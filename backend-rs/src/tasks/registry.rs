@@ -44,11 +44,6 @@ impl TaskRegistry {
         }
     }
 
-    pub async fn remove(&self, task_id: &str) -> Option<TaskRecord> {
-        let mut tasks = self.tasks.write().await;
-        tasks.remove(task_id)
-    }
-
     pub async fn list_for_user(
         &self,
         user_id: &str,
@@ -115,14 +110,6 @@ impl TaskRegistry {
             })
             .max_by_key(|t| t.created_at)
             .cloned()
-    }
-
-    pub async fn count_active_for_user(&self, user_id: &str) -> usize {
-        let tasks = self.tasks.read().await;
-        tasks
-            .values()
-            .filter(|t| t.user_id == user_id && t.status.is_active())
-            .count()
     }
 
     pub async fn all_records(&self) -> Vec<TaskRecord> {

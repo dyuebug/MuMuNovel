@@ -2,6 +2,16 @@
 
 from __future__ import annotations
 
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active chapter analysis route group; this Python module is "
+    "kept only as repointed rollback/source-map material after explicit "
+    "repoint approval."
+)
+SOURCE_MAP_RUST_OWNER = "backend-rs/src/api/chapter_analysis_routes.rs"
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_chapter_analysis_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "repoint"
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +26,7 @@ from app.models.memory import PlotAnalysis, StoryMemory
 from app.services.chapter_analysis_response_service import (
     build_chapter_analysis_payload,
 )
-from app.services.chapter_generation_history_service import (
+from app.services.chapter_generation.history_service import (
     _load_latest_candidate_draft_attempt,
 )
 

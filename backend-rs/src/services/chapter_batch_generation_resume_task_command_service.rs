@@ -1,44 +1,26 @@
-use sea_orm::DatabaseConnection;
-use serde_json::Value;
+pub(crate) mod resume_launch_owner;
+pub(crate) mod resume_task_command_owner;
 
-use crate::models::batch_generation_snapshot;
-use crate::services::chapter_batch_generation_owned_task_query_service::{
-    load_owned_batch_generation_task_sources, LoadOwnedBatchGenerationTaskError,
-    LoadOwnedBatchGenerationTaskSourcesError,
+pub(crate) use self::resume_launch_owner::build_batch_generation_resume_launch_owner_contract;
+#[cfg(test)]
+use self::resume_launch_owner::map_single_chapter_resume_validation_error;
+use self::resume_launch_owner::BatchGenerationResumeLaunchPersistencePlan;
+#[cfg(test)]
+use self::resume_launch_owner::{
+    ResumeExecutionDispatchPlan, ResumeExecutionEligibilityPlan, ValidatedResumeExecutionPlan,
 };
-use crate::services::chapter_batch_generation_runtime_state_service::{
-    dispatch_batch_generation_runtime, reset_batch_generation_task_for_resume,
-    BatchGenerationExecutionInput, BatchGenerationPersistedRuntimeContext,
-    BatchGenerationResumeResetPersistencePlan, PreparedBatchGenerationResumeRuntimeLaunch,
-    PreparedSingleChapterResumeRuntimeLaunch, ResolveResumeExecutionSelectionError,
-    RestoredResumeRuntimeStateProjection, ResumeBatchGenerationCommandState,
-    ResumeExecutionSelection,
-};
-use crate::services::chapter_generation_access_service::{
-    load_accessible_chapters_for_generation, LoadAccessibleChapterForGenerationError,
+pub(crate) use self::resume_task_command_owner::{
+    build_batch_generation_resume_task_command_owner_contract,
+    resume_owned_batch_generation_task_command,
 };
 #[cfg(test)]
-use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
-use crate::services::chapter_generation_prerequisite_service::check_chapter_generation_prerequisites;
-#[cfg(test)]
-use crate::services::chapter_generation_quality_runtime_context_service::BatchGenerationQualityRuntimeContext;
-#[cfg(test)]
-use crate::services::chapter_generation_request_runtime_state_service::BatchGenerationRequestRuntimeState;
-use crate::services::chapter_generation_target_word_count_service::normalize_chapter_generation_target_word_count;
-#[cfg(test)]
-use crate::services::chapter_generation_task_semantics_service::BatchGenerationTaskKind;
-use crate::services::chapter_single_generation_prepare_service::{
-    load_single_chapter_generation_target, PrepareSingleChapterGenerationRequestError,
-    SingleChapterGenerationTarget,
+use self::resume_task_command_owner::{
+    prepare_batch_generation_resume, prepare_owned_batch_generation_resume,
+    resolve_resume_active_story_repair_payload_from_runtime_context,
+    restore_resume_compat_options_from_runtime_context, restored_resume_quality_runtime_context,
 };
-use crate::services::chapter_single_generation_runtime_state_service::{
-    SingleGenerationRuntimeLaunchInput, SingleGenerationRuntimeLifecyclePlan,
-};
-#[cfg(test)]
-use crate::services::chapter_story_repair_quality_context_service::{
-    resolve_resumed_active_story_repair_payload,
-    restore_story_repair_compat_options_from_active_snapshot,
-};
+use crate::services::chapter_batch_generation_read_context_service::LoadOwnedBatchGenerationTaskError;
+use crate::services::chapter_batch_generation_runtime_state_service::ResolveResumeExecutionSelectionError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResumeBatchGenerationDomainError {
@@ -89,507 +71,29 @@ pub(crate) enum PrepareOwnedBatchGenerationResumeError {
     Config(String),
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct BatchGenerationResumeLaunchPersistencePlan {
-    command_state: ResumeBatchGenerationCommandState,
-    dispatch_plan: ResumeExecutionDispatchPlan,
-    reset_persistence_plan: BatchGenerationResumeResetPersistencePlan,
-    response_payload: Value,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ResumeBatchGenerationTaskCommandError {
+    Task(LoadOwnedBatchGenerationTaskError),
+    Domain(ResumeBatchGenerationDomainError),
+    Config(String),
 }
 
-#[cfg(test)]
-fn map_single_chapter_resume_prepare_error(
-    error: PrepareSingleChapterGenerationRequestError,
-) -> String {
-    match error {
-        PrepareSingleChapterGenerationRequestError::Chapter(
-            LoadAccessibleChapterForGenerationError::ChapterNotFound,
-        ) => "Chapter not found".to_string(),
-        PrepareSingleChapterGenerationRequestError::Chapter(
-            LoadAccessibleChapterForGenerationError::ChapterNotFoundOrAccessDenied,
-        ) => "Chapter not found or access denied".to_string(),
-        PrepareSingleChapterGenerationRequestError::Chapter(
-            LoadAccessibleChapterForGenerationError::Internal(detail),
-        )
-        | PrepareSingleChapterGenerationRequestError::Config(detail)
-        | PrepareSingleChapterGenerationRequestError::Internal(detail) => detail,
-        PrepareSingleChapterGenerationRequestError::PrerequisitesBlocked(detail) => {
-            ResumeBatchGenerationDomainError::PrerequisitesBlocked(detail).detail_message()
-        }
-        PrepareSingleChapterGenerationRequestError::InvalidTargetWordCountTooSmall => {
-            "target_word_count must be greater than or equal to 500".to_string()
-        }
-        PrepareSingleChapterGenerationRequestError::InvalidTargetWordCountTooLarge => {
-            "target_word_count must be less than or equal to 10000".to_string()
-        }
-        PrepareSingleChapterGenerationRequestError::InvalidCreativeMode => {
-            "creative_mode is invalid".to_string()
-        }
-        PrepareSingleChapterGenerationRequestError::InvalidStoryFocus => {
-            "story_focus is invalid".to_string()
-        }
-        PrepareSingleChapterGenerationRequestError::InvalidPlotStage => {
-            "plot_stage is invalid".to_string()
-        }
-        PrepareSingleChapterGenerationRequestError::InvalidQualityPreset => {
-            "quality_preset is invalid".to_string()
-        }
-        PrepareSingleChapterGenerationRequestError::StoryCreationBriefTooLong => {
-            "story_creation_brief must be at most 1200 characters".to_string()
-        }
-        PrepareSingleChapterGenerationRequestError::QualityNotesTooLong => {
-            "quality_notes must be at most 600 characters".to_string()
+impl From<PrepareOwnedBatchGenerationResumeError> for ResumeBatchGenerationTaskCommandError {
+    fn from(error: PrepareOwnedBatchGenerationResumeError) -> Self {
+        match error {
+            PrepareOwnedBatchGenerationResumeError::Task(error) => Self::Task(error),
+            PrepareOwnedBatchGenerationResumeError::Domain(error) => Self::Domain(error),
+            PrepareOwnedBatchGenerationResumeError::Config(error) => Self::Config(error),
         }
     }
-}
-
-impl BatchGenerationResumeLaunchPersistencePlan {
-    fn new(
-        command_state: ResumeBatchGenerationCommandState,
-        dispatch_plan: ResumeExecutionDispatchPlan,
-        reset_persistence_plan: BatchGenerationResumeResetPersistencePlan,
-    ) -> Self {
-        let response_payload = reset_persistence_plan
-            .clone()
-            .into_resume_response_payload(&command_state);
-
-        Self {
-            command_state,
-            dispatch_plan,
-            reset_persistence_plan,
-            response_payload,
-        }
-    }
-
-    async fn prepare_from_validated_execution(
-        db: &DatabaseConnection,
-        command_state: ResumeBatchGenerationCommandState,
-        execution_plan: ValidatedResumeExecutionPlan,
-        restored_runtime_state: RestoredResumeRuntimeStateProjection,
-        existing_workflow_runtime_state: Option<Value>,
-        user_id: &str,
-    ) -> Result<Self, String> {
-        let (dispatch_plan, runtime_state_seed) =
-            ResumeExecutionDispatchPlan::from_validated_execution(
-                db,
-                user_id,
-                execution_plan,
-                restored_runtime_state,
-                normalize_chapter_generation_target_word_count(Some(
-                    command_state.target_word_count,
-                )),
-            )
-            .await?;
-        let reset_persistence_plan =
-            BatchGenerationResumeResetPersistencePlan::from_resume_task_with_existing_runtime_state(
-                &command_state,
-                runtime_state_seed,
-                existing_workflow_runtime_state,
-            );
-
-        Ok(Self::new(
-            command_state,
-            dispatch_plan,
-            reset_persistence_plan,
-        ))
-    }
-
-    async fn prepare(
-        db: &DatabaseConnection,
-        command_state: ResumeBatchGenerationCommandState,
-        user_id: &str,
-        snapshot: Option<&batch_generation_snapshot::Model>,
-    ) -> Result<Self, ResumeBatchGenerationDomainError> {
-        let (restored_runtime_state, existing_workflow_runtime_state) =
-            prepare_resume_launch_restored_state(&command_state, snapshot)?;
-        let execution =
-            ValidatedResumeExecutionPlan::from_command_state(db, user_id, &command_state).await?;
-
-        Self::prepare_from_validated_execution(
-            db,
-            command_state,
-            execution,
-            restored_runtime_state,
-            existing_workflow_runtime_state,
-            user_id,
-        )
-        .await
-        .map_err(ResumeBatchGenerationDomainError::Internal)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn dispatch_plan(&self) -> &ResumeExecutionDispatchPlan {
-        &self.dispatch_plan
-    }
-
-    #[cfg(test)]
-    pub(crate) fn response_payload(&self) -> Value {
-        self.response_payload.clone()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_contract_for_test(
-        command_state: ResumeBatchGenerationCommandState,
-        dispatch_plan: ResumeExecutionDispatchPlan,
-        reset_persistence_plan: BatchGenerationResumeResetPersistencePlan,
-    ) -> Self {
-        Self::new(command_state, dispatch_plan, reset_persistence_plan)
-    }
-
-    pub(crate) async fn persist_and_dispatch(
-        self,
-        db: &DatabaseConnection,
-    ) -> Result<Value, String> {
-        let response_payload = self.response_payload.clone();
-        let batch_id = self.command_state.batch_id.clone();
-
-        reset_batch_generation_task_for_resume(db, self.reset_persistence_plan).await?;
-        self.dispatch_plan.dispatch(db.clone(), batch_id);
-        Ok(response_payload)
-    }
-}
-
-fn prepare_resume_launch_restored_state(
-    command_state: &ResumeBatchGenerationCommandState,
-    snapshot: Option<&batch_generation_snapshot::Model>,
-) -> Result<(RestoredResumeRuntimeStateProjection, Option<Value>), ResumeBatchGenerationDomainError>
-{
-    if !matches!(command_state.status.as_str(), "failed" | "cancelled") {
-        return Err(ResumeBatchGenerationDomainError::InvalidStatus);
-    }
-
-    let task_kind = command_state.task_kind();
-    let persisted_runtime_context =
-        BatchGenerationPersistedRuntimeContext::from_snapshot(snapshot.cloned());
-    let restored_runtime_state =
-        RestoredResumeRuntimeStateProjection::from_persisted_runtime_context(
-            task_kind,
-            &command_state.batch_id,
-            command_state.max_retries,
-            &persisted_runtime_context,
-        );
-    if restored_runtime_state.is_manual_review_blocked(command_state) {
-        return Err(ResumeBatchGenerationDomainError::ManualReviewBlocked);
-    }
-
-    Ok((
-        restored_runtime_state,
-        snapshot_workflow_runtime_state(snapshot),
-    ))
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum ResumeExecutionDispatchPlan {
-    SingleChapter {
-        runtime_input: SingleGenerationRuntimeLaunchInput,
-    },
-    Batch {
-        runtime_input: BatchGenerationExecutionInput,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum ResumeExecutionEligibilityPlan {
-    SingleChapter { chapter_id: String },
-    Batch { chapter_ids: Vec<String> },
-}
-
-#[derive(Debug, Clone)]
-enum ValidatedResumeExecutionPlan {
-    SingleChapter {
-        validated_single_chapter_target: SingleChapterGenerationTarget,
-    },
-    Batch {
-        chapter_ids: Vec<String>,
-    },
-}
-
-impl ResumeExecutionEligibilityPlan {
-    fn from_command_state(
-        command_state: &ResumeBatchGenerationCommandState,
-    ) -> Result<Self, ResumeBatchGenerationDomainError> {
-        let execution_selection = command_state
-            .resolve_execution_selection()
-            .map_err(ResumeBatchGenerationDomainError::from_execution_selection_error)?;
-
-        Self::from_execution_selection(execution_selection)
-    }
-
-    fn from_execution_selection(
-        execution_selection: ResumeExecutionSelection,
-    ) -> Result<Self, ResumeBatchGenerationDomainError> {
-        match execution_selection {
-            ResumeExecutionSelection::SingleChapter { chapter_id } => {
-                Ok(Self::SingleChapter { chapter_id })
-            }
-            ResumeExecutionSelection::Batch { chapter_ids } => {
-                if chapter_ids.is_empty() {
-                    return Err(ResumeBatchGenerationDomainError::NoResumableChaptersFound);
-                }
-                Ok(Self::Batch { chapter_ids })
-            }
-        }
-    }
-
-    async fn validate_access_and_prerequisites(
-        self,
-        db: &DatabaseConnection,
-        user_id: &str,
-    ) -> Result<ValidatedResumeExecutionPlan, ResumeBatchGenerationDomainError> {
-        match self {
-            Self::SingleChapter { chapter_id } => {
-                let validated_single_chapter_target =
-                    load_single_chapter_generation_target(db, &chapter_id, user_id)
-                        .await
-                        .map_err(map_single_chapter_resume_validation_error)?;
-
-                Ok(ValidatedResumeExecutionPlan::SingleChapter {
-                    validated_single_chapter_target,
-                })
-            }
-            Self::Batch { chapter_ids } => {
-                let remaining_chapters =
-                    load_accessible_chapters_for_generation(db, &chapter_ids, user_id)
-                        .await
-                        .map_err(|error| {
-                            match error {
-                    LoadAccessibleChapterForGenerationError::ChapterNotFound
-                    | LoadAccessibleChapterForGenerationError::ChapterNotFoundOrAccessDenied => {
-                        ResumeBatchGenerationDomainError::ChaptersUnavailable
-                    }
-                    LoadAccessibleChapterForGenerationError::Internal(detail) => {
-                        ResumeBatchGenerationDomainError::Internal(detail)
-                    }
-                }
-                        })?;
-                if let Some(first_chapter) = remaining_chapters.first() {
-                    let prerequisite = check_chapter_generation_prerequisites(db, first_chapter)
-                        .await
-                        .map_err(ResumeBatchGenerationDomainError::Internal)?;
-                    if !prerequisite.can_generate {
-                        return Err(ResumeBatchGenerationDomainError::PrerequisitesBlocked(
-                            prerequisite.error_message,
-                        ));
-                    }
-                }
-
-                Ok(ValidatedResumeExecutionPlan::Batch { chapter_ids })
-            }
-        }
-    }
-}
-
-impl ValidatedResumeExecutionPlan {
-    async fn from_command_state(
-        db: &DatabaseConnection,
-        user_id: &str,
-        command_state: &ResumeBatchGenerationCommandState,
-    ) -> Result<Self, ResumeBatchGenerationDomainError> {
-        ResumeExecutionEligibilityPlan::from_command_state(command_state)?
-            .validate_access_and_prerequisites(db, user_id)
-            .await
-    }
-}
-
-impl ResumeExecutionDispatchPlan {
-    async fn from_validated_execution(
-        db: &DatabaseConnection,
-        user_id: &str,
-        execution_plan: ValidatedResumeExecutionPlan,
-        restored_runtime_state: RestoredResumeRuntimeStateProjection,
-        target_word_count: i32,
-    ) -> Result<(Self, Option<Value>), String> {
-        match execution_plan {
-            ValidatedResumeExecutionPlan::SingleChapter {
-                validated_single_chapter_target,
-            } => {
-                let PreparedSingleChapterResumeRuntimeLaunch {
-                    runtime_input,
-                    runtime_state_seed,
-                } = restored_runtime_state
-                    .prepare_single_chapter_runtime_launch(
-                        db,
-                        user_id,
-                        &validated_single_chapter_target,
-                        target_word_count,
-                    )
-                    .await?;
-
-                Ok((Self::SingleChapter { runtime_input }, runtime_state_seed))
-            }
-            ValidatedResumeExecutionPlan::Batch { chapter_ids } => {
-                let PreparedBatchGenerationResumeRuntimeLaunch {
-                    runtime_input,
-                    runtime_state_seed,
-                } = restored_runtime_state
-                    .prepare_batch_runtime_launch(db, user_id, chapter_ids, target_word_count)
-                    .await?;
-
-                Ok((Self::Batch { runtime_input }, runtime_state_seed))
-            }
-        }
-    }
-
-    fn dispatch(self, db: DatabaseConnection, task_id: String) {
-        match self {
-            ResumeExecutionDispatchPlan::SingleChapter { runtime_input } => {
-                SingleGenerationRuntimeLifecyclePlan::from_runtime_launch(task_id, runtime_input)
-                    .spawn(db)
-            }
-            ResumeExecutionDispatchPlan::Batch { runtime_input } => {
-                dispatch_batch_generation_runtime(db, task_id, runtime_input)
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-fn restored_resume_quality_runtime_context_from_persisted_context(
-    task_kind: BatchGenerationTaskKind,
-    persisted_runtime_context: &BatchGenerationPersistedRuntimeContext,
-) -> BatchGenerationQualityRuntimeContext {
-    persisted_runtime_context.restored_quality_runtime_context(task_kind)
-}
-
-#[cfg(test)]
-fn restored_resume_quality_runtime_context(
-    task_kind: BatchGenerationTaskKind,
-    snapshot: Option<&batch_generation_snapshot::Model>,
-    workflow_runtime_state: Option<&Value>,
-) -> BatchGenerationQualityRuntimeContext {
-    let persisted_runtime_context = BatchGenerationPersistedRuntimeContext::from_sources(
-        workflow_runtime_state.cloned(),
-        snapshot.and_then(|item| item.quality_metrics_history.clone()),
-        snapshot.and_then(|item| item.quality_metrics_summary.clone()),
-        snapshot.and_then(|item| item.latest_quality_metrics.clone()),
-    );
-
-    restored_resume_quality_runtime_context_from_persisted_context(
-        task_kind,
-        &persisted_runtime_context,
-    )
-}
-
-#[cfg(test)]
-fn restore_resume_compat_options_from_runtime_context(
-    request_runtime_state: &BatchGenerationRequestRuntimeState,
-    runtime_active_story_repair_payload: Option<&Value>,
-    restored_quality_context: &BatchGenerationQualityRuntimeContext,
-) -> SingleChapterGenerationCompatOptions {
-    restore_story_repair_compat_options_from_active_snapshot(
-        &request_runtime_state.compat_options,
-        runtime_active_story_repair_payload,
-        restored_quality_context.quality_metrics_summary.as_ref(),
-        restored_quality_context.latest_quality_metrics.as_ref(),
-    )
-}
-
-#[cfg(test)]
-fn resolve_resume_active_story_repair_payload_from_runtime_context(
-    runtime_active_story_repair_payload: Option<&Value>,
-    request_active_story_repair_payload: Option<&Value>,
-    restored_quality_context: &BatchGenerationQualityRuntimeContext,
-    scope: &str,
-) -> Option<Value> {
-    resolve_resumed_active_story_repair_payload(
-        runtime_active_story_repair_payload,
-        restored_quality_context.quality_metrics_summary.as_ref(),
-        restored_quality_context.latest_quality_metrics.as_ref(),
-        request_active_story_repair_payload,
-        scope,
-        "recent_history_summary",
-        "Recent history summary",
-    )
-}
-
-pub(crate) async fn prepare_batch_generation_resume(
-    db: &DatabaseConnection,
-    command_state: ResumeBatchGenerationCommandState,
-    user_id: &str,
-    snapshot: Option<&batch_generation_snapshot::Model>,
-) -> Result<BatchGenerationResumeLaunchPersistencePlan, ResumeBatchGenerationDomainError> {
-    BatchGenerationResumeLaunchPersistencePlan::prepare(db, command_state, user_id, snapshot).await
-}
-
-pub(crate) async fn prepare_owned_batch_generation_resume(
-    db: &DatabaseConnection,
-    batch_id: &str,
-    user_id: &str,
-) -> Result<BatchGenerationResumeLaunchPersistencePlan, PrepareOwnedBatchGenerationResumeError> {
-    let (task, snapshot) = load_owned_batch_generation_task_sources(db, batch_id, user_id)
-        .await
-        .map_err(map_prepare_owned_batch_generation_resume_sources_error)?
-        .into_parts();
-    let command_state = ResumeBatchGenerationCommandState::from_task(&task);
-
-    prepare_batch_generation_resume(db, command_state, user_id, snapshot.as_ref())
-        .await
-        .map_err(PrepareOwnedBatchGenerationResumeError::Domain)
-}
-
-fn map_prepare_owned_batch_generation_resume_sources_error(
-    error: LoadOwnedBatchGenerationTaskSourcesError,
-) -> PrepareOwnedBatchGenerationResumeError {
-    match error {
-        LoadOwnedBatchGenerationTaskSourcesError::Task(error) => {
-            PrepareOwnedBatchGenerationResumeError::Task(error)
-        }
-        LoadOwnedBatchGenerationTaskSourcesError::Snapshot(error) => {
-            PrepareOwnedBatchGenerationResumeError::Config(error)
-        }
-    }
-}
-
-fn map_single_chapter_resume_validation_error(
-    error: PrepareSingleChapterGenerationRequestError,
-) -> ResumeBatchGenerationDomainError {
-    match error {
-        PrepareSingleChapterGenerationRequestError::Chapter(
-            LoadAccessibleChapterForGenerationError::ChapterNotFound,
-        ) => ResumeBatchGenerationDomainError::SingleChapterUnavailable(
-            "Chapter not found".to_string(),
-        ),
-        PrepareSingleChapterGenerationRequestError::Chapter(
-            LoadAccessibleChapterForGenerationError::ChapterNotFoundOrAccessDenied,
-        ) => ResumeBatchGenerationDomainError::SingleChapterUnavailable(
-            "Chapter not found or access denied".to_string(),
-        ),
-        PrepareSingleChapterGenerationRequestError::Chapter(
-            LoadAccessibleChapterForGenerationError::Internal(detail),
-        )
-        | PrepareSingleChapterGenerationRequestError::Config(detail)
-        | PrepareSingleChapterGenerationRequestError::Internal(detail) => {
-            ResumeBatchGenerationDomainError::Internal(detail)
-        }
-        PrepareSingleChapterGenerationRequestError::PrerequisitesBlocked(detail) => {
-            ResumeBatchGenerationDomainError::PrerequisitesBlocked(detail)
-        }
-        PrepareSingleChapterGenerationRequestError::InvalidTargetWordCountTooSmall
-        | PrepareSingleChapterGenerationRequestError::InvalidTargetWordCountTooLarge
-        | PrepareSingleChapterGenerationRequestError::InvalidCreativeMode
-        | PrepareSingleChapterGenerationRequestError::InvalidStoryFocus
-        | PrepareSingleChapterGenerationRequestError::InvalidPlotStage
-        | PrepareSingleChapterGenerationRequestError::InvalidQualityPreset
-        | PrepareSingleChapterGenerationRequestError::StoryCreationBriefTooLong
-        | PrepareSingleChapterGenerationRequestError::QualityNotesTooLong => {
-            ResumeBatchGenerationDomainError::Internal(
-                "Unexpected single chapter resume validation request error".to_string(),
-            )
-        }
-    }
-}
-
-fn snapshot_workflow_runtime_state(
-    snapshot: Option<&batch_generation_snapshot::Model>,
-) -> Option<Value> {
-    snapshot.and_then(|item| item.workflow_runtime_state.clone())
 }
 
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
     use sea_orm::{
-        ActiveModelTrait, ConnectionTrait, Database, DatabaseConnection, DbBackend, Schema, Set,
+        ActiveModelTrait, ConnectionTrait, Database, DatabaseConnection, DbBackend, EntityTrait,
+        IntoActiveModel, Schema, Set,
     };
 
     use crate::models::batch_generation_snapshot;
@@ -602,35 +106,40 @@ mod tests {
     use crate::models::project;
     use crate::models::settings;
     use crate::models::story_memory;
+    use crate::services::chapter_access_service::LoadAccessibleChapterForGenerationError;
+    use crate::services::chapter_batch_generation_read_context_service::LoadOwnedBatchGenerationTaskError;
+    use crate::services::chapter_batch_generation_resume_task_command_service::ResumeBatchGenerationTaskCommandError;
+    use crate::services::chapter_batch_generation_runtime_state_service::prepare_batch_generation_resume_restored_runtime_state;
     use crate::services::chapter_batch_generation_runtime_state_service::{
         build_batch_generation_execution_input, build_pending_batch_generation_runtime_checkpoint,
         BatchGenerationResumeResetPersistencePlan, RestoredResumeRuntimeStateProjection,
         ResumeBatchGenerationCommandState, ResumeExecutionSelection, ResumeResetSemantics,
     };
+    use crate::services::chapter_batch_generation_task_payload_base_service::BatchGenerationTaskKind;
     use crate::services::chapter_batch_generation_task_payload_base_service::{
         build_batch_generation_command_summary_payload, BatchGenerationCommandProgressSummary,
         BatchGenerationQualityStatusContext,
     };
-    use crate::services::chapter_generation_access_service::LoadAccessibleChapterForGenerationError;
+    use crate::services::chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig;
+    use crate::services::chapter_generation_execution_contract_service::normalize_chapter_generation_target_word_count;
+    use crate::services::chapter_generation_execution_contract_service::BatchGenerationRequestRuntimeState;
     use crate::services::chapter_generation_execution_contract_service::{
         SingleChapterGenerationCompatOptions, SingleChapterGenerationExecutionInput,
     };
-    use crate::services::chapter_generation_quality_gate_semantics_service::manual_review_label;
-    use crate::services::chapter_generation_request_runtime_state_service::BatchGenerationRequestRuntimeState;
-    use crate::services::chapter_generation_target_word_count_service::normalize_chapter_generation_target_word_count;
-    use crate::services::chapter_generation_task_semantics_service::BatchGenerationTaskKind;
+    use crate::services::chapter_generation_runtime_service::quality_runtime_context_owner::manual_review_label;
+    use crate::services::chapter_generation_runtime_service::story_repair_quality_context_owner::{
+        extract_quality_gate_object, extract_repair_guidance_object,
+        restore_story_repair_compat_options_from_active_snapshot,
+    };
     use crate::services::chapter_single_generation_prepare_service::{
         PrepareSingleChapterGenerationRequestError, SingleChapterGenerationTarget,
     };
     use crate::services::chapter_single_generation_runtime_state_service::SingleGenerationRuntimeLaunchInput;
-    use crate::services::chapter_story_repair_quality_context_service::{
-        extract_quality_gate_object, extract_repair_guidance_object,
-        restore_story_repair_compat_options_from_active_snapshot,
-    };
     use serde_json::{json, Value};
 
     use super::{
-        map_single_chapter_resume_prepare_error, prepare_resume_launch_restored_state,
+        build_batch_generation_resume_task_command_owner_contract,
+        map_single_chapter_resume_validation_error,
         resolve_resume_active_story_repair_payload_from_runtime_context,
         restore_resume_compat_options_from_runtime_context,
         restored_resume_quality_runtime_context, BatchGenerationResumeLaunchPersistencePlan,
@@ -638,13 +147,200 @@ mod tests {
         ResumeExecutionEligibilityPlan, ValidatedResumeExecutionPlan,
     };
 
-    fn build_default_execution_config(
-    ) -> crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig
-    {
-        crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
-            ai_config: crate::ai::AIConfig::default(),
-            provider_payload: crate::services::chapter_generation_prompt_context_provider_service::build_placeholder_prompt_context_provider_payload(),
+    fn test_single_generation_gateway_config() -> ChapterCandidateRouteGatewayConfig {
+        ChapterCandidateRouteGatewayConfig {
+            rust_executor_enabled: true,
+            fallback_on_rust_error: false,
+            disabled_reason: Some("test resume single-generation explicit gateway".to_string()),
+            rollback_boundary: "test_single_generation_resume_gateway".to_string(),
         }
+    }
+
+    fn build_default_execution_config(
+    ) -> crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig
+    {
+        crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig {
+            ai_config: crate::ai::AIConfig::default(),
+            provider_payload: crate::services::chapter_generation_prompt_service::build_placeholder_prompt_context_provider_payload(),
+        }
+    }
+
+    fn build_test_resume_launch_persistence_plan(
+        command_state: ResumeBatchGenerationCommandState,
+        user_id: &str,
+        chapter_ids: Vec<String>,
+        enable_analysis: bool,
+    ) -> BatchGenerationResumeLaunchPersistencePlan {
+        let dispatch_plan = ResumeExecutionDispatchPlan::Batch {
+            runtime_input: build_batch_generation_execution_input(
+                user_id.to_string(),
+                chapter_ids,
+                command_state.target_word_count,
+                SingleChapterGenerationCompatOptions {
+                    enable_analysis,
+                    ..Default::default()
+                },
+                build_default_execution_config(),
+                test_single_generation_gateway_config(),
+            ),
+        };
+        let reset_persistence_plan =
+            BatchGenerationResumeResetPersistencePlan::from_resume_task(&command_state, None);
+
+        BatchGenerationResumeLaunchPersistencePlan::from_contract_for_test(
+            command_state,
+            dispatch_plan,
+            reset_persistence_plan,
+            test_single_generation_gateway_config(),
+        )
+    }
+
+    #[test]
+    fn should_publish_batch_generation_resume_task_command_owner_contract() {
+        let contract = build_batch_generation_resume_task_command_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_resume_task_command_service::resume_task_command_owner"
+        );
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/app/services/batch_generation/resume_service.py"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][0],
+            "backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["command_entrypoints"][0],
+            "prepare_owned_batch_generation_resume"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["command_entrypoints"][1],
+            "resume_owned_batch_generation_task_command"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_restore"][0],
+            "prepare_batch_generation_resume_restored_runtime_state"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["gateway_config"][1],
+            "SingleGenerationRuntimeLifecyclePlan::from_runtime_launch_with_gateway_config"
+        );
+        assert_eq!(
+            contract["active_consumers"][1],
+            "chapter_batch_generation_resume_task_command_service::resume_owned_batch_generation_task_command"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["runtime_knob"],
+            "python_candidate_executor_fallback"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profile"],
+            "phase5-batch-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["batch_generation_manifest_probe_count"],
+            11
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["rust_manifest_probe_count"],
+            11
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["task_command_owner"],
+            "resume_owned_batch_generation_task_command"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["command_owner"],
+            "prepare_owned_batch_generation_resume"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["execution_selection_owner"],
+            "ResumeBatchGenerationCommandState::resolve_execution_selection"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["persist_and_dispatch_owner"],
+            "BatchGenerationResumeLaunchPersistencePlan::persist_and_dispatch"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["runtime_restore_owner"],
+            "prepare_batch_generation_resume_restored_runtime_state"
+        );
+        assert_eq!(
+            contract["resume_launch_owner_contract"]["owner"],
+            "chapter_batch_generation_resume_task_command_service::resume_launch_owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_batch_generation_resume_task_command_owner_ready_for_source_map_closeout_review"
+        );
+    }
+
+    #[test]
+    fn should_publish_batch_generation_resume_launch_owner_contract() {
+        let contract = super::build_batch_generation_resume_launch_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_resume_task_command_service::resume_launch_owner"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["resume_launch_entrypoints"][3],
+            "BatchGenerationResumeLaunchPersistencePlan::persist_and_dispatch"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["execution_selection_entrypoints"][2],
+            "ValidatedResumeExecutionPlan::from_command_state"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["execution_selection_entrypoints"][4],
+            "ResumeExecutionDispatchPlan::dispatch"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_restore_entrypoints"][3],
+            "resume_owned_batch_generation_task_command"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["response_projection_entrypoints"][0],
+            "BatchGenerationResumeResetPersistencePlan::into_resume_response_payload"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["dispatch_contract"]["batch_dispatch_owner"],
+            "dispatch_batch_generation_runtime"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["domain_error_surface"][6],
+            "PrerequisitesBlocked"
+        );
+        assert_eq!(
+            contract["active_consumers"][4],
+            "chapter_batch_generation_active_gateway_smoke_service"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["runtime_state_keys"][7],
+            "candidate_gateway"
+        );
     }
 
     fn build_task(status: &str) -> batch_generation_task::Model {
@@ -707,6 +403,14 @@ mod tests {
         db.execute(builder.build(&schema.create_table_from_entity(settings::Entity)))
             .await
             .expect("create settings table");
+        db.execute(builder.build(&schema.create_table_from_entity(batch_generation_task::Entity)))
+            .await
+            .expect("create batch generation tasks table");
+        db.execute(
+            builder.build(&schema.create_table_from_entity(batch_generation_snapshot::Entity)),
+        )
+        .await
+        .expect("create batch generation snapshots table");
         db.execute(builder.build(&schema.create_table_from_entity(project::Entity)))
             .await
             .expect("create projects table");
@@ -809,6 +513,104 @@ mod tests {
         }
     }
 
+    async fn seed_owned_resume_task_and_snapshot(db: &DatabaseConnection, user_id: &str) {
+        let now = Utc::now().naive_utc();
+
+        batch_generation_task::ActiveModel {
+            id: Set("batch-resume-db-smoke".to_string()),
+            project_id: Set("project-1".to_string()),
+            user_id: Set(user_id.to_string()),
+            start_chapter_number: Set(1),
+            chapter_count: Set(2),
+            chapter_ids: Set(json!(["chapter-1", "chapter-2"])),
+            style_id: Set(None),
+            target_word_count: Set(0),
+            enable_analysis: Set(true),
+            status: Set("failed".to_string()),
+            total_chapters: Set(2),
+            completed_chapters: Set(1),
+            failed_chapters: Set(json!([{
+                "chapter_id": "chapter-2",
+                "phase": "generation_failed",
+                "error": "provider interrupted"
+            }])),
+            current_chapter_id: Set(Some("chapter-2".to_string())),
+            current_chapter_number: Set(Some(2)),
+            current_retry_count: Set(1),
+            max_retries: Set(3),
+            created_at: Set(Some(now)),
+            started_at: Set(Some(now)),
+            completed_at: Set(Some(now)),
+            error_message: Set(Some("provider interrupted".to_string())),
+        }
+        .insert(db)
+        .await
+        .expect("insert resume db smoke task");
+
+        batch_generation_snapshot::ActiveModel {
+            id: Set("snapshot-resume-db-smoke".to_string()),
+            batch_task_id: Set("batch-resume-db-smoke".to_string()),
+            latest_quality_metrics: Set(Some(json!({
+                "overall_score": 87.0,
+                "source": "resume-db-smoke"
+            }))),
+            quality_metrics_history: Set(Some(json!([{
+                "overall_score": 84.0,
+                "source": "resume-db-smoke-history"
+            }]))),
+            quality_metrics_summary: Set(Some(json!({
+                "chapter_count": 1,
+                "avg_score": 87.0,
+                "quality_gate": {
+                    "decision": "allow_resume"
+                }
+            }))),
+            workflow_runtime_state: Set(Some(json!({
+                "phase": "failed",
+                "progress": 50,
+                "last_event": "failed",
+                "last_message": "DB backed resume smoke failed before resume",
+                "batch_request_runtime_state": {
+                    "compat_options": {
+                        "style_id": null,
+                        "enable_analysis": true,
+                        "enable_mcp": false,
+                        "web_research_enabled": false,
+                        "web_research_query": null,
+                        "narrative_perspective": null,
+                        "creative_mode": null,
+                        "story_focus": null,
+                        "plot_stage": null,
+                        "story_creation_brief": null,
+                        "quality_preset": null,
+                        "quality_notes": null,
+                        "story_repair_summary": "沿用 DB-backed resume 修复摘要",
+                        "story_repair_targets": ["节奏修复"],
+                        "story_preserve_strengths": []
+                    },
+                    "model_override": "resume-db-model"
+                },
+                "active_story_repair_payload": {
+                    "scope": "batch",
+                    "mode": "resume-db-smoke",
+                    "summary": "沿用 DB-backed resume 修复摘要",
+                    "repair_targets": ["节奏修复"]
+                },
+                "candidate_gateway": {
+                    "execution_path": "rust_candidate_executor",
+                    "fallback_applied": false,
+                    "rollback_boundary": "python_candidate_executor_fallback",
+                    "rust_error": null
+                }
+            }))),
+            created_at: Set(Some(now)),
+            updated_at: Set(Some(now)),
+        }
+        .insert(db)
+        .await
+        .expect("insert resume db smoke snapshot");
+    }
+
     #[test]
     fn should_build_resume_execution_selection_for_single_and_batch_tasks() {
         let mut single = build_task("failed");
@@ -857,7 +659,7 @@ mod tests {
     #[test]
     fn should_detect_exhausted_auto_repair_quality_context_as_manual_review_blocker() {
         assert_eq!(
-            crate::services::chapter_generation_quality_gate_semantics_service::manual_review_label_from_quality_context_with_retry_budget(
+            crate::services::chapter_generation_runtime_service::quality_runtime_context_owner::manual_review_label_from_quality_context_with_retry_budget(
                 None,
                 Some(&json!({
                     "quality_gate": {
@@ -930,21 +732,47 @@ mod tests {
     }
 
     #[test]
+    fn should_keep_resume_batch_generation_task_command_config_error_shape() {
+        let error = ResumeBatchGenerationTaskCommandError::Config("model missing".to_string());
+
+        assert!(matches!(
+            error,
+            ResumeBatchGenerationTaskCommandError::Config(detail) if detail == "model missing"
+        ));
+    }
+
+    #[test]
+    fn should_keep_resume_batch_generation_task_command_task_error_shape() {
+        let error = ResumeBatchGenerationTaskCommandError::Task(
+            LoadOwnedBatchGenerationTaskError::TaskNotFound,
+        );
+
+        assert!(matches!(
+            error,
+            ResumeBatchGenerationTaskCommandError::Task(
+                LoadOwnedBatchGenerationTaskError::TaskNotFound
+            )
+        ));
+    }
+
+    #[test]
     fn should_map_single_chapter_prepare_errors_into_stable_resume_messages() {
         assert_eq!(
-            map_single_chapter_resume_prepare_error(
+            map_single_chapter_resume_validation_error(
                 PrepareSingleChapterGenerationRequestError::Chapter(
                     LoadAccessibleChapterForGenerationError::ChapterNotFoundOrAccessDenied,
                 ),
-            ),
+            )
+            .detail_message(),
             "Chapter not found or access denied"
         );
         assert_eq!(
-            map_single_chapter_resume_prepare_error(
+            map_single_chapter_resume_validation_error(
                 PrepareSingleChapterGenerationRequestError::PrerequisitesBlocked(
                     "缺少章节大纲".to_string(),
                 ),
-            ),
+            )
+            .detail_message(),
             "Resume blocked by prerequisites: 缺少章节大纲"
         );
     }
@@ -986,6 +814,7 @@ mod tests {
             command_state,
             "user-1",
             Some(&build_snapshot_with_runtime_state(workflow_runtime_state)),
+            test_single_generation_gateway_config(),
         )
         .await;
 
@@ -1019,6 +848,7 @@ mod tests {
             command_state,
             "user-1",
             Some(&snapshot),
+            test_single_generation_gateway_config(),
         )
         .await;
 
@@ -1073,6 +903,13 @@ mod tests {
             command_state.clone(),
             dispatch_plan,
             reset_persistence_plan.clone(),
+            test_single_generation_gateway_config(),
+        );
+        assert_eq!(
+            persistence_plan
+                .single_generation_gateway_config()
+                .rollback_boundary,
+            "test_single_generation_resume_gateway"
         );
 
         match persistence_plan.dispatch_plan() {
@@ -1193,12 +1030,14 @@ mod tests {
                 )),
                 request_runtime_state.compat_options.clone(),
                 build_default_execution_config(),
+                test_single_generation_gateway_config(),
             ),
         };
         let persistence_plan = BatchGenerationResumeLaunchPersistencePlan::new(
             command_state.clone(),
             dispatch_plan,
             reset_persistence_plan.clone(),
+            test_single_generation_gateway_config(),
         );
 
         match persistence_plan.dispatch_plan() {
@@ -1306,6 +1145,7 @@ mod tests {
                     "quality_metrics_history": [{"overall_score": 88}]
                 })),
                 "user-8",
+                test_single_generation_gateway_config(),
             )
             .await
             .expect("resume persistence plan");
@@ -1344,7 +1184,7 @@ mod tests {
         assert_eq!(response_payload["checkpoint"]["last_event"], "resume");
         assert_eq!(
             persistence_plan
-                .reset_persistence_plan
+                .reset_persistence_plan()
                 .resume_snapshot_plan()
                 .runtime_state()["quality_metrics_history"][0]["overall_score"],
             88
@@ -1367,7 +1207,7 @@ mod tests {
         }));
 
         let (restored_runtime_state, existing_workflow_runtime_state) =
-            prepare_resume_launch_restored_state(&command_state, Some(&snapshot))
+            prepare_batch_generation_resume_restored_runtime_state(&command_state, Some(&snapshot))
                 .expect("resume launch restored state");
 
         assert_eq!(command_state.batch_id, "task-resume-owner-1");
@@ -1751,10 +1591,11 @@ mod tests {
                 vec!["chapter-1".to_string(), "chapter-2".to_string()],
                 3200,
                 SingleChapterGenerationCompatOptions::default(),
-                crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
+                crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig {
                     ai_config: crate::ai::AIConfig::default(),
-                    provider_payload: crate::services::chapter_generation_prompt_context_provider_service::build_placeholder_prompt_context_provider_payload(),
+                    provider_payload: crate::services::chapter_generation_prompt_service::build_placeholder_prompt_context_provider_payload(),
                 },
+                test_single_generation_gateway_config(),
             ),
         };
 
@@ -1779,9 +1620,9 @@ mod tests {
                         enable_analysis: true,
                         ..Default::default()
                     },
-                    execution_config: crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
+                    execution_config: crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig {
                         ai_config: crate::ai::AIConfig::default(),
-                        provider_payload: crate::services::chapter_generation_prompt_context_provider_service::build_placeholder_prompt_context_provider_payload(),
+                        provider_payload: crate::services::chapter_generation_prompt_service::build_placeholder_prompt_context_provider_payload(),
                     },
                 },
             },
@@ -1927,6 +1768,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn should_prepare_db_backed_owned_resume_launch_from_rust_owner() {
+        let db = setup_resume_settings_db().await;
+        seed_resume_settings(&db, "user-resume-db-smoke").await;
+        seed_resume_project_and_chapters(&db, "user-resume-db-smoke").await;
+        let mut prerequisite_chapter = chapter::Entity::find_by_id("chapter-1")
+            .one(&db)
+            .await
+            .expect("load prerequisite chapter")
+            .expect("prerequisite chapter exists")
+            .into_active_model();
+        prerequisite_chapter.status = Set("completed".to_string());
+        prerequisite_chapter.content = Set(Some("前置章节已完成正文".to_string()));
+        prerequisite_chapter.summary = Set(Some("前置章节概要".to_string()));
+        prerequisite_chapter.word_count = Set(1000);
+        prerequisite_chapter
+            .update(&db)
+            .await
+            .expect("mark prerequisite chapter completed");
+        seed_owned_resume_task_and_snapshot(&db, "user-resume-db-smoke").await;
+
+        let plan = super::prepare_owned_batch_generation_resume(
+            &db,
+            "batch-resume-db-smoke",
+            "user-resume-db-smoke",
+            test_single_generation_gateway_config(),
+        )
+        .await
+        .expect("db-backed owned resume plan");
+        let response_payload = plan.response_payload();
+
+        let ResumeExecutionDispatchPlan::Batch { runtime_input } = plan.dispatch_plan() else {
+            panic!("db-backed resume should dispatch through batch runtime owner");
+        };
+        assert_eq!(runtime_input.user_id, "user-resume-db-smoke");
+        assert_eq!(runtime_input.chapter_ids, vec!["chapter-2".to_string()]);
+        assert_eq!(runtime_input.target_word_count, 1);
+        assert!(runtime_input.compat_options.enable_analysis);
+        assert_eq!(
+            runtime_input.compat_options.story_repair_summary(),
+            "沿用 DB-backed resume 修复摘要"
+        );
+        assert_eq!(runtime_input.ai_config.model, "resume-db-model");
+        assert_eq!(
+            runtime_input.candidate_gateway_config.rollback_boundary,
+            "test_single_generation_resume_gateway"
+        );
+        assert_eq!(
+            plan.single_generation_gateway_config().rollback_boundary,
+            "test_single_generation_resume_gateway"
+        );
+        assert_eq!(response_payload["batch_id"], "batch-resume-db-smoke");
+        assert_eq!(response_payload["status"], "pending");
+        assert_eq!(response_payload["message"], "Task resumed and queued");
+        assert_eq!(
+            response_payload["checkpoint"]["resume_from_batch_id"],
+            "batch-resume-db-smoke"
+        );
+        assert_eq!(response_payload["checkpoint"]["last_event"], "resume");
+        assert_eq!(
+            response_payload["checkpoint"]["active_story_repair_payload"]["mode"],
+            "resume-db-smoke"
+        );
+        assert_eq!(
+            response_payload["active_story_repair_payload"]["summary"],
+            "沿用 DB-backed resume 修复摘要"
+        );
+        assert_eq!(
+            response_payload["latest_quality_metrics"]["source"],
+            "resume-db-smoke"
+        );
+        assert_eq!(
+            response_payload["quality_metrics_summary"]["quality_gate"]["decision"],
+            "allow_resume"
+        );
+    }
+
+    #[tokio::test]
     async fn should_build_resume_dispatch_plan_from_validated_execution_and_restored_runtime_owner()
     {
         let db = setup_resume_settings_db().await;
@@ -1967,6 +1885,7 @@ mod tests {
                 normalize_chapter_generation_target_word_count(Some(
                     command_state.target_word_count,
                 )),
+                test_single_generation_gateway_config(),
             )
             .await
             .expect("dispatch plan from validated execution owner");
@@ -2026,6 +1945,7 @@ mod tests {
                 normalize_chapter_generation_target_word_count(Some(
                     command_state.target_word_count,
                 )),
+                test_single_generation_gateway_config(),
             )
             .await
             .expect("single chapter dispatch plan from validated execution owner");
@@ -2213,6 +2133,7 @@ mod tests {
                 "user-8",
                 vec!["chapter-1".to_string(), "chapter-2".to_string()],
                 3200,
+                test_single_generation_gateway_config(),
             )
             .await
             .expect("prepared batch resume runtime launch");
@@ -2423,6 +2344,7 @@ mod tests {
             command_state,
             dispatch_plan,
             reset_persistence_plan,
+            test_single_generation_gateway_config(),
         );
 
         match persistence_plan.dispatch_plan() {
@@ -2464,6 +2386,7 @@ mod tests {
                     ..Default::default()
                 },
                 build_default_execution_config(),
+                test_single_generation_gateway_config(),
             ),
         };
         let command_state = ResumeBatchGenerationCommandState::from_task(&build_task("failed"));
@@ -2473,6 +2396,7 @@ mod tests {
             command_state,
             dispatch_plan,
             reset_persistence_plan,
+            test_single_generation_gateway_config(),
         );
         let dispatch_plan = persistence_plan.dispatch_plan().clone();
 
@@ -2484,6 +2408,163 @@ mod tests {
                     && runtime_input.target_word_count == 3100
                     && runtime_input.compat_options.enable_analysis
         ));
+    }
+
+    #[test]
+    fn should_keep_batch_generation_resume_task_command_dispatch_plan_contract() {
+        let mut task = build_task("failed");
+        task.user_id = "user-7".to_string();
+        task.target_word_count = 3100;
+        task.enable_analysis = true;
+        task.chapter_ids = json!(["chapter-1", "chapter-2"]);
+
+        let command_state = ResumeBatchGenerationCommandState::from_task(&task);
+        let persistence_plan = build_test_resume_launch_persistence_plan(
+            command_state.clone(),
+            "user-7",
+            vec!["chapter-1".to_string(), "chapter-2".to_string()],
+            true,
+        );
+
+        match persistence_plan.dispatch_plan() {
+            ResumeExecutionDispatchPlan::Batch { runtime_input } => {
+                assert_eq!(runtime_input.user_id, "user-7");
+                assert_eq!(
+                    runtime_input.chapter_ids,
+                    vec!["chapter-1".to_string(), "chapter-2".to_string()]
+                );
+                assert_eq!(runtime_input.target_word_count, 3100);
+                assert!(runtime_input.compat_options.enable_analysis);
+            }
+            ResumeExecutionDispatchPlan::SingleChapter { .. } => {
+                panic!("expected batch dispatch plan");
+            }
+        }
+
+        assert_eq!(
+            persistence_plan.response_payload()["batch_id"],
+            command_state.batch_id
+        );
+    }
+
+    #[test]
+    fn should_keep_batch_generation_resume_task_command_response_payload_owner_contract() {
+        let mut task = build_task("cancelled");
+        task.chapter_count = 2;
+        task.total_chapters = 2;
+        task.target_word_count = 2800;
+        task.chapter_ids = json!(["chapter-3", "chapter-4"]);
+
+        let persistence_plan = build_test_resume_launch_persistence_plan(
+            ResumeBatchGenerationCommandState::from_task(&task),
+            "user-1",
+            vec!["chapter-3".to_string(), "chapter-4".to_string()],
+            false,
+        );
+
+        assert_eq!(persistence_plan.response_payload()["status"], "pending");
+        assert_eq!(
+            persistence_plan.response_payload()["message"],
+            "Task resumed and queued"
+        );
+        assert_eq!(
+            persistence_plan.response_payload()["checkpoint"]["phase"],
+            "pending"
+        );
+    }
+
+    #[test]
+    fn should_keep_batch_generation_resume_task_command_launch_start_owner_contract() {
+        let mut task = build_task("failed");
+        task.user_id = "user-41".to_string();
+        task.target_word_count = 2900;
+        task.chapter_ids = json!(["chapter-41", "chapter-42"]);
+
+        let persistence_plan = build_test_resume_launch_persistence_plan(
+            ResumeBatchGenerationCommandState::from_task(&task),
+            "user-41",
+            vec!["chapter-41".to_string(), "chapter-42".to_string()],
+            true,
+        );
+
+        match persistence_plan.dispatch_plan() {
+            ResumeExecutionDispatchPlan::Batch { runtime_input } => {
+                assert_eq!(runtime_input.user_id, "user-41");
+                assert_eq!(
+                    runtime_input.chapter_ids,
+                    vec!["chapter-41".to_string(), "chapter-42".to_string()]
+                );
+                assert_eq!(runtime_input.target_word_count, 2900);
+                assert!(runtime_input.compat_options.enable_analysis);
+            }
+            ResumeExecutionDispatchPlan::SingleChapter { .. } => {
+                panic!("expected batch dispatch plan");
+            }
+        }
+
+        assert_eq!(persistence_plan.response_payload()["batch_id"], "task-1");
+        assert_eq!(persistence_plan.response_payload()["status"], "pending");
+    }
+
+    #[test]
+    fn should_keep_resume_batch_generation_owned_prepare_owner_contract_explicit() {
+        let task = batch_generation_task::Model {
+            id: "task-5".to_string(),
+            project_id: "project-5".to_string(),
+            user_id: "user-5".to_string(),
+            start_chapter_number: 5,
+            chapter_count: 2,
+            chapter_ids: json!(["chapter-5", "chapter-6"]),
+            style_id: None,
+            target_word_count: 3400,
+            enable_analysis: true,
+            status: "failed".to_string(),
+            total_chapters: 2,
+            completed_chapters: 0,
+            failed_chapters: json!([]),
+            current_chapter_id: Some("chapter-5".to_string()),
+            current_chapter_number: Some(5),
+            current_retry_count: 1,
+            max_retries: 3,
+            created_at: None,
+            started_at: None,
+            completed_at: None,
+            error_message: None,
+        };
+        let workflow_runtime_state = json!({
+            "batch_request_runtime_state": {
+                "compat_options": {
+                    "enable_analysis": true,
+                    "enable_mcp": true,
+                    "web_research_enabled": false,
+                    "story_repair_targets": [],
+                    "story_preserve_strengths": []
+                },
+                "model_override": null
+            }
+        });
+        let snapshot = batch_generation_snapshot::Model {
+            id: "snapshot-5".to_string(),
+            batch_task_id: "task-5".to_string(),
+            workflow_runtime_state: Some(workflow_runtime_state.clone()),
+            latest_quality_metrics: None,
+            quality_metrics_history: None,
+            quality_metrics_summary: None,
+            created_at: Some(Utc::now().naive_utc()),
+            updated_at: Some(Utc::now().naive_utc()),
+        };
+        let command_state = ResumeBatchGenerationCommandState::from_task(&task);
+
+        assert_eq!(command_state.batch_id, "task-5");
+        assert_eq!(command_state.chapter_ids, json!(["chapter-5", "chapter-6"]));
+        assert_eq!(
+            snapshot
+                .workflow_runtime_state
+                .as_ref()
+                .and_then(|state| state.get("batch_request_runtime_state"))
+                .and_then(|state| state.get("model_override")),
+            Some(&Value::Null)
+        );
     }
 
     #[test]
@@ -2705,7 +2786,7 @@ mod tests {
         );
 
         let payload =
-            crate::services::chapter_story_repair_quality_context_service::restore_active_story_repair_payload_from_quality_context(
+            crate::services::chapter_generation_runtime_service::story_repair_quality_context_owner::restore_active_story_repair_payload_from_quality_context(
                 snapshot.quality_metrics_summary.as_ref(),
                 snapshot.latest_quality_metrics.as_ref(),
                 "batch",
@@ -3549,13 +3630,13 @@ mod tests {
             })),
         );
 
-        let guidance = crate::services::chapter_story_repair_quality_context_service::quality_repair_guidance_from_quality_context(
+        let guidance = crate::services::chapter_generation_runtime_service::story_repair_quality_context_owner::quality_repair_guidance_from_quality_context(
             snapshot.quality_metrics_summary.as_ref(),
             snapshot.latest_quality_metrics.as_ref(),
         )
             .expect("quality guidance should be resolved");
 
-        let merged_guidance = crate::services::chapter_story_repair_quality_context_service::merged_story_repair_guidance_from_quality_context(
+        let merged_guidance = crate::services::chapter_generation_runtime_service::story_repair_quality_context_owner::merged_story_repair_guidance_from_quality_context(
             snapshot.quality_metrics_summary.as_ref(),
             snapshot.latest_quality_metrics.as_ref(),
         )

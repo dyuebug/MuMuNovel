@@ -2,19 +2,33 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
-from app.models.chapter import Chapter
-from app.models.chapter_draft_attempt import ChapterDraftAttempt
-from app.models.generation_history import GenerationHistory
-from app.models.memory import PlotAnalysis, StoryMemory
-from app.services.chapter_generation_history_service import (
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active chapter-analysis response projection and draft view "
+    "payload contract; this Python service is kept only as frozen "
+    "rollback/source-map material behind repointed route shells."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/services/chapter_analysis_runtime_service/query_owner.rs; "
+    "backend-rs/src/services/chapter_draft_view_payload_service.rs; "
+    "backend-rs/src/services/chapter_draft_history_service.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_chapter_analysis_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
+
+from app.services.chapter_generation.history_service import (
     build_auto_revision_draft_payload,
     _build_candidate_draft_payload as build_candidate_draft_payload,
     parse_reviser_result_from_history,
 )
-from app.services.story_quality_feedback_service import extract_quality_metrics_from_history_payload
-from app.services.story_repair_payload_service import build_batch_quality_metrics_summary
+
+if TYPE_CHECKING:
+    from app.models.chapter import Chapter
+    from app.models.chapter_draft_attempt import ChapterDraftAttempt
+    from app.models.generation_history import GenerationHistory
+    from app.models.memory import PlotAnalysis, StoryMemory
 
 
 def parse_checker_result_from_history(generated_content: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -60,6 +74,13 @@ def build_chapter_analysis_payload(
     candidate_attempt: Optional[ChapterDraftAttempt],
     include_full_draft: bool = False,
 ) -> Dict[str, Any]:
+    from app.services.story_quality_feedback_service import (
+        extract_quality_metrics_from_history_payload,
+    )
+    from app.services.story_repair_payload_service import (
+        build_batch_quality_metrics_summary,
+    )
+
     latest_checker_result: Optional[Dict[str, Any]] = None
     latest_reviser_result: Optional[Dict[str, Any]] = None
     checker_created_at: Optional[str] = None

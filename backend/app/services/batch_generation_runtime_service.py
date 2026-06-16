@@ -2,23 +2,56 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
 
-from sqlalchemy.ext.asyncio import AsyncSession
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active batch runtime, context, and quality-profile chain; "
+    "this Python helper is kept only as frozen rollback/source-map material "
+    "for legacy batch runtime preparation."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs; "
+    "backend-rs/src/services/chapter_generation_runtime_service.rs; "
+    "backend-rs/src/services/chapter_generation_prompt_service.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_batch_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from app.logger import get_logger
-from app.models.chapter import Chapter
-from app.models.project import Project
-from app.services.chapter_quality_context_service import (
-    StoryPacket,
-    build_story_generation_packet_with_project_continuity,
-    clone_chapter_quality_profile,
-    resolve_chapter_quality_profile,
-)
-from app.services.story_repair_payload_service import StoryRepairPayload
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter import Chapter
+    from app.models.outline import Outline
+    from app.models.project import Project
+    from app.services.chapter_quality_context_service import StoryPacket
+    from app.services.story_repair_payload_service import StoryRepairPayload
 
 
 logger = get_logger(__name__)
+
+
+def _chapter_quality_context_service():
+    from app.services import chapter_quality_context_service
+
+    return chapter_quality_context_service
+
+
+def build_story_generation_packet_with_project_continuity(*args, **kwargs):
+    return _chapter_quality_context_service().build_story_generation_packet_with_project_continuity(
+        *args,
+        **kwargs,
+    )
+
+
+def clone_chapter_quality_profile(*args, **kwargs):
+    return _chapter_quality_context_service().clone_chapter_quality_profile(*args, **kwargs)
+
+
+async def resolve_chapter_quality_profile(*args, **kwargs):
+    return await _chapter_quality_context_service().resolve_chapter_quality_profile(*args, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -48,6 +81,14 @@ class BatchGenerationBuiltContext:
 
 
 @dataclass(frozen=True)
+class BatchGenerationProjectOutlineContext:
+    project: "Project"
+    outline: Optional["Outline"]
+    outline_mode: str
+    research_assets: list[Any]
+
+
+@dataclass(frozen=True)
 class BatchGenerationChapterRuntimeArtifacts:
     effective_story_packet: StoryPacket
     generation_guidance: Any
@@ -65,15 +106,166 @@ class BatchGenerationChapterRuntimeArtifacts:
 
 
 
+async def load_batch_generation_project_and_outline(
+    *,
+    db_session: "AsyncSession",
+    chapter: "Chapter",
+) -> tuple["Project", Optional["Outline"], str]:
+    from sqlalchemy import select
+    from app.models.outline import Outline
+    from app.models.project import Project
+
+    project_result = await db_session.execute(
+        select(Project).where(Project.id == chapter.project_id)
+    )
+    project = project_result.scalar_one_or_none()
+    if not project:
+        raise Exception("项目不存在")
+
+    outline_mode = project.outline_mode if project else "one-to-many"
+    logger.info(f"批量生成单章 - 大纲模式: {outline_mode}")
+
+    if chapter.outline_id:
+        outline_result = await db_session.execute(
+            select(Outline).where(Outline.id == chapter.outline_id)
+        )
+    else:
+        outline_result = await db_session.execute(
+            select(Outline)
+            .where(Outline.project_id == chapter.project_id)
+            .where(Outline.order_index == chapter.chapter_number)
+        )
+
+    return project, outline_result.scalar_one_or_none(), outline_mode
+
+
+async def collect_batch_generation_research_assets(
+    *,
+    db_session: "AsyncSession",
+    chapter: "Chapter",
+    project: "Project",
+    outline: Optional["Outline"],
+    user_id: str,
+    story_creation_brief: Optional[str],
+    enable_web_research: Optional[bool],
+    web_research_query: Optional[str],
+    stream_task_id: Optional[str],
+    write_lock: Any,
+    chapter_web_research_service: Any,
+    publish_task_stream_event_fn: Callable[..., Any],
+) -> list[Dict[str, str]]:
+    if not chapter_web_research_service.is_enabled(enable_web_research):
+        return []
+
+    if stream_task_id:
+        await publish_task_stream_event_fn(
+            stream_task_id,
+            {
+                "type": "progress",
+                "message": f"第{chapter.chapter_number}章正在联网检索",
+                "progress": 18,
+                "status": "running",
+                "phase": "researching",
+            },
+            db_session=db_session,
+        )
+
+    research_bundle = await chapter_web_research_service.collect_for_chapter(
+        project=project,
+        chapter=chapter,
+        outline=outline,
+        story_creation_brief=story_creation_brief,
+        enable_web_research=enable_web_research,
+        web_research_query=web_research_query,
+    )
+    research_assets = list(research_bundle.get("assets") or [])
+    research_query = str(research_bundle.get("query") or "")
+    if not research_assets:
+        return research_assets
+
+    async with write_lock:
+        saved_memory_ids = await chapter_web_research_service.replace_chapter_memories(
+            db_session=db_session,
+            user_id=user_id,
+            project=project,
+            chapter=chapter,
+            query=research_query,
+            archive_path=str(research_bundle.get("archive_path") or ""),
+            assets=research_assets,
+        )
+
+    logger.info(
+        "联网检索 - 第%s章获得 %s 条资料，归档 %s 条记忆",
+        chapter.chapter_number,
+        len(research_assets),
+        len(saved_memory_ids),
+    )
+    if stream_task_id:
+        await publish_task_stream_event_fn(
+            stream_task_id,
+            {
+                "type": "progress",
+                "message": f"第{chapter.chapter_number}章已检索到 {len(research_assets)} 条资料",
+                "progress": 22,
+                "status": "running",
+                "phase": "researching",
+            },
+            db_session=db_session,
+        )
+
+    return research_assets
+
+
+async def prepare_batch_generation_project_outline_context(
+    *,
+    db_session: "AsyncSession",
+    chapter: "Chapter",
+    user_id: str,
+    story_creation_brief: Optional[str],
+    enable_web_research: Optional[bool],
+    web_research_query: Optional[str],
+    stream_task_id: Optional[str],
+    write_lock: Any,
+    chapter_web_research_service: Any,
+    publish_task_stream_event_fn: Callable[..., Any],
+    load_project_outline_fn: Callable[..., Awaitable[tuple["Project", Optional["Outline"], str]]] = load_batch_generation_project_and_outline,
+    collect_research_assets_fn: Callable[..., Awaitable[list[Dict[str, str]]]] = collect_batch_generation_research_assets,
+) -> BatchGenerationProjectOutlineContext:
+    project, outline, outline_mode = await load_project_outline_fn(
+        db_session=db_session,
+        chapter=chapter,
+    )
+    research_assets = await collect_research_assets_fn(
+        db_session=db_session,
+        chapter=chapter,
+        project=project,
+        outline=outline,
+        user_id=user_id,
+        story_creation_brief=story_creation_brief,
+        enable_web_research=enable_web_research,
+        web_research_query=web_research_query,
+        stream_task_id=stream_task_id,
+        write_lock=write_lock,
+        chapter_web_research_service=chapter_web_research_service,
+        publish_task_stream_event_fn=publish_task_stream_event_fn,
+    )
+    return BatchGenerationProjectOutlineContext(
+        project=project,
+        outline=outline,
+        outline_mode=outline_mode,
+        research_assets=research_assets,
+    )
+
+
 async def prepare_batch_generation_runtime(
     *,
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     user_id: str,
-    project: Project,
-    chapter: Chapter,
+    project: "Project",
+    chapter: "Chapter",
     target_word_count: int,
     style_id: Optional[int],
-    story_packet: Optional[StoryPacket],
+    story_packet: Optional["StoryPacket"],
     base_quality_profile: Optional[Dict[str, Any]],
     research_assets: list[Any],
     creative_mode: Optional[str],
@@ -85,7 +277,7 @@ async def prepare_batch_generation_runtime(
     chapter_context: Any = None,
     outline_runtime_sources: Any = None,
     story_repair_state: Optional[Dict[str, Any]] = None,
-    story_repair_payload: Optional[StoryRepairPayload] = None,
+    story_repair_payload: Optional["StoryRepairPayload"] = None,
     active_story_repair_snapshot: Optional[Dict[str, Any]] = None,
     build_story_packet_fn: Callable[..., Any] = build_story_generation_packet_with_project_continuity,
     clone_quality_profile_fn: Callable[..., Dict[str, Any]] = clone_chapter_quality_profile,
@@ -164,13 +356,13 @@ async def prepare_batch_generation_runtime(
 def finalize_batch_generation_runtime(
     *,
     runtime_preparation: BatchGenerationRuntimePreparation,
-    project: Project,
-    chapter: Chapter,
+    project: "Project",
+    chapter: "Chapter",
     chapter_context: Any,
     target_word_count: int,
     outline_runtime_sources: Any,
     story_repair_state: Optional[Dict[str, Any]],
-    story_repair_payload: Optional[StoryRepairPayload],
+    story_repair_payload: Optional["StoryRepairPayload"],
     active_story_repair_snapshot: Optional[Dict[str, Any]],
     build_generation_runtime_bundle_fn: Callable[..., Any],
 ) -> BatchGenerationResolvedRuntime:
@@ -198,9 +390,9 @@ def finalize_batch_generation_runtime(
 
 async def build_batch_generation_context(
     *,
-    db_session: AsyncSession,
-    chapter: Chapter,
-    project: Project,
+    db_session: "AsyncSession",
+    chapter: "Chapter",
+    project: "Project",
     outline: Any,
     outline_mode: str,
     user_id: str,
@@ -263,15 +455,15 @@ async def build_batch_generation_context(
 
 async def resolve_batch_generation_chapter_runtime(
     *,
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     user_id: str,
-    project: Project,
-    chapter: Chapter,
+    project: "Project",
+    chapter: "Chapter",
     outline: Any,
     outline_mode: str,
     target_word_count: int,
     style_id: Optional[int],
-    story_packet: Optional[StoryPacket],
+    story_packet: Optional["StoryPacket"],
     base_quality_profile: Optional[Dict[str, Any]],
     research_assets: list[Any],
     creative_mode: Optional[str],
@@ -283,7 +475,7 @@ async def resolve_batch_generation_chapter_runtime(
     memory_service: Any,
     foreshadow_service: Any,
     story_repair_state: Optional[Dict[str, Any]],
-    story_repair_payload: Optional[StoryRepairPayload],
+    story_repair_payload: Optional["StoryRepairPayload"],
     active_story_repair_snapshot: Optional[Dict[str, Any]],
     build_generation_runtime_bundle_fn: Callable[..., Any],
     build_story_packet_fn: Callable[..., Any] = build_story_generation_packet_with_project_continuity,

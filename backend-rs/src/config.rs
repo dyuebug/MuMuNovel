@@ -94,6 +94,21 @@ pub struct AppConfig {
     pub chapter_candidate_rust_executor_rollback_boundary: String,
 }
 
+impl AppConfig {
+    pub fn log_startup_contract(&self) {
+        info!(
+            app_name = %self.app_name,
+            app_version = %self.app_version,
+            log_level = %self.log_level,
+            debug = self.debug,
+            runtime_mode = %self.runtime_mode.as_str(),
+            enable_startup_schema_sync = self.enable_startup_schema_sync,
+            session_refresh_threshold_minutes = self.session_refresh_threshold_minutes,
+            "Rust backend startup configuration contract loaded"
+        );
+    }
+}
+
 fn env_or(key: &str, default: &str) -> String {
     env::var(key).unwrap_or_else(|_| default.to_string())
 }

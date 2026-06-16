@@ -2,21 +2,48 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from sqlalchemy.ext.asyncio import AsyncSession
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active batch success-state, retry, and applied-chapter "
+    "projection chain; this Python helper is kept only as frozen "
+    "rollback/source-map material for legacy batch success handling."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs; "
+    "backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_batch_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from app.logger import get_logger
-from app.models.batch_generation_task import BatchGenerationTask
-from app.models.chapter import Chapter
-from app.models.project import Project
-from app.services.batch_generation_chapter_persistence_service import (
-    apply_generated_batch_chapter_candidate,
-    build_batch_chapter_draft_attempt,
-)
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.batch_generation_task import BatchGenerationTask
+    from app.models.chapter import Chapter
+    from app.models.project import Project
 
 
 logger = get_logger(__name__)
+
+
+def apply_generated_batch_chapter_candidate(*args, **kwargs):
+    from app.services.batch_generation_chapter_persistence_service import (
+        apply_generated_batch_chapter_candidate as apply_generated_batch_chapter_candidate_service,
+    )
+
+    return apply_generated_batch_chapter_candidate_service(*args, **kwargs)
+
+
+def build_batch_chapter_draft_attempt(*args, **kwargs):
+    from app.services.batch_generation_chapter_persistence_service import (
+        build_batch_chapter_draft_attempt as build_batch_chapter_draft_attempt_service,
+    )
+
+    return build_batch_chapter_draft_attempt_service(*args, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -27,11 +54,11 @@ class BatchGenerationQualityGateRetryPreparation:
 
 
 async def handle_batch_generation_quality_gate_retry(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
-    task: BatchGenerationTask,
-    chapter: Chapter,
-    project: Project,
+    task: "BatchGenerationTask",
+    chapter: "Chapter",
+    project: "Project",
     batch_id: str,
     chapter_id: str,
     retry_count: int,
@@ -112,14 +139,14 @@ class BatchGenerationAppliedChapterState:
 
 
 async def apply_successful_batch_generation_chapter(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
-    task: BatchGenerationTask,
-    chapter: Chapter,
+    task: "BatchGenerationTask",
+    chapter: "Chapter",
     batch_id: str,
     retry_count: int,
     emit_event,
-    project: Project,
+    project: "Project",
     write_lock,
     resolve_story_repair_state_fn,
     sync_task_story_repair_state_fn,
@@ -187,9 +214,9 @@ async def apply_successful_batch_generation_chapter(
 
 
 async def finalize_successful_batch_generation_chapter(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
-    task: BatchGenerationTask,
+    task: "BatchGenerationTask",
     emit_event,
     write_lock,
 ) -> None:

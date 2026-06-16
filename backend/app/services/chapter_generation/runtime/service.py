@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from app.models.chapter import Chapter
-from app.models.project import Project
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the shared chapter-generation runtime bundle and prompt-quality "
+    "contract; this Python module is kept only as frozen rollback/source-map "
+    "material after explicit support-shell freeze approval."
+)
+SOURCE_MAP_RUST_OWNER = "backend-rs/src/services/chapter_generation_prompt_service.rs"
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_single_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
+
 from app.services.chapter_quality_context_service import (
     ChapterGenerationIntent,
     StoryPacket,
@@ -12,6 +20,10 @@ from app.services.chapter_quality_context_service import (
     build_chapter_generation_intent as build_base_chapter_generation_intent,
 )
 from app.services.story_repair_payload_service import StoryRepairPayload
+
+if TYPE_CHECKING:
+    from app.models.chapter import Chapter
+    from app.models.project import Project
 
 
 @dataclass

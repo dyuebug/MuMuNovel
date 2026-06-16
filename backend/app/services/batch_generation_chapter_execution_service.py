@@ -2,33 +2,65 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active batch chapter attempt/runtime chain; this Python "
+    "helper is kept only as frozen rollback/source-map material for legacy "
+    "batch execution fallback."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs; "
+    "backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_batch_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from app.logger import get_logger
-from app.models.batch_generation_task import BatchGenerationTask
-from app.models.chapter import Chapter
-from app.models.project import Project
-from app.services.task_quality_snapshot_service import clear_task_quality_metrics_cache
-from app.services.task_workflow_runtime_service import clear_task_workflow_runtime_cache
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.batch_generation_task import BatchGenerationTask
+    from app.models.chapter import Chapter
+    from app.models.project import Project
 
 
 logger = get_logger(__name__)
 
 
+def _task_quality_snapshot_service():
+    from app.services import task_quality_snapshot_service
+
+    return task_quality_snapshot_service
+
+
+def _task_workflow_runtime_service():
+    from app.services import task_workflow_runtime_service
+
+    return task_workflow_runtime_service
+
+
+async def clear_task_quality_metrics_cache(*args, **kwargs):
+    return await _task_quality_snapshot_service().clear_task_quality_metrics_cache(*args, **kwargs)
+
+
+async def clear_task_workflow_runtime_cache(*args, **kwargs):
+    return await _task_workflow_runtime_service().clear_task_workflow_runtime_cache(*args, **kwargs)
+
+
 @dataclass(frozen=True)
 class BatchGenerationChapterAttemptPreparation:
-    chapter: Chapter
+    chapter: "Chapter"
     analysis_quality_profile: Dict[str, Any]
 
 
 async def prepare_batch_generation_chapter_attempt(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
-    task: BatchGenerationTask,
-    project: Project,
+    task: "BatchGenerationTask",
+    project: "Project",
     chapter_id: str,
     retry_count: int,
     write_lock,
@@ -36,6 +68,9 @@ async def prepare_batch_generation_chapter_attempt(
     cached_analysis_quality_profile: Dict[str, Any],
     clone_quality_profile_fn,
 ) -> BatchGenerationChapterAttemptPreparation:
+    from sqlalchemy import select
+    from app.models.chapter import Chapter
+
     chapter_result = await db_session.execute(
         select(Chapter).where(Chapter.id == chapter_id)
     )
@@ -92,7 +127,7 @@ class BatchGenerationPreparedChapterResult:
 def prepare_batch_generation_chapter_result(
     generation_result: Dict[str, Any],
     *,
-    chapter: Chapter,
+    chapter: "Chapter",
     retry_count: int,
     max_retries: int,
     active_story_repair_payload,

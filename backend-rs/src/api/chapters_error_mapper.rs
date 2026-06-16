@@ -1,7 +1,12 @@
 use axum::{http::StatusCode, Json};
 use serde_json::{json, Value};
 
-use crate::services::chapter_access_service::LoadAccessibleChapterError;
+use crate::api::chapter_regeneration_routes::{
+    ApplyPartialRegenerateError, RegenerationTasksQueryRequestError,
+};
+use crate::services::chapter_access_service::{
+    LoadAccessibleChapterError, LoadAccessibleChapterForGenerationError,
+};
 use crate::services::chapter_analysis_runtime_service::PrepareChapterAnalysisTriggerError;
 use crate::services::chapter_analysis_service::CreateChapterAnalysisTaskError;
 use crate::services::chapter_query_service::{
@@ -9,16 +14,15 @@ use crate::services::chapter_query_service::{
     LoadNavigationPayloadError, LoadQualityTrendPayloadError, QualityTrendQueryRequestError,
     ReadQueryPayloadError,
 };
-use crate::services::chapter_regeneration_apply_service::ApplyPartialRegenerateError;
 use crate::services::chapter_regeneration_prepare_service::{
     BuildRegenerationAiServiceError, PreparePartialRegenerationError,
     PreparePartialRegenerationStreamError,
 };
-use crate::services::chapter_regeneration_query_service::RegenerationTasksQueryRequestError;
 use crate::services::chapter_regeneration_stream_workflow_service::{
     CreateChapterRegenerationStreamWorkflowError, CreatePartialRegenerationStreamWorkflowError,
     CreateRegenerationStreamWorkflowError,
 };
+use crate::services::chapter_single_generation_prepare_service::PrepareSingleChapterGenerationRequestError;
 
 pub type ChapterRouteError = (StatusCode, Json<Value>);
 
@@ -44,6 +48,43 @@ pub fn map_load_accessible_chapter_error(error: LoadAccessibleChapterError) -> C
             chapter_not_found_or_access_denied_error()
         }
         LoadAccessibleChapterError::Internal(error) => internal_detail_error(error),
+    }
+}
+
+pub fn map_single_chapter_generation_error(
+    error: LoadAccessibleChapterForGenerationError,
+) -> ChapterRouteError {
+    match error {
+        LoadAccessibleChapterForGenerationError::ChapterNotFound => {
+            detail_error(StatusCode::NOT_FOUND, "Chapter not found")
+        }
+        LoadAccessibleChapterForGenerationError::ChapterNotFoundOrAccessDenied => {
+            chapter_not_found_or_access_denied_error()
+        }
+        LoadAccessibleChapterForGenerationError::Internal(error) => internal_detail_error(error),
+    }
+}
+
+pub fn map_single_chapter_generation_request_error(
+    error: PrepareSingleChapterGenerationRequestError,
+) -> ChapterRouteError {
+    match error {
+        PrepareSingleChapterGenerationRequestError::Chapter(error) => {
+            map_single_chapter_generation_error(error)
+        }
+        PrepareSingleChapterGenerationRequestError::Config(error) => {
+            detail_error(StatusCode::BAD_REQUEST, error)
+        }
+        PrepareSingleChapterGenerationRequestError::PrerequisitesBlocked(error) => {
+            detail_error(StatusCode::BAD_REQUEST, error)
+        }
+        PrepareSingleChapterGenerationRequestError::Internal(error) => internal_detail_error(error),
+        error => detail_error(
+            StatusCode::BAD_REQUEST,
+            error
+                .request_validation_detail_message()
+                .expect("single-generation request validation errors should share canonical detail messages"),
+        ),
     }
 }
 
@@ -303,6 +344,7 @@ mod tests {
         map_prepare_partial_regeneration_stream_error, map_quality_trend_query_request_error,
         map_regeneration_tasks_query_request_error,
     };
+    use crate::api::chapter_regeneration_routes::RegenerationTasksQueryRequestError;
     use crate::services::chapter_access_service::LoadAccessibleChapterError;
     use crate::services::chapter_analysis_runtime_service::PrepareChapterAnalysisTriggerError;
     use crate::services::chapter_analysis_service::CreateChapterAnalysisTaskError;
@@ -314,7 +356,6 @@ mod tests {
         BuildRegenerationAiServiceError, PreparePartialRegenerationError,
         PreparePartialRegenerationStreamError,
     };
-    use crate::services::chapter_regeneration_query_service::RegenerationTasksQueryRequestError;
     use axum::http::StatusCode;
     use serde_json::json;
 

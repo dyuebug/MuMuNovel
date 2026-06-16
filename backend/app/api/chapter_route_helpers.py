@@ -1,11 +1,17 @@
 """章节路由共享辅助函数。"""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from fastapi import HTTPException, Request
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.common import verify_project_access
-from app.models.chapter import Chapter
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter import Chapter
 
 
 def require_authenticated_user_id(request: Request) -> str:
@@ -21,6 +27,10 @@ async def load_accessible_chapter_or_404(
     chapter_id: str,
     user_id: str,
 ) -> Chapter:
+    from sqlalchemy import select
+
+    from app.models.chapter import Chapter
+
     chapter_result = await db.execute(
         select(Chapter).where(Chapter.id == chapter_id)
     )

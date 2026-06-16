@@ -2,19 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from functools import cached_property
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Sequence
 import json
 import re
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.logger import get_logger
-from app.models.project import Project
-from app.models.writing_style import WritingStyle
-from app.services.mcp_tools_loader import mcp_tools_loader
-from app.services.project_generation_defaults import resolve_project_generation_defaults
-from app.services.project_continuity_ledger_service import build_project_continuity_ledger
 from app.services.novel_quality_rules import detect_genre_profiles, detect_style_profile
 from app.services.prompt_service import (
     build_creative_mode_block,
@@ -37,8 +29,13 @@ from app.services.prompt_service import (
     normalize_story_focus,
     build_story_repair_target_block,
 )
-from app.services.story_repair_payload_service import StoryRepairPayload, resolve_story_repair_prompt_kwargs
-from app.services.writing_style_sync_service import sync_low_ai_presets
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.project import Project
+    from app.models.writing_style import WritingStyle
+    from app.services.story_repair_payload_service import StoryRepairPayload
 
 logger = get_logger(__name__)
 
@@ -1511,6 +1508,10 @@ def resolve_story_generation_guidance(
     quality_preset: Optional[str] = None,
     quality_notes: Optional[str] = None,
 ) -> StoryGenerationGuidance:
+    from app.services.project_generation_defaults import (
+        resolve_project_generation_defaults,
+    )
+
     normalized_overrides = _normalize_story_guidance_values({
         "creative_mode": creative_mode,
         "story_focus": story_focus,
@@ -1593,6 +1594,9 @@ async def enrich_story_packet_with_project_continuity(
     story_packet: StoryPacket,
 ) -> StoryPacket:
     """在 story packet 缺少状态账本时，用项目 continuity ledger 回填。"""
+    from app.services.project_continuity_ledger_service import (
+        build_project_continuity_ledger,
+    )
 
     project_id = getattr(project, "id", None)
     if not project_id:
@@ -1917,6 +1921,10 @@ def build_prompt_quality_kwargs(
     story_organization_state_ledger: Optional[Sequence[Any]] = None,
     story_career_state_ledger: Optional[Sequence[Any]] = None,
 ) -> Dict[str, Any]:
+    from app.services.story_repair_payload_service import (
+        resolve_story_repair_prompt_kwargs,
+    )
+
     source = profile or {}
     active_guidance = guidance or StoryGenerationGuidance()
     external_assets = source.get("external_assets") or ()
@@ -2068,6 +2076,7 @@ async def _resolve_project_default_style_id(
     db_session: AsyncSession,
     project_id: str,
 ) -> Optional[int]:
+    from sqlalchemy import select
     from app.models.project_default_style import ProjectDefaultStyle
 
     result = await db_session.execute(
@@ -2086,6 +2095,11 @@ async def _resolve_effective_style_context(
     prefer_project_default_style: bool = False,
     log_prefix: str = "章节",
 ) -> Dict[str, Any]:
+    from sqlalchemy import select
+
+    from app.models.writing_style import WritingStyle
+    from app.services.writing_style_sync_service import sync_low_ai_presets
+
     await sync_low_ai_presets(db_session)
 
     resolved_style_id = style_id
@@ -2167,6 +2181,8 @@ async def resolve_chapter_quality_profile(
         )
 
     if enable_mcp and user_id:
+        from app.services.mcp_tools_loader import mcp_tools_loader
+
         try:
             prompt_blocks = await mcp_tools_loader.get_prompt_reference_blocks(
                 user_id=user_id,

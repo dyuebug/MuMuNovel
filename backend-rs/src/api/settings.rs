@@ -18,31 +18,142 @@ use crate::ai::service::AIService;
 use crate::ai::types::{ToolChoice, ToolDef, ToolFunction};
 use crate::models::settings;
 use crate::services::auth::Claims;
-use crate::services::settings_api_key_payload_adapter_service::build_stored_api_key_payload;
-use crate::services::settings_models_payload_adapter_service::{
-    build_available_models_fallback_payload, build_available_models_payload,
-    build_fetch_models_failure_payload, build_fetch_models_fallback_payload,
-    build_fetch_models_success_payload,
-};
-use crate::services::settings_preset_query_service::{find_preset_config, FindPresetConfigError};
-use crate::services::settings_preset_request_service::{
-    build_create_preset_from_current_request,
-    build_create_settings_preset_request_from_typed_route_payload,
-    build_update_settings_preset_request_from_typed_route_payload,
-    CreatePresetFromCurrentRouteBody, CreatePresetFromCurrentRouteQuery,
-    CreateSettingsPresetRouteRequest, UpdateSettingsPresetRouteRequest,
-};
-use crate::services::settings_runtime_config_service::{
-    normalize_openai_compatible_base_url, resolve_effective_runtime_settings,
-    EffectiveSettingsOverrides,
-};
 use crate::services::settings_service::{
-    SettingsService, SETTINGS_DELETE_MISSING_DETAIL, SETTINGS_UPDATE_MISSING_DETAIL,
+    build_create_settings_preset_request_from_route_payload,
+    build_settings_update_request_from_route_body,
+    build_update_settings_preset_request_from_route_payload, normalize_openai_compatible_base_url,
+    CreateSettingsPresetRequest, EffectiveSettingsOverrides, SettingsService,
+    UpdateSettingsPresetRequest, SETTINGS_DELETE_MISSING_DETAIL, SETTINGS_UPDATE_MISSING_DETAIL,
 };
-use crate::services::settings_test_preset_request_service::build_test_preset_connection_request;
-use crate::services::settings_update_request_service::{
-    build_settings_update_request_from_typed_route_payload, SettingsUpdateRouteRequest,
-};
+
+const SETTINGS_ROUTE: &str = "/settings";
+const SETTINGS_API_KEY_ROUTE: &str = "/settings/api-key";
+const SETTINGS_MODELS_ROUTE: &str = "/settings/models";
+const SETTINGS_TEST_ROUTE: &str = "/settings/test";
+const SETTINGS_FETCH_MODELS_ROUTE: &str = "/settings/fetch-models";
+const SETTINGS_TEST_WEB_RESEARCH_ROUTE: &str = "/settings/test-web-research";
+const SETTINGS_CHECK_FUNCTION_CALLING_ROUTE: &str = "/settings/check-function-calling";
+const SETTINGS_PRESETS_ROUTE: &str = "/settings/presets";
+const SETTINGS_PRESETS_FROM_CURRENT_ROUTE: &str = "/settings/presets/from-current";
+const SETTINGS_PRESET_DETAIL_ROUTE: &str = "/settings/presets/{preset_id}";
+const SETTINGS_PRESET_ACTIVATE_ROUTE: &str = "/settings/presets/{preset_id}/activate";
+const SETTINGS_PRESET_TEST_ROUTE: &str = "/settings/presets/{preset_id}/test";
+
+#[cfg(test)]
+fn build_settings_route_owner_contract() -> Value {
+    json!({
+        "owner": "settings",
+        "rust_owner": "backend-rs/src/api/settings.rs",
+        "route_prefix": "/api",
+        "routes": {
+            "settings": SETTINGS_ROUTE,
+            "api_key": SETTINGS_API_KEY_ROUTE,
+            "models": SETTINGS_MODELS_ROUTE,
+            "test": SETTINGS_TEST_ROUTE,
+            "fetch_models": SETTINGS_FETCH_MODELS_ROUTE,
+            "test_web_research": SETTINGS_TEST_WEB_RESEARCH_ROUTE,
+            "check_function_calling": SETTINGS_CHECK_FUNCTION_CALLING_ROUTE,
+            "presets": SETTINGS_PRESETS_ROUTE,
+            "presets_from_current": SETTINGS_PRESETS_FROM_CURRENT_ROUTE,
+            "preset_detail": SETTINGS_PRESET_DETAIL_ROUTE,
+            "preset_activate": SETTINGS_PRESET_ACTIVATE_ROUTE,
+            "preset_test": SETTINGS_PRESET_TEST_ROUTE
+        },
+        "method_contract": {
+            "settings": ["GET", "POST", "PUT", "DELETE"],
+            "api_key": ["GET"],
+            "models": ["GET"],
+            "test": ["POST"],
+            "fetch_models": ["POST"],
+            "test_web_research": ["POST"],
+            "check_function_calling": ["POST"],
+            "presets": ["GET", "POST"],
+            "presets_from_current": ["POST"],
+            "preset_detail": ["PUT", "DELETE"],
+            "preset_activate": ["POST"],
+            "preset_test": ["POST"]
+        },
+        "service_handoffs": {
+            "settings_crud_owner": "backend-rs/src/services/settings_service.rs",
+            "api_key_payload_owner": "backend-rs/src/api/settings.rs",
+            "models_payload_owner": "backend-rs/src/api/settings.rs",
+            "preset_query_owner": "backend-rs/src/api/settings.rs",
+            "runtime_config_owner": "backend-rs/src/services/settings_service.rs"
+        },
+        "readiness_probes": [
+            "settings-auth-guard-rust",
+            "settings-api-key-auth-guard-rust",
+            "settings-presets-auth-guard-rust",
+            "settings-presets-create-auth-guard-rust",
+            "settings-presets-from-current-auth-guard-rust",
+            "settings-presets-update-auth-guard-rust",
+            "settings-presets-delete-auth-guard-rust",
+            "settings-presets-activate-auth-guard-rust",
+            "settings-presets-test-auth-guard-rust",
+            "settings-models-auth-guard-rust",
+            "settings-fetch-models-auth-guard-rust",
+            "settings-test-auth-guard-rust",
+            "settings-check-function-calling-auth-guard-rust",
+            "settings-get-business-rust",
+            "settings-presets-get-business-rust",
+            "settings-test-business-rust",
+            "settings-check-function-calling-business-rust",
+            "settings-presets-create-business-rust",
+            "settings-presets-update-business-rust",
+            "settings-presets-test-business-rust",
+            "settings-presets-activate-business-rust",
+            "settings-get-after-preset-activate-business-rust",
+            "settings-deactivate-active-preset-business-rust",
+            "settings-presets-list-after-deactivate-business-rust",
+            "settings-presets-delete-business-rust",
+            "settings-presets-from-current-business-rust",
+            "settings-presets-delete-current-business-rust"
+        ],
+        "source_map_files": [
+            "backend/app/api/settings.py",
+            "backend/app/models/settings.py",
+            "backend/app/schemas/settings.py"
+        ],
+        "owner_profile": {
+            "name": "phase5-settings-business-owner",
+            "business_probes": [
+                "settings-get-business-rust",
+                "settings-presets-get-business-rust",
+                "settings-test-business-rust",
+                "settings-check-function-calling-business-rust",
+                "settings-presets-create-business-rust",
+                "settings-presets-update-business-rust",
+                "settings-presets-test-business-rust",
+                "settings-presets-activate-business-rust",
+                "settings-get-after-preset-activate-business-rust",
+                "settings-deactivate-active-preset-business-rust",
+                "settings-presets-list-after-deactivate-business-rust",
+                "settings-presets-delete-business-rust",
+                "settings-presets-from-current-business-rust",
+                "settings-presets-delete-current-business-rust"
+            ],
+            "python_fallback_probe_count": 0
+        },
+        "rollback_boundary": {
+            "source_map_policy": "keep_python_settings_route_model_schema_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_freeze_candidate_ready": true,
+            "full_module_freeze_ready": false,
+            "python_fallback_removal_ready": false,
+            "remaining_blockers": [
+                "explicit source-map freeze/delete/repoint approval"
+            ],
+            "freeze_reason": "Rust settings route group has dedicated phase5-settings-business-owner probes for settings CRUD, presets, API test, function-calling check, and preset lifecycle; final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy."
+        },
+        "business_smoke_status": {
+            "owner_profile": "phase5-settings-business-owner",
+            "business_probe_count": 14,
+            "python_fallback_probe_count": 0,
+            "status": "covered_by_dedicated_rust_owner_profile"
+        },
+        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+        "migration_policy": "Settings route business smoke is covered by phase5-settings-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+    })
+}
 
 #[derive(Deserialize)]
 struct ModelsQuery {
@@ -71,6 +182,58 @@ struct FetchModelsRequest {
     models_url: Option<String>,
 }
 
+#[derive(Debug, PartialEq)]
+struct TestPresetConnectionRequest {
+    api_key: Option<String>,
+    api_base_url: Option<String>,
+    provider: Option<String>,
+    llm_model: Option<String>,
+    temperature: Option<f64>,
+    max_tokens: Option<u32>,
+    api_backup_urls: Option<Vec<String>>,
+    fallback_strategy: Option<String>,
+}
+
+fn build_test_preset_connection_request(config: &Value) -> TestPresetConnectionRequest {
+    TestPresetConnectionRequest {
+        api_key: config
+            .get("api_key")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        api_base_url: config
+            .get("api_base_url")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        provider: config
+            .get("api_provider")
+            .or_else(|| config.get("provider"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        llm_model: config
+            .get("llm_model")
+            .or_else(|| config.get("model"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        temperature: config.get("temperature").and_then(Value::as_f64),
+        max_tokens: config
+            .get("max_tokens")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok()),
+        api_backup_urls: config.get("api_backup_urls").and_then(|value| {
+            value.as_array().map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(ToString::to_string))
+                    .collect()
+            })
+        }),
+        fallback_strategy: config
+            .get("fallback_strategy")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+    }
+}
+
 #[derive(Deserialize)]
 struct TestWebResearchRequest {
     provider: String,
@@ -81,6 +244,341 @@ struct TestWebResearchRequest {
     grok_model: Option<String>,
     grok_search_enabled: Option<bool>,
     query: Option<String>,
+}
+
+#[derive(Deserialize, Default, Clone, Debug, PartialEq)]
+struct SettingsUpdateRouteRequest {
+    #[serde(default)]
+    api_provider: Option<Value>,
+    #[serde(default)]
+    clear_api_key: Option<Value>,
+    #[serde(default)]
+    api_key: Option<Value>,
+    #[serde(default)]
+    api_base_url: Option<Value>,
+    #[serde(default)]
+    api_backup_urls: Option<Value>,
+    #[serde(default)]
+    provider_type: Option<Value>,
+    #[serde(default)]
+    fallback_strategy: Option<Value>,
+    #[serde(default)]
+    azure_api_version: Option<Value>,
+    #[serde(default)]
+    llm_model: Option<Value>,
+    #[serde(default)]
+    temperature: Option<Value>,
+    #[serde(default)]
+    max_tokens: Option<Value>,
+    #[serde(default)]
+    system_prompt: Option<Value>,
+    #[serde(default)]
+    preferences: Option<Value>,
+    #[serde(default)]
+    web_research_enabled: Option<Value>,
+    #[serde(default)]
+    web_research_exa_enabled: Option<Value>,
+    #[serde(default)]
+    web_research_grok_enabled: Option<Value>,
+    #[serde(default)]
+    web_research_exa_api_key: Option<Value>,
+    #[serde(default)]
+    web_research_exa_base_url: Option<Value>,
+    #[serde(default)]
+    web_research_grok_api_key: Option<Value>,
+    #[serde(default)]
+    web_research_grok_base_url: Option<Value>,
+    #[serde(default)]
+    web_research_grok_model: Option<Value>,
+    #[serde(default)]
+    web_research_grok_search_enabled: Option<Value>,
+}
+
+impl SettingsUpdateRouteRequest {
+    fn into_body(self) -> Value {
+        let mut body = Map::new();
+
+        insert_present_field(&mut body, "api_provider", self.api_provider);
+        insert_present_field(&mut body, "clear_api_key", self.clear_api_key);
+        insert_present_field(&mut body, "api_key", self.api_key);
+        insert_present_field(&mut body, "api_base_url", self.api_base_url);
+        insert_present_field(&mut body, "api_backup_urls", self.api_backup_urls);
+        insert_present_field(&mut body, "provider_type", self.provider_type);
+        insert_present_field(&mut body, "fallback_strategy", self.fallback_strategy);
+        insert_present_field(&mut body, "azure_api_version", self.azure_api_version);
+        insert_present_field(&mut body, "llm_model", self.llm_model);
+        insert_present_field(&mut body, "temperature", self.temperature);
+        insert_present_field(&mut body, "max_tokens", self.max_tokens);
+        insert_present_field(&mut body, "system_prompt", self.system_prompt);
+        insert_present_field(&mut body, "preferences", self.preferences);
+        insert_present_field(&mut body, "web_research_enabled", self.web_research_enabled);
+        insert_present_field(
+            &mut body,
+            "web_research_exa_enabled",
+            self.web_research_exa_enabled,
+        );
+        insert_present_field(
+            &mut body,
+            "web_research_grok_enabled",
+            self.web_research_grok_enabled,
+        );
+        insert_present_field(
+            &mut body,
+            "web_research_exa_api_key",
+            self.web_research_exa_api_key,
+        );
+        insert_present_field(
+            &mut body,
+            "web_research_exa_base_url",
+            self.web_research_exa_base_url,
+        );
+        insert_present_field(
+            &mut body,
+            "web_research_grok_api_key",
+            self.web_research_grok_api_key,
+        );
+        insert_present_field(
+            &mut body,
+            "web_research_grok_base_url",
+            self.web_research_grok_base_url,
+        );
+        insert_present_field(
+            &mut body,
+            "web_research_grok_model",
+            self.web_research_grok_model,
+        );
+        insert_present_field(
+            &mut body,
+            "web_research_grok_search_enabled",
+            self.web_research_grok_search_enabled,
+        );
+
+        Value::Object(body)
+    }
+}
+
+fn insert_present_field(body: &mut Map<String, Value>, key: &str, value: Option<Value>) {
+    if let Some(value) = value {
+        body.insert(key.to_string(), value);
+    }
+}
+
+fn build_settings_update_request_from_typed_route_payload(
+    body: SettingsUpdateRouteRequest,
+) -> crate::services::settings_service::SettingsUpdateRequest {
+    build_settings_update_request_from_route_body(&body.into_body())
+}
+
+#[derive(Deserialize, Default, Clone, Debug)]
+struct CreatePresetFromCurrentRouteQuery {
+    name: Option<String>,
+    description: Option<String>,
+}
+
+#[derive(Deserialize, Default, Clone, Debug)]
+struct CreatePresetFromCurrentRouteBody {
+    name: Option<String>,
+    description: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CreatePresetFromCurrentRequest {
+    name: String,
+    description: Option<String>,
+}
+
+#[derive(Deserialize, Default, Clone, Debug, PartialEq)]
+struct CreateSettingsPresetRouteRequest {
+    #[serde(default)]
+    name: Option<Value>,
+    #[serde(default)]
+    description: Option<Value>,
+    #[serde(default)]
+    config: Option<Value>,
+}
+
+impl CreateSettingsPresetRouteRequest {
+    fn into_body(self) -> Value {
+        json!({
+            "name": self.name,
+            "description": self.description,
+            "config": self.config,
+        })
+    }
+}
+
+#[derive(Deserialize, Default, Clone, Debug, PartialEq)]
+struct UpdateSettingsPresetRouteRequest {
+    #[serde(default)]
+    name: Option<Value>,
+    #[serde(default)]
+    description: Option<Value>,
+    #[serde(default)]
+    config: Option<Value>,
+}
+
+impl UpdateSettingsPresetRouteRequest {
+    fn into_body(self) -> Value {
+        json!({
+            "name": self.name,
+            "description": self.description,
+            "config": self.config,
+        })
+    }
+}
+
+fn build_create_preset_from_current_request(
+    query: CreatePresetFromCurrentRouteQuery,
+    body: Option<CreatePresetFromCurrentRouteBody>,
+) -> CreatePresetFromCurrentRequest {
+    let body_name = body
+        .as_ref()
+        .and_then(|payload| payload.name.as_deref())
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string);
+    let body_description = body.and_then(|payload| payload.description);
+
+    let name = query
+        .name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string)
+        .or(body_name)
+        .unwrap_or_else(|| "My Preset".to_string());
+    let description = query
+        .description
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string)
+        .or(body_description);
+
+    CreatePresetFromCurrentRequest { name, description }
+}
+
+fn build_create_settings_preset_request_from_typed_route_payload(
+    body: CreateSettingsPresetRouteRequest,
+) -> CreateSettingsPresetRequest {
+    build_create_settings_preset_request_from_route_payload(&body.into_body())
+}
+
+fn build_update_settings_preset_request_from_typed_route_payload(
+    body: UpdateSettingsPresetRouteRequest,
+) -> UpdateSettingsPresetRequest {
+    build_update_settings_preset_request_from_route_payload(&body.into_body())
+}
+
+fn build_stored_api_key_payload(api_key: Option<&str>) -> Value {
+    let trimmed = api_key.unwrap_or_default().trim();
+    json!({
+        "api_key": trimmed,
+        "has_api_key": !trimmed.is_empty(),
+    })
+}
+
+fn build_available_models_payload(provider: &str, models: Vec<Value>) -> Value {
+    let count = models.len();
+    json!({
+        "provider": provider,
+        "models": models,
+        "count": count,
+    })
+}
+
+fn build_available_models_fallback_payload(
+    provider: &str,
+    fallback_models: Vec<Value>,
+    error: &str,
+) -> Value {
+    let count = fallback_models.len();
+    json!({
+        "provider": provider,
+        "models": fallback_models,
+        "count": count,
+        "message": format!("Model list fallback applied: {}", error),
+        "fallback_applied": true,
+    })
+}
+
+fn normalize_fetch_models_payload(models: Vec<Value>) -> Vec<Value> {
+    models
+        .into_iter()
+        .filter_map(|item| {
+            if let Some(id) = item.get("id").and_then(Value::as_str) {
+                let trimmed = id.trim();
+                if !trimmed.is_empty() {
+                    return Some(json!({
+                        "id": trimmed,
+                        "owned_by": item
+                            .get("owned_by")
+                            .and_then(Value::as_str)
+                            .or_else(|| item.get("description").and_then(Value::as_str))
+                    }));
+                }
+            }
+
+            let value = item
+                .get("value")
+                .and_then(Value::as_str)
+                .or_else(|| item.get("name").and_then(Value::as_str))
+                .or_else(|| item.get("label").and_then(Value::as_str))
+                .map(str::trim)
+                .filter(|text| !text.is_empty())?;
+
+            Some(json!({
+                "id": value,
+                "owned_by": item
+                    .get("owned_by")
+                    .and_then(Value::as_str)
+                    .or_else(|| item.get("description").and_then(Value::as_str))
+                    .or_else(|| item.get("label").and_then(Value::as_str))
+            }))
+        })
+        .collect()
+}
+
+fn build_fetch_models_success_payload(models: Vec<Value>) -> Value {
+    let model_count = models.len();
+    json!({
+        "success": true,
+        "models": normalize_fetch_models_payload(models),
+        "message": format!("Fetched {} models", model_count)
+    })
+}
+
+fn build_fetch_models_fallback_payload(fallback_models: Vec<Value>, error: &str) -> Value {
+    json!({
+        "success": true,
+        "models": fallback_models,
+        "message": format!("Model list fallback applied: {}", error)
+    })
+}
+
+fn build_fetch_models_failure_payload(error: &str, error_type: &str) -> Value {
+    json!({
+        "success": false,
+        "models": [],
+        "message": "Failed to fetch models",
+        "error": error,
+        "error_type": error_type
+    })
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FindPresetConfigError {
+    PresetNotFound,
+}
+
+fn find_preset_config(
+    preferences: Option<&str>,
+    preset_id: &str,
+) -> Result<Value, FindPresetConfigError> {
+    let (presets, _version) = crate::services::settings_service::get_api_presets(preferences);
+
+    presets
+        .into_iter()
+        .find(|preset| preset.get("id").and_then(Value::as_str) == Some(preset_id))
+        .map(|preset| preset.get("config").cloned().unwrap_or_else(|| json!({})))
+        .ok_or(FindPresetConfigError::PresetNotFound)
 }
 
 async fn get_settings(
@@ -180,7 +678,7 @@ async fn get_available_models(
     Extension(db): Extension<DatabaseConnection>,
     Query(query): Query<ModelsQuery>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let effective = resolve_effective_runtime_settings(
+    let effective = SettingsService::resolve_effective_runtime_settings(
         &db,
         &claims.sub,
         EffectiveSettingsOverrides {
@@ -246,7 +744,7 @@ async fn test_api_connection(
     let probe_max_tokens = max_tokens.clamp(1, 64);
     let api_backup_urls = normalize_probe_backup_urls(body.api_backup_urls.as_deref());
     let fallback_strategy = normalize_probe_fallback_strategy(body.fallback_strategy.as_deref());
-    let effective = resolve_effective_runtime_settings(
+    let effective = SettingsService::resolve_effective_runtime_settings(
         &db,
         &claims.sub,
         EffectiveSettingsOverrides {
@@ -362,7 +860,7 @@ async fn fetch_models_endpoint(
     Extension(db): Extension<DatabaseConnection>,
     Json(body): Json<FetchModelsRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let effective = resolve_effective_runtime_settings(
+    let effective = SettingsService::resolve_effective_runtime_settings(
         &db,
         &claims.sub,
         EffectiveSettingsOverrides {
@@ -511,7 +1009,7 @@ async fn check_function_calling(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let api_backup_urls = normalize_probe_backup_urls(body.api_backup_urls.as_deref());
     let fallback_strategy = normalize_probe_fallback_strategy(body.fallback_strategy.as_deref());
-    let effective = resolve_effective_runtime_settings(
+    let effective = SettingsService::resolve_effective_runtime_settings(
         &db,
         &claims.sub,
         EffectiveSettingsOverrides {
@@ -1623,35 +2121,32 @@ fn generic_suggestions(kind: &str) -> Vec<&'static str> {
 
 pub fn routes() -> Router {
     Router::new()
-        .route("/settings", get(get_settings))
-        .route("/settings", post(create_settings))
-        .route("/settings", put(update_settings))
-        .route("/settings", delete(delete_settings))
-        .route("/settings/api-key", get(get_stored_api_key))
-        .route("/settings/models", get(get_available_models))
-        .route("/settings/test", post(test_api_connection))
-        .route("/settings/fetch-models", post(fetch_models_endpoint))
+        .route(SETTINGS_ROUTE, get(get_settings))
+        .route(SETTINGS_ROUTE, post(create_settings))
+        .route(SETTINGS_ROUTE, put(update_settings))
+        .route(SETTINGS_ROUTE, delete(delete_settings))
+        .route(SETTINGS_API_KEY_ROUTE, get(get_stored_api_key))
+        .route(SETTINGS_MODELS_ROUTE, get(get_available_models))
+        .route(SETTINGS_TEST_ROUTE, post(test_api_connection))
+        .route(SETTINGS_FETCH_MODELS_ROUTE, post(fetch_models_endpoint))
         .route(
-            "/settings/test-web-research",
+            SETTINGS_TEST_WEB_RESEARCH_ROUTE,
             post(test_web_research_connection),
         )
         .route(
-            "/settings/check-function-calling",
+            SETTINGS_CHECK_FUNCTION_CALLING_ROUTE,
             post(check_function_calling),
         )
-        .route("/settings/presets", get(get_presets))
-        .route("/settings/presets", post(create_preset))
+        .route(SETTINGS_PRESETS_ROUTE, get(get_presets))
+        .route(SETTINGS_PRESETS_ROUTE, post(create_preset))
         .route(
-            "/settings/presets/from-current",
+            SETTINGS_PRESETS_FROM_CURRENT_ROUTE,
             post(create_preset_from_current),
         )
-        .route("/settings/presets/{preset_id}", put(update_preset))
-        .route("/settings/presets/{preset_id}", delete(delete_preset))
-        .route(
-            "/settings/presets/{preset_id}/activate",
-            post(activate_preset),
-        )
-        .route("/settings/presets/{preset_id}/test", post(test_preset))
+        .route(SETTINGS_PRESET_DETAIL_ROUTE, put(update_preset))
+        .route(SETTINGS_PRESET_DETAIL_ROUTE, delete(delete_preset))
+        .route(SETTINGS_PRESET_ACTIVATE_ROUTE, post(activate_preset))
+        .route(SETTINGS_PRESET_TEST_ROUTE, post(test_preset))
 }
 
 #[cfg(test)]
@@ -1668,14 +2163,27 @@ mod tests {
 
     use super::{
         available_models_success_message, build_api_probe_failure_suggestions,
-        build_openai_compatible_model_candidate_urls, build_probe_endpoint_diagnostics,
-        build_probe_transport_config, build_provider_model_header_pairs, check_function_calling,
-        delete_settings, get_available_models, parse_anthropic_available_models,
-        parse_gemini_available_models, parse_openai_compatible_available_models,
-        test_api_connection, update_settings, ModelsQuery, TestConnectionRequest,
+        build_available_models_fallback_payload, build_available_models_payload,
+        build_create_preset_from_current_request,
+        build_create_settings_preset_request_from_typed_route_payload,
+        build_fetch_models_failure_payload, build_fetch_models_fallback_payload,
+        build_fetch_models_success_payload, build_openai_compatible_model_candidate_urls,
+        build_probe_endpoint_diagnostics, build_probe_transport_config,
+        build_provider_model_header_pairs, build_settings_route_owner_contract,
+        build_stored_api_key_payload, build_test_preset_connection_request,
+        build_update_settings_preset_request_from_typed_route_payload, check_function_calling,
+        delete_settings, find_preset_config, get_available_models, normalize_fetch_models_payload,
+        parse_anthropic_available_models, parse_gemini_available_models,
+        parse_openai_compatible_available_models, test_api_connection, update_settings,
+        CreatePresetFromCurrentRouteBody, CreatePresetFromCurrentRouteQuery,
+        CreateSettingsPresetRouteRequest, FindPresetConfigError, ModelsQuery,
+        SettingsUpdateRouteRequest, TestConnectionRequest, UpdateSettingsPresetRouteRequest,
+        SETTINGS_API_KEY_ROUTE, SETTINGS_CHECK_FUNCTION_CALLING_ROUTE, SETTINGS_FETCH_MODELS_ROUTE,
+        SETTINGS_MODELS_ROUTE, SETTINGS_PRESETS_FROM_CURRENT_ROUTE, SETTINGS_PRESETS_ROUTE,
+        SETTINGS_PRESET_ACTIVATE_ROUTE, SETTINGS_PRESET_DETAIL_ROUTE, SETTINGS_PRESET_TEST_ROUTE,
+        SETTINGS_ROUTE, SETTINGS_TEST_ROUTE, SETTINGS_TEST_WEB_RESEARCH_ROUTE,
     };
     use crate::services::auth::Claims;
-    use crate::services::settings_update_request_service::SettingsUpdateRouteRequest;
 
     async fn setup_settings_db() -> DatabaseConnection {
         let db = Database::connect("sqlite::memory:")
@@ -1721,6 +2229,417 @@ mod tests {
             axum::serve(listener, app).await.expect("serve test app");
         });
         (format!("http://{}/v1", address), handle)
+    }
+
+    #[test]
+    fn should_publish_settings_route_owner_contract() {
+        let contract = build_settings_route_owner_contract();
+
+        assert_eq!(contract["owner"], "settings");
+        assert_eq!(contract["rust_owner"], "backend-rs/src/api/settings.rs");
+        assert_eq!(contract["routes"]["settings"], SETTINGS_ROUTE);
+        assert_eq!(contract["routes"]["api_key"], SETTINGS_API_KEY_ROUTE);
+        assert_eq!(contract["routes"]["models"], SETTINGS_MODELS_ROUTE);
+        assert_eq!(contract["routes"]["test"], SETTINGS_TEST_ROUTE);
+        assert_eq!(
+            contract["routes"]["fetch_models"],
+            SETTINGS_FETCH_MODELS_ROUTE
+        );
+        assert_eq!(
+            contract["routes"]["check_function_calling"],
+            SETTINGS_CHECK_FUNCTION_CALLING_ROUTE
+        );
+        assert_eq!(contract["routes"]["presets"], SETTINGS_PRESETS_ROUTE);
+        assert_eq!(
+            contract["routes"]["preset_detail"],
+            SETTINGS_PRESET_DETAIL_ROUTE
+        );
+        assert!(contract["service_handoffs"]
+            .get("preset_request_owner")
+            .is_none());
+        assert!(contract["service_handoffs"]
+            .get("test_preset_request_owner")
+            .is_none());
+        assert_eq!(
+            contract["service_handoffs"]["api_key_payload_owner"],
+            "backend-rs/src/api/settings.rs"
+        );
+        assert_eq!(
+            contract["service_handoffs"]["models_payload_owner"],
+            "backend-rs/src/api/settings.rs"
+        );
+        assert_eq!(
+            contract["service_handoffs"]["preset_query_owner"],
+            "backend-rs/src/api/settings.rs"
+        );
+        assert_eq!(contract["readiness_probes"].as_array().unwrap().len(), 27);
+        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 3);
+        assert_eq!(
+            contract["owner_profile"]["name"],
+            "phase5-settings-business-owner"
+        );
+        assert_eq!(
+            contract["owner_profile"]["business_probes"][13],
+            "settings-presets-delete-current-business-rust"
+        );
+        assert_eq!(contract["owner_profile"]["python_fallback_probe_count"], 0);
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["full_module_freeze_ready"],
+            false
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            false
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["status"],
+            "covered_by_dedicated_rust_owner_profile"
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["business_probe_count"],
+            14
+        );
+        assert_eq!(
+            contract["next_cutover_gate"],
+            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+        );
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("migration policy")
+            .contains("business smoke is covered"));
+        assert!(!contract["migration_policy"]
+            .as_str()
+            .expect("migration policy")
+            .contains("requires source-map freeze/delete/repoint evidence or business smoke"));
+    }
+
+    #[test]
+    fn build_stored_api_key_payload_trims_and_marks_present_key() {
+        let payload = build_stored_api_key_payload(Some("  secret-key  "));
+
+        assert_eq!(payload["api_key"], "secret-key");
+        assert_eq!(payload["has_api_key"], true);
+    }
+
+    #[test]
+    fn build_stored_api_key_payload_handles_empty_and_missing_key() {
+        let empty = build_stored_api_key_payload(Some("   "));
+        assert_eq!(empty["api_key"], "");
+        assert_eq!(empty["has_api_key"], false);
+
+        let missing = build_stored_api_key_payload(None);
+        assert_eq!(missing["api_key"], "");
+        assert_eq!(missing["has_api_key"], false);
+    }
+
+    #[test]
+    fn build_available_models_payload_keeps_provider_models_and_count() {
+        let payload = build_available_models_payload(
+            "openai",
+            vec![json!({"value": "gpt-4o", "label": "gpt-4o", "description": "OpenAI-compatible"})],
+        );
+
+        assert_eq!(payload["provider"], "openai");
+        assert_eq!(payload["count"], 1);
+        assert_eq!(payload["models"][0]["value"], "gpt-4o");
+    }
+
+    #[test]
+    fn build_available_models_fallback_payload_keeps_existing_shell() {
+        let payload = build_available_models_fallback_payload(
+            "gemini",
+            vec![json!({"value": "gemini-2.5-pro"})],
+            "timeout",
+        );
+
+        assert_eq!(payload["provider"], "gemini");
+        assert_eq!(payload["count"], 1);
+        assert_eq!(payload["fallback_applied"], true);
+        assert_eq!(payload["message"], "Model list fallback applied: timeout");
+    }
+
+    #[test]
+    fn normalize_fetch_models_payload_accepts_id_and_value_shapes() {
+        let payload = normalize_fetch_models_payload(vec![
+            json!({"id": "gpt-4o", "owned_by": "openai"}),
+            json!({"value": "claude-3-5-sonnet-latest", "description": "Anthropic"}),
+        ]);
+
+        assert_eq!(payload.len(), 2);
+        assert_eq!(payload[0]["id"], "gpt-4o");
+        assert_eq!(payload[0]["owned_by"], "openai");
+        assert_eq!(payload[1]["id"], "claude-3-5-sonnet-latest");
+        assert_eq!(payload[1]["owned_by"], "Anthropic");
+    }
+
+    #[test]
+    fn build_fetch_models_payloads_keep_success_and_failure_contracts() {
+        let success = build_fetch_models_success_payload(vec![json!({"id": "gpt-4o"})]);
+        assert_eq!(success["success"], true);
+        assert_eq!(success["models"][0]["id"], "gpt-4o");
+
+        let fallback =
+            build_fetch_models_fallback_payload(vec![json!({"id": "gpt-4o-mini"})], "network");
+        assert_eq!(fallback["success"], true);
+        assert_eq!(fallback["message"], "Model list fallback applied: network");
+
+        let failure = build_fetch_models_failure_payload("failed", "NetworkError");
+        assert_eq!(failure["success"], false);
+        assert_eq!(failure["models"], json!([]));
+        assert_eq!(failure["error_type"], "NetworkError");
+    }
+
+    #[test]
+    fn find_preset_config_returns_matching_config() {
+        let config = find_preset_config(
+            Some(
+                &json!({
+                    "api_presets": {
+                        "version": "1.0",
+                        "presets": [
+                            {
+                                "id": "preset_1",
+                                "config": {
+                                    "api_provider": "openai",
+                                    "llm_model": "gpt-4o"
+                                }
+                            }
+                        ]
+                    }
+                })
+                .to_string(),
+            ),
+            "preset_1",
+        )
+        .expect("preset config should exist");
+
+        assert_eq!(config["api_provider"], "openai");
+        assert_eq!(config["llm_model"], "gpt-4o");
+    }
+
+    #[test]
+    fn find_preset_config_defaults_to_empty_object_when_config_missing() {
+        let config = find_preset_config(
+            Some(
+                &json!({
+                    "api_presets": {
+                        "presets": [
+                            { "id": "preset_1" }
+                        ]
+                    }
+                })
+                .to_string(),
+            ),
+            "preset_1",
+        )
+        .expect("preset without config should still resolve");
+
+        assert_eq!(config, json!({}));
+    }
+
+    #[test]
+    fn find_preset_config_rejects_unknown_preset() {
+        let error =
+            find_preset_config(Some("{}"), "missing").expect_err("missing preset should fail");
+
+        assert_eq!(error, FindPresetConfigError::PresetNotFound);
+    }
+
+    #[test]
+    fn should_keep_settings_route_group_paths_stable() {
+        assert_eq!(SETTINGS_ROUTE, "/settings");
+        assert_eq!(SETTINGS_API_KEY_ROUTE, "/settings/api-key");
+        assert_eq!(SETTINGS_MODELS_ROUTE, "/settings/models");
+        assert_eq!(SETTINGS_TEST_ROUTE, "/settings/test");
+        assert_eq!(SETTINGS_FETCH_MODELS_ROUTE, "/settings/fetch-models");
+        assert_eq!(
+            SETTINGS_TEST_WEB_RESEARCH_ROUTE,
+            "/settings/test-web-research"
+        );
+        assert_eq!(
+            SETTINGS_CHECK_FUNCTION_CALLING_ROUTE,
+            "/settings/check-function-calling"
+        );
+        assert_eq!(SETTINGS_PRESETS_ROUTE, "/settings/presets");
+        assert_eq!(
+            SETTINGS_PRESETS_FROM_CURRENT_ROUTE,
+            "/settings/presets/from-current"
+        );
+        assert_eq!(
+            SETTINGS_PRESET_DETAIL_ROUTE,
+            "/settings/presets/{preset_id}"
+        );
+        assert_eq!(
+            SETTINGS_PRESET_ACTIVATE_ROUTE,
+            "/settings/presets/{preset_id}/activate"
+        );
+        assert_eq!(
+            SETTINGS_PRESET_TEST_ROUTE,
+            "/settings/presets/{preset_id}/test"
+        );
+    }
+
+    #[test]
+    fn build_test_preset_connection_request_prefers_existing_provider_keys() {
+        let request = build_test_preset_connection_request(&json!({
+            "api_key": "sk-test",
+            "api_base_url": "https://api.example.com/v1",
+            "api_provider": "openai",
+            "provider": "gemini",
+            "llm_model": "gpt-4o",
+            "model": "gemini-2.5-pro",
+            "temperature": 0.7,
+            "max_tokens": 1024,
+            "api_backup_urls": ["https://backup-1.example.com/v1", 1, "https://backup-2.example.com/v1"],
+            "fallback_strategy": "manual"
+        }));
+
+        assert_eq!(request.api_key.as_deref(), Some("sk-test"));
+        assert_eq!(
+            request.api_base_url.as_deref(),
+            Some("https://api.example.com/v1")
+        );
+        assert_eq!(request.provider.as_deref(), Some("openai"));
+        assert_eq!(request.llm_model.as_deref(), Some("gpt-4o"));
+        assert_eq!(request.temperature, Some(0.7));
+        assert_eq!(request.max_tokens, Some(1024));
+        assert_eq!(
+            request.api_backup_urls,
+            Some(vec![
+                "https://backup-1.example.com/v1".to_string(),
+                "https://backup-2.example.com/v1".to_string()
+            ])
+        );
+        assert_eq!(request.fallback_strategy.as_deref(), Some("manual"));
+    }
+
+    #[test]
+    fn build_test_preset_connection_request_falls_back_to_legacy_keys() {
+        let request = build_test_preset_connection_request(&json!({
+            "provider": "anthropic",
+            "model": "claude-3-5-sonnet-latest",
+            "temperature": 0.125
+        }));
+
+        assert_eq!(request.provider.as_deref(), Some("anthropic"));
+        assert_eq!(
+            request.llm_model.as_deref(),
+            Some("claude-3-5-sonnet-latest")
+        );
+        assert_eq!(request.temperature, Some(0.125));
+        assert_eq!(request.max_tokens, None);
+        assert_eq!(request.api_backup_urls, None);
+        assert_eq!(request.fallback_strategy, None);
+    }
+
+    #[test]
+    fn build_test_preset_connection_request_ignores_invalid_max_tokens() {
+        let request = build_test_preset_connection_request(&json!({
+            "max_tokens": 5000000000u64,
+            "temperature": "bad"
+        }));
+
+        assert_eq!(request.max_tokens, None);
+        assert_eq!(request.temperature, None);
+    }
+
+    #[test]
+    fn build_create_preset_from_current_request_prefers_non_empty_query_values() {
+        let request = build_create_preset_from_current_request(
+            CreatePresetFromCurrentRouteQuery {
+                name: Some("Query Preset".to_string()),
+                description: Some("Query Description".to_string()),
+            },
+            Some(CreatePresetFromCurrentRouteBody {
+                name: Some("Body Preset".to_string()),
+                description: Some("Body Description".to_string()),
+            }),
+        );
+
+        assert_eq!(request.name, "Query Preset");
+        assert_eq!(request.description.as_deref(), Some("Query Description"));
+    }
+
+    #[test]
+    fn build_create_preset_from_current_request_falls_back_to_body_and_default_name() {
+        let from_body = build_create_preset_from_current_request(
+            CreatePresetFromCurrentRouteQuery::default(),
+            Some(CreatePresetFromCurrentRouteBody {
+                name: Some("Body Preset".to_string()),
+                description: Some("Body Description".to_string()),
+            }),
+        );
+        assert_eq!(from_body.name, "Body Preset");
+        assert_eq!(from_body.description.as_deref(), Some("Body Description"));
+
+        let defaulted = build_create_preset_from_current_request(
+            CreatePresetFromCurrentRouteQuery::default(),
+            Some(CreatePresetFromCurrentRouteBody {
+                name: Some("   ".to_string()),
+                description: None,
+            }),
+        );
+        assert_eq!(defaulted.name, "My Preset");
+        assert_eq!(defaulted.description, None);
+    }
+
+    #[test]
+    fn build_create_preset_from_current_request_treats_blank_query_as_missing() {
+        let request = build_create_preset_from_current_request(
+            CreatePresetFromCurrentRouteQuery {
+                name: Some("   ".to_string()),
+                description: Some("  ".to_string()),
+            },
+            Some(CreatePresetFromCurrentRouteBody {
+                name: Some("Body Preset".to_string()),
+                description: Some("".to_string()),
+            }),
+        );
+
+        assert_eq!(request.name, "Body Preset");
+        assert_eq!(request.description.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn build_create_settings_preset_request_from_typed_route_payload_keeps_existing_shape() {
+        let request = build_create_settings_preset_request_from_typed_route_payload(
+            CreateSettingsPresetRouteRequest {
+                name: Some(json!("Preset A")),
+                description: Some(json!("desc")),
+                config: Some(json!({
+                    "provider": "openai"
+                })),
+            },
+        );
+
+        assert_eq!(request.name(), "Preset A");
+        assert_eq!(request.description(), Some(&json!("desc")));
+        assert_eq!(request.config()["provider"], "openai");
+    }
+
+    #[test]
+    fn build_update_settings_preset_request_from_typed_route_payload_tracks_optional_fields() {
+        let request = build_update_settings_preset_request_from_typed_route_payload(
+            UpdateSettingsPresetRouteRequest {
+                name: Some(json!("Renamed")),
+                description: Some(json!(null)),
+                config: Some(json!({
+                    "model": "gpt-4o"
+                })),
+            },
+        );
+
+        assert_eq!(request.name(), Some("Renamed"));
+        assert!(request.has_description());
+        assert_eq!(request.description(), Some(&json!(null)));
+        assert_eq!(
+            request.config().expect("config should exist")["model"],
+            "gpt-4o"
+        );
     }
 
     #[tokio::test]

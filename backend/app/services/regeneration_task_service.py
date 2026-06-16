@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.chapter import Chapter
-from app.models.memory import PlotAnalysis
-from app.models.regeneration_task import RegenerationTask
 from app.schemas.regeneration import ChapterRegenerateRequest
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter import Chapter
+    from app.models.memory import PlotAnalysis
+    from app.models.regeneration_task import RegenerationTask
 
 
 REGENERATION_ANALYSIS_SOURCES = {"analysis_suggestions", "mixed"}
@@ -21,6 +22,10 @@ async def load_latest_regeneration_analysis(
     chapter_id: str,
     modification_source: str,
 ) -> Optional[PlotAnalysis]:
+    from sqlalchemy import select
+
+    from app.models.memory import PlotAnalysis
+
     if modification_source not in REGENERATION_ANALYSIS_SOURCES:
         return None
 
@@ -42,6 +47,8 @@ async def create_regeneration_task(
     regenerate_request: ChapterRegenerateRequest,
     style_id: Optional[int],
 ) -> RegenerationTask:
+    from app.models.regeneration_task import RegenerationTask
+
     regeneration_task = RegenerationTask(
         chapter_id=chapter.id,
         analysis_id=analysis.id if analysis else None,
@@ -77,6 +84,10 @@ async def mark_latest_regeneration_task_failed(
     chapter_id: str,
     error_message: str,
 ) -> Optional[RegenerationTask]:
+    from sqlalchemy import select
+
+    from app.models.regeneration_task import RegenerationTask
+
     task_result = await db_session.execute(
         select(RegenerationTask)
         .where(RegenerationTask.chapter_id == chapter_id)

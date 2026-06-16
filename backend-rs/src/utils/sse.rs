@@ -48,13 +48,6 @@ struct DonePayload {
     event_type: String,
 }
 
-/// Format any serializable payload into an SSE event string
-pub fn format_sse(data: &impl Serialize) -> String {
-    let json = serde_json::to_string(data)
-        .unwrap_or_else(|_| r#"{"type":"error","error":"serialize failed"}"#.into());
-    format!("data: {}\n\n", json)
-}
-
 /// Create a progress event (matching Python SSEResponse.send_progress)
 pub fn sse_progress(message: &str, progress: u32, status: &str) -> Event {
     let payload = ProgressPayload {
@@ -128,11 +121,6 @@ impl SseProgress {
         sse_progress(&format!("开始生成{}...", self.task_name), 0, "processing")
     }
 
-    pub fn progress(&mut self, message: &str, progress: u32) -> Event {
-        self.current_progress = progress.clamp(0, 100);
-        sse_progress(message, self.current_progress, "processing")
-    }
-
     pub fn preparing(&mut self, message: Option<&str>) -> Event {
         let progress = self.current_progress.max(15).min(20);
         self.current_progress = progress;
@@ -166,25 +154,6 @@ impl SseProgress {
         sse_progress(&msg, progress, "processing")
     }
 
-    pub fn parsing(&mut self, message: Option<&str>, progress: u32) -> Event {
-        self.current_progress = progress;
-        sse_progress(
-            message.unwrap_or(&format!("解析{}数据...", self.task_name)),
-            progress,
-            "processing",
-        )
-    }
-
-    pub fn saving(&mut self, message: Option<&str>) -> Event {
-        let progress = self.current_progress.max(85).min(95);
-        self.current_progress = progress;
-        sse_progress(
-            message.unwrap_or(&format!("保存{}到数据库...", self.task_name)),
-            progress,
-            "processing",
-        )
-    }
-
     pub fn complete(&mut self, message: Option<&str>) -> Event {
         self.current_progress = 100;
         sse_progress(
@@ -194,22 +163,7 @@ impl SseProgress {
         )
     }
 
-    pub fn retry(&mut self, retry_count: u32, max_retries: u32, reason: &str) -> Event {
-        sse_progress(
-            &format!("⚠ {}... ({}/{})", reason, retry_count, max_retries),
-            self.current_progress,
-            "processing",
-        )
-    }
-
-    pub fn warning(&mut self, message: &str) -> Event {
-        sse_progress(
-            &format!("⚠ {}", message),
-            self.current_progress,
-            "processing",
-        )
-    }
-
+    #[cfg(test)]
     pub fn current_progress(&self) -> u32 {
         self.current_progress
     }
@@ -310,53 +264,9 @@ impl SseChannel {
     }
 }
 
-/// Convenience: shared progress tracker for multi-step operations
-pub type SharedProgress = Arc<Mutex<SseProgress>>;
-
-pub fn shared_progress(task_name: &str) -> SharedProgress {
-    Arc::new(Mutex::new(SseProgress::new(task_name)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_format_sse_progress() {
-        let payload = ProgressPayload {
-            event_type: "progress".into(),
-            message: "测试消息".into(),
-            progress: 50,
-            status: "processing".into(),
-        };
-        let data = format_sse(&payload);
-        assert!(data.contains("\"type\":\"progress\""));
-        assert!(data.contains("测试消息"));
-        assert!(data.contains("\"progress\":50"));
-        assert!(data.starts_with("data: "));
-    }
-
-    #[test]
-    fn test_format_sse_done() {
-        let payload = DonePayload {
-            event_type: "done".into(),
-        };
-        let data = format_sse(&payload);
-        assert!(data.contains("\"type\":\"done\""));
-    }
-
-    #[test]
-    fn test_format_sse_error() {
-        let payload = ErrorPayload {
-            event_type: "error".into(),
-            error: "错误信息".into(),
-            code: 500,
-        };
-        let data = format_sse(&payload);
-        assert!(data.contains("\"type\":\"error\""));
-        assert!(data.contains("错误信息"));
-        assert!(data.contains("\"code\":500"));
-    }
 
     #[test]
     fn test_progress_tracker_state() {
@@ -364,8 +274,11 @@ mod tests {
         let _start = tracker.start();
         assert_eq!(tracker.current_progress(), 0);
 
-        let _prog = tracker.progress("生成中", 50);
-        assert_eq!(tracker.current_progress(), 50);
+        let _preparing = tracker.preparing(None);
+        assert_eq!(tracker.current_progress(), 15);
+
+        let _generating = tracker.generating(Some("生成中"), (20, 90), 0, None);
+        assert_eq!(tracker.current_progress(), 20);
 
         let _done = tracker.complete(None);
         assert_eq!(tracker.current_progress(), 100);

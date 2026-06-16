@@ -2,17 +2,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
-
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from app.logger import get_logger
-from app.models.chapter import Chapter
-from app.models.character import Character
-from app.models.memory import PlotAnalysis
-from app.models.outline import Outline
-from app.models.project import Project
 from app.schemas.regeneration import ChapterRegenerateRequest
 from app.services.chapter_web_research_service import chapter_web_research_service
 from app.services.chapter_generation.runtime.service import build_chapter_generation_runtime_bundle
@@ -30,6 +22,13 @@ from app.services.story_repair_payload_service import (
     story_repair_payload_to_prompt_kwargs,
 )
 
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter import Chapter
+    from app.models.outline import Outline
+    from app.models.project import Project
+
 logger = get_logger(__name__)
 
 @dataclass(frozen=True)
@@ -46,6 +45,10 @@ async def _load_regeneration_outline(
     *,
     chapter: Chapter,
 ) -> Optional[Outline]:
+    from sqlalchemy import select
+
+    from app.models.outline import Outline
+
     if chapter.outline_id:
         outline_result = await db_session.execute(
             select(Outline).where(Outline.id == chapter.outline_id)
@@ -107,6 +110,11 @@ async def prepare_chapter_regeneration_context(
     regenerate_request: ChapterRegenerateRequest,
     user_id: str,
 ) -> ChapterRegenerationPreparation:
+    from sqlalchemy import select
+
+    from app.models.character import Character
+    from app.models.project import Project
+
     project_result = await db_session.execute(
         select(Project).where(Project.id == chapter.project_id)
     )
@@ -234,6 +242,10 @@ async def prepare_chapter_regeneration_stream_context(
     regenerate_request: ChapterRegenerateRequest,
     user_id: str,
 ) -> ChapterRegenerationStreamContext:
+    from sqlalchemy import select
+
+    from app.models.memory import PlotAnalysis
+
     if not chapter.content or not chapter.content.strip():
         raise ValueError("当前章节缺少可重写的原始内容")
 

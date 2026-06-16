@@ -1,20 +1,39 @@
-use chrono::NaiveDateTime;
-use sea_orm::DatabaseConnection;
-use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
-use crate::models::{batch_generation_task, chapter};
-use crate::services::chapter_generation_execution_config_service::{
-    prepare_generation_execution_config_with_provider_payload, PreparedGenerationExecutionConfig,
+pub(crate) mod prerequisite_owner;
+pub(crate) mod request_prepare_owner;
+pub(crate) mod research_payload_owner;
+pub(crate) mod task_view_payload_owner;
+
+pub(crate) use self::prerequisite_owner::{
+    build_chapter_generation_prerequisite_owner_contract, check_chapter_generation_prerequisites,
+    is_valid_optional_choice, is_valid_optional_text_length,
+    normalize_optional_single_generation_request_string,
+    normalize_single_generation_web_research_enabled, ChapterGenerationPrerequisiteCheck,
 };
+pub(crate) use self::request_prepare_owner::{
+    load_single_chapter_generation_target,
+    prepare_single_chapter_generation_execution_config_from_runtime_state,
+    PrepareSingleChapterGenerationRequestError, SingleChapterGenerationRequest,
+    SingleChapterGenerationRouteRequest, SingleChapterGenerationTarget,
+};
+use self::research_payload_owner::build_single_chapter_research_payload_owner_contract;
+#[cfg(test)]
+pub(crate) use self::task_view_payload_owner::single_generation_pending_stage_code;
+pub(crate) use self::task_view_payload_owner::{
+    build_single_generation_runtime_payload_base,
+    build_single_generation_task_view_payload_from_task_state,
+    build_single_generation_task_view_payload_owner_contract,
+    estimated_single_generation_task_minutes, single_generation_active_task_statuses,
+};
+use crate::services::chapter_access_service::build_chapter_generation_access_owner_contract;
 pub(crate) use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
-use crate::services::chapter_generation_prerequisite_service::check_chapter_generation_prerequisites;
-use crate::services::chapter_generation_request_runtime_state_service::BatchGenerationRequestRuntimeState;
-use crate::services::chapter_generation_research_payload_service::build_single_chapter_research_provider_payload;
-use crate::services::route_request_deserialize_service::deserialize_optional_non_null;
-
-use super::chapter_generation_access_service::{
-    load_accessible_chapter_for_generation, LoadAccessibleChapterForGenerationError,
+use crate::services::chapter_generation_execution_contract_service::{
+    build_generation_execution_config_owner_contract,
+    build_single_generation_execution_contract_owner_contract,
+};
+use crate::services::chapter_generation_prompt_service::{
+    build_prompt_context_provider_owner_contract, build_quality_profile_owner_contract,
 };
 const MIN_SINGLE_GENERATION_TARGET_WORD_COUNT: i32 = 500;
 const MAX_SINGLE_GENERATION_TARGET_WORD_COUNT: i32 = 10_000;
@@ -44,447 +63,443 @@ const SINGLE_GENERATION_QUALITY_PRESET_VALUES: &[&str] = &[
     "emotion_drama",
     "clean_prose",
 ];
-const SINGLE_GENERATION_TASK_TYPE: &str = "chapter_single_generate";
-const SINGLE_GENERATION_EXECUTION_MODE: &str = "interactive";
-const SINGLE_GENERATION_ACTIVE_TASK_STATUSES: [&str; 2] = ["pending", "running"];
 
-pub(crate) fn estimated_single_generation_task_minutes(
-    target_word_count: i32,
-    enable_analysis: bool,
-) -> i32 {
-    let generation_time = (target_word_count as f64 / 3000.0) * 2.0;
-    let analysis_time = if enable_analysis { 1.0 } else { 0.0 };
-    ((generation_time + analysis_time) as i32).max(1)
-}
-
-pub(crate) fn single_generation_pending_stage_code() -> &'static str {
-    "6.writing.pending"
-}
-
-pub(crate) fn single_generation_active_task_statuses() -> [&'static str; 2] {
-    SINGLE_GENERATION_ACTIVE_TASK_STATUSES
-}
-
-pub(crate) fn build_single_generation_runtime_payload_base(
-    task_id: &str,
-    project_id: &str,
-    chapter_id: Option<&str>,
-    status: &str,
-    workflow_runtime_state: Option<&Value>,
-    created_at: Option<NaiveDateTime>,
-) -> Map<String, Value> {
-    let stage_code = match status {
-        "completed" => "6.writing.completed",
-        "failed" => "6.writing.failed",
-        "cancelled" => "6.writing.cancelled",
-        "running" => "6.writing.generating",
-        _ => single_generation_pending_stage_code(),
-    };
-    let mut checkpoint = workflow_runtime_state
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    checkpoint.insert("stage_code".to_string(), json!(stage_code));
-    checkpoint.insert(
-        "execution_mode".to_string(),
-        json!(SINGLE_GENERATION_EXECUTION_MODE),
-    );
-
-    let mut payload = Map::new();
-    payload.insert("batch_id".to_string(), json!(task_id));
-    payload.insert("task_type".to_string(), json!(SINGLE_GENERATION_TASK_TYPE));
-    payload.insert("project_id".to_string(), json!(project_id));
-    payload.insert("status".to_string(), json!(status));
-    payload.insert("stage_code".to_string(), json!(stage_code));
-    payload.insert(
-        "execution_mode".to_string(),
-        json!(SINGLE_GENERATION_EXECUTION_MODE),
-    );
-    payload.insert(
-        "current_chapter_id".to_string(),
-        json!(chapter_id.map(str::to_string)),
-    );
-    payload.insert("checkpoint".to_string(), Value::Object(checkpoint));
-    payload.insert(
-        "created_at".to_string(),
-        json!(created_at.map(|datetime| datetime.and_utc().to_rfc3339())),
-    );
-
-    payload
-}
-
-fn single_generation_task_chapter_id(task: &batch_generation_task::Model) -> Option<&str> {
-    task.current_chapter_id.as_deref().or_else(|| {
-        task.chapter_ids
-            .as_array()
-            .and_then(|items| items.first())
-            .and_then(|item| {
-                item.as_str()
-                    .or_else(|| item.get("id").and_then(Value::as_str))
-            })
+pub(crate) fn build_single_generation_prepare_owner_contract() -> Value {
+    json!({
+        "owner": "chapter_single_generation_prepare_service",
+        "scope": "single_generation_route_request_target_prerequisite_execution_config_and_task_view_payload",
+        "python_source_map": [
+            "backend/app/api/chapter_generation_routes.py",
+            "backend/app/api/chapters.py",
+            "backend/app/schemas/chapter.py",
+            "backend/app/services/chapter_generation/route_wiring_service.py",
+            "backend/app/services/chapter_generation/stream/entry_service.py",
+            "backend/app/services/chapter_generation/stream/service.py",
+            "backend/app/services/chapter_generation/stream/execution_service.py",
+            "backend/app/services/compat/chapter_generation_route_compat_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/services/chapter_single_generation_prepare_service.rs",
+            "backend-rs/src/api/chapter_generation_routes.rs",
+            "backend-rs/src/services/chapter_access_service.rs",
+            "backend-rs/src/services/chapter_generation_execution_contract_service.rs",
+            "backend-rs/src/services/chapter_single_generation_prepare_service/research_payload_owner.rs",
+            "backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs",
+            "backend-rs/src/services/chapter_single_generation_runtime_restore_workflow_service.rs",
+            "backend-rs/src/api/health.rs"
+        ],
+        "behavior_contract": {
+            "route_request_owner": "SingleChapterGenerationRouteRequest",
+            "generation_request_owner": "SingleChapterGenerationRequest",
+            "target_owner": "SingleChapterGenerationTarget",
+            "request_fields": [
+                "style_id",
+                "target_word_count",
+                "model",
+                "enable_analysis",
+                "enable_mcp",
+                "enable_web_research",
+                "web_research_query",
+                "narrative_perspective",
+                "creative_mode",
+                "story_focus",
+                "plot_stage",
+                "story_creation_brief",
+                "quality_preset",
+                "quality_notes",
+                "story_repair_summary",
+                "story_repair_targets",
+                "story_preserve_strengths"
+            ],
+            "bounds": {
+                "target_word_count_min": MIN_SINGLE_GENERATION_TARGET_WORD_COUNT,
+                "target_word_count_max": MAX_SINGLE_GENERATION_TARGET_WORD_COUNT,
+                "story_creation_brief_max_chars": MAX_SINGLE_GENERATION_STORY_CREATION_BRIEF_LENGTH,
+                "quality_notes_max_chars": MAX_SINGLE_GENERATION_QUALITY_NOTES_LENGTH
+            },
+            "choice_fields": {
+                "creative_mode": SINGLE_GENERATION_CREATIVE_MODE_VALUES,
+                "story_focus": SINGLE_GENERATION_STORY_FOCUS_VALUES,
+                "plot_stage": SINGLE_GENERATION_PLOT_STAGE_VALUES,
+                "quality_preset": SINGLE_GENERATION_QUALITY_PRESET_VALUES
+            },
+            "prepare_entrypoints": [
+                "load_single_chapter_generation_target",
+                "prepare_single_chapter_generation_execution_config_from_runtime_state",
+                "SingleChapterGenerationRequest::compat_options_with_web_research_default",
+                "SingleChapterGenerationRequest::validate_request_bounds"
+            ],
+            "task_view_payload": [
+                "build_single_generation_runtime_payload_base",
+                "build_single_generation_task_view_payload_from_task_state",
+                "single_generation_pending_stage_code",
+                "single_generation_active_task_statuses"
+            ],
+            "strict_schema": {
+                "deny_unknown_fields": true,
+                "explicit_null_rejected_for_default_flags": [
+                    "enable_analysis",
+                    "enable_mcp"
+                ],
+                "empty_strings_trimmed_to_none": true
+            }
+        },
+        "active_consumers": [
+            "chapter_generation_routes",
+            "chapter_single_generation_stream_workflow_service",
+            "chapter_single_generation_runtime_restore_workflow_service",
+            "chapter_batch_generation_resume_task_command_service",
+            "chapter_single_generation_active_gateway_smoke_service"
+        ],
+        "chapter_generation_access_owner_contract": build_chapter_generation_access_owner_contract(),
+        "prerequisite_owner_contract": build_chapter_generation_prerequisite_owner_contract(),
+        "task_view_payload_owner_contract": build_single_generation_task_view_payload_owner_contract(),
+        "execution_config_owner_contract": build_generation_execution_config_owner_contract(),
+        "execution_contract_owner_contract": build_single_generation_execution_contract_owner_contract(),
+        "prompt_context_provider_owner_contract": build_prompt_context_provider_owner_contract(),
+        "quality_profile_owner_contract": build_quality_profile_owner_contract(),
+        "research_payload_owner_contract": build_single_chapter_research_payload_owner_contract(),
+        "validation_boundary": [
+            "cargo test chapter_single_generation_prepare_service",
+            "cargo test api::health",
+            "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only",
+            "cargo check"
+        ],
+        "service_runtime_closeout_status": {
+            "owner_profile": "phase5-single-generation-owner",
+            "route_request_schema_owner": "SingleChapterGenerationRouteRequest",
+            "target_prerequisite_owner": "load_single_chapter_generation_target",
+            "execution_config_owner": "prepare_single_chapter_generation_execution_config_from_runtime_state",
+            "task_view_payload_owner": "build_single_generation_task_view_payload_from_task_state",
+            "manifest_probe_count": 6,
+            "rust_manifest_probe_count": 6,
+            "python_fallback_probe_count": 0,
+            "source_map_closeout_ready": true,
+            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+            "status": "rust_prepare_owner_ready_for_source_map_closeout_review"
+        },
+        "rollback_boundary": {
+            "runtime_knobs": [
+                "legacy_single_generation_direct_ai",
+                "python_candidate_executor_fallback"
+            ],
+            "source_map_policy": "keep_python_single_generation_route_schema_and_stream_prepare_shells_as_source_map_until_explicit_freeze_delete_round",
+            "python_fallback_removal_ready": true,
+            "rollback_files": [
+                "backend/app/api/chapter_generation_routes.py",
+                "backend/app/api/chapters.py",
+                "backend/app/services/chapter_generation/route_wiring_service.py",
+                "backend/app/services/chapter_generation/stream/entry_service.py",
+                "backend/app/services/compat/chapter_generation_route_compat_service.py"
+            ]
+        }
     })
-}
-
-fn single_generation_to_iso(value: Option<NaiveDateTime>) -> Option<String> {
-    value.map(|datetime| datetime.and_utc().to_rfc3339())
-}
-
-pub(crate) fn build_single_generation_task_view_payload_from_task_state(
-    task: &batch_generation_task::Model,
-    workflow_runtime_state: Option<&Value>,
-) -> Map<String, Value> {
-    let mut payload = build_single_generation_runtime_payload_base(
-        &task.id,
-        &task.project_id,
-        single_generation_task_chapter_id(task),
-        &task.status,
-        workflow_runtime_state,
-        task.created_at,
-    );
-    payload.insert("total".to_string(), json!(task.total_chapters));
-    payload.insert("completed".to_string(), json!(task.completed_chapters));
-    payload.insert(
-        "current_chapter_number".to_string(),
-        json!(task.current_chapter_number),
-    );
-    payload.insert(
-        "started_at".to_string(),
-        json!(single_generation_to_iso(task.started_at)),
-    );
-    payload.insert(
-        "completed_at".to_string(),
-        json!(single_generation_to_iso(task.completed_at)),
-    );
-    payload.insert("error_message".to_string(), json!(task.error_message));
-
-    payload
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SingleChapterGenerationRouteRequest {
-    pub(crate) style_id: Option<i32>,
-    pub(crate) target_word_count: Option<i32>,
-    pub(crate) model: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
-    pub(crate) enable_analysis: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
-    pub(crate) enable_mcp: Option<bool>,
-    #[serde(default)]
-    pub(crate) enable_web_research: Option<bool>,
-    pub(crate) web_research_query: Option<String>,
-    pub(crate) narrative_perspective: Option<String>,
-    pub(crate) creative_mode: Option<String>,
-    pub(crate) story_focus: Option<String>,
-    pub(crate) plot_stage: Option<String>,
-    pub(crate) story_creation_brief: Option<String>,
-    pub(crate) quality_preset: Option<String>,
-    pub(crate) quality_notes: Option<String>,
-    pub(crate) story_repair_summary: Option<String>,
-    pub(crate) story_repair_targets: Option<Vec<String>>,
-    pub(crate) story_preserve_strengths: Option<Vec<String>>,
-}
-
-impl SingleChapterGenerationRouteRequest {
-    pub(crate) fn into_generation_request(self) -> SingleChapterGenerationRequest {
-        SingleChapterGenerationRequest {
-            style_id: self.style_id,
-            target_word_count: self.target_word_count,
-            model: self.model,
-            enable_analysis: self.enable_analysis,
-            enable_mcp: self.enable_mcp,
-            enable_web_research: self.enable_web_research,
-            web_research_query: self.web_research_query,
-            narrative_perspective: self.narrative_perspective,
-            creative_mode: normalize_optional_single_generation_request_string(self.creative_mode),
-            story_focus: normalize_optional_single_generation_request_string(self.story_focus),
-            plot_stage: normalize_optional_single_generation_request_string(self.plot_stage),
-            story_creation_brief: normalize_optional_single_generation_request_string(
-                self.story_creation_brief,
-            ),
-            quality_preset: normalize_optional_single_generation_request_string(
-                self.quality_preset,
-            ),
-            quality_notes: normalize_optional_single_generation_request_string(self.quality_notes),
-            story_repair_summary: normalize_optional_single_generation_request_string(
-                self.story_repair_summary,
-            ),
-            story_repair_targets: self.story_repair_targets,
-            story_preserve_strengths: self.story_preserve_strengths,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct SingleChapterGenerationRequest {
-    pub(crate) style_id: Option<i32>,
-    pub(crate) target_word_count: Option<i32>,
-    pub(crate) model: Option<String>,
-    pub(crate) enable_analysis: Option<bool>,
-    pub(crate) enable_mcp: Option<bool>,
-    pub(crate) enable_web_research: Option<bool>,
-    pub(crate) web_research_query: Option<String>,
-    pub(crate) narrative_perspective: Option<String>,
-    pub(crate) creative_mode: Option<String>,
-    pub(crate) story_focus: Option<String>,
-    pub(crate) plot_stage: Option<String>,
-    pub(crate) story_creation_brief: Option<String>,
-    pub(crate) quality_preset: Option<String>,
-    pub(crate) quality_notes: Option<String>,
-    pub(crate) story_repair_summary: Option<String>,
-    pub(crate) story_repair_targets: Option<Vec<String>>,
-    pub(crate) story_preserve_strengths: Option<Vec<String>>,
-}
-
-impl SingleChapterGenerationRequest {
-    pub(crate) fn validate_request_bounds(
-        &self,
-    ) -> Result<(), PrepareSingleChapterGenerationRequestError> {
-        if let Some(target_word_count) = self.target_word_count {
-            if target_word_count < MIN_SINGLE_GENERATION_TARGET_WORD_COUNT {
-                return Err(
-                    PrepareSingleChapterGenerationRequestError::InvalidTargetWordCountTooSmall,
-                );
-            }
-            if target_word_count > MAX_SINGLE_GENERATION_TARGET_WORD_COUNT {
-                return Err(
-                    PrepareSingleChapterGenerationRequestError::InvalidTargetWordCountTooLarge,
-                );
-            }
-        }
-        if !is_valid_optional_choice(
-            self.creative_mode.as_deref(),
-            SINGLE_GENERATION_CREATIVE_MODE_VALUES,
-        ) {
-            return Err(PrepareSingleChapterGenerationRequestError::InvalidCreativeMode);
-        }
-        if !is_valid_optional_choice(
-            self.story_focus.as_deref(),
-            SINGLE_GENERATION_STORY_FOCUS_VALUES,
-        ) {
-            return Err(PrepareSingleChapterGenerationRequestError::InvalidStoryFocus);
-        }
-        if !is_valid_optional_choice(
-            self.plot_stage.as_deref(),
-            SINGLE_GENERATION_PLOT_STAGE_VALUES,
-        ) {
-            return Err(PrepareSingleChapterGenerationRequestError::InvalidPlotStage);
-        }
-        if !is_valid_optional_choice(
-            self.quality_preset.as_deref(),
-            SINGLE_GENERATION_QUALITY_PRESET_VALUES,
-        ) {
-            return Err(PrepareSingleChapterGenerationRequestError::InvalidQualityPreset);
-        }
-        if !is_valid_optional_text_length(
-            self.story_creation_brief.as_deref(),
-            MAX_SINGLE_GENERATION_STORY_CREATION_BRIEF_LENGTH,
-        ) {
-            return Err(PrepareSingleChapterGenerationRequestError::StoryCreationBriefTooLong);
-        }
-        if !is_valid_optional_text_length(
-            self.quality_notes.as_deref(),
-            MAX_SINGLE_GENERATION_QUALITY_NOTES_LENGTH,
-        ) {
-            return Err(PrepareSingleChapterGenerationRequestError::QualityNotesTooLong);
-        }
-
-        Ok(())
-    }
-
-    pub(crate) fn compat_options_with_web_research_default(
-        &self,
-        web_research_default: bool,
-    ) -> SingleChapterGenerationCompatOptions {
-        SingleChapterGenerationCompatOptions {
-            style_id: self.style_id,
-            enable_analysis: self.enable_analysis.unwrap_or(true),
-            enable_mcp: self.enable_mcp.unwrap_or(true),
-            web_research_enabled: normalize_single_generation_web_research_enabled(
-                self.enable_web_research,
-                web_research_default,
-            ),
-            web_research_query: self.web_research_query.clone(),
-            narrative_perspective: self.narrative_perspective.clone(),
-            creative_mode: self.creative_mode.clone(),
-            story_focus: self.story_focus.clone(),
-            plot_stage: self.plot_stage.clone(),
-            story_creation_brief: self.story_creation_brief.clone(),
-            quality_preset: self.quality_preset.clone(),
-            quality_notes: self.quality_notes.clone(),
-            story_repair_summary: self.story_repair_summary.clone(),
-            story_repair_targets: self.story_repair_targets.clone().unwrap_or_default(),
-            story_preserve_strengths: self.story_preserve_strengths.clone().unwrap_or_default(),
-        }
-    }
-}
-
-fn normalize_optional_single_generation_request_string(value: Option<String>) -> Option<String> {
-    value
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn is_valid_optional_choice(value: Option<&str>, allowed_values: &[&str]) -> bool {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| allowed_values.contains(&value))
-        .unwrap_or(true)
-}
-
-fn is_valid_optional_text_length(value: Option<&str>, max_chars: usize) -> bool {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.chars().count() <= max_chars)
-        .unwrap_or(true)
-}
-
-fn normalize_single_generation_web_research_enabled(
-    enabled: Option<bool>,
-    default_enabled: bool,
-) -> bool {
-    enabled.unwrap_or(default_enabled)
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum PrepareSingleChapterGenerationRequestError {
-    Chapter(LoadAccessibleChapterForGenerationError),
-    Config(String),
-    PrerequisitesBlocked(String),
-    InvalidTargetWordCountTooSmall,
-    InvalidTargetWordCountTooLarge,
-    InvalidCreativeMode,
-    InvalidStoryFocus,
-    InvalidPlotStage,
-    InvalidQualityPreset,
-    StoryCreationBriefTooLong,
-    QualityNotesTooLong,
-    Internal(String),
-}
-
-impl PrepareSingleChapterGenerationRequestError {
-    pub(crate) fn detail_message(&self) -> String {
-        match self {
-            Self::Chapter(LoadAccessibleChapterForGenerationError::ChapterNotFound) => {
-                "Chapter not found".to_string()
-            }
-            Self::Chapter(
-                LoadAccessibleChapterForGenerationError::ChapterNotFoundOrAccessDenied,
-            ) => "Chapter not found or access denied".to_string(),
-            Self::Chapter(LoadAccessibleChapterForGenerationError::Internal(detail))
-            | Self::Config(detail)
-            | Self::PrerequisitesBlocked(detail)
-            | Self::Internal(detail) => detail.clone(),
-            Self::InvalidTargetWordCountTooSmall => {
-                "target_word_count must be greater than or equal to 500".to_string()
-            }
-            Self::InvalidTargetWordCountTooLarge => {
-                "target_word_count must be less than or equal to 10000".to_string()
-            }
-            Self::InvalidCreativeMode => "creative_mode is invalid".to_string(),
-            Self::InvalidStoryFocus => "story_focus is invalid".to_string(),
-            Self::InvalidPlotStage => "plot_stage is invalid".to_string(),
-            Self::InvalidQualityPreset => "quality_preset is invalid".to_string(),
-            Self::StoryCreationBriefTooLong => {
-                "story_creation_brief must be at most 1200 characters".to_string()
-            }
-            Self::QualityNotesTooLong => "quality_notes must be at most 600 characters".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SingleChapterGenerationTarget {
-    pub(crate) project_id: String,
-    pub(crate) chapter_id: String,
-    pub(crate) chapter_number: i32,
-    pub(crate) title: String,
-}
-
-impl SingleChapterGenerationTarget {
-    pub(crate) fn from_model(chapter_model: &chapter::Model) -> Self {
-        Self {
-            project_id: chapter_model.project_id.clone(),
-            chapter_id: chapter_model.id.clone(),
-            chapter_number: chapter_model.chapter_number,
-            title: chapter_model.title.clone(),
-        }
-    }
-}
-
-pub(crate) async fn load_single_chapter_generation_target(
-    db: &DatabaseConnection,
-    chapter_id: &str,
-    user_id: &str,
-) -> Result<SingleChapterGenerationTarget, PrepareSingleChapterGenerationRequestError> {
-    let chapter_model = load_accessible_chapter_for_generation(db, chapter_id, user_id)
-        .await
-        .map_err(PrepareSingleChapterGenerationRequestError::Chapter)?;
-    let prerequisite = check_chapter_generation_prerequisites(db, &chapter_model)
-        .await
-        .map_err(PrepareSingleChapterGenerationRequestError::Internal)?;
-    if !prerequisite.can_generate {
-        return Err(
-            PrepareSingleChapterGenerationRequestError::PrerequisitesBlocked(
-                prerequisite.error_message,
-            ),
-        );
-    }
-
-    Ok(SingleChapterGenerationTarget::from_model(&chapter_model))
-}
-
-pub(crate) async fn prepare_single_chapter_generation_execution_config_from_runtime_state(
-    db: &DatabaseConnection,
-    user_id: &str,
-    chapter_target: &SingleChapterGenerationTarget,
-    request_runtime_state: &BatchGenerationRequestRuntimeState,
-) -> Result<PreparedGenerationExecutionConfig, PrepareSingleChapterGenerationRequestError> {
-    let provider_payload = build_single_chapter_research_provider_payload(
-        db,
-        user_id,
-        chapter_target,
-        &request_runtime_state.compat_options,
-    )
-    .await
-    .map_err(PrepareSingleChapterGenerationRequestError::Config)?;
-
-    prepare_generation_execution_config_with_provider_payload(
-        db,
-        user_id,
-        request_runtime_state.model_override.as_deref(),
-        provider_payload,
-    )
-    .await
-    .map_err(PrepareSingleChapterGenerationRequestError::Config)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::research_payload_owner::build_single_chapter_research_payload_owner_contract;
     use super::{
+        build_chapter_generation_prerequisite_owner_contract,
+        build_single_generation_prepare_owner_contract,
         build_single_generation_runtime_payload_base,
         build_single_generation_task_view_payload_from_task_state,
+        build_single_generation_task_view_payload_owner_contract,
         estimated_single_generation_task_minutes, single_generation_active_task_statuses,
-        single_generation_pending_stage_code, PrepareSingleChapterGenerationRequestError,
-        SingleChapterGenerationCompatOptions, SingleChapterGenerationRequest,
-        SingleChapterGenerationRouteRequest, SingleChapterGenerationTarget,
+        single_generation_pending_stage_code, ChapterGenerationPrerequisiteCheck,
+        PrepareSingleChapterGenerationRequestError, SingleChapterGenerationCompatOptions,
+        SingleChapterGenerationRequest, SingleChapterGenerationRouteRequest,
+        SingleChapterGenerationTarget, MIN_SINGLE_GENERATION_TARGET_WORD_COUNT,
     };
     use crate::models::{batch_generation_task, chapter};
-    use crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig;
-    use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationExecutionInput;
-    use crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload;
-    use crate::services::chapter_generation_request_runtime_state_service::BatchGenerationRequestRuntimeState;
-    use crate::services::chapter_generation_target_word_count_service::normalize_chapter_generation_target_word_count;
+    use crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig;
+    use crate::services::chapter_generation_execution_contract_service::{
+        build_generation_execution_config_owner_contract,
+        build_single_generation_execution_contract_owner_contract,
+        normalize_chapter_generation_target_word_count, BatchGenerationRequestRuntimeState,
+        SingleChapterGenerationExecutionInput,
+    };
+    use crate::services::chapter_generation_prompt_service::{
+        build_prompt_context_provider_owner_contract, build_quality_profile_owner_contract,
+        PromptContextProviderPayload,
+    };
     use crate::services::chapter_quality_metrics_query_service::ChapterQualityMetricsFragments;
-    use crate::services::chapter_single_generation_runtime_restore_service::{
+    use crate::services::chapter_single_generation_runtime_restore_workflow_service::PreparedSingleChapterGenerationRestoredRuntimeLaunch;
+    use crate::services::chapter_single_generation_runtime_seed_service::{
         build_single_generation_runtime_launch_input_from_request_runtime_state,
-        PreparedSingleChapterGenerationRestoredRuntimeLaunch, RestoredSingleGenerationRuntimeState,
+        RestoredSingleGenerationRuntimeState,
     };
     use crate::services::chapter_single_generation_runtime_state_service::SingleGenerationRuntimeLaunchInput;
     use chrono::Utc;
     use serde_json::json;
+
+    #[test]
+    fn should_publish_single_generation_prepare_owner_contract() {
+        let contract = build_single_generation_prepare_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_single_generation_prepare_service"
+        );
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/app/api/chapter_generation_routes.py"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][0],
+            "backend-rs/src/services/chapter_single_generation_prepare_service.rs"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["request_fields"]
+                .as_array()
+                .expect("request fields")
+                .len(),
+            17
+        );
+        assert_eq!(
+            contract["behavior_contract"]["bounds"]["target_word_count_min"],
+            MIN_SINGLE_GENERATION_TARGET_WORD_COUNT
+        );
+        assert_eq!(
+            contract["behavior_contract"]["choice_fields"]["plot_stage"][1],
+            "climax"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["strict_schema"]["deny_unknown_fields"],
+            true
+        );
+        assert_eq!(
+            contract["active_consumers"][4],
+            "chapter_single_generation_active_gateway_smoke_service"
+        );
+        assert_eq!(
+            contract["prerequisite_owner_contract"]["scope"],
+            "prerequisite_owner"
+        );
+        assert_eq!(
+            contract["prerequisite_owner_contract"]["behavior_contract"]["entrypoint"],
+            "check_chapter_generation_prerequisites"
+        );
+        assert_eq!(
+            contract["chapter_generation_access_owner_contract"]["owner"],
+            "chapter_access_service"
+        );
+        assert_eq!(
+            contract["chapter_generation_access_owner_contract"]["behavior_contract"]
+                ["entrypoints"][1],
+            "load_accessible_chapter_for_generation"
+        );
+        assert_eq!(
+            contract["chapter_generation_access_owner_contract"]["service_runtime_closeout_status"]
+                ["owner_profiles"][1],
+            "phase5-single-generation-owner"
+        );
+        assert_eq!(
+            contract["task_view_payload_owner_contract"]["owner"],
+            "chapter_single_generation_prepare_service::task_view_payload_owner"
+        );
+        assert_eq!(
+            contract["execution_config_owner_contract"]["owner"],
+            build_generation_execution_config_owner_contract()["owner"]
+        );
+        assert_eq!(
+            contract["execution_contract_owner_contract"]["owner"],
+            build_single_generation_execution_contract_owner_contract()["owner"]
+        );
+        assert_eq!(
+            contract["prompt_context_provider_owner_contract"]["owner"],
+            build_prompt_context_provider_owner_contract()["owner"]
+        );
+        assert_eq!(
+            contract["quality_profile_owner_contract"]["owner"],
+            build_quality_profile_owner_contract()["owner"]
+        );
+        assert_eq!(
+            contract["research_payload_owner_contract"]["owner"],
+            "chapter_single_generation_prepare_service::research_payload_owner"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["runtime_knobs"][0],
+            "legacy_single_generation_direct_ai"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profile"],
+            "phase5-single-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["route_request_schema_owner"],
+            "SingleChapterGenerationRouteRequest"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["target_prerequisite_owner"],
+            "load_single_chapter_generation_target"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["execution_config_owner"],
+            "prepare_single_chapter_generation_execution_config_from_runtime_state"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["task_view_payload_owner"],
+            "build_single_generation_task_view_payload_from_task_state"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["manifest_probe_count"],
+            json!(6)
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["rust_manifest_probe_count"],
+            json!(6)
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            json!(0)
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_prepare_owner_ready_for_source_map_closeout_review"
+        );
+    }
+
+    fn prerequisite_test_chapter(chapter_number: i32, content: Option<&str>) -> chapter::Model {
+        chapter::Model {
+            id: format!("chapter-{chapter_number}"),
+            project_id: "project-1".to_string(),
+            chapter_number,
+            title: format!("第{chapter_number}章"),
+            content: content.map(str::to_string),
+            summary: None,
+            word_count: 0,
+            status: "draft".to_string(),
+            outline_id: None,
+            sub_index: 0,
+            expansion_plan: None,
+            created_at: Utc::now().naive_utc(),
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn should_publish_chapter_generation_prerequisite_owner_contract() {
+        let contract = build_chapter_generation_prerequisite_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_single_generation_prepare_service"
+        );
+        assert_eq!(contract["scope"], "prerequisite_owner");
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/app/services/chapter_generation/prerequisite_service.py"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][0],
+            "backend-rs/src/services/chapter_single_generation_prepare_service.rs"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoint"],
+            "check_chapter_generation_prerequisites"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["first_chapter"]["can_generate"],
+            true
+        );
+        assert_eq!(
+            contract["behavior_contract"]["previous_chapter_query"][2],
+            "ordered_by_chapter_number_asc"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["error_message_template"],
+            "前置章节尚未完成: <numbers> 章"
+        );
+        assert_eq!(
+            contract["rollback_boundary"],
+            "chapter_generation_prerequisite_service_python_source_map"
+        );
+    }
+
+    #[test]
+    fn should_publish_single_generation_task_view_payload_owner_contract() {
+        let contract = build_single_generation_task_view_payload_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_single_generation_prepare_service::task_view_payload_owner"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][0],
+            "build_single_generation_runtime_payload_base"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][1],
+            "build_single_generation_task_view_payload_from_task_state"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["payload_fields"][9],
+            "candidate_gateway"
+        );
+    }
+
+    #[test]
+    fn should_keep_single_generation_research_payload_owner_contract_nested_under_prepare_owner() {
+        let contract = build_single_chapter_research_payload_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_single_generation_prepare_service::research_payload_owner"
+        );
+        assert_eq!(contract["behavior_contract"]["asset_limit"], json!(2));
+    }
+
+    #[test]
+    fn should_allow_first_chapter_generation_without_previous_chapters() {
+        let result = ChapterGenerationPrerequisiteCheck {
+            can_generate: true,
+            error_message: String::new(),
+            previous_chapters: Vec::new(),
+        };
+
+        assert!(result.can_generate);
+        assert!(result.error_message.is_empty());
+        assert!(result.previous_chapters.is_empty());
+    }
+
+    #[test]
+    fn should_keep_incomplete_previous_chapter_message_contract() {
+        let previous_chapters = vec![
+            prerequisite_test_chapter(1, Some("第一章正文")),
+            prerequisite_test_chapter(2, None),
+            prerequisite_test_chapter(3, Some("   ")),
+        ];
+        let incomplete_numbers = previous_chapters
+            .iter()
+            .filter(|chapter| {
+                chapter
+                    .content
+                    .as_ref()
+                    .map(|content| content.trim().is_empty())
+                    .unwrap_or(true)
+            })
+            .map(|chapter| chapter.chapter_number.to_string())
+            .collect::<Vec<_>>();
+
+        let result = ChapterGenerationPrerequisiteCheck {
+            can_generate: false,
+            error_message: format!("前置章节尚未完成: {} 章", incomplete_numbers.join(", ")),
+            previous_chapters,
+        };
+
+        assert!(!result.can_generate);
+        assert_eq!(result.error_message, "前置章节尚未完成: 2, 3 章");
+        assert_eq!(result.previous_chapters.len(), 3);
+    }
 
     #[test]
     fn should_normalize_single_chapter_generation_target_word_count() {
@@ -535,6 +550,63 @@ mod tests {
         assert_eq!(payload["execution_mode"], "interactive");
         assert_eq!(payload["checkpoint"]["progress"], 15);
         assert_eq!(payload["checkpoint"]["stage_code"], "6.writing.pending");
+    }
+
+    #[test]
+    fn should_project_candidate_gateway_from_single_generation_runtime_payload_base() {
+        let runtime_state = json!({
+            "progress": 100,
+            "candidate_gateway": {
+                "execution_path": "rust_candidate_executor",
+                "fallback_applied": false,
+                "fallback_reason": "rust executor completed",
+                "rollback_boundary": "legacy_single_generation_direct_ai",
+                "rust_error": null
+            }
+        });
+
+        let payload = build_single_generation_runtime_payload_base(
+            "task-9",
+            "project-9",
+            Some("chapter-9"),
+            "completed",
+            Some(&runtime_state),
+            None,
+        );
+
+        assert_eq!(
+            payload["candidate_gateway"]["execution_path"],
+            "rust_candidate_executor"
+        );
+        assert_eq!(payload["candidate_gateway"]["fallback_applied"], false);
+        assert_eq!(
+            payload["candidate_gateway"]["rollback_boundary"],
+            "legacy_single_generation_direct_ai"
+        );
+        assert_eq!(
+            payload["checkpoint"]["candidate_gateway"],
+            payload["candidate_gateway"]
+        );
+    }
+
+    #[test]
+    fn should_not_project_invalid_single_generation_candidate_gateway_metadata() {
+        let runtime_state = json!({
+            "progress": 15,
+            "candidate_gateway": "not-an-object"
+        });
+
+        let payload = build_single_generation_runtime_payload_base(
+            "task-10",
+            "project-10",
+            Some("chapter-10"),
+            "running",
+            Some(&runtime_state),
+            None,
+        );
+
+        assert!(payload.get("candidate_gateway").is_none());
+        assert_eq!(payload["checkpoint"]["candidate_gateway"], "not-an-object");
     }
 
     #[test]

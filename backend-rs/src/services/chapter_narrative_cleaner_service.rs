@@ -183,12 +183,71 @@ pub fn contains_chapter_workflow_meta_text(text: &str) -> bool {
     text.lines().any(is_likely_chapter_meta_line)
 }
 
+#[allow(dead_code)]
+pub(crate) fn build_chapter_narrative_cleaner_owner_contract() -> serde_json::Value {
+    serde_json::json!({
+        "owner": "chapter_narrative_cleaner_service",
+        "scope": "shared_generated_narrative_meta_line_cleanup_template_polish_and_sentence_boundary_trim",
+        "python_source_map": [
+            "backend/app/api/chapter_draft_routes.py",
+            "backend/app/api/chapter_regeneration_routes.py",
+            "backend/app/services/chapter_generation/stream/finalize_service.py",
+            "backend/app/services/chapter_generation/stream/candidate_service.py",
+            "backend/app/services/chapter_candidate_record_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/services/chapter_narrative_cleaner_service.rs",
+            "backend-rs/src/services/chapter_candidate_output_service.rs",
+            "backend-rs/src/services/chapter_candidate_record_service.rs",
+            "backend-rs/src/services/chapter_generation_runtime_service.rs",
+            "backend-rs/src/services/chapter_regeneration_stream_workflow_service.rs"
+        ],
+        "behavior_contract": {
+            "meta_line_detector": "is_likely_chapter_meta_line",
+            "template_phrase_polisher": "lightly_polish_template_phrases",
+            "sentence_boundary_trim_owner": "trim_text_to_sentence_boundary_with_lookback",
+            "default_lookback_chars": 220,
+            "shared_consumers": [
+                "chapter_candidate_output_service",
+                "chapter_candidate_record_service",
+                "chapter_generation_runtime_service",
+                "chapter_regeneration_stream_workflow_service",
+                "chapter_draft_routes"
+            ]
+        },
+        "service_runtime_closeout_status": {
+            "owner_profiles": [
+                "phase5-single-generation-owner",
+                "phase5-batch-generation-owner",
+                "phase5-chapter-regeneration-owner",
+                "phase5-chapter-draft-owner"
+            ],
+            "single_generation_manifest_probe_count": 6,
+            "batch_generation_manifest_probe_count": 11,
+            "regeneration_manifest_probe_count": 13,
+            "chapter_draft_manifest_probe_count": 8,
+            "rust_manifest_probe_count": 38,
+            "python_fallback_probe_count": 0,
+            "narrative_cleanup_owner": "chapter_narrative_cleaner_service",
+            "source_map_closeout_ready": true,
+            "physical_python_closeout_completed": false,
+            "remaining_cutover_gate": "explicit_python_source_map_freeze_delete_or_repoint_approval",
+            "status": "rust_service_runtime_owner_closeout_ready_python_source_map_pending"
+        },
+        "rollback_boundary": {
+            "python_source_map_retained": true,
+            "approval_required_before_python_edit": true
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        contains_chapter_workflow_meta_text, is_likely_chapter_meta_line,
-        lightly_polish_template_phrases, sanitize_generated_narrative_text,
-        trim_text_to_sentence_boundary, trim_text_to_sentence_boundary_with_lookback,
+        build_chapter_narrative_cleaner_owner_contract, contains_chapter_workflow_meta_text,
+        is_likely_chapter_meta_line, lightly_polish_template_phrases,
+        sanitize_generated_narrative_text, trim_text_to_sentence_boundary,
+        trim_text_to_sentence_boundary_with_lookback,
     };
 
     #[test]
@@ -203,6 +262,41 @@ mod tests {
 
         assert_eq!(removed_count, 2);
         assert_eq!(cleaned, "正常正文第一段。\n\n正常正文第二段。");
+    }
+
+    #[test]
+    fn should_publish_chapter_narrative_cleaner_owner_contract() {
+        let contract = build_chapter_narrative_cleaner_owner_contract();
+
+        assert_eq!(contract["owner"], "chapter_narrative_cleaner_service");
+        assert_eq!(
+            contract["rust_owner_map"][0],
+            "backend-rs/src/services/chapter_narrative_cleaner_service.rs"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["meta_line_detector"],
+            "is_likely_chapter_meta_line"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profiles"][0],
+            "phase5-single-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["chapter_draft_manifest_probe_count"],
+            8
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
     }
 
     #[test]

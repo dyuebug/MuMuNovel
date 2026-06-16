@@ -180,10 +180,6 @@ impl AIService {
         Self { config }
     }
 
-    pub fn config(&self) -> &AIConfig {
-        &self.config
-    }
-
     pub async fn generate_text(
         &self,
         prompt: &str,
@@ -192,17 +188,6 @@ impl AIService {
     ) -> Result<AIResponse, String> {
         let messages = Self::build_messages(system_prompt, prompt);
         self.call_client(&messages, tools, None).await
-    }
-
-    pub async fn generate_text_with_tool_choice(
-        &self,
-        prompt: &str,
-        system_prompt: Option<&str>,
-        tools: Option<&[ToolDef]>,
-        tool_choice: Option<&ToolChoice>,
-    ) -> Result<AIResponse, String> {
-        let messages = Self::build_messages(system_prompt, prompt);
-        self.call_client(&messages, tools, tool_choice).await
     }
 
     pub async fn generate_text_detailed(

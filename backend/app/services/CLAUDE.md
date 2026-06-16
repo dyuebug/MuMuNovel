@@ -56,7 +56,6 @@
 
 ### 4. 批量生成域
 核心命名族：
-- `batch_generation_create_service.py`
 - `batch_generation_stream_service.py`
 - `batch_generation_execution_service.py`
 - `batch_generation_runtime_service.py`
@@ -64,9 +63,8 @@
 - `batch_generation_retry_service.py`
 - `batch_generation_candidate_service.py`
 - `batch_generation_chapter_*`
-- `batch_generation_status_service.py`
-- `batch_generation_resume_service.py`
 - `batch_generation_orchestration_service.py`
+- `batch_generation/`
 
 说明：`batch_generation_execution_service.py` 现在更像 facade / re-export 门面，真正实现分散在多个 `batch_generation_*` 文件中。
 

@@ -1,6 +1,6 @@
 use chrono::NaiveDateTime;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::models::chapter_draft_attempt;
 
@@ -125,6 +125,45 @@ pub(crate) async fn load_candidate_draft_attempt(
     query.one(db).await
 }
 
+#[allow(dead_code)]
+pub(crate) fn build_chapter_draft_source_owner_contract() -> Value {
+    json!({
+        "owner": "chapter_draft_source_service",
+        "scope": "chapter_draft_candidate_source_loading_full_content_and_python_truthy_compatibility",
+        "python_source_map": [
+            "backend/app/api/chapter_draft_routes.py",
+            "backend/app/api/chapter_analysis_routes.py",
+            "backend/app/services/chapter_draft_query_service.py",
+            "backend/app/services/chapter_generation/stream/candidate_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/services/chapter_draft_source_service.rs",
+            "backend-rs/src/services/chapter_draft_view_payload_service.rs",
+            "backend-rs/src/services/chapter_analysis_service.rs"
+        ],
+        "behavior_contract": {
+            "datetime_format": "YYYY-MM-DDTHH:MM:SS without timezone suffix",
+            "candidate_draft_selection": "explicit attempt_id or latest chapter draft attempt",
+            "full_content_resolution": "candidate_full_content, complete preview, or exact word-count preview",
+            "python_truthy_compatibility": true
+        },
+        "service_runtime_closeout_status": {
+            "owner_profile": "phase5-chapter-draft-owner",
+            "chapter_draft_manifest_probe_count": 8,
+            "rust_manifest_probe_count": 8,
+            "python_fallback_probe_count": 0,
+            "source_map_closeout_ready": true,
+            "physical_python_closeout_completed": false,
+            "remaining_cutover_gate": "explicit_python_source_map_freeze_delete_or_repoint_approval",
+            "status": "rust_service_runtime_owner_closeout_ready_python_source_map_pending"
+        },
+        "rollback_boundary": {
+            "python_source_map_retained": true,
+            "approval_required_before_python_edit": true
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
@@ -132,7 +171,10 @@ mod tests {
 
     use crate::models::chapter_draft_attempt;
 
-    use super::{extract_candidate_draft_full_content, format_datetime, is_draft_stale};
+    use super::{
+        build_chapter_draft_source_owner_contract, extract_candidate_draft_full_content,
+        format_datetime, is_draft_stale,
+    };
 
     fn naive_datetime(
         year: i32,
@@ -209,5 +251,36 @@ mod tests {
 
         assert_eq!(full_content, "候选正文");
         assert!(has_full_content);
+    }
+
+    #[test]
+    fn should_publish_chapter_draft_source_owner_contract() {
+        let contract = build_chapter_draft_source_owner_contract();
+
+        assert_eq!(contract["owner"], "chapter_draft_source_service");
+        assert_eq!(
+            contract["rust_owner_map"][0],
+            "backend-rs/src/services/chapter_draft_source_service.rs"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profile"],
+            "phase5-chapter-draft-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["chapter_draft_manifest_probe_count"],
+            8
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
     }
 }

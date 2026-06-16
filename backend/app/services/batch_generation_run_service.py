@@ -3,39 +3,41 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from typing import Any, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
+
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active batch-generation runtime lifecycle and dispatch "
+    "chain; this Python runtime shell is retained only as frozen "
+    "rollback/source-map material after the batch retired-support-shell "
+    "closeout review."
+)
+SOURCE_MAP_RUST_OWNER = "backend-rs/src/api/health.rs"
+SOURCE_MAP_ROLLBACK_FLAG = "aggregate_chapters_python_source_map"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from app.logger import get_logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.batch_generation_task import BatchGenerationTask
-from app.services.chapter_analysis_support_service import get_chapter_analysis_write_lock
-from app.services.ai_service import AIService
-from app.services.batch_generation_execution_service import (
-    BatchGenerationChapterRuntimeState,
-    BatchGenerationExecutionEnvironment,
-    complete_batch_generation_execution,
-    execute_batch_generation_chapter_with_retries,
-    fail_batch_generation_on_unhandled_exception,
-    handle_cancelled_batch_generation_execution,
-    initialize_batch_generation_execution,
-    mark_batch_generation_current_chapter,
-)
-from app.services.chapter_quality_context_service import StoryPacket
-from app.services.story_repair_payload_service import StoryRepairPayload
-from app.services.task_workflow_runtime_service import publish_task_stream_event
+if TYPE_CHECKING:
+    from app.models.batch_generation_task import BatchGenerationTask
+    from app.services.ai_service import AIService
+    from app.services.chapter_quality_context_service import StoryPacket
+    from app.services.story_repair_payload_service import StoryRepairPayload
 
 logger = get_logger(__name__)
 
 
 async def get_db_write_lock(user_id: str):
+    from app.services.chapter_analysis_support_service import get_chapter_analysis_write_lock
+
     return await get_chapter_analysis_write_lock(user_id)
 
 
 async def await_cancelable_batch_generation_result(
     *,
     generation_coro,
-    task: BatchGenerationTask,
+    task: "BatchGenerationTask",
     db_session: AsyncSession,
     poll_interval_seconds: float,
 ):
@@ -65,10 +67,10 @@ async def execute_batch_generation_in_order_workflow(
     *,
     batch_id: str,
     user_id: str,
-    ai_service: AIService,
+    ai_service: "AIService",
     custom_model: Optional[str] = None,
     temp_narrative_perspective: Optional[str] = None,
-    story_packet: Optional[StoryPacket] = None,
+    story_packet: Optional["StoryPacket"] = None,
     creative_mode: Optional[str] = None,
     story_focus: Optional[str] = None,
     plot_stage: Optional[str] = None,
@@ -80,7 +82,7 @@ async def execute_batch_generation_in_order_workflow(
     story_repair_summary: Optional[str] = None,
     story_repair_targets: Optional[list[str]] = None,
     story_preserve_strengths: Optional[list[str]] = None,
-    story_repair_payload: Optional[StoryRepairPayload] = None,
+    story_repair_payload: Optional["StoryRepairPayload"] = None,
     base_quality_profile: Optional[Dict[str, Any]] = None,
     get_db_write_lock_fn,
     resolve_story_repair_prompt_kwargs_fn,
@@ -92,6 +94,19 @@ async def execute_batch_generation_in_order_workflow(
     run_batch_analysis_fn: Callable[..., Any],
     publish_task_stream_event_fn: Callable[..., Any],
 ):
+    from app.services.batch_generation_retry_service import (
+        BatchGenerationChapterRuntimeState,
+        BatchGenerationExecutionEnvironment,
+        execute_batch_generation_chapter_with_retries,
+    )
+    from app.services.batch_generation_workflow_service import (
+        complete_batch_generation_execution,
+        fail_batch_generation_on_unhandled_exception,
+        handle_cancelled_batch_generation_execution,
+        initialize_batch_generation_execution,
+        mark_batch_generation_current_chapter,
+    )
+
     db_session = None
     task = None
     emit_batch_event = None

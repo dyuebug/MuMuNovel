@@ -3,21 +3,42 @@ from __future__ import annotations
 import asyncio
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Sequence
 
-from sqlalchemy.ext.asyncio import AsyncSession
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active single-generation stream finalize chain; this "
+    "Python module is kept only as frozen rollback/source-map material after "
+    "explicit stream shell freeze approval."
+)
+SOURCE_MAP_RUST_OWNER = "backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs"
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_single_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from app.logger import get_logger
-from app.models.chapter import Chapter
-from app.models.project import Project
-from app.services.chapter_generation.stream.models import (
-    ChapterGenerationAnalysisFollowupPlan,
-    ChapterGenerationAnalysisScheduling,
-    ChapterGenerationEmissionStep,
-    ChapterGenerationPostPersistEffects,
-    ChapterGenerationStreamFinalizeDependencies,
-    ChapterGenerationStreamResponseArtifacts,
-)
 
 logger = get_logger(__name__)
+
+
+class _LazyStreamModel:
+    def __init__(self, attr_name: str):
+        self._attr_name = attr_name
+
+    def _resolve(self):
+        from app.services.chapter_generation.stream import models
+
+        return getattr(models, self._attr_name)
+
+    def __call__(self, *args, **kwargs):
+        return self._resolve()(*args, **kwargs)
+
+    def __getattr__(self, name: str):
+        return getattr(self._resolve(), name)
+
+
+ChapterGenerationAnalysisFollowupPlan = _LazyStreamModel("ChapterGenerationAnalysisFollowupPlan")
+ChapterGenerationAnalysisScheduling = _LazyStreamModel("ChapterGenerationAnalysisScheduling")
+ChapterGenerationEmissionStep = _LazyStreamModel("ChapterGenerationEmissionStep")
+ChapterGenerationPostPersistEffects = _LazyStreamModel("ChapterGenerationPostPersistEffects")
+ChapterGenerationStreamResponseArtifacts = _LazyStreamModel("ChapterGenerationStreamResponseArtifacts")
 
 
 def build_chapter_generation_analysis_followup_plan(
@@ -138,7 +159,7 @@ def build_chapter_generation_stream_response_artifacts(
 
 
 async def prepare_chapter_generation_analysis_scheduling(
-    db_session: AsyncSession,
+    db_session: Any,
     *,
     chapter_id: str,
     user_id: str,
@@ -180,7 +201,7 @@ async def prepare_chapter_generation_analysis_scheduling(
 
 
 async def run_chapter_generation_post_persist_effects(
-    db_session: AsyncSession,
+    db_session: Any,
     *,
     chapter_id: str,
     chapter: Chapter,
@@ -284,7 +305,7 @@ async def emit_chapter_generation_stream_plan(
 
 async def finalize_chapter_generation_stream_result(
     *,
-    db_session: AsyncSession,
+    db_session: Any,
     chapter_id: str,
     current_user_id: str,
     background_tasks: Any,
@@ -292,7 +313,7 @@ async def finalize_chapter_generation_stream_result(
     enable_analysis: bool,
     execution_setup: Any,
     candidate_stage_result: Any,
-    dependencies: ChapterGenerationStreamFinalizeDependencies,
+    dependencies: Any,
     emit_saving_fn: Callable[[str, float], Awaitable[Any]],
     apply_outcome_and_build_history_fn: Callable[..., Any],
 ) -> tuple[Any, List[ChapterGenerationEmissionStep]]:

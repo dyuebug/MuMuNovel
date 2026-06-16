@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+mod outline_quality_owner;
+mod outline_requirement_owner;
+
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -11,20 +14,67 @@ use crate::models::{career, character, project};
 use crate::services::career_service::CareerService;
 use crate::services::chapter_service::ChapterService;
 use crate::services::character_service::CharacterService;
-use crate::services::outline_quality_summary_snapshot_service::build_outline_quality_guidance_bundle;
-use crate::services::outline_requirement_service::{
-    build_project_long_term_goal, build_wizard_outline_requirements,
-};
-use crate::services::outline_runtime_system_prompt_service::{
-    build_outline_runtime_system_prompt, OutlineRuntimeStage,
-};
 use crate::services::outline_service::OutlineService;
 use crate::services::project_service::{CreateProjectParams, ProjectService};
 use crate::services::prompt_template_service::PromptTemplateService;
 use crate::services::settings_service::SettingsService;
 use crate::utils::sse::SseChannel;
 
+pub(crate) use outline_quality_owner::build_outline_quality_guidance_bundle;
+pub(crate) use outline_requirement_owner::{
+    build_continue_outline_requirements, build_project_long_term_goal,
+    build_wizard_outline_requirements,
+};
+
 const MAX_WORLD_RETRIES: u32 = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OutlineRuntimeStage {
+    Opening,
+    Continuation,
+}
+
+impl OutlineRuntimeStage {
+    fn phase_text(self) -> &'static str {
+        match self {
+            Self::Opening => "开局阶段",
+            Self::Continuation => "续写阶段",
+        }
+    }
+}
+
+pub(crate) fn build_outline_runtime_system_prompt(
+    project_model: &project::Model,
+    chapter_count: usize,
+    stage: OutlineRuntimeStage,
+) -> String {
+    format!(
+        "【大纲生成阶段】\n\
+- 当前阶段：{}\n\
+- 本轮目标章节数：{}\n\n\
+【世界观锚点】\n\
+- 时间背景：{}\n\
+- 地理位置：{}\n\
+- 氛围基调：{}\n\
+- 世界规则：{}\n\n\
+【剧情质量硬约束】\n\
+- 每章至少包含一次“目标受阻→角色选择→代价/新麻烦”的推进链\n\
+- 每章至少给一个可直接写成对白场景的冲突对话钩子（双方立场有差异）\n\
+- 每章至少让一位核心配角出现反预期行为，并补一句动机说明\n\
+- 世界规则必须作用于事件结果，不能只做名词陈列\n\
+- 若同段出现2个及以上术语，需在三句内补一条通俗解释思路\n\
+- 摘要优先写“发生了什么”，避免空泛总结和模板化衔接词\n\n\
+【输出补充建议】\n\
+- 可在章节对象中补充字段：conflict_line / decision / cost / rule_impact / dialogue_hook / character_turns\n\
+- 新增字段应与 summary 保持一致，不得互相矛盾\n",
+        stage.phase_text(),
+        chapter_count,
+        project_model.world_time_period.as_deref().unwrap_or("未设定"),
+        project_model.world_location.as_deref().unwrap_or("未设定"),
+        project_model.world_atmosphere.as_deref().unwrap_or("未设定"),
+        project_model.world_rules.as_deref().unwrap_or("未设定"),
+    )
+}
 
 fn build_outline_create_system_prompt(
     project_model: &project::Model,
@@ -164,7 +214,8 @@ fn default_world_data() -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_outline_create_system_prompt, clean_json_response, parse_character_batch_items,
+        build_outline_create_system_prompt, build_outline_runtime_system_prompt,
+        clean_json_response, parse_character_batch_items, OutlineRuntimeStage,
     };
     use crate::models::project;
     use chrono::NaiveDateTime;
@@ -243,6 +294,27 @@ mod tests {
         assert!(prompt.contains("本轮目标章节数：3"));
         assert!(prompt.contains("时间背景：乱世末年"));
         assert!(prompt.contains("每章至少包含一次“目标受阻→角色选择→代价/新麻烦”的推进链"));
+    }
+
+    #[test]
+    fn outline_runtime_system_prompt_supports_continuation_defaults() {
+        let mut project_model = project_model();
+        project_model.world_time_period = None;
+        project_model.world_location = None;
+        project_model.world_atmosphere = None;
+        project_model.world_rules = None;
+
+        let prompt = build_outline_runtime_system_prompt(
+            &project_model,
+            5,
+            OutlineRuntimeStage::Continuation,
+        );
+
+        assert!(prompt.contains("当前阶段：续写阶段"));
+        assert!(prompt.contains("本轮目标章节数：5"));
+        assert!(prompt.contains("时间背景：未设定"));
+        assert!(prompt.contains("世界规则：未设定"));
+        assert!(prompt.contains("摘要优先写“发生了什么”"));
     }
 }
 

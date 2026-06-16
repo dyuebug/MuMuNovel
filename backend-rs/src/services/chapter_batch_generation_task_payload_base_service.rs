@@ -1,414 +1,41 @@
-use chrono::NaiveDateTime;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
-use crate::models::{batch_generation_snapshot, batch_generation_task};
-use crate::services::chapter_candidate_runtime_state_service::insert_python_query_snapshot_candidate_runtime_fields;
-use crate::services::chapter_generation_quality_gate_semantics_service::{
-    manual_review_label, manual_review_label_from_quality_context_with_retry_budget,
-    retryable_repair_label, retryable_repair_label_from_quality_context_with_retry_budget,
+pub(crate) mod metadata_owner;
+pub(crate) mod quality_terminal_status_owner;
+pub(crate) mod task_view_payload_owner;
+
+#[cfg(test)]
+pub(crate) use self::metadata_owner::task_kind;
+pub(crate) use self::metadata_owner::{
+    batch_generation_stage_code, batch_generation_task_kind, batch_generation_task_type,
+    build_batch_generation_command_summary_payload,
+    build_batch_generation_payload_metadata_owner_contract, checkpoint_with_runtime_metadata,
+    estimated_task_minutes, task_execution_mode, task_type, to_iso,
+    BatchGenerationCommandProgressSummary, BatchGenerationTaskKind,
 };
-use crate::services::chapter_generation_quality_runtime_context_service::{
-    apply_batch_quality_runtime_context_to_payload,
-    apply_generation_quality_runtime_context_to_payload,
-    resolve_batch_quality_runtime_context_from_snapshot_and_runtime_state,
-    BatchGenerationQualityRuntimeContext, GenerationQualityRuntimeContext,
+pub(crate) use self::quality_terminal_status_owner::{
+    build_batch_generation_quality_terminal_status_owner_contract,
+    insert_batch_generation_terminal_status_payload, resolve_failed_terminal_semantics,
+    resolve_failed_terminal_semantics_from_sources, BatchGenerationFailedTerminalKind,
+    BatchGenerationFailedTerminalSemantics, BatchGenerationQualityStatusContext,
 };
-use crate::services::chapter_generation_task_semantics_service::task_type;
+#[allow(unused_imports)]
+pub(crate) use self::task_view_payload_owner::{
+    apply_batch_generation_loading_stage_fields,
+    build_batch_generation_status_task_payload_from_task_and_snapshot_projection,
+    build_batch_generation_status_task_payload_with_quality_context,
+    build_batch_generation_task_response_payload_from_runtime_parts,
+    build_batch_generation_task_runtime_payload,
+    build_batch_generation_task_runtime_payload_from_task_state,
+    build_batch_generation_task_view_payload_from_task_state,
+    build_batch_generation_task_view_payload_owner_contract,
+    build_batch_generation_task_view_payload_with_quality_context,
+};
 
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct BatchGenerationQualityStatusContext {
-    pub latest_quality_metrics: Option<Value>,
-    pub quality_metrics_history: Option<Value>,
-    pub quality_metrics_summary_state: Option<Value>,
-    pub quality_metrics_summary: Option<Value>,
-    pub quality_history_context: Option<Value>,
-    pub active_story_repair_payload: Option<Value>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BatchGenerationFailedTerminalKind {
-    ManualReview,
-    Retry,
-    Error,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BatchGenerationFailedTerminalSemantics {
-    pub(crate) kind: BatchGenerationFailedTerminalKind,
-    pub(crate) reason: &'static str,
-    pub(crate) label: String,
-    pub(crate) review_required: bool,
-    pub(crate) can_resume: bool,
-}
-
-impl BatchGenerationQualityStatusContext {
-    pub fn from_snapshot_and_runtime_state(
-        snapshot: Option<&batch_generation_snapshot::Model>,
-        workflow_runtime_state: Option<&Value>,
-    ) -> Self {
-        let active_story_repair_payload =
-            Self::active_story_repair_payload_from_runtime_state(workflow_runtime_state);
-        let quality_runtime_context =
-            resolve_batch_quality_runtime_context_from_snapshot_and_runtime_state(
-                snapshot,
-                workflow_runtime_state,
-            );
-
-        Self::from_runtime_quality_context_and_active_payload(
-            &quality_runtime_context,
-            active_story_repair_payload.as_ref(),
-        )
-    }
-
-    pub fn insert_into_payload(&self, payload: &mut Map<String, Value>) {
-        payload.insert(
-            "latest_quality_metrics".to_string(),
-            serde_json::json!(self.latest_quality_metrics),
-        );
-        payload.insert(
-            "quality_metrics_history".to_string(),
-            serde_json::json!(self.quality_metrics_history),
-        );
-        payload.insert(
-            "quality_metrics_summary_state".to_string(),
-            serde_json::json!(self.quality_metrics_summary_state),
-        );
-        payload.insert(
-            "quality_metrics_summary".to_string(),
-            serde_json::json!(self.quality_metrics_summary),
-        );
-        payload.insert(
-            "quality_history_context".to_string(),
-            serde_json::json!(self.quality_history_context),
-        );
-        payload.insert(
-            "active_story_repair_payload".to_string(),
-            serde_json::json!(self.active_story_repair_payload),
-        );
-    }
-
-    pub fn from_runtime_quality_context_and_active_payload(
-        quality_runtime_context: &BatchGenerationQualityRuntimeContext,
-        active_story_repair_payload: Option<&Value>,
-    ) -> Self {
-        Self {
-            latest_quality_metrics: quality_runtime_context.latest_quality_metrics.clone(),
-            quality_metrics_history: quality_runtime_context.quality_metrics_history.clone(),
-            quality_metrics_summary_state: quality_runtime_context
-                .quality_metrics_summary_state
-                .clone(),
-            quality_metrics_summary: quality_runtime_context.quality_metrics_summary.clone(),
-            quality_history_context: quality_runtime_context.quality_history_context.clone(),
-            active_story_repair_payload: active_story_repair_payload.cloned(),
-        }
-    }
-
-    fn active_story_repair_payload_from_runtime_state(
-        workflow_runtime_state: Option<&Value>,
-    ) -> Option<Value> {
-        workflow_runtime_state
-            .and_then(Value::as_object)
-            .and_then(|state| state.get("active_story_repair_payload"))
-            .filter(|payload| payload.is_object())
-            .cloned()
-    }
-}
-
-pub(crate) fn insert_batch_generation_terminal_status_payload(
-    payload: &mut Map<String, Value>,
-    task: &batch_generation_task::Model,
-    failed_chapters: Option<&Value>,
-    quality_status_context: Option<&BatchGenerationQualityStatusContext>,
-) {
-    let (terminal_reason, terminal_label, review_required, can_resume) = if task.status == "failed"
-    {
-        resolve_failed_terminal_semantics(task, failed_chapters, quality_status_context)
-            .map(|semantics| match semantics.kind {
-                BatchGenerationFailedTerminalKind::ManualReview => (
-                    Some(semantics.reason),
-                    Some(semantics.label),
-                    semantics.review_required,
-                    semantics.can_resume,
-                ),
-                BatchGenerationFailedTerminalKind::Retry
-                | BatchGenerationFailedTerminalKind::Error => {
-                    (Some("error"), Some("执行失败".to_string()), false, true)
-                }
-            })
-            .unwrap_or((Some("error"), Some("执行失败".to_string()), false, true))
-    } else {
-        match task.status.as_str() {
-            "completed" => (Some("completed"), Some("已完成".to_string()), false, false),
-            "cancelled" => (Some("cancelled"), Some("已取消".to_string()), false, true),
-            _ => (None, None, false, false),
-        }
-    };
-
-    payload.insert(
-        "terminal_reason".to_string(),
-        serde_json::json!(terminal_reason),
-    );
-    payload.insert(
-        "terminal_label".to_string(),
-        serde_json::json!(terminal_label),
-    );
-    payload.insert(
-        "review_required".to_string(),
-        serde_json::json!(review_required),
-    );
-    payload.insert("can_resume".to_string(), serde_json::json!(can_resume));
-}
-
-pub(crate) fn resolve_failed_terminal_semantics(
-    task: &batch_generation_task::Model,
-    failed_chapters: Option<&Value>,
-    quality_status_context: Option<&BatchGenerationQualityStatusContext>,
-) -> Option<BatchGenerationFailedTerminalSemantics> {
-    resolve_failed_terminal_semantics_from_sources(
-        failed_chapters,
-        quality_status_context,
-        task.current_retry_count,
-        task.max_retries,
-    )
-}
-
-pub(crate) fn resolve_failed_terminal_semantics_from_sources(
-    failed_chapters: Option<&Value>,
-    quality_status_context: Option<&BatchGenerationQualityStatusContext>,
-    current_retry_count: i32,
-    max_retries: i32,
-) -> Option<BatchGenerationFailedTerminalSemantics> {
-    if let Some(label) = manual_review_label(failed_chapters).or_else(|| {
-        quality_status_context.and_then(|context| {
-            manual_review_label_from_quality_context_with_retry_budget(
-                context.active_story_repair_payload.as_ref(),
-                context.quality_metrics_summary.as_ref(),
-                context.latest_quality_metrics.as_ref(),
-                current_retry_count,
-                max_retries,
-            )
-        })
-    }) {
-        return Some(BatchGenerationFailedTerminalSemantics {
-            kind: BatchGenerationFailedTerminalKind::ManualReview,
-            reason: "manual_review",
-            label,
-            review_required: true,
-            can_resume: false,
-        });
-    }
-
-    if let Some(label) = retryable_repair_label(failed_chapters, current_retry_count, max_retries)
-        .or_else(|| {
-            quality_status_context.and_then(|context| {
-                retryable_repair_label_from_quality_context_with_retry_budget(
-                    context.active_story_repair_payload.as_ref(),
-                    context.quality_metrics_summary.as_ref(),
-                    context.latest_quality_metrics.as_ref(),
-                    current_retry_count,
-                    max_retries,
-                )
-            })
-        })
-    {
-        return Some(BatchGenerationFailedTerminalSemantics {
-            kind: BatchGenerationFailedTerminalKind::Retry,
-            reason: "retry",
-            label,
-            review_required: false,
-            can_resume: true,
-        });
-    }
-
-    Some(BatchGenerationFailedTerminalSemantics {
-        kind: BatchGenerationFailedTerminalKind::Error,
-        reason: "error",
-        label: "执行失败".to_string(),
-        review_required: false,
-        can_resume: true,
-    })
-}
-
-pub(crate) fn batch_generation_stage_code(status: &str) -> &'static str {
-    match status {
-        "completed" => "6.writing.completed",
-        "failed" => "6.writing.failed",
-        "cancelled" => "6.writing.cancelled",
-        "running" => "6.writing.generating",
-        _ => "6.writing.pending",
-    }
-}
-
-pub(crate) fn task_execution_mode() -> &'static str {
-    "interactive"
-}
-
-pub(crate) fn to_iso(value: Option<NaiveDateTime>) -> Option<String> {
-    value.map(|datetime| datetime.and_utc().to_rfc3339())
-}
-
-pub(crate) fn checkpoint_with_runtime_metadata(
-    workflow_runtime_state: Option<&Value>,
-    stage_code: &str,
-    execution_mode: &str,
-) -> Map<String, Value> {
-    let mut checkpoint = workflow_runtime_state
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    checkpoint.insert("stage_code".to_string(), json!(stage_code));
-    checkpoint.insert("execution_mode".to_string(), json!(execution_mode));
-    checkpoint
-}
-
-fn checkpoint_with_task_metadata(
-    workflow_runtime_state: Option<&Value>,
-    task: &batch_generation_task::Model,
-    stage_code: &str,
-    execution_mode: &str,
-    progress_phase: &str,
-) -> Map<String, Value> {
-    let mut checkpoint =
-        checkpoint_with_runtime_metadata(workflow_runtime_state, stage_code, execution_mode);
-    let progress = resolve_batch_checkpoint_progress(&checkpoint, task);
-
-    checkpoint.insert(
-        "current_chapter_id".to_string(),
-        json!(task.current_chapter_id.clone()),
-    );
-    checkpoint.insert(
-        "current_chapter_number".to_string(),
-        json!(task.current_chapter_number),
-    );
-    checkpoint.insert(
-        "current_retry_count".to_string(),
-        json!(task.current_retry_count),
-    );
-    checkpoint.insert("max_retries".to_string(), json!(task.max_retries));
-    checkpoint.insert("progress_phase".to_string(), json!(progress_phase));
-    checkpoint.insert("progress".to_string(), json!(progress));
-    insert_python_query_snapshot_runtime_fields(&mut checkpoint);
-    checkpoint
-}
-
-fn resolve_batch_progress_phase(
-    workflow_runtime_state: Option<&Value>,
-    task: &batch_generation_task::Model,
-) -> String {
-    workflow_runtime_state
-        .and_then(Value::as_object)
-        .and_then(|state| state.get("phase"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_lowercase)
-        .unwrap_or_else(|| default_batch_progress_phase(task).to_string())
-}
-
-fn compose_python_query_snapshot_stage_code(progress_phase: &str) -> String {
-    if progress_phase.is_empty() || progress_phase == "init" {
-        "6.writing".to_string()
-    } else {
-        format!("6.writing.{progress_phase}")
-    }
-}
-
-fn default_batch_progress_phase(task: &batch_generation_task::Model) -> &'static str {
-    match task.status.as_str() {
-        "pending" => "init",
-        "completed" => "complete",
-        "failed" => "failed",
-        "cancelled" => "cancelled",
-        _ if task.current_retry_count > 0 => "generating",
-        _ if task.current_chapter_number.is_some() => "generating",
-        _ => "loading",
-    }
-}
-
-fn resolve_batch_checkpoint_progress(
-    checkpoint: &Map<String, Value>,
-    task: &batch_generation_task::Model,
-) -> i32 {
-    let progress = checkpoint
-        .get("progress")
-        .and_then(Value::as_i64)
-        .map(|value| value as i32)
-        .unwrap_or_else(|| fallback_batch_checkpoint_progress(task));
-
-    progress.clamp(0, 100)
-}
-
-fn fallback_batch_checkpoint_progress(task: &batch_generation_task::Model) -> i32 {
-    if task.status == "completed" {
-        return 100;
-    }
-
-    let completed = task.completed_chapters.max(0);
-    let total = task.total_chapters.max(1);
-    ((completed as f64 / total as f64) * 100.0) as i32
-}
-
-fn insert_python_query_snapshot_runtime_fields(checkpoint: &mut Map<String, Value>) {
-    const RAW_FIELDS: [&str; 4] = [
-        "last_event",
-        "last_message",
-        "pre_compaction_total_length",
-        "context_budget_limit",
-    ];
-    const BOOL_FIELDS: [&str; 1] = ["compaction_applied"];
-
-    insert_python_query_snapshot_candidate_runtime_fields(checkpoint);
-
-    for key in RAW_FIELDS {
-        checkpoint
-            .entry(key.to_string())
-            .or_insert_with(|| Value::Null);
-    }
-    for key in BOOL_FIELDS {
-        let value = checkpoint
-            .get(key)
-            .and_then(Value::as_bool)
-            .map(Value::Bool)
-            .unwrap_or(Value::Null);
-        checkpoint.insert(key.to_string(), value);
-    }
-
-    let compaction_details = checkpoint
-        .get("compaction_details")
-        .and_then(Value::as_object)
-        .cloned()
-        .map(Value::Object)
-        .unwrap_or(Value::Null);
-    checkpoint.insert("compaction_details".to_string(), compaction_details);
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BatchGenerationCommandProgressSummary {
-    pub(crate) batch_id: String,
-    pub(crate) total_chapters: i32,
-    pub(crate) completed_chapters: i32,
-}
-
-impl BatchGenerationCommandProgressSummary {
-    pub(crate) fn batch_id(&self) -> &str {
-        &self.batch_id
-    }
-}
-
-pub(crate) fn build_batch_generation_command_summary_payload(
-    progress: BatchGenerationCommandProgressSummary,
-    message: impl Into<String>,
-) -> Value {
-    let mut payload = Map::new();
-    payload.insert("total_chapters".to_string(), json!(progress.total_chapters));
-    payload.insert(
-        "completed_chapters".to_string(),
-        json!(progress.completed_chapters),
-    );
-    payload.insert("batch_id".to_string(), json!(progress.batch_id));
-    payload.insert("message".to_string(), json!(message.into()));
-    Value::Object(payload)
-}
+use crate::services::chapter_generation_runtime_service::quality_runtime_context_owner::{
+    build_generation_quality_runtime_owner_contract, BatchGenerationQualityRuntimeContext,
+    GenerationQualityRuntimeContext,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum BatchGenerationTaskResponseQualityPayload {
@@ -442,254 +69,107 @@ pub(crate) enum BatchGenerationTaskViewPayloadVariant {
     StatusTask,
 }
 
-pub(crate) fn estimated_task_minutes(
-    total_chapters: usize,
-    target_word_count: i32,
-    enable_analysis: bool,
-) -> i32 {
-    let generation_time_per_chapter = (target_word_count as f64 / 3000.0) * 2.0;
-    let analysis_time_per_chapter = if enable_analysis { 1.0 } else { 0.0 };
-    let total_time =
-        total_chapters as f64 * (generation_time_per_chapter + analysis_time_per_chapter);
-
-    (total_time as i32).max(1)
-}
-
-pub(crate) fn build_batch_generation_task_runtime_payload(
-    batch_id: impl Into<String>,
-    task_type: impl Into<String>,
-    project_id: impl Into<String>,
-    status: impl Into<String>,
-    current_chapter_id: Option<&str>,
-    created_at: Option<NaiveDateTime>,
-    checkpoint: Map<String, Value>,
-    stage_code: impl Into<String>,
-    execution_mode: impl Into<String>,
-) -> Map<String, Value> {
-    let mut payload = Map::new();
-    payload.insert("batch_id".to_string(), json!(batch_id.into()));
-    payload.insert("task_type".to_string(), json!(task_type.into()));
-    payload.insert("project_id".to_string(), json!(project_id.into()));
-    let status = status.into();
-    payload.insert("status".to_string(), json!(status));
-    payload.insert("stage_code".to_string(), json!(stage_code.into()));
-    payload.insert("execution_mode".to_string(), json!(execution_mode.into()));
-    payload.insert(
-        "current_chapter_id".to_string(),
-        json!(current_chapter_id.map(str::to_string)),
-    );
-    payload.insert("checkpoint".to_string(), Value::Object(checkpoint));
-    payload.insert("created_at".to_string(), json!(to_iso(created_at)));
-    payload
-}
-
-pub(crate) fn apply_batch_generation_loading_stage_fields(payload: &mut Map<String, Value>) {
-    payload.insert("stage_code".to_string(), json!("6.writing.loading"));
-    if let Some(checkpoint) = payload.get_mut("checkpoint").and_then(Value::as_object_mut) {
-        checkpoint.insert("stage_code".to_string(), json!("6.writing.loading"));
-        checkpoint.insert("progress_phase".to_string(), json!("loading"));
-    }
-}
-
-pub(crate) fn build_batch_generation_task_response_payload_from_runtime_parts(
-    batch_id: impl Into<String>,
-    task_type: impl Into<String>,
-    project_id: impl Into<String>,
-    status: impl Into<String>,
-    current_chapter_id: Option<&str>,
-    created_at: Option<NaiveDateTime>,
-    workflow_runtime_state: Option<&Value>,
-    options: BatchGenerationTaskResponsePayloadOptions,
-) -> Map<String, Value> {
-    let batch_id = batch_id.into();
-    let task_type = task_type.into();
-    let project_id = project_id.into();
-    let status = status.into();
-    let stage_code = batch_generation_stage_code(&status);
-    let execution_mode = task_execution_mode();
-    let mut checkpoint =
-        checkpoint_with_runtime_metadata(workflow_runtime_state, stage_code, execution_mode);
-
-    if let Some((key, value)) = options.checkpoint_override {
-        checkpoint.insert(key, value);
-    }
-
-    let mut payload = build_batch_generation_task_runtime_payload(
-        batch_id,
-        task_type,
-        project_id,
-        status,
-        current_chapter_id,
-        created_at,
-        checkpoint,
-        stage_code,
-        execution_mode,
-    );
-
-    if let Some(summary_payload) = options.summary_payload {
-        if let Value::Object(summary_fields) = summary_payload {
-            payload.extend(summary_fields);
-        }
-    }
-
-    if let Some(quality_payload) = options.quality_payload {
-        match quality_payload {
-            BatchGenerationTaskResponseQualityPayload::Batch {
-                quality_runtime_context,
-                quality_metrics_summary,
-            } => apply_batch_quality_runtime_context_to_payload(
-                &mut payload,
-                quality_runtime_context,
-                quality_metrics_summary,
-            ),
-            BatchGenerationTaskResponseQualityPayload::Single {
-                quality_runtime_context,
-                latest_quality_metrics,
-                quality_metrics_summary,
-                quality_metrics_history,
-            } => apply_generation_quality_runtime_context_to_payload(
-                &mut payload,
-                quality_runtime_context,
-                latest_quality_metrics,
-                quality_metrics_summary,
-                quality_metrics_history,
-            ),
-        }
-    }
-
-    if let Some(active_story_repair_payload) = options.active_story_repair_payload {
-        payload.insert(
-            "active_story_repair_payload".to_string(),
-            active_story_repair_payload,
-        );
-    }
-    if let Some(quality_history_context) = options.quality_history_context {
-        payload.insert(
-            "quality_history_context".to_string(),
-            quality_history_context,
-        );
-    }
-    for (key, value) in options.extra_fields {
-        payload.insert(key, value);
-    }
-    if options.apply_loading_stage_fields {
-        apply_batch_generation_loading_stage_fields(&mut payload);
-    }
-
-    payload
-}
-
-pub(crate) fn build_batch_generation_task_runtime_payload_from_runtime_parts(
-    batch_id: impl Into<String>,
-    task_type: impl Into<String>,
-    project_id: impl Into<String>,
-    status: impl Into<String>,
-    current_chapter_id: Option<&str>,
-    created_at: Option<NaiveDateTime>,
-    workflow_runtime_state: Option<&Value>,
-    checkpoint_override: Option<(&str, Value)>,
-) -> Map<String, Value> {
-    build_batch_generation_task_response_payload_from_runtime_parts(
-        batch_id,
-        task_type,
-        project_id,
-        status,
-        current_chapter_id,
-        created_at,
-        workflow_runtime_state,
-        BatchGenerationTaskResponsePayloadOptions {
-            checkpoint_override: checkpoint_override.map(|(key, value)| (key.to_string(), value)),
-            ..Default::default()
+pub(crate) fn build_chapter_batch_generation_task_payload_base_owner_contract() -> Value {
+    json!({
+        "owner": "chapter_batch_generation_task_payload_base_service",
+        "scope": "batch_generation_task_view_payload_checkpoint_and_terminal_semantics_owner",
+        "python_source_map": [
+            "backend/app/models/batch_generation_task.py",
+            "backend/app/models/batch_generation_snapshot.py",
+            "backend/app/services/batch_generation/status_response_builder.py",
+            "backend/app/services/batch_generation/status_models.py",
+            "backend/app/services/batch_generation/create_service.py",
+            "backend/app/services/batch_generation/resume_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs",
+            "backend-rs/src/services/chapter_batch_generation_task_payload_base_service/task_view_payload_owner.rs",
+            "backend-rs/src/services/chapter_batch_generation_read_context_service.rs",
+            "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
+            "backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs",
+            "backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs",
+            "backend-rs/src/services/chapter_generation_runtime_service/quality_runtime_context_owner.rs",
+            "backend-rs/src/services/chapter_generation_execution_contract_service.rs",
+            "backend-rs/src/services/chapter_candidate_runtime_state_service.rs"
+        ],
+        "behavior_contract": {
+            "entrypoints": [
+                "batch_generation_task_kind",
+                "task_kind",
+                "batch_generation_task_type",
+                "task_type",
+                "build_batch_generation_task_view_payload_owner_contract",
+                "checkpoint_with_runtime_metadata",
+                "build_batch_generation_task_runtime_payload",
+                "build_batch_generation_task_response_payload_from_runtime_parts",
+                "build_batch_generation_task_runtime_payload_from_task_state",
+                "build_batch_generation_task_view_payload_from_task_state",
+                "build_batch_generation_task_view_payload_with_quality_context",
+                "build_batch_generation_status_task_payload_with_quality_context",
+                "build_batch_generation_status_task_payload_from_task_and_snapshot_projection",
+                "insert_batch_generation_terminal_status_payload",
+                "resolve_failed_terminal_semantics_from_sources"
+            ],
+            "checkpoint_fields": [
+                "progress",
+                "progress_phase",
+                "stage_code",
+                "execution_mode",
+                "candidate_gateway",
+                "rust_runtime",
+                "rust_runtime_owner"
+            ],
+            "task_payload_fields": [
+                "task_id",
+                "project_id",
+                "status",
+                "progress",
+                "completed_chapters",
+                "total_chapters",
+                "checkpoint",
+                "terminal_reason",
+                "terminal_label",
+                "review_required",
+                "can_resume",
+                "active_story_repair_payload"
+            ],
+            "terminal_status_policy": [
+                "completed -> terminal_reason completed and can_resume false",
+                "cancelled -> terminal_reason cancelled and can_resume true",
+                "failed manual_review -> review_required true and can_resume false",
+                "failed retry_or_error -> execution_failed_label and can_resume true",
+                "non_terminal -> null terminal fields and can_resume false"
+            ],
+            "quality_context_policy": "BatchGenerationQualityStatusContext projects snapshot and runtime quality fields into task/status payloads",
+            "candidate_gateway_policy": "runtime candidate gateway metadata is projected only when workflow runtime state contains a valid object",
+            "python_compat_policy": "checkpoint and status payload fields keep Python query snapshot compatible keys while Rust owns projection",
+            "loading_stage_policy": "loading stage fields stay available for payload builders that need to surface in-progress write work"
         },
-    )
-}
-
-pub(crate) fn build_batch_generation_task_runtime_payload_from_task_state(
-    task: &batch_generation_task::Model,
-    workflow_runtime_state: Option<&Value>,
-) -> Map<String, Value> {
-    let progress_phase = resolve_batch_progress_phase(workflow_runtime_state, task);
-    let stage_code = compose_python_query_snapshot_stage_code(&progress_phase);
-    let execution_mode = task_execution_mode();
-    let checkpoint = checkpoint_with_task_metadata(
-        workflow_runtime_state,
-        task,
-        &stage_code,
-        execution_mode,
-        &progress_phase,
-    );
-
-    build_batch_generation_task_runtime_payload(
-        &task.id,
-        task_type(task),
-        &task.project_id,
-        &task.status,
-        task.current_chapter_id.as_deref(),
-        task.created_at,
-        checkpoint,
-        stage_code,
-        execution_mode,
-    )
-}
-
-pub(crate) fn build_batch_generation_task_view_payload_from_task_state(
-    task: &batch_generation_task::Model,
-    workflow_runtime_state: Option<&Value>,
-) -> Map<String, Value> {
-    let mut payload =
-        build_batch_generation_task_runtime_payload_from_task_state(task, workflow_runtime_state);
-
-    payload.insert("total".to_string(), json!(task.total_chapters));
-    payload.insert("completed".to_string(), json!(task.completed_chapters));
-    payload.insert(
-        "current_chapter_number".to_string(),
-        json!(task.current_chapter_number),
-    );
-    payload.insert("started_at".to_string(), json!(to_iso(task.started_at)));
-    payload.insert("completed_at".to_string(), json!(to_iso(task.completed_at)));
-    payload.insert("error_message".to_string(), json!(task.error_message));
-
-    payload
-}
-
-pub(crate) fn build_batch_generation_task_view_payload_with_quality_context(
-    task: &batch_generation_task::Model,
-    workflow_runtime_state: Option<&Value>,
-    quality_status_context: Option<&BatchGenerationQualityStatusContext>,
-    variant: BatchGenerationTaskViewPayloadVariant,
-) -> Map<String, Value> {
-    let mut payload =
-        build_batch_generation_task_view_payload_from_task_state(task, workflow_runtime_state);
-
-    if let Some(quality_status_context) = quality_status_context {
-        quality_status_context.insert_into_payload(&mut payload);
-    }
-
-    match variant {
-        BatchGenerationTaskViewPayloadVariant::ActiveTaskListItem => {}
-        BatchGenerationTaskViewPayloadVariant::ActiveProjectTask => {
-            payload.remove("task_type");
-            payload.remove("project_id");
-            payload.remove("completed_at");
-            payload.remove("error_message");
-        }
-        BatchGenerationTaskViewPayloadVariant::StatusTask => {
-            payload.insert(
-                "current_retry_count".to_string(),
-                json!(task.current_retry_count),
-            );
-            payload.insert("max_retries".to_string(), json!(task.max_retries));
-            payload.insert("failed_chapters".to_string(), task.failed_chapters.clone());
-            insert_batch_generation_terminal_status_payload(
-                &mut payload,
-                task,
-                Some(&task.failed_chapters),
-                quality_status_context,
-            );
-        }
-    }
-
-    payload
+        "metadata_owner_contract": build_batch_generation_payload_metadata_owner_contract(),
+        "quality_terminal_status_owner_contract": build_batch_generation_quality_terminal_status_owner_contract(),
+        "quality_runtime_owner_contract": build_generation_quality_runtime_owner_contract(),
+        "task_view_payload_owner_contract": build_batch_generation_task_view_payload_owner_contract(),
+        "validation_boundary": [
+            "cargo test chapter_batch_generation_task_payload_base_service",
+            "cargo test api::health",
+            "cargo check --manifest-path backend-rs/Cargo.toml",
+            "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only"
+        ],
+        "service_runtime_closeout_status": {
+            "owner_profile": "phase5-batch-generation-owner",
+            "batch_generation_manifest_probe_count": 11,
+            "rust_manifest_probe_count": 11,
+            "python_fallback_probe_count": 0,
+            "task_payload_owner": "chapter_batch_generation_task_payload_base_service",
+            "checkpoint_projection_owner": "chapter_batch_generation_task_payload_base_service::task_view_payload_owner",
+            "quality_status_projection_owner": "BatchGenerationQualityStatusContext",
+            "source_map_closeout_ready": true,
+            "physical_python_closeout_completed": false,
+            "remaining_cutover_gate": "explicit_python_source_map_freeze_delete_or_repoint_approval",
+            "status": "rust_service_runtime_owner_closeout_ready_python_source_map_pending"
+        },
+        "rollback_boundary": "batch_generation_task_payload_python_source_map"
+    })
 }
 
 #[cfg(test)]
@@ -698,23 +178,25 @@ mod tests {
 
     use super::{
         apply_batch_generation_loading_stage_fields, batch_generation_stage_code,
+        batch_generation_task_kind, batch_generation_task_type,
         build_batch_generation_command_summary_payload,
+        build_batch_generation_status_task_payload_from_task_and_snapshot_projection,
+        build_batch_generation_status_task_payload_with_quality_context,
         build_batch_generation_task_response_payload_from_runtime_parts,
         build_batch_generation_task_runtime_payload,
-        build_batch_generation_task_runtime_payload_from_runtime_parts,
         build_batch_generation_task_runtime_payload_from_task_state,
         build_batch_generation_task_view_payload_from_task_state,
         build_batch_generation_task_view_payload_with_quality_context,
         checkpoint_with_runtime_metadata, insert_batch_generation_terminal_status_payload,
         resolve_failed_terminal_semantics, resolve_failed_terminal_semantics_from_sources,
-        task_execution_mode, BatchGenerationCommandProgressSummary,
+        task_execution_mode, task_kind, task_type, BatchGenerationCommandProgressSummary,
         BatchGenerationFailedTerminalKind, BatchGenerationQualityStatusContext,
-        BatchGenerationTaskResponsePayloadOptions, BatchGenerationTaskResponseQualityPayload,
-        BatchGenerationTaskViewPayloadVariant,
+        BatchGenerationTaskKind, BatchGenerationTaskResponsePayloadOptions,
+        BatchGenerationTaskResponseQualityPayload, BatchGenerationTaskViewPayloadVariant,
     };
     use crate::models::{batch_generation_snapshot, batch_generation_task};
-    use crate::services::chapter_generation_quality_runtime_context_service::BatchGenerationQualityRuntimeContext;
-    use crate::services::chapter_generation_task_semantics_service::task_type;
+    use crate::services::chapter_generation_execution_contract_service::active_story_repair_payload_from_runtime_state;
+    use crate::services::chapter_generation_runtime_service::quality_runtime_context_owner::BatchGenerationQualityRuntimeContext;
 
     fn build_task_shape(
         status: &str,
@@ -762,6 +244,209 @@ mod tests {
             created_at: None,
             updated_at: None,
         }
+    }
+
+    #[test]
+    fn should_publish_chapter_batch_generation_task_payload_base_owner_contract() {
+        let contract = super::build_chapter_batch_generation_task_payload_base_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_task_payload_base_service"
+        );
+        assert_eq!(
+            contract["scope"],
+            "batch_generation_task_view_payload_checkpoint_and_terminal_semantics_owner"
+        );
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/app/models/batch_generation_task.py"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][0],
+            "backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs"
+        );
+        assert_eq!(contract["behavior_contract"]["entrypoints"][1], "task_kind");
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][2],
+            "batch_generation_task_type"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][6],
+            "build_batch_generation_task_runtime_payload"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][10],
+            "build_batch_generation_task_view_payload_with_quality_context"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][11],
+            "build_batch_generation_status_task_payload_with_quality_context"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][7],
+            "backend-rs/src/services/chapter_generation_execution_contract_service.rs"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["checkpoint_fields"][3],
+            "execution_mode"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["terminal_status_policy"][2],
+            "failed manual_review -> review_required true and can_resume false"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profile"],
+            "phase5-batch-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["batch_generation_manifest_probe_count"],
+            11
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
+        assert_eq!(
+            contract["validation_boundary"][0],
+            "cargo test chapter_batch_generation_task_payload_base_service"
+        );
+        assert_eq!(contract["validation_boundary"][1], "cargo test api::health");
+        assert_eq!(
+            contract["quality_terminal_status_owner_contract"]["owner"],
+            "chapter_batch_generation_task_payload_base_service::quality_terminal_status_owner"
+        );
+        assert_eq!(
+            contract["quality_runtime_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::quality_runtime_context_owner"
+        );
+        assert_eq!(
+            contract["metadata_owner_contract"]["request_runtime_state_owner_contract"]["owner"],
+            "chapter_generation_execution_contract_service::request_runtime_state"
+        );
+        assert_eq!(
+            contract["metadata_owner_contract"]["candidate_runtime_state_owner_contract"]["owner"],
+            "chapter_candidate_runtime_state_service"
+        );
+        assert_eq!(
+            contract["rollback_boundary"],
+            "batch_generation_task_payload_python_source_map"
+        );
+    }
+
+    #[test]
+    fn should_publish_batch_generation_quality_terminal_status_owner_contract() {
+        let contract = super::build_batch_generation_quality_terminal_status_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_task_payload_base_service::quality_terminal_status_owner"
+        );
+        assert_eq!(
+            contract["scope"],
+            "batch_generation_quality_status_context_failed_terminal_semantics_and_status_payload_projection"
+        );
+        assert_eq!(
+            contract["python_source_map"][2],
+            "backend/app/services/batch_generation/status_response_builder.py"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][0],
+            "backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["quality_status_context_entrypoints"][0],
+            "BatchGenerationQualityStatusContext::from_snapshot_and_runtime_state"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["failed_terminal_semantics_entrypoints"][2],
+            "resolve_failed_terminal_semantics_from_sources"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["status_payload_projection_entrypoints"][2],
+            "build_batch_generation_status_task_payload_from_task_and_snapshot_projection"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["projected_fields"][6],
+            "terminal_reason"
+        );
+        assert_eq!(
+            contract["validation_boundary"][0],
+            "cargo test chapter_batch_generation_task_payload_base_service"
+        );
+        assert_eq!(
+            contract["validation_boundary"][2],
+            "cargo check --manifest-path backend-rs/Cargo.toml"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "keep_python_quality_terminal_status_projection_shells_as_source_map_until_explicit_freeze_delete_round"
+        );
+    }
+
+    #[test]
+    fn should_resolve_batch_generation_task_type_semantics_inside_payload_owner() {
+        let single = build_task_shape("pending", 1, json!(["chapter-1"]), 1);
+        let batch = build_task_shape("pending", 2, json!(["chapter-1", "chapter-2"]), 2);
+        let malformed_single =
+            build_task_shape("pending", 1, json!({"chapter_id": "chapter-1"}), 1);
+
+        assert_eq!(
+            batch_generation_task_type(BatchGenerationTaskKind::SingleChapter),
+            "chapter_single_generate"
+        );
+        assert_eq!(
+            batch_generation_task_type(BatchGenerationTaskKind::Batch),
+            "chapters_batch_generate"
+        );
+        assert_eq!(
+            batch_generation_task_kind(1, &json!(["chapter-1"])),
+            BatchGenerationTaskKind::SingleChapter
+        );
+        assert_eq!(
+            batch_generation_task_kind(2, &json!(["chapter-1", "chapter-2"])),
+            BatchGenerationTaskKind::Batch
+        );
+        assert_eq!(task_kind(&single), BatchGenerationTaskKind::SingleChapter);
+        assert_eq!(task_kind(&batch), BatchGenerationTaskKind::Batch);
+        assert_eq!(task_kind(&malformed_single), BatchGenerationTaskKind::Batch);
+        assert_eq!(task_type(&single), "chapter_single_generate");
+        assert_eq!(task_type(&batch), "chapters_batch_generate");
+        assert_eq!(task_type(&malformed_single), "chapters_batch_generate");
+    }
+
+    #[test]
+    fn should_preserve_python_status_response_builder_task_type_contract_inside_payload_owner() {
+        let python_single_shape =
+            build_task_shape("pending", 1, json!(["chapter-python-compat"]), 1);
+        let python_batch_shape = build_task_shape(
+            "running",
+            3,
+            json!(["chapter-1", "chapter-2", "chapter-3"]),
+            3,
+        );
+        let python_empty_single_shape = build_task_shape("pending", 1, json!([]), 1);
+        let python_object_single_shape =
+            build_task_shape("pending", 1, json!({"id": "chapter-python-compat"}), 1);
+
+        assert_eq!(task_type(&python_single_shape), "chapter_single_generate");
+        assert_eq!(task_type(&python_batch_shape), "chapters_batch_generate");
+        assert_eq!(
+            task_type(&python_empty_single_shape),
+            "chapters_batch_generate"
+        );
+        assert_eq!(
+            task_type(&python_object_single_shape),
+            "chapters_batch_generate"
+        );
     }
 
     #[test]
@@ -1095,16 +780,26 @@ mod tests {
     }
 
     #[test]
-    fn should_build_batch_generation_task_runtime_payload_from_runtime_parts() {
-        let payload = build_batch_generation_task_runtime_payload_from_runtime_parts(
+    fn should_build_batch_generation_task_response_payload_from_runtime_parts() {
+        let payload = build_batch_generation_task_response_payload_from_runtime_parts(
             "task-9",
             "chapters_batch_generate",
             "project-9",
             "pending",
             Some("chapter-7"),
             None,
-            Some(&json!({"progress": 42})),
-            Some(("chapter_id", json!("chapter-8"))),
+            Some(&json!({
+                "progress": 42,
+                "candidate_gateway": {
+                    "execution_path": "rust_candidate_executor",
+                    "fallback_applied": false,
+                    "rollback_boundary": "python_candidate_executor_fallback"
+                }
+            })),
+            BatchGenerationTaskResponsePayloadOptions {
+                checkpoint_override: Some(("chapter_id".to_string(), json!("chapter-8"))),
+                ..Default::default()
+            },
         );
 
         assert_eq!(payload["batch_id"], "task-9");
@@ -1118,6 +813,15 @@ mod tests {
         assert_eq!(payload["checkpoint"]["chapter_id"], "chapter-8");
         assert_eq!(payload["checkpoint"]["stage_code"], "6.writing.pending");
         assert_eq!(payload["checkpoint"]["execution_mode"], "interactive");
+        assert_eq!(
+            payload["candidate_gateway"]["execution_path"],
+            "rust_candidate_executor"
+        );
+        assert_eq!(payload["candidate_gateway"]["fallback_applied"], false);
+        assert_eq!(
+            payload["checkpoint"]["candidate_gateway"],
+            payload["candidate_gateway"]
+        );
     }
 
     #[test]
@@ -1137,6 +841,57 @@ mod tests {
         assert_eq!(payload["checkpoint"]["progress"], 42);
         assert_eq!(payload["checkpoint"]["stage_code"], "6.writing.generating");
         assert_eq!(payload["checkpoint"]["execution_mode"], "interactive");
+    }
+
+    #[test]
+    fn should_project_candidate_gateway_from_runtime_state_to_task_payload() {
+        let task = build_task("completed");
+        let runtime_state = json!({
+            "progress": 100,
+            "candidate_gateway": {
+                "execution_path": "rust_candidate_executor",
+                "fallback_applied": false,
+                "fallback_reason": "rust executor completed",
+                "rollback_boundary": "python_candidate_executor_fallback",
+                "rust_error": null
+            }
+        });
+
+        let payload = build_batch_generation_task_runtime_payload_from_task_state(
+            &task,
+            Some(&runtime_state),
+        );
+
+        assert_eq!(
+            payload["candidate_gateway"]["execution_path"],
+            "rust_candidate_executor"
+        );
+        assert_eq!(payload["candidate_gateway"]["fallback_applied"], false);
+        assert_eq!(
+            payload["candidate_gateway"]["rollback_boundary"],
+            "python_candidate_executor_fallback"
+        );
+        assert_eq!(
+            payload["checkpoint"]["candidate_gateway"],
+            payload["candidate_gateway"]
+        );
+    }
+
+    #[test]
+    fn should_not_invent_candidate_gateway_for_invalid_runtime_metadata() {
+        let task = build_task("running");
+        let runtime_state = json!({
+            "progress": 42,
+            "candidate_gateway": "not-an-object"
+        });
+
+        let payload = build_batch_generation_task_runtime_payload_from_task_state(
+            &task,
+            Some(&runtime_state),
+        );
+
+        assert!(payload.get("candidate_gateway").is_none());
+        assert_eq!(payload["checkpoint"]["candidate_gateway"], "not-an-object");
     }
 
     #[test]
@@ -1210,11 +965,82 @@ mod tests {
     }
 
     #[test]
-    fn should_build_batch_generation_task_runtime_payload_from_runtime_parts_with_checkpoint_override(
+    fn should_build_status_task_payload_from_task_and_snapshot_projection_owner() {
+        let mut snapshot = snapshot_with_quality_fields();
+        snapshot.workflow_runtime_state = Some(json!({
+            "progress": 60,
+            "candidate_gateway": {
+                "execution_path": "rust_candidate_executor",
+                "fallback_applied": false,
+                "fallback_reason": "rust executor completed",
+                "rollback_boundary": "python_candidate_executor_fallback",
+                "rust_error": null
+            },
+            "active_story_repair_payload": {
+                "mode": "repair"
+            }
+        }));
+        let workflow_runtime_state = snapshot
+            .workflow_runtime_state
+            .as_ref()
+            .expect("snapshot runtime state");
+        let payload = build_batch_generation_status_task_payload_from_task_and_snapshot_projection(
+            &build_task("completed"),
+            Some(&snapshot),
+            Some(workflow_runtime_state),
+        );
+
+        assert_eq!(payload["batch_id"], "task-1");
+        assert_eq!(payload["checkpoint"]["progress"], 60);
+        assert_eq!(payload["current_retry_count"], 2);
+        assert_eq!(payload["max_retries"], 3);
+        assert_eq!(payload["terminal_reason"], "completed");
+        assert_eq!(payload["review_required"], false);
+        assert_eq!(payload["can_resume"], false);
+        assert_eq!(payload["latest_quality_metrics"]["score"], 91);
+        assert_eq!(payload["quality_metrics_summary"]["summary"], "ok");
+        assert_eq!(payload["active_story_repair_payload"]["mode"], "repair");
+        assert_eq!(
+            payload["candidate_gateway"]["execution_path"],
+            "rust_candidate_executor"
+        );
+        assert_eq!(
+            payload["checkpoint"]["candidate_gateway"],
+            payload["candidate_gateway"]
+        );
+    }
+
+    #[test]
+    fn should_build_status_task_payload_from_quality_context_owner() {
+        let payload = build_batch_generation_status_task_payload_with_quality_context(
+            &build_task("failed"),
+            Some(&json!({"progress": 80})),
+            &BatchGenerationQualityStatusContext {
+                latest_quality_metrics: Some(json!({"score": 88})),
+                quality_metrics_history: None,
+                quality_metrics_summary_state: None,
+                quality_metrics_summary: Some(json!({"summary": "good"})),
+                quality_history_context: None,
+                active_story_repair_payload: Some(json!({"mode": "repair"})),
+            },
+        );
+
+        assert_eq!(payload["batch_id"], "task-1");
+        assert_eq!(payload["checkpoint"]["progress"], 80);
+        assert_eq!(payload["checkpoint"]["stage_code"], "6.writing.failed");
+        assert_eq!(payload["current_retry_count"], 2);
+        assert_eq!(payload["max_retries"], 3);
+        assert_eq!(payload["latest_quality_metrics"]["score"], 88);
+        assert_eq!(payload["quality_metrics_summary"]["summary"], "good");
+        assert_eq!(payload["active_story_repair_payload"]["mode"], "repair");
+    }
+
+    #[test]
+    fn should_build_batch_generation_task_response_payload_from_runtime_parts_with_checkpoint_override(
     ) {
         let task = build_task("running");
 
-        let payload = build_batch_generation_task_runtime_payload_from_runtime_parts(
+        let payload = build_batch_generation_task_response_payload_from_runtime_parts(
             &task.id,
             task_type(&task),
             &task.project_id,
@@ -1222,7 +1048,10 @@ mod tests {
             task.current_chapter_id.as_deref(),
             task.created_at,
             Some(&json!({"progress": 42})),
-            Some(("chapter_id", json!("chapter-9"))),
+            BatchGenerationTaskResponsePayloadOptions {
+                checkpoint_override: Some(("chapter_id".to_string(), json!("chapter-9"))),
+                ..Default::default()
+            },
         );
 
         assert_eq!(payload["checkpoint"]["chapter_id"], "chapter-9");
@@ -1280,7 +1109,7 @@ mod tests {
 
     #[test]
     fn should_apply_shared_loading_stage_fields_for_response_payload() {
-        let mut payload = build_batch_generation_task_runtime_payload_from_runtime_parts(
+        let mut payload = build_batch_generation_task_response_payload_from_runtime_parts(
             "task-9",
             "chapters_batch_generate",
             "project-9",
@@ -1288,7 +1117,10 @@ mod tests {
             Some("chapter-7"),
             None,
             Some(&json!({"progress": 42})),
-            Some(("chapter_id", json!("chapter-8"))),
+            BatchGenerationTaskResponsePayloadOptions {
+                checkpoint_override: Some(("chapter_id".to_string(), json!("chapter-8"))),
+                ..Default::default()
+            },
         );
 
         apply_batch_generation_loading_stage_fields(&mut payload);
@@ -1307,10 +1139,7 @@ mod tests {
             }
         });
 
-        let payload =
-            BatchGenerationQualityStatusContext::active_story_repair_payload_from_runtime_state(
-                Some(&runtime_state),
-            );
+        let payload = active_story_repair_payload_from_runtime_state(Some(&runtime_state));
 
         assert_eq!(payload, Some(json!({"mode": "repair", "attempt": 2})));
     }
@@ -1322,17 +1151,10 @@ mod tests {
         });
 
         assert_eq!(
-            BatchGenerationQualityStatusContext::active_story_repair_payload_from_runtime_state(
-                Some(&runtime_state),
-            ),
+            active_story_repair_payload_from_runtime_state(Some(&runtime_state)),
             None
         );
-        assert_eq!(
-            BatchGenerationQualityStatusContext::active_story_repair_payload_from_runtime_state(
-                None
-            ),
-            None
-        );
+        assert_eq!(active_story_repair_payload_from_runtime_state(None), None);
     }
 
     #[test]

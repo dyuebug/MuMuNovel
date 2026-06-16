@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from app.models.outline import Outline
+if TYPE_CHECKING:
+    from app.models.outline import Outline
 
 
 def build_outline_structure_runtime_sources(outline: Optional[Outline]) -> Dict[str, Any]:

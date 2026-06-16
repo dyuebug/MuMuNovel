@@ -1,30 +1,81 @@
 from __future__ import annotations
 
 import inspect
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional, Sequence
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active single-generation stream execution chain; this "
+    "Python module is kept only as frozen rollback/source-map material after "
+    "explicit stream shell freeze approval."
+)
+SOURCE_MAP_RUST_OWNER = "backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs"
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_single_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from app.logger import get_logger
-from app.models.chapter import Chapter
-from app.models.outline import Outline
-from app.models.project import Project
-from app.services.chapter_generation.stream.models import (
-    ChapterGenerationStreamBuiltContext,
-    ChapterGenerationStreamExecutionDependencies,
-    ChapterGenerationStreamExecutionSetup,
-    ChapterGenerationStreamPreparation,
-    ChapterGenerationStreamPrompt,
-    ChapterGenerationStreamRequestPayload,
-    ChapterGenerationStreamRuntimeContext,
-)
-from app.services.chapter_quality_context_service import (
-    build_story_generation_packet_with_project_continuity,
-    resolve_chapter_quality_profile,
-)
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter import Chapter
+    from app.models.outline import Outline
+    from app.models.project import Project
+    from app.services.chapter_generation.stream.models import (
+        ChapterGenerationStreamBuiltContext,
+        ChapterGenerationStreamExecutionDependencies,
+        ChapterGenerationStreamExecutionSetup,
+        ChapterGenerationStreamPreparation,
+        ChapterGenerationStreamPrompt,
+        ChapterGenerationStreamRequestPayload,
+        ChapterGenerationStreamRuntimeContext,
+    )
 
 logger = get_logger(__name__)
+
+
+def _select():
+    from sqlalchemy import select
+
+    return select
+
+
+def _chapter_model():
+    from app.models.chapter import Chapter
+
+    return Chapter
+
+
+def _outline_model():
+    from app.models.outline import Outline
+
+    return Outline
+
+
+def _project_model():
+    from app.models.project import Project
+
+    return Project
+
+
+def _stream_model_attr(attr_name: str):
+    from app.services.chapter_generation.stream import models
+
+    return getattr(models, attr_name)
+
+
+def resolve_chapter_quality_profile(*args, **kwargs):
+    from app.services.chapter_quality_context_service import resolve_chapter_quality_profile
+
+    return resolve_chapter_quality_profile(*args, **kwargs)
+
+
+def build_story_generation_packet_with_project_continuity(*args, **kwargs):
+    from app.services.chapter_quality_context_service import (
+        build_story_generation_packet_with_project_continuity,
+    )
+
+    return build_story_generation_packet_with_project_continuity(*args, **kwargs)
 
 
 async def _resolve_maybe_await(result: Any) -> Any:
@@ -50,6 +101,8 @@ async def _load_generation_outline(
     *,
     chapter: Chapter,
 ) -> Optional[Outline]:
+    select = _select()
+    Outline = _outline_model()
     if chapter.outline_id:
         outline_result = await db_session.execute(
             select(Outline)
@@ -110,6 +163,11 @@ async def prepare_chapter_generation_stream_request(
     chapter_id: str,
     check_prerequisites_fn: Callable[[AsyncSession, Chapter], Awaitable[tuple[bool, str, list[Chapter]]]],
 ) -> ChapterGenerationStreamPreparation:
+    select = _select()
+    Chapter = _chapter_model()
+    ChapterGenerationStreamPreparation = _stream_model_attr(
+        "ChapterGenerationStreamPreparation"
+    )
     result = await db_session.execute(
         select(Chapter).where(Chapter.id == chapter_id)
     )
@@ -139,6 +197,12 @@ async def load_chapter_generation_stream_runtime_context(
     resolve_quality_profile_fn: Optional[Callable[..., Awaitable[Dict[str, Any]]]] = None,
     build_story_packet_fn: Optional[Callable[..., Awaitable[Any]]] = None,
 ) -> ChapterGenerationStreamRuntimeContext:
+    select = _select()
+    Chapter = _chapter_model()
+    Project = _project_model()
+    ChapterGenerationStreamRuntimeContext = _stream_model_attr(
+        "ChapterGenerationStreamRuntimeContext"
+    )
     chapter_result = await db_session.execute(
         select(Chapter).where(Chapter.id == chapter_id)
     )
@@ -220,6 +284,9 @@ async def build_chapter_generation_stream_context(
     build_outline_structure_runtime_sources_fn: Callable[[Optional[Outline]], Any],
     build_generation_runtime_bundle_fn: Callable[..., Any],
 ) -> ChapterGenerationStreamBuiltContext:
+    ChapterGenerationStreamBuiltContext = _stream_model_attr(
+        "ChapterGenerationStreamBuiltContext"
+    )
     chapter = runtime_context.chapter
     project = runtime_context.project
     outline = runtime_context.outline
@@ -300,6 +367,7 @@ async def build_chapter_generation_stream_prompt(
     format_prompt_fn: Callable[..., str],
     apply_style_to_prompt_fn: Callable[..., str],
 ) -> ChapterGenerationStreamPrompt:
+    ChapterGenerationStreamPrompt = _stream_model_attr("ChapterGenerationStreamPrompt")
     chapter = runtime_context.chapter
     project = runtime_context.project
     chapter_context = built_context.chapter_context
@@ -390,6 +458,9 @@ def build_chapter_generation_stream_request_payload(
     detect_style_profile_fn: Callable[..., str],
     resolve_generation_temperature_fn: Callable[[str], float],
 ) -> ChapterGenerationStreamRequestPayload:
+    ChapterGenerationStreamRequestPayload = _stream_model_attr(
+        "ChapterGenerationStreamRequestPayload"
+    )
     chapter_context = built_context.chapter_context
     style_content = runtime_context.style_content
     style_name = runtime_context.style_name
@@ -448,6 +519,9 @@ async def prepare_chapter_generation_stream_execution(
     resolve_quality_profile_fn: Optional[Callable[..., Awaitable[Dict[str, Any]]]] = None,
     build_story_packet_fn: Optional[Callable[..., Awaitable[Any]]] = None,
 ) -> ChapterGenerationStreamExecutionSetup:
+    ChapterGenerationStreamExecutionSetup = _stream_model_attr(
+        "ChapterGenerationStreamExecutionSetup"
+    )
     stream_runtime_context = await load_chapter_generation_stream_runtime_context(
         db_session,
         chapter_id=chapter_id,

@@ -4,25 +4,53 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active single-generation stream candidate chain; this "
+    "Python module is kept only as frozen rollback/source-map material after "
+    "explicit stream shell freeze approval."
+)
+SOURCE_MAP_RUST_OWNER = "backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs"
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_single_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
+
 from app.logger import get_logger
-from app.models.chapter import Chapter
-from app.models.generation_history import GenerationHistory
-from app.models.project import Project
-from app.services.chapter_candidate_event_service import build_chapter_generation_progress_kwargs
 from app.services.chapter_candidate_result_service import normalize_selected_candidate_result
 from app.services.chapter_candidate_runtime_state_service import (
     build_chapter_candidate_runtime_state,
     snapshot_chapter_candidate_runtime_state,
 )
-from app.services.chapter_generation.stream.models import (
-    ChapterGenerationStreamBuiltContext,
-    ChapterGenerationStreamCandidateStageResult,
-    ChapterGenerationStreamCandidateDependencies,
-    ChapterGenerationStreamExecutionSetup,
-    ChapterGenerationStreamRuntimeContext,
-)
 
 logger = get_logger(__name__)
+
+
+class _LazyStreamModel:
+    def __init__(self, attr_name: str):
+        self._attr_name = attr_name
+
+    def _resolve(self):
+        from app.services.chapter_generation.stream import models
+
+        return getattr(models, self._attr_name)
+
+    def __call__(self, *args, **kwargs):
+        return self._resolve()(*args, **kwargs)
+
+    def __getattr__(self, name: str):
+        return getattr(self._resolve(), name)
+
+
+ChapterGenerationStreamCandidateStageResult = _LazyStreamModel(
+    "ChapterGenerationStreamCandidateStageResult"
+)
+
+
+def build_chapter_generation_progress_kwargs(*args, **kwargs):
+    from app.services.chapter_candidate_event_service import (
+        build_chapter_generation_progress_kwargs as build_progress_kwargs,
+    )
+
+    return build_progress_kwargs(*args, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -61,7 +89,7 @@ class ChapterGenerationPersistencePreparation:
     previous_status: Optional[str]
     saved_word_count: int
     provisional_draft_saved: bool
-    history: GenerationHistory
+    history: Any
 
 
 def create_chapter_generation_candidate_execution(
@@ -131,8 +159,8 @@ async def wait_for_chapter_generation_candidate(
 
 def build_chapter_generation_candidate_quality_hooks(
     *,
-    runtime_context: ChapterGenerationStreamRuntimeContext,
-    built_context: ChapterGenerationStreamBuiltContext,
+    runtime_context: Any,
+    built_context: Any,
     target_word_count: int,
     build_quality_runtime_context_fn: Callable[..., Dict[str, Any]],
     compute_story_quality_metrics_fn: Callable[..., Dict[str, Any]],
@@ -255,13 +283,15 @@ def build_chapter_generation_selected_candidate_outcome(
 
 def apply_chapter_generation_outcome_and_build_history(
     *,
-    chapter: Chapter,
-    project: Project,
+    chapter: Any,
+    project: Any,
     outcome: ChapterGenerationSelectedCandidateOutcome,
     story_runtime_contract: Optional[Dict[str, Any]],
     build_generation_history_payload_fn: Callable[..., str],
     history_model: str = "default",
 ) -> ChapterGenerationPersistencePreparation:
+    from app.models.generation_history import GenerationHistory
+
     previous_content = chapter.content or ""
     previous_word_count = int(chapter.word_count or len(previous_content))
     previous_status = chapter.status
@@ -304,8 +334,8 @@ async def execute_chapter_generation_candidate_stage(
     user_ai_service: Any,
     target_word_count: int,
     heartbeat_interval_seconds: float,
-    execution_setup: ChapterGenerationStreamExecutionSetup,
-    dependencies: ChapterGenerationStreamCandidateDependencies,
+    execution_setup: Any,
+    dependencies: Any,
     emit_generating_fn: Callable[..., Awaitable[Any]],
     emit_heartbeat_fn: Callable[..., Awaitable[Any]],
     emit_chunk_fn: Callable[[str], Awaitable[Any]],

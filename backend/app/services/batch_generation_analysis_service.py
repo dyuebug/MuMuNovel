@@ -2,21 +2,58 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
+
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active batch-generation analysis and failure-handling "
+    "chain; this Python helper is retained only as frozen "
+    "rollback/source-map material after the batch retired-support-shell "
+    "closeout review."
+)
+SOURCE_MAP_RUST_OWNER = "backend-rs/src/api/health.rs"
+SOURCE_MAP_ROLLBACK_FLAG = "aggregate_chapters_python_source_map"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logger import get_logger
-from app.models.chapter import Chapter
-from app.services.ai_service import AIService
-from app.services.analysis_task_service import create_analysis_task_safely
-from app.services.chapter_quality_context_service import StoryGenerationGuidance, StoryPacket
-from app.services.manual_chapter_analysis_execution_service import execute_chapter_analysis_background
-from app.services.story_repair_payload_service import StoryRepairPayload
-from app.services.task_workflow_runtime_service import publish_task_stream_event
+
+if TYPE_CHECKING:
+    from app.models.chapter import Chapter
+    from app.services.ai_service import AIService
+    from app.services.chapter_quality_context_service import (
+        StoryGenerationGuidance,
+        StoryPacket,
+    )
+    from app.services.story_repair_payload_service import StoryRepairPayload
 
 
 logger = get_logger(__name__)
+
+
+async def create_analysis_task_safely(*args, **kwargs):
+    from app.services.analysis_task_service import (
+        create_analysis_task_safely as create_analysis_task_safely_impl,
+    )
+
+    return await create_analysis_task_safely_impl(*args, **kwargs)
+
+
+async def execute_chapter_analysis_background(*args, **kwargs):
+    from app.services.manual_chapter_analysis_execution_service import (
+        execute_chapter_analysis_background as execute_chapter_analysis_background_impl,
+    )
+
+    return await execute_chapter_analysis_background_impl(*args, **kwargs)
+
+
+async def publish_task_stream_event(*args, **kwargs):
+    from app.services.task_workflow_runtime_service import (
+        publish_task_stream_event as publish_task_stream_event_impl,
+    )
+
+    return await publish_task_stream_event_impl(*args, **kwargs)
 
 
 async def run_batch_chapter_analysis(
@@ -24,21 +61,21 @@ async def run_batch_chapter_analysis(
     *,
     write_lock,
     batch_id: str,
-    chapter: Chapter,
+    chapter: "Chapter",
     user_id: str,
     project_id: str,
     retry_count: int,
     max_retries: int,
-    ai_service: AIService,
+    ai_service: "AIService",
     quality_profile: Optional[Dict[str, Any]] = None,
-    story_packet: Optional[StoryPacket] = None,
-    generation_guidance: Optional[StoryGenerationGuidance] = None,
+    story_packet: Optional["StoryPacket"] = None,
+    generation_guidance: Optional["StoryGenerationGuidance"] = None,
     chapter_content_override: Optional[str] = None,
     chapter_word_count_override: Optional[int] = None,
     story_repair_summary: Optional[str] = None,
     story_repair_targets: Optional[list[str]] = None,
     story_preserve_strengths: Optional[list[str]] = None,
-    story_repair_payload: Optional[StoryRepairPayload] = None,
+    story_repair_payload: Optional["StoryRepairPayload"] = None,
     create_analysis_task_fn: Optional[Callable[..., Any]] = None,
     analyze_chapter_background_fn: Optional[Callable[..., Any]] = None,
 ) -> tuple[bool, Optional[str]]:

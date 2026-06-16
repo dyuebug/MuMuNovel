@@ -2,13 +2,18 @@
 
 包含跨 API 模块共享的通用函数和工具。
 """
-from fastapi import HTTPException, Request
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from typing import Optional
+from __future__ import annotations
 
-from app.models.project import Project
+from typing import TYPE_CHECKING, Optional
+
+from fastapi import HTTPException, Request
+
 from app.logger import get_logger
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.project import Project
 
 logger = get_logger(__name__)
 
@@ -41,6 +46,10 @@ async def verify_project_access(
     """
     if not user_id:
         raise HTTPException(status_code=401, detail="未登录")
+
+    from sqlalchemy import select
+
+    from app.models.project import Project
     
     result = await db.execute(
         select(Project).where(

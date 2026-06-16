@@ -1,27 +1,92 @@
+mod lifecycle_owner;
+
 use chrono::{NaiveDateTime, Utc};
 use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use serde_json::{json, Value};
 
 use crate::models::batch_generation_task;
-use crate::services::chapter_analysis_runtime_service::analyze_generated_chapter_follow_up;
-use crate::services::chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig;
-use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationExecutionInput;
-use crate::services::chapter_generation_quality_gate_semantics_service::{
+use crate::services::chapter_analysis_runtime_service::build_chapter_analysis_runtime_owner_contract;
+use crate::services::chapter_generation_runtime_service::build_single_generation_candidate_runtime_owner_contract;
+use crate::services::chapter_generation_runtime_service::quality_runtime_context_owner::{
     manual_review_label_from_quality_context_with_retry_budget,
     retryable_repair_label_from_quality_context_with_retry_budget,
 };
-use crate::services::chapter_generation_runtime_service::{
-    generate_and_persist_chapter_content_with_candidate_route_gateway, GeneratedChapterResult,
+use crate::services::chapter_generation_runtime_service::snapshot_persistence_owner::{
+    build_chapter_generation_snapshot_owner_contract, upsert_chapter_generation_runtime_snapshot,
 };
-use crate::services::chapter_generation_snapshot_service::upsert_chapter_generation_runtime_snapshot;
+use crate::services::chapter_generation_runtime_service::GeneratedChapterResult;
+use crate::services::chapter_single_generation_result_lifecycle_service::build_single_generation_result_lifecycle_owner_contract;
 
+#[cfg(test)]
+pub(crate) use self::lifecycle_owner::append_single_generation_failed_chapter_entry;
+#[cfg(test)]
+pub(crate) use self::lifecycle_owner::SingleGenerationRuntimeOutcome;
+pub(crate) use self::lifecycle_owner::{
+    SingleGenerationRuntimeLaunchInput, SingleGenerationRuntimeLifecyclePlan,
+};
+#[cfg(test)]
 pub(crate) use crate::services::chapter_generation_execution_contract_service::build_prompt_overrides_from_compat_options;
 
-#[derive(Debug, Clone)]
-pub(crate) struct SingleGenerationRuntimeLaunchInput {
-    pub(crate) chapter_id: String,
-    pub(crate) user_id: String,
-    pub(crate) execution_input: SingleChapterGenerationExecutionInput,
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SingleGenerationQualityGateTerminalState {
+    pub(crate) checkpoint_payload: Value,
+    pub(crate) error_message: String,
+    pub(crate) failed_entry: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SingleGenerationFollowUpAnalysisDecision {
+    pub(crate) manual_review_label: String,
+    pub(crate) quality_metrics: Option<Value>,
+}
+
+pub(crate) fn build_single_generation_runtime_checkpoint_owner_contract() -> Value {
+    json!({
+        "owner": "chapter_single_generation_runtime_state_service::runtime_checkpoint_owner",
+        "scope": "runtime_checkpoint_projection_candidate_gateway_metadata_and_persisted_stage_updates",
+        "python_source_map": [
+            "backend/app/services/chapter_generation/stream/service.py",
+            "backend/app/services/chapter_generation/stream/finalize_service.py",
+            "backend/app/services/chapter_generation/stream/candidate_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/services/chapter_single_generation_runtime_state_service.rs",
+            "backend-rs/src/services/chapter_generation_runtime_service/snapshot_persistence_owner.rs",
+            "backend-rs/src/api/health.rs"
+        ],
+        "behavior_contract": {
+            "entrypoints": [
+                "build_single_generation_runtime_checkpoint_for_stage",
+                "attach_single_generation_candidate_gateway_checkpoint_metadata",
+                "build_single_generation_runtime_terminal_checkpoint_projection"
+            ],
+            "persistence_entrypoints": [
+                "SingleGenerationTaskStage::persist_runtime_preparation",
+                "SingleGenerationTaskStage::persist_with_checkpoint_payload"
+            ],
+            "checkpoint_fields": [
+                "phase",
+                "status",
+                "progress",
+                "chapter_id",
+                "current_chapter_number",
+                "word_count",
+                "candidate_gateway"
+            ]
+        },
+        "active_consumers": [
+            "chapter_single_generation_runtime_state_service",
+            "chapter_single_generation_runtime_restore_workflow_service",
+            "chapter_single_generation_active_gateway_smoke_service"
+        ],
+        "snapshot_persistence_owner_contract": build_chapter_generation_snapshot_owner_contract(),
+        "validation_boundary": [
+            "cargo test chapter_single_generation_runtime_state_service",
+            "cargo test chapter_single_generation_runtime_restore_workflow_service",
+            "cargo test api::health",
+            "cargo check"
+        ]
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +125,7 @@ impl SingleGenerationSnapshotStage {
         chapter_id: &str,
         current_chapter_number: Option<i32>,
         word_count: Option<i32>,
-    ) -> serde_json::Value {
+    ) -> Value {
         let (phase, progress, status, last_event, last_message) = match self {
             SingleGenerationSnapshotStage::Pending => (
                 "pending",
@@ -93,7 +158,7 @@ impl SingleGenerationSnapshotStage {
                 ("failed", 100, "failed", "error", "章节生成失败")
             }
         };
-        let mut checkpoint = serde_json::json!({
+        let mut checkpoint = json!({
             "phase": phase,
             "progress": progress.clamp(0, 100),
             "status": status,
@@ -106,7 +171,7 @@ impl SingleGenerationSnapshotStage {
         });
         if let Some(object) = checkpoint.as_object_mut() {
             if let Some(value) = word_count {
-                object.insert("word_count".to_string(), serde_json::json!(value.max(0)));
+                object.insert("word_count".to_string(), json!(value.max(0)));
             }
         }
 
@@ -252,18 +317,7 @@ impl SingleGenerationTaskStage {
             ModelFieldUpdate::Set(value) => active.current_chapter_number = Set(value),
         }
     }
-}
 
-pub(crate) fn build_single_generation_runtime_checkpoint_for_stage(
-    stage: SingleGenerationSnapshotStage,
-    chapter_id: &str,
-    current_chapter_number: Option<i32>,
-    word_count: Option<i32>,
-) -> serde_json::Value {
-    stage.build_checkpoint(chapter_id, current_chapter_number, word_count)
-}
-
-impl SingleGenerationTaskStage {
     pub(crate) async fn persist_runtime_preparation(
         db: &DatabaseConnection,
         task_id: &str,
@@ -300,15 +354,14 @@ impl SingleGenerationTaskStage {
         .await
     }
 
-    pub(crate) async fn persist_with_checkpoint(
+    pub(crate) async fn persist_with_checkpoint_payload(
         self,
         db: &DatabaseConnection,
         task_id: &str,
-        checkpoint_stage: SingleGenerationSnapshotStage,
         chapter_id: &str,
         chapter_number: Option<i32>,
-        word_count: Option<i32>,
         error_message: Option<String>,
+        checkpoint_payload: Value,
     ) -> Result<(), String> {
         let now = Utc::now().naive_utc();
         self.persist_for_task(
@@ -324,456 +377,245 @@ impl SingleGenerationTaskStage {
         upsert_chapter_generation_runtime_snapshot(
             db,
             task_id,
-            build_single_generation_runtime_checkpoint_for_stage(
-                checkpoint_stage,
-                chapter_id,
-                chapter_number,
-                word_count,
-            ),
+            checkpoint_payload,
             Utc::now().naive_utc(),
         )
         .await
     }
 }
 
-impl SingleGenerationRuntimeLaunchInput {
-    pub(crate) async fn execute_generation_with_gateway_config(
-        self,
-        db: &DatabaseConnection,
-        candidate_gateway_config: ChapterCandidateRouteGatewayConfig,
-    ) -> Result<GeneratedChapterResult, String> {
-        let Self {
-            chapter_id,
-            user_id,
-            execution_input,
-        } = self;
-        let SingleChapterGenerationExecutionInput {
-            target_word_count,
-            compat_options,
-            execution_config,
-        } = execution_input;
-        let crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
-            ai_config,
-            provider_payload,
-        } = execution_config;
-
-        let prompt_overrides = build_prompt_overrides_from_compat_options(&compat_options);
-        generate_and_persist_chapter_content_with_candidate_route_gateway(
-            db,
-            &user_id,
-            &chapter_id,
-            target_word_count,
-            provider_payload,
-            &prompt_overrides,
-            ai_config,
-            candidate_gateway_config,
-        )
-        .await
-    }
+pub(crate) fn build_single_generation_runtime_checkpoint_for_stage(
+    stage: SingleGenerationSnapshotStage,
+    chapter_id: &str,
+    current_chapter_number: Option<i32>,
+    word_count: Option<i32>,
+) -> Value {
+    stage.build_checkpoint(chapter_id, current_chapter_number, word_count)
 }
 
-pub(crate) fn default_single_generation_candidate_gateway_config(
-) -> ChapterCandidateRouteGatewayConfig {
-    ChapterCandidateRouteGatewayConfig {
-        rust_executor_enabled: false,
-        fallback_on_rust_error: true,
-        disabled_reason: Some("single generation direct AI fallback remains default".to_string()),
-        rollback_boundary: "legacy_single_generation_direct_ai".to_string(),
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct SingleGenerationRuntimeLifecyclePlan {
-    task_id: String,
-    chapter_id: String,
-    runtime_user_id: String,
-    enable_analysis: bool,
-    candidate_gateway_config: ChapterCandidateRouteGatewayConfig,
-    runtime_input: SingleGenerationRuntimeLaunchInput,
-}
-
-impl SingleGenerationRuntimeLifecyclePlan {
-    pub(crate) fn from_runtime_launch(
-        task_id: String,
-        runtime_input: SingleGenerationRuntimeLaunchInput,
-    ) -> Self {
-        Self::from_runtime_launch_with_gateway_config(
-            task_id,
-            runtime_input,
-            default_single_generation_candidate_gateway_config(),
-        )
+pub(crate) fn attach_single_generation_candidate_gateway_checkpoint_metadata(
+    mut checkpoint_payload: Value,
+    generated_result: &GeneratedChapterResult,
+) -> Value {
+    if let (Some(object), Some(candidate_gateway_metadata)) = (
+        checkpoint_payload.as_object_mut(),
+        generated_result.candidate_gateway_metadata.as_ref(),
+    ) {
+        object.insert(
+            "candidate_gateway".to_string(),
+            candidate_gateway_metadata.clone(),
+        );
     }
 
-    pub(crate) fn from_runtime_launch_with_gateway_config(
-        task_id: String,
-        runtime_input: SingleGenerationRuntimeLaunchInput,
-        candidate_gateway_config: ChapterCandidateRouteGatewayConfig,
-    ) -> Self {
-        let chapter_id = runtime_input.chapter_id.clone();
-        let runtime_user_id = runtime_input.user_id.clone();
-        let enable_analysis = runtime_input
-            .execution_input
-            .compat_options
-            .enable_analysis();
+    checkpoint_payload
+}
 
-        Self {
-            task_id,
-            chapter_id,
-            runtime_user_id,
-            enable_analysis,
-            candidate_gateway_config,
-            runtime_input,
+pub(crate) fn build_single_generation_runtime_terminal_checkpoint_projection(
+    stage: SingleGenerationSnapshotStage,
+    chapter_id: &str,
+    chapter_number: Option<i32>,
+    word_count: Option<i32>,
+    extra_payload: Option<Value>,
+    generated_result: Option<&GeneratedChapterResult>,
+) -> Value {
+    let base_checkpoint = build_single_generation_runtime_checkpoint_for_stage(
+        stage,
+        chapter_id,
+        chapter_number,
+        word_count,
+    );
+    let checkpoint_payload = match extra_payload {
+        Some(payload) => {
+            merge_single_generation_terminal_checkpoint_payload(base_checkpoint, payload)
         }
+        None => base_checkpoint,
+    };
+
+    match generated_result {
+        Some(result) => attach_single_generation_candidate_gateway_checkpoint_metadata(
+            checkpoint_payload,
+            result,
+        ),
+        None => checkpoint_payload,
     }
+}
 
-    pub(crate) fn spawn(self, db: DatabaseConnection) {
-        tokio::spawn(async move {
-            self.execute(&db).await;
-        });
-    }
-
-    async fn execute(self, db: &DatabaseConnection) {
-        let _ = SingleGenerationTaskStage::persist_runtime_preparation(
-            db,
-            &self.task_id,
-            &self.chapter_id,
-        )
-        .await;
-        let outcome = self.outcome();
-
-        let _ = match self.execute_generation(db).await {
-            Ok(generated_result) => {
-                outcome
-                    .persist_generated_result(db, &generated_result)
-                    .await
+fn merge_single_generation_terminal_checkpoint_payload(
+    base_checkpoint: Value,
+    extra_payload: Value,
+) -> Value {
+    match (base_checkpoint, extra_payload) {
+        (Value::Object(mut base), Value::Object(extra)) => {
+            for (key, value) in extra {
+                base.insert(key, value);
             }
-            Err(error) => outcome.persist_failed_generation(db, error).await,
-        };
-    }
-
-    async fn execute_generation(
-        &self,
-        db: &DatabaseConnection,
-    ) -> Result<GeneratedChapterResult, String> {
-        self.runtime_input
-            .clone()
-            .execute_generation_with_gateway_config(db, self.candidate_gateway_config.clone())
-            .await
-    }
-
-    fn outcome(&self) -> SingleGenerationRuntimeOutcome {
-        SingleGenerationRuntimeOutcome::new(
-            self.task_id.clone(),
-            self.chapter_id.clone(),
-            self.runtime_user_id.clone(),
-            self.enable_analysis,
-        )
+            Value::Object(base)
+        }
+        (_, extra) => extra,
     }
 }
 
-#[derive(Debug, Clone)]
-struct SingleGenerationRuntimeOutcome {
-    task_id: String,
-    chapter_id: String,
-    runtime_user_id: String,
-    enable_analysis: bool,
+pub(crate) fn build_single_generation_runtime_state_owner_contract() -> Value {
+    json!({
+        "owner": "chapter_single_generation_runtime_state_service",
+        "scope": "single_generation_runtime_lifecycle_candidate_gateway_checkpoint_terminal_follow_up_analysis_and_task_persistence",
+        "python_source_map": [
+            "backend/app/api/chapter_generation_routes.py",
+            "backend/app/api/chapters.py",
+            "backend/app/services/chapter_generation/stream/service.py",
+            "backend/app/services/chapter_generation/stream/execution_service.py",
+            "backend/app/services/chapter_generation/stream/finalize_service.py",
+            "backend/app/services/chapter_generation/stream/candidate_service.py",
+            "backend/app/services/manual_chapter_analysis_execution_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/services/chapter_single_generation_runtime_state_service.rs",
+            "backend-rs/src/services/chapter_single_generation_runtime_restore_workflow_service.rs",
+            "backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs",
+            "backend-rs/src/services/chapter_single_generation_runtime_restore_workflow_service.rs",
+            "backend-rs/src/services/chapter_generation_runtime_service.rs",
+            "backend-rs/src/services/chapter_single_generation_result_lifecycle_service.rs",
+            "backend-rs/src/services/chapter_generation_runtime_service/snapshot_persistence_owner.rs",
+            "backend-rs/src/services/chapter_analysis_runtime_service.rs",
+            "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
+            "backend-rs/src/api/health.rs"
+        ],
+        "behavior_contract": {
+            "runtime_lifecycle_entrypoints": [
+                "SingleGenerationRuntimeLifecyclePlan::from_runtime_launch_with_gateway_config",
+                "SingleGenerationRuntimeLifecyclePlan::spawn",
+                "SingleGenerationRuntimeOutcome::run"
+            ],
+            "runtime_generation_entrypoints": [
+                "SingleGenerationRuntimeLaunchInput::execute_generation_with_gateway_config",
+                "generate_and_persist_chapter_content_with_candidate_route_gateway"
+            ],
+            "checkpoint_entrypoints": [
+                "build_single_generation_runtime_checkpoint_for_stage",
+                "build_single_generation_runtime_terminal_checkpoint_projection",
+                "attach_single_generation_candidate_gateway_checkpoint_metadata"
+            ],
+            "terminal_state_entrypoints": [
+                "resolve_single_generation_quality_gate_terminal_state",
+                "build_single_generation_error_terminal_state",
+                "SingleGenerationTaskStage::apply_to_active_model"
+            ],
+            "follow_up_analysis_entrypoints": [
+                "SingleGenerationRuntimeOutcome::run_follow_up_analysis",
+                "resolve_single_generation_manual_review_label_from_analysis_payload",
+                "analyze_generated_chapter_follow_up"
+            ],
+            "gateway_config": [
+                "ChapterCandidateRouteGatewayConfig",
+                "runtime lifecycle receives route/AppConfig supplied gateway config",
+                "default_single_generation_candidate_gateway_config is test-only rollback/source-map helper"
+            ],
+            "task_stage_statuses": [
+                "pending",
+                "running",
+                "completed",
+                "failed"
+            ],
+            "terminal_phases": [
+                "completed",
+                "failed",
+                "quality_blocked",
+                "quality_retry"
+            ]
+        },
+        "active_consumers": [
+            "chapter_single_generation_runtime_restore_workflow_service",
+            "chapter_single_generation_stream_workflow_service",
+            "chapter_single_generation_runtime_restore_workflow_service",
+            "chapter_single_generation_active_gateway_smoke_service",
+            "chapter_generation_routes"
+        ],
+        "shared_candidate_runtime_owner_contract": build_single_generation_candidate_runtime_owner_contract(),
+        "result_lifecycle_owner_contract": build_single_generation_result_lifecycle_owner_contract(),
+        "checkpoint_owner_contract": build_single_generation_runtime_checkpoint_owner_contract(),
+        "terminal_state_owner_contract": build_single_generation_terminal_state_owner_contract(),
+        "analysis_runtime_owner_contract": build_chapter_analysis_runtime_owner_contract(),
+        "validation_boundary": [
+            "cargo test chapter_single_generation_runtime_state_service",
+            "cargo test chapter_single_generation_runtime_restore_workflow_service",
+            "cargo test api::health",
+            "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only",
+            "cargo check"
+        ],
+        "service_runtime_closeout_status": {
+            "owner_profile": "phase5-single-generation-owner",
+            "runtime_checkpoint_owner": "build_single_generation_runtime_checkpoint_for_stage",
+            "terminal_state_owner": "resolve_single_generation_quality_gate_terminal_state",
+            "follow_up_analysis_owner": "SingleGenerationRuntimeOutcome::run_follow_up_analysis",
+            "manifest_probe_count": 6,
+            "rust_manifest_probe_count": 6,
+            "python_fallback_probe_count": 0,
+            "source_map_closeout_ready": true,
+            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+            "status": "rust_runtime_state_owner_ready_for_source_map_closeout_review"
+        },
+        "rollback_boundary": {
+            "runtime_knobs": [
+                "legacy_single_generation_direct_ai",
+                "python_candidate_executor_fallback"
+            ],
+            "source_map_policy": "keep_python_single_generation_runtime_and_analysis_shells_as_source_map_until_explicit_freeze_delete_round",
+            "python_fallback_removal_ready": true,
+            "rollback_files": [
+                "backend/app/api/chapter_generation_routes.py",
+                "backend/app/api/chapters.py",
+                "backend/app/services/chapter_generation/stream/service.py",
+                "backend/app/services/chapter_generation/stream/finalize_service.py",
+                "backend/app/services/manual_chapter_analysis_execution_service.py"
+            ]
+        }
+    })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SingleGenerationFollowUpAnalysisDecision {
-    manual_review_label: String,
-    quality_metrics: Option<Value>,
+pub(crate) fn build_single_generation_terminal_state_owner_contract() -> Value {
+    json!({
+        "owner": "chapter_single_generation_runtime_state_service::terminal_state_owner",
+        "scope": "quality_gate_terminal_state_manual_review_retry_error_projection_and_follow_up_decision",
+        "python_source_map": [
+            "backend/app/services/chapter_generation/stream/finalize_service.py",
+            "backend/app/services/manual_chapter_analysis_execution_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/services/chapter_single_generation_runtime_state_service.rs",
+            "backend-rs/src/services/chapter_analysis_runtime_service.rs",
+            "backend-rs/src/api/health.rs"
+        ],
+        "behavior_contract": {
+            "entrypoints": [
+                "resolve_single_generation_manual_review_label_from_analysis_payload",
+                "resolve_single_generation_quality_gate_terminal_state",
+                "build_single_generation_error_terminal_state"
+            ],
+            "terminal_state_fields": [
+                "checkpoint_payload",
+                "error_message",
+                "failed_entry"
+            ],
+            "manual_review_contract": [
+                "manual review label follows quality context and retry budget",
+                "analysis payload quality_metrics may override generated result quality_metrics"
+            ]
+        },
+        "active_consumers": [
+            "chapter_single_generation_runtime_state_service",
+            "chapter_single_generation_active_gateway_smoke_service",
+            "chapter_generation_routes"
+        ],
+        "validation_boundary": [
+            "cargo test chapter_single_generation_runtime_state_service",
+            "cargo test api::health",
+            "cargo check"
+        ]
+    })
 }
 
-#[derive(Debug, Clone, PartialEq)]
-struct SingleGenerationQualityGateTerminalState {
-    checkpoint_payload: Value,
-    error_message: String,
-    failed_entry: Value,
-}
-
-impl SingleGenerationRuntimeOutcome {
-    fn new(
-        task_id: String,
-        chapter_id: String,
-        runtime_user_id: String,
-        enable_analysis: bool,
-    ) -> Self {
-        Self {
-            task_id,
-            chapter_id,
-            runtime_user_id,
-            enable_analysis,
-        }
-    }
-
-    async fn persist_generated_result(
-        &self,
-        db: &DatabaseConnection,
-        generated_result: &GeneratedChapterResult,
-    ) -> Result<(), String> {
-        let persisted_task = self.load_task(db).await?;
-        if let Some(terminal_state) =
-            self.resolve_quality_gate_terminal_state(&persisted_task, generated_result, None)
-        {
-            return self
-                .persist_quality_gate_terminal_generation(db, generated_result, terminal_state)
-                .await;
-        }
-
-        if let Some(analysis_decision) = self.run_follow_up_analysis(db, generated_result).await {
-            let terminal_state = self
-                .resolve_quality_gate_terminal_state(
-                    &persisted_task,
-                    generated_result,
-                    Some(&analysis_decision),
-                )
-                .unwrap_or_else(|| {
-                    build_single_generation_manual_review_terminal_state(
-                        &persisted_task,
-                        generated_result,
-                        &analysis_decision.manual_review_label,
-                        analysis_decision.quality_metrics.as_ref(),
-                    )
-                });
-            return self
-                .persist_quality_gate_terminal_generation(db, generated_result, terminal_state)
-                .await;
-        }
-
-        self.persist_completed_generation(db, generated_result)
-            .await
-    }
-
-    async fn persist_failed_generation(
-        &self,
-        db: &DatabaseConnection,
-        error: String,
-    ) -> Result<(), String> {
-        let persisted_task = self.load_task(db).await?;
-        let terminal_state = build_single_generation_error_terminal_state(
-            &persisted_task,
-            &self.chapter_id,
-            None,
-            None,
-            &error,
-        );
-
-        self.persist_quality_gate_terminal_generation_without_result(db, terminal_state)
-            .await
-    }
-
-    async fn run_follow_up_analysis(
-        &self,
-        db: &DatabaseConnection,
-        generated_result: &GeneratedChapterResult,
-    ) -> Option<SingleGenerationFollowUpAnalysisDecision> {
-        if !self.enable_analysis {
-            return None;
-        }
-
-        analyze_generated_chapter_follow_up(db, &self.runtime_user_id, generated_result)
-            .await
-            .ok()
-            .and_then(|payload| {
-                resolve_single_generation_manual_review_label_from_analysis_payload(&payload).map(
-                    |manual_review_label| SingleGenerationFollowUpAnalysisDecision {
-                        manual_review_label,
-                        quality_metrics: payload.get("quality_metrics").cloned(),
-                    },
-                )
-            })
-    }
-
-    async fn persist_quality_gate_terminal_generation(
-        &self,
-        db: &DatabaseConnection,
-        generated_result: &GeneratedChapterResult,
-        terminal_state: SingleGenerationQualityGateTerminalState,
-    ) -> Result<(), String> {
-        let chapter_number = Some(generated_result.chapter_number);
-        let word_count = Some(generated_result.word_count);
-        self.persist_quality_gate_terminal_generation_inner(
-            db,
-            &generated_result.chapter_id,
-            chapter_number,
-            word_count,
-            terminal_state,
-        )
-        .await
-    }
-
-    async fn persist_quality_gate_terminal_generation_without_result(
-        &self,
-        db: &DatabaseConnection,
-        terminal_state: SingleGenerationQualityGateTerminalState,
-    ) -> Result<(), String> {
-        self.persist_quality_gate_terminal_generation_inner(
-            db,
-            &self.chapter_id,
-            None,
-            None,
-            terminal_state,
-        )
-        .await
-    }
-
-    async fn persist_quality_gate_terminal_generation_inner(
-        &self,
-        db: &DatabaseConnection,
-        chapter_id: &str,
-        chapter_number: Option<i32>,
-        word_count: Option<i32>,
-        terminal_state: SingleGenerationQualityGateTerminalState,
-    ) -> Result<(), String> {
-        let SingleGenerationQualityGateTerminalState {
-            checkpoint_payload,
-            error_message,
-            failed_entry,
-        } = terminal_state;
-        let merged_checkpoint_payload = merge_single_generation_terminal_checkpoint_payload(
-            build_single_generation_runtime_checkpoint_for_stage(
-                SingleGenerationSnapshotStage::Failed,
-                chapter_id,
-                chapter_number,
-                word_count,
-            ),
-            checkpoint_payload,
-        );
-        upsert_chapter_generation_runtime_snapshot(
-            db,
-            &self.task_id,
-            merged_checkpoint_payload,
-            Utc::now().naive_utc(),
-        )
-        .await?;
-
-        let Some(task_model) = self.load_task(db).await? else {
-            return Ok(());
-        };
-
-        let mut active: batch_generation_task::ActiveModel = task_model.clone().into();
-        let now = Utc::now().naive_utc();
-        SingleGenerationTaskStage::Failed.apply_to_active_model(
-            &mut active,
-            chapter_id,
-            chapter_number,
-            Some(error_message),
-            now,
-        );
-        active.failed_chapters = Set(append_single_generation_failed_chapter_entry(
-            &task_model.failed_chapters,
-            Some(&failed_entry),
-        ));
-        active.update(db).await.map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
-    async fn persist_completed_generation(
-        &self,
-        db: &DatabaseConnection,
-        generated_result: &GeneratedChapterResult,
-    ) -> Result<(), String> {
-        let GeneratedChapterResult {
-            chapter_id,
-            chapter_number,
-            word_count,
-            ..
-        } = generated_result;
-
-        SingleGenerationTaskStage::Completed
-            .persist_with_checkpoint(
-                db,
-                &self.task_id,
-                SingleGenerationSnapshotStage::Finalizing,
-                chapter_id,
-                Some(*chapter_number),
-                Some(*word_count),
-                None,
-            )
-            .await?;
-
-        SingleGenerationTaskStage::Completed
-            .persist_with_checkpoint(
-                db,
-                &self.task_id,
-                SingleGenerationSnapshotStage::Completed,
-                chapter_id,
-                Some(*chapter_number),
-                Some(*word_count),
-                None,
-            )
-            .await
-    }
-
-    async fn load_task(
-        &self,
-        db: &DatabaseConnection,
-    ) -> Result<Option<batch_generation_task::Model>, String> {
-        batch_generation_task::Entity::find_by_id(&self.task_id)
-            .one(db)
-            .await
-            .map_err(|error| error.to_string())
-    }
-
-    fn resolve_quality_gate_terminal_state(
-        &self,
-        persisted_task: &Option<batch_generation_task::Model>,
-        generated_result: &GeneratedChapterResult,
-        analysis_decision: Option<&SingleGenerationFollowUpAnalysisDecision>,
-    ) -> Option<SingleGenerationQualityGateTerminalState> {
-        let current_retry_count = persisted_task
-            .as_ref()
-            .map(|task| task.current_retry_count)
-            .unwrap_or(0);
-        let max_retries = persisted_task
-            .as_ref()
-            .map(|task| task.max_retries)
-            .unwrap_or(0);
-        let quality_metrics = analysis_decision
-            .and_then(|decision| decision.quality_metrics.as_ref())
-            .or(generated_result.quality_metrics.as_ref());
-
-        let manual_review_label = analysis_decision
-            .map(|decision| decision.manual_review_label.clone())
-            .or_else(|| {
-                resolve_single_generation_manual_review_label_from_quality_context(
-                    generated_result,
-                    quality_metrics,
-                    current_retry_count,
-                    max_retries,
-                )
-            });
-        if let Some(label) = manual_review_label {
-            return Some(build_single_generation_manual_review_terminal_state(
-                persisted_task,
-                generated_result,
-                &label,
-                quality_metrics,
-            ));
-        }
-
-        if generated_result_requires_retry_follow_up(generated_result) {
-            let retry_label = resolve_single_generation_retry_terminal_label(
-                generated_result,
-                quality_metrics,
-                current_retry_count,
-                max_retries,
-            );
-            return Some(build_single_generation_retry_terminal_state(
-                persisted_task,
-                generated_result,
-                retry_label.as_deref(),
-                quality_metrics,
-            ));
-        }
-
-        None
-    }
-}
-
-fn resolve_single_generation_manual_review_label_from_analysis_payload(
-    payload: &serde_json::Value,
+pub(crate) fn resolve_single_generation_manual_review_label_from_analysis_payload(
+    payload: &Value,
 ) -> Option<String> {
     let quality_metrics = payload.get("quality_metrics");
     manual_review_label_from_quality_context_with_retry_budget(
@@ -783,6 +625,90 @@ fn resolve_single_generation_manual_review_label_from_analysis_payload(
         0,
         0,
     )
+}
+
+pub(crate) fn resolve_single_generation_quality_gate_terminal_state(
+    persisted_task: &Option<batch_generation_task::Model>,
+    generated_result: &GeneratedChapterResult,
+    analysis_decision: Option<&SingleGenerationFollowUpAnalysisDecision>,
+) -> Option<SingleGenerationQualityGateTerminalState> {
+    let current_retry_count = persisted_task
+        .as_ref()
+        .map(|task| task.current_retry_count)
+        .unwrap_or(0);
+    let max_retries = persisted_task
+        .as_ref()
+        .map(|task| task.max_retries)
+        .unwrap_or(0);
+    let quality_metrics = analysis_decision
+        .and_then(|decision| decision.quality_metrics.as_ref())
+        .or(generated_result.quality_metrics.as_ref());
+
+    let manual_review_label = analysis_decision
+        .map(|decision| decision.manual_review_label.clone())
+        .or_else(|| {
+            resolve_single_generation_manual_review_label_from_quality_context(
+                generated_result,
+                quality_metrics,
+                current_retry_count,
+                max_retries,
+            )
+        });
+    if let Some(label) = manual_review_label {
+        return Some(build_single_generation_manual_review_terminal_state(
+            persisted_task,
+            generated_result,
+            &label,
+            quality_metrics,
+        ));
+    }
+
+    if generated_result_requires_retry_follow_up(generated_result) {
+        let retry_label = resolve_single_generation_retry_terminal_label(
+            generated_result,
+            quality_metrics,
+            current_retry_count,
+            max_retries,
+        );
+        return Some(build_single_generation_retry_terminal_state(
+            persisted_task,
+            generated_result,
+            retry_label.as_deref(),
+            quality_metrics,
+        ));
+    }
+
+    None
+}
+
+pub(crate) fn build_single_generation_error_terminal_state(
+    persisted_task: &Option<batch_generation_task::Model>,
+    chapter_id: &str,
+    chapter_number: Option<i32>,
+    chapter_title: Option<&str>,
+    error_message: &str,
+) -> SingleGenerationQualityGateTerminalState {
+    let failed_entry = build_single_generation_failed_chapter_entry(
+        Some(chapter_id),
+        chapter_number,
+        chapter_title,
+        error_message,
+        persisted_task
+            .as_ref()
+            .map(|task| task.current_retry_count)
+            .unwrap_or(0),
+    );
+
+    SingleGenerationQualityGateTerminalState {
+        checkpoint_payload: json!({
+            "analysis_task_message": Value::Null,
+            "analysis_task_progress": 100,
+            "analysis_last_error": error_message,
+            "phase": "failed",
+        }),
+        error_message: error_message.to_string(),
+        failed_entry,
+    }
 }
 
 fn resolve_single_generation_manual_review_label_from_quality_context(
@@ -847,32 +773,6 @@ fn resolve_single_generation_retry_terminal_label(
             )
         })
         .or_else(|| Some("可自动修复后重试".to_string()))
-}
-
-fn merge_single_generation_terminal_checkpoint_payload(
-    base_checkpoint: Value,
-    extra_payload: Value,
-) -> Value {
-    match (base_checkpoint, extra_payload) {
-        (Value::Object(mut base), Value::Object(extra)) => {
-            for (key, value) in extra {
-                base.insert(key, value);
-            }
-            Value::Object(base)
-        }
-        (_, extra) => extra,
-    }
-}
-
-fn append_single_generation_failed_chapter_entry(
-    failed_chapters: &Value,
-    failed_entry: Option<&Value>,
-) -> Value {
-    let mut items = failed_chapters.as_array().cloned().unwrap_or_default();
-    if let Some(entry) = failed_entry.filter(|entry| entry.is_object()) {
-        items.push(entry.clone());
-    }
-    Value::Array(items)
 }
 
 fn build_single_generation_failed_chapter_entry(
@@ -1005,36 +905,6 @@ fn build_single_generation_retry_terminal_state(
     }
 }
 
-fn build_single_generation_error_terminal_state(
-    persisted_task: &Option<batch_generation_task::Model>,
-    chapter_id: &str,
-    chapter_number: Option<i32>,
-    chapter_title: Option<&str>,
-    error_message: &str,
-) -> SingleGenerationQualityGateTerminalState {
-    let failed_entry = build_single_generation_failed_chapter_entry(
-        Some(chapter_id),
-        chapter_number,
-        chapter_title,
-        error_message,
-        persisted_task
-            .as_ref()
-            .map(|task| task.current_retry_count)
-            .unwrap_or(0),
-    );
-
-    SingleGenerationQualityGateTerminalState {
-        checkpoint_payload: json!({
-            "analysis_task_message": Value::Null,
-            "analysis_task_progress": 100,
-            "analysis_last_error": error_message,
-            "phase": "failed",
-        }),
-        error_message: error_message.to_string(),
-        failed_entry,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::ai::AIConfig;
@@ -1043,20 +913,33 @@ mod tests {
     use serde_json::json;
 
     use super::{
+        append_single_generation_failed_chapter_entry,
+        build_chapter_analysis_runtime_owner_contract,
+        build_chapter_generation_snapshot_owner_contract,
         build_prompt_overrides_from_compat_options,
-        build_single_generation_runtime_checkpoint_for_stage,
+        build_single_generation_candidate_runtime_owner_contract,
+        build_single_generation_error_terminal_state,
+        build_single_generation_runtime_checkpoint_owner_contract,
+        build_single_generation_runtime_state_owner_contract,
+        build_single_generation_terminal_state_owner_contract,
+        merge_single_generation_terminal_checkpoint_payload,
         resolve_single_generation_manual_review_label_from_analysis_payload,
-        resolve_single_generation_manual_review_label_from_quality_context, ModelFieldUpdate,
-        SingleGenerationRuntimeLaunchInput, SingleGenerationRuntimeLifecyclePlan,
-        SingleGenerationRuntimeOutcome, SingleGenerationSnapshotStage, SingleGenerationTaskStage,
-        TaskTimestampUpdate,
+        resolve_single_generation_quality_gate_terminal_state, SingleGenerationRuntimeLaunchInput,
+        SingleGenerationRuntimeLifecyclePlan, SingleGenerationRuntimeOutcome,
     };
     use crate::models::batch_generation_task;
+    use crate::services::chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig;
     use crate::services::chapter_generation_execution_contract_service::{
         SingleChapterGenerationCompatOptions, SingleChapterGenerationExecutionInput,
     };
-    use crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload;
+    use crate::services::chapter_generation_prompt_service::PromptContextProviderPayload;
     use crate::services::chapter_generation_runtime_service::GeneratedChapterResult;
+    use crate::services::chapter_single_generation_runtime_state_service::{
+        attach_single_generation_candidate_gateway_checkpoint_metadata,
+        build_single_generation_runtime_checkpoint_for_stage,
+        build_single_generation_runtime_terminal_checkpoint_projection, ModelFieldUpdate,
+        SingleGenerationSnapshotStage, SingleGenerationTaskStage, TaskTimestampUpdate,
+    };
     fn empty_compat_options() -> SingleChapterGenerationCompatOptions {
         SingleChapterGenerationCompatOptions {
             style_id: None,
@@ -1075,6 +958,148 @@ mod tests {
             story_repair_targets: Vec::new(),
             story_preserve_strengths: Vec::new(),
         }
+    }
+
+    #[test]
+    fn should_publish_single_generation_runtime_state_owner_contract() {
+        let contract = build_single_generation_runtime_state_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_single_generation_runtime_state_service"
+        );
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/app/api/chapter_generation_routes.py"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][0],
+            "backend-rs/src/services/chapter_single_generation_runtime_state_service.rs"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_lifecycle_entrypoints"][0],
+            "SingleGenerationRuntimeLifecyclePlan::from_runtime_launch_with_gateway_config"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["checkpoint_entrypoints"][2],
+            "attach_single_generation_candidate_gateway_checkpoint_metadata"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["terminal_state_entrypoints"][0],
+            "resolve_single_generation_quality_gate_terminal_state"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["follow_up_analysis_entrypoints"][2],
+            "analyze_generated_chapter_follow_up"
+        );
+        assert_eq!(
+            contract["active_consumers"][3],
+            "chapter_single_generation_active_gateway_smoke_service"
+        );
+        assert_eq!(
+            contract["shared_candidate_runtime_owner_contract"]["owner"],
+            build_single_generation_candidate_runtime_owner_contract()["owner"]
+        );
+        assert_eq!(
+            contract["checkpoint_owner_contract"]["owner"],
+            build_single_generation_runtime_checkpoint_owner_contract()["owner"]
+        );
+        assert_eq!(
+            contract["terminal_state_owner_contract"]["owner"],
+            build_single_generation_terminal_state_owner_contract()["owner"]
+        );
+        assert_eq!(
+            contract["analysis_runtime_owner_contract"]["owner"],
+            build_chapter_analysis_runtime_owner_contract()["owner"]
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profile"],
+            "phase5-single-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["runtime_checkpoint_owner"],
+            "build_single_generation_runtime_checkpoint_for_stage"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["terminal_state_owner"],
+            "resolve_single_generation_quality_gate_terminal_state"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["follow_up_analysis_owner"],
+            "SingleGenerationRuntimeOutcome::run_follow_up_analysis"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["manifest_probe_count"],
+            json!(6)
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["rust_manifest_probe_count"],
+            json!(6)
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            json!(0)
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_runtime_state_owner_ready_for_source_map_closeout_review"
+        );
+    }
+
+    #[test]
+    fn should_publish_single_generation_runtime_checkpoint_owner_contract() {
+        let contract = build_single_generation_runtime_checkpoint_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_single_generation_runtime_state_service::runtime_checkpoint_owner"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][0],
+            "build_single_generation_runtime_checkpoint_for_stage"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][2],
+            "build_single_generation_runtime_terminal_checkpoint_projection"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["checkpoint_fields"][6],
+            "candidate_gateway"
+        );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["owner"],
+            build_chapter_generation_snapshot_owner_contract()["owner"]
+        );
+    }
+
+    #[test]
+    fn should_publish_single_generation_terminal_state_owner_contract() {
+        let contract = build_single_generation_terminal_state_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_single_generation_runtime_state_service::terminal_state_owner"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][0],
+            "resolve_single_generation_manual_review_label_from_analysis_payload"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][2],
+            "build_single_generation_error_terminal_state"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["terminal_state_fields"][2],
+            "failed_entry"
+        );
     }
 
     fn build_task(status: &str) -> batch_generation_task::Model {
@@ -1101,6 +1126,164 @@ mod tests {
             completed_at: None,
             error_message: None,
         }
+    }
+
+    fn build_terminal_task() -> batch_generation_task::Model {
+        batch_generation_task::Model {
+            id: "task-1".to_string(),
+            project_id: "project-1".to_string(),
+            user_id: "user-1".to_string(),
+            start_chapter_number: 1,
+            chapter_count: 1,
+            chapter_ids: json!(["chapter-1"]),
+            style_id: None,
+            target_word_count: 3000,
+            enable_analysis: false,
+            status: "running".to_string(),
+            total_chapters: 1,
+            completed_chapters: 0,
+            failed_chapters: json!([]),
+            current_chapter_id: Some("chapter-1".to_string()),
+            current_chapter_number: Some(1),
+            current_retry_count: 1,
+            max_retries: 3,
+            created_at: None,
+            started_at: None,
+            completed_at: None,
+            error_message: None,
+        }
+    }
+
+    #[test]
+    fn should_resolve_single_generation_manual_review_label_from_analysis_payload() {
+        let label = resolve_single_generation_manual_review_label_from_analysis_payload(&json!({
+            "quality_metrics": {
+                "quality_gate": {
+                    "decision": "manual_review",
+                    "label": "需要人工复核"
+                }
+            }
+        }));
+
+        assert_eq!(label.as_deref(), Some("需要人工复核"));
+    }
+
+    #[test]
+    fn should_build_manual_review_terminal_state_from_quality_context() {
+        let result = GeneratedChapterResult {
+            chapter_id: "chapter-1".to_string(),
+            chapter_number: 1,
+            title: "第一章".to_string(),
+            quality_gate_action: Some("manual_review".to_string()),
+            quality_gate_message: Some("连续性需人工复核".to_string()),
+            ..Default::default()
+        };
+
+        let terminal = resolve_single_generation_quality_gate_terminal_state(
+            &Some(build_terminal_task()),
+            &result,
+            None,
+        )
+        .expect("manual review terminal");
+
+        assert_eq!(
+            terminal.checkpoint_payload["quality_gate_decision"],
+            "manual_review"
+        );
+        assert_eq!(
+            terminal.checkpoint_payload["quality_gate_label"],
+            "连续性需人工复核"
+        );
+        assert_eq!(
+            terminal.failed_entry["quality_gate_decision"],
+            "manual_review"
+        );
+        assert_eq!(terminal.failed_entry["phase"], "quality_blocked");
+        assert!(terminal.error_message.contains("需人工复核"));
+    }
+
+    #[test]
+    fn should_build_retry_terminal_state_from_generated_retry_result() {
+        let result = GeneratedChapterResult {
+            chapter_id: "chapter-2".to_string(),
+            chapter_number: 2,
+            title: "第二章".to_string(),
+            content_applied: false,
+            provisional_draft_saved: true,
+            attempt_state: "retry".to_string(),
+            quality_gate_action: Some("retry".to_string()),
+            quality_gate_message: Some("建议自动修复".to_string()),
+            quality_metrics: Some(json!({
+                "quality_gate": {
+                    "failed_metrics": [{"label": "节奏"}]
+                }
+            })),
+            ..Default::default()
+        };
+
+        let terminal = resolve_single_generation_quality_gate_terminal_state(
+            &Some(build_terminal_task()),
+            &result,
+            None,
+        )
+        .expect("retry terminal");
+
+        assert_eq!(
+            terminal.checkpoint_payload["quality_gate_decision"],
+            "auto_repair"
+        );
+        assert_eq!(terminal.checkpoint_payload["phase"], "quality_retry");
+        assert_eq!(
+            terminal.failed_entry["quality_gate_decision"],
+            "auto_repair"
+        );
+        assert_eq!(
+            terminal.failed_entry["quality_gate_failed_metrics"][0],
+            "节奏"
+        );
+        assert!(terminal.error_message.contains("质量修复重试"));
+    }
+
+    #[test]
+    fn should_build_error_terminal_state_for_runtime_failure() {
+        let terminal = build_single_generation_error_terminal_state(
+            &Some(build_terminal_task()),
+            "chapter-3",
+            Some(3),
+            Some("第三章"),
+            "generation failed",
+        );
+
+        assert_eq!(terminal.checkpoint_payload["phase"], "failed");
+        assert_eq!(
+            terminal.checkpoint_payload["analysis_last_error"],
+            "generation failed"
+        );
+        assert_eq!(terminal.failed_entry["chapter_id"], "chapter-3");
+        assert_eq!(terminal.failed_entry["retry_count"], 1);
+    }
+
+    #[test]
+    fn should_merge_terminal_checkpoint_payload() {
+        let merged = merge_single_generation_terminal_checkpoint_payload(
+            json!({"phase": "failed", "status": "failed"}),
+            json!({"quality_gate_decision": "manual_review"}),
+        );
+
+        assert_eq!(merged["phase"], "failed");
+        assert_eq!(merged["status"], "failed");
+        assert_eq!(merged["quality_gate_decision"], "manual_review");
+    }
+
+    #[test]
+    fn should_append_single_generation_failed_chapter_entry() {
+        let payload = append_single_generation_failed_chapter_entry(
+            &json!([{"chapter_id": "old"}]),
+            Some(&json!({"chapter_id": "new"})),
+        );
+
+        assert_eq!(payload.as_array().expect("array").len(), 2);
+        assert_eq!(payload[1]["chapter_id"], "new");
     }
 
     #[test]
@@ -1186,7 +1369,7 @@ mod tests {
             execution_input: SingleChapterGenerationExecutionInput {
                 target_word_count: 2400,
                 compat_options: empty_compat_options(),
-                execution_config: crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
+                execution_config: crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig {
                     ai_config: AIConfig::default(),
                     provider_payload: PromptContextProviderPayload {
                         recent_chapters_context: String::new(),
@@ -1220,6 +1403,49 @@ mod tests {
                 .characters_info,
             "[]"
         );
+    }
+
+    #[test]
+    fn should_keep_single_generation_runtime_lifecycle_gateway_config_from_route() {
+        let runtime_input = SingleGenerationRuntimeLaunchInput {
+            chapter_id: "chapter-gateway".to_string(),
+            user_id: "user-gateway".to_string(),
+            execution_input: SingleChapterGenerationExecutionInput {
+                target_word_count: 2600,
+                compat_options: empty_compat_options(),
+                execution_config: crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig {
+                    ai_config: AIConfig::default(),
+                    provider_payload: PromptContextProviderPayload {
+                        recent_chapters_context: String::new(),
+                        previous_chapter_summary: String::new(),
+                        chapter_careers: "[]".to_string(),
+                        characters_info: "[]".to_string(),
+                        foreshadow_reminders: "[]".to_string(),
+                        relevant_memories: "[]".to_string(),
+                        research_query: String::new(),
+                        research_assets: "[]".to_string(),
+                        external_assets: "[]".to_string(),
+                        reference_assets: "[]".to_string(),
+                        mcp_references: String::new(),
+                    },
+                },
+            },
+        };
+        let gateway_config = ChapterCandidateRouteGatewayConfig {
+            rust_executor_enabled: true,
+            fallback_on_rust_error: false,
+            disabled_reason: Some("active route supplied rust gateway".to_string()),
+            rollback_boundary: "active_route_gateway".to_string(),
+        };
+
+        let lifecycle =
+            SingleGenerationRuntimeLifecyclePlan::from_runtime_launch_with_gateway_config(
+                "task-gateway".to_string(),
+                runtime_input,
+                gateway_config.clone(),
+            );
+
+        assert_eq!(lifecycle.candidate_gateway_config, gateway_config);
     }
 
     #[test]
@@ -1269,6 +1495,140 @@ mod tests {
         assert_eq!(generating_checkpoint["current_chapter_id"], chapter_id);
     }
 
+    #[test]
+    fn should_attach_candidate_gateway_metadata_to_single_generation_runtime_checkpoint() {
+        let checkpoint = build_single_generation_runtime_checkpoint_for_stage(
+            SingleGenerationSnapshotStage::Completed,
+            "chapter-9",
+            Some(9),
+            Some(2600),
+        );
+        let result = GeneratedChapterResult {
+            chapter_id: "chapter-9".to_string(),
+            chapter_number: 9,
+            title: "第九章".to_string(),
+            content: "正文".to_string(),
+            word_count: 2600,
+            candidate_gateway_metadata: Some(json!({
+                "execution_path": "rust_candidate_executor",
+                "fallback_applied": false,
+                "fallback_reason": "rust executor completed",
+                "rollback_boundary": "legacy_single_generation_direct_ai",
+                "rust_error": null
+            })),
+            ..Default::default()
+        };
+
+        let checkpoint =
+            attach_single_generation_candidate_gateway_checkpoint_metadata(checkpoint, &result);
+
+        assert_eq!(checkpoint["phase"], "completed");
+        assert_eq!(
+            checkpoint["candidate_gateway"]["execution_path"],
+            "rust_candidate_executor"
+        );
+        assert_eq!(checkpoint["candidate_gateway"]["fallback_applied"], false);
+        assert_eq!(
+            checkpoint["candidate_gateway"]["rollback_boundary"],
+            "legacy_single_generation_direct_ai"
+        );
+    }
+
+    #[test]
+    fn should_leave_single_generation_runtime_checkpoint_unchanged_without_candidate_gateway_metadata(
+    ) {
+        let checkpoint = build_single_generation_runtime_checkpoint_for_stage(
+            SingleGenerationSnapshotStage::Finalizing,
+            "chapter-10",
+            Some(10),
+            Some(1800),
+        );
+        let result = GeneratedChapterResult {
+            chapter_id: "chapter-10".to_string(),
+            chapter_number: 10,
+            title: "第十章".to_string(),
+            content: "正文".to_string(),
+            word_count: 1800,
+            candidate_gateway_metadata: None,
+            ..Default::default()
+        };
+
+        let checkpoint =
+            attach_single_generation_candidate_gateway_checkpoint_metadata(checkpoint, &result);
+
+        assert_eq!(checkpoint["phase"], "finalizing");
+        assert!(checkpoint.get("candidate_gateway").is_none());
+    }
+
+    #[test]
+    fn should_project_single_generation_terminal_checkpoint_owner_contract() {
+        let generated_result = GeneratedChapterResult {
+            chapter_id: "chapter-11".to_string(),
+            chapter_number: 11,
+            title: "第十一章".to_string(),
+            content: "正文".to_string(),
+            word_count: 3120,
+            candidate_gateway_metadata: Some(json!({
+                "execution_path": "rust_candidate_executor",
+                "fallback_applied": false,
+                "fallback_reason": null,
+                "rollback_boundary": "legacy_single_generation_direct_ai",
+                "rust_error": null
+            })),
+            ..Default::default()
+        };
+
+        let completed_checkpoint = build_single_generation_runtime_terminal_checkpoint_projection(
+            SingleGenerationSnapshotStage::Completed,
+            &generated_result.chapter_id,
+            Some(generated_result.chapter_number),
+            Some(generated_result.word_count),
+            None,
+            Some(&generated_result),
+        );
+
+        assert_eq!(completed_checkpoint["phase"], "completed");
+        assert_eq!(completed_checkpoint["status"], "completed");
+        assert_eq!(completed_checkpoint["progress"], 100);
+        assert_eq!(
+            completed_checkpoint["candidate_gateway"]["execution_path"],
+            "rust_candidate_executor"
+        );
+        assert_eq!(
+            completed_checkpoint["candidate_gateway"]["rollback_boundary"],
+            "legacy_single_generation_direct_ai"
+        );
+
+        let failed_checkpoint = build_single_generation_runtime_terminal_checkpoint_projection(
+            SingleGenerationSnapshotStage::Failed,
+            &generated_result.chapter_id,
+            Some(generated_result.chapter_number),
+            Some(generated_result.word_count),
+            Some(json!({
+                "analysis_task_message": "单章生成触发质量门禁，需人工复核",
+                "analysis_task_progress": 100,
+                "analysis_last_error": null,
+                "quality_gate_decision": "manual_review",
+                "quality_gate_label": "连续性需人工复核",
+                "phase": "quality_blocked"
+            })),
+            Some(&generated_result),
+        );
+
+        assert_eq!(failed_checkpoint["phase"], "quality_blocked");
+        assert_eq!(failed_checkpoint["status"], "failed");
+        assert_eq!(failed_checkpoint["quality_gate_decision"], "manual_review");
+        assert_eq!(
+            failed_checkpoint["analysis_task_message"],
+            "单章生成触发质量门禁，需人工复核"
+        );
+        assert_eq!(
+            failed_checkpoint["candidate_gateway"]["fallback_applied"],
+            false
+        );
+        assert_eq!(failed_checkpoint["word_count"], 3120);
+    }
+
     #[tokio::test]
     async fn should_keep_single_generation_runtime_dispatch_contract() {
         SingleGenerationRuntimeLifecyclePlan::from_runtime_launch(
@@ -1279,7 +1639,7 @@ mod tests {
                 execution_input: SingleChapterGenerationExecutionInput {
                     target_word_count: 2400,
                     compat_options: empty_compat_options(),
-                    execution_config: crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
+                    execution_config: crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig {
                         ai_config: AIConfig::default(),
                         provider_payload: PromptContextProviderPayload {
                             recent_chapters_context: String::new(),
@@ -1325,7 +1685,7 @@ mod tests {
                     story_repair_targets: vec!["tighten setup".to_string()],
                     story_preserve_strengths: vec!["voice".to_string()],
                 },
-                execution_config: crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
+                execution_config: crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig {
                     ai_config: AIConfig::default(),
                     provider_payload: PromptContextProviderPayload {
                         recent_chapters_context: String::new(),
@@ -1391,7 +1751,7 @@ mod tests {
                     story_repair_targets: Vec::new(),
                     story_preserve_strengths: Vec::new(),
                 },
-                execution_config: crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
+                execution_config: crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig {
                     ai_config: AIConfig::default(),
                     provider_payload: PromptContextProviderPayload {
                         recent_chapters_context: String::new(),
@@ -1434,7 +1794,7 @@ mod tests {
                     ..empty_compat_options()
                 },
                 execution_config:
-                    crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig {
+                    crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig {
                         ai_config: AIConfig::default(),
                         provider_payload: PromptContextProviderPayload {
                             recent_chapters_context: String::new(),
@@ -1476,41 +1836,6 @@ mod tests {
             .await;
 
         assert_eq!(result, None);
-    }
-
-    #[test]
-    fn should_resolve_single_generation_manual_review_label_from_analysis_payload() {
-        let label = resolve_single_generation_manual_review_label_from_analysis_payload(&json!({
-            "quality_metrics": {
-                "quality_gate": {
-                    "decision": "manual_review",
-                    "label": "需要人工复核"
-                }
-            }
-        }));
-
-        assert_eq!(label.as_deref(), Some("需要人工复核"));
-    }
-
-    #[test]
-    fn should_resolve_manual_review_label_from_single_generation_quality_context() {
-        let label = resolve_single_generation_manual_review_label_from_quality_context(
-            &GeneratedChapterResult {
-                quality_gate_action: Some("manual_review".to_string()),
-                quality_gate_message: Some("连续性需人工复核".to_string()),
-                ..Default::default()
-            },
-            Some(&json!({
-                "quality_gate": {
-                    "decision": "manual_review",
-                    "label": "连续性需人工复核"
-                }
-            })),
-            0,
-            3,
-        );
-
-        assert_eq!(label.as_deref(), Some("连续性需人工复核"));
     }
 
     #[test]

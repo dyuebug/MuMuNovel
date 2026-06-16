@@ -1,8 +1,7 @@
-// Staged Rust owner for Python chapter_candidate_runtime_state_service.py.
-// The checkpoint field inserter is already consumed by Rust payload projection;
-// the remaining pure functions become production owners as candidate execution
-// flow moves from Python into backend-rs.
-#![allow(dead_code)]
+// Rust owner for candidate runtime state originally mapped from Python
+// chapter_candidate_runtime_state_service.py. Generation, output collection,
+// repair, finalize, event, and batch payload owners now consume this module
+// directly for attempt labels, snapshots, checkpoint fields, and state sync.
 
 use serde_json::{json, Map, Value};
 
@@ -62,6 +61,7 @@ pub(crate) fn resolve_generation_attempt_labels(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn build_chapter_candidate_runtime_state(max_candidates: i64) -> Value {
     let normalized_max_candidates = max_candidates.max(1);
     json!({
@@ -288,12 +288,128 @@ fn value_is_python_truthy(value: &Value) -> bool {
     }
 }
 
+pub(crate) fn build_chapter_candidate_runtime_state_owner_contract() -> Value {
+    json!({
+        "owner": "chapter_candidate_runtime_state_service",
+        "scope": "candidate_attempt_label_snapshot_sync_and_checkpoint_field_owner",
+        "python_source_map": [
+            "backend/app/services/chapter_candidate_runtime_state_service.py",
+            "backend/app/services/chapter_candidate_output_service.py",
+            "backend/app/services/chapter_candidate_event_service.py",
+            "backend/app/services/chapter_generation/stream/candidate_service.py",
+            "backend/app/services/batch_generation_candidate_service.py",
+            "backend/app/services/compat/chapter_generation_route_compat_service.py",
+            "backend/tests/test_services/test_chapter_candidate_runtime_state_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/services/chapter_candidate_runtime_state_service.rs",
+            "backend-rs/src/services/chapter_candidate_output_service.rs",
+            "backend-rs/src/services/chapter_candidate_generation_service.rs",
+            "backend-rs/src/services/chapter_candidate_finalize_service.rs",
+            "backend-rs/src/services/chapter_candidate_word_budget_repair_service.rs",
+            "backend-rs/src/services/chapter_candidate_targeted_final_repair_service.rs",
+            "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
+            "backend-rs/src/services/chapter_batch_generation_read_context_service.rs"
+        ],
+        "behavior_contract": {
+            "entrypoints": [
+                "resolve_generation_attempt_labels",
+                "build_chapter_candidate_runtime_state",
+                "snapshot_chapter_candidate_runtime_state",
+                "sync_chapter_candidate_runtime_state",
+                "insert_python_query_snapshot_candidate_runtime_fields"
+            ],
+            "state_fields": [
+                "candidate_total",
+                "candidate_count",
+                "candidate_index",
+                "current_chars",
+                "word_count",
+                "chunk_count",
+                "generation_path",
+                "attempt_kind",
+                "rerank_used",
+                "word_budget_repair_used",
+                "winner_candidate_index"
+            ],
+            "attempt_label_policy": [
+                "candidate_index <= 1 and no repair resolves to single_pass / initial_candidate",
+                "candidate_index > 1 resolves to rerank_retry / rerank_candidate",
+                "word budget repair overrides candidate_index and resolves to word_budget_repair"
+            ],
+            "snapshot_policy": [
+                "default candidate total is normalized to at least 1",
+                "candidate_total is never below candidate_index",
+                "candidate_count is normalized to at least 1",
+                "negative current_chars, word_count, and chunk_count normalize to zero",
+                "generation_path and attempt_kind are trimmed with Python defaults",
+                "rerank and word-budget flags use Python truthiness",
+                "winner_candidate_index is parsed like Python int and normalized to at least 1"
+            ],
+            "sync_policy": [
+                "None runtime state is a no-op",
+                "non-object runtime state is replaced with an object",
+                "candidate_index and candidate_total are normalized and mirrored into candidate_count",
+                "current_chars also updates word_count",
+                "empty generation_path and attempt_kind patches are ignored",
+                "winner_candidate_index is normalized to at least 1"
+            ],
+            "checkpoint_policy": [
+                "Python query snapshot fields are inserted as null when absent",
+                "rerank_used and word_budget_repair_used remain bool-only in query snapshots"
+            ]
+        },
+        "validation_boundary": [
+            "cargo test services::chapter_candidate_runtime_state_service",
+            "cargo check --manifest-path backend-rs/Cargo.toml",
+            "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only"
+        ],
+        "active_consumers": [
+            "chapter_candidate_output_service",
+            "chapter_candidate_generation_service",
+            "chapter_candidate_finalize_service",
+            "chapter_candidate_word_budget_repair_service",
+            "chapter_candidate_targeted_final_repair_service",
+            "chapter_batch_generation_runtime_state_service",
+            "chapter_batch_generation_read_context_service",
+            "chapter_candidate_record_service",
+            "chapter_candidate_executor_default_dependency_service"
+        ],
+        "rollback_boundary": {
+            "python_source_map": "chapter_candidate_runtime_state_python_source_map",
+            "python_query_snapshot_compatibility": "insert_python_query_snapshot_candidate_runtime_fields",
+            "python_fallback_removal_ready": false,
+            "approval_required": "explicit source-map freeze/delete/repoint approval"
+        },
+        "service_runtime_closeout_status": {
+            "owner_profiles": [
+                "phase5-single-generation-owner",
+                "phase5-batch-generation-owner",
+                "phase5-chapter-regeneration-owner"
+            ],
+            "single_generation_manifest_probe_count": 6,
+            "batch_generation_manifest_probe_count": 11,
+            "regeneration_manifest_probe_count": 13,
+            "python_fallback_probe_count": 0,
+            "attempt_label_owner": "resolve_generation_attempt_labels",
+            "runtime_state_snapshot_owner": "snapshot_chapter_candidate_runtime_state",
+            "runtime_state_sync_owner": "sync_chapter_candidate_runtime_state",
+            "python_query_checkpoint_field_owner": "insert_python_query_snapshot_candidate_runtime_fields",
+            "source_map_closeout_ready": true,
+            "physical_python_closeout_completed": false,
+            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+            "status": "rust_chapter_candidate_runtime_state_owner_ready_for_source_map_closeout_review"
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{json, Value};
 
     use super::{
         build_chapter_candidate_runtime_state,
+        build_chapter_candidate_runtime_state_owner_contract,
         insert_python_query_snapshot_candidate_runtime_fields, resolve_generation_attempt_labels,
         snapshot_chapter_candidate_runtime_state, sync_chapter_candidate_runtime_state,
         ChapterCandidateRuntimeStatePatch,
@@ -414,5 +530,88 @@ mod tests {
         assert_eq!(checkpoint["winner_candidate_index"], Value::Null);
         assert_eq!(checkpoint["rerank_used"], true);
         assert_eq!(checkpoint["word_budget_repair_used"], Value::Null);
+    }
+
+    #[test]
+    fn should_publish_chapter_candidate_runtime_state_owner_contract() {
+        let contract = build_chapter_candidate_runtime_state_owner_contract();
+
+        assert_eq!(contract["owner"], "chapter_candidate_runtime_state_service");
+        assert_eq!(
+            contract["scope"],
+            "candidate_attempt_label_snapshot_sync_and_checkpoint_field_owner"
+        );
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/app/services/chapter_candidate_runtime_state_service.py"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][0],
+            "backend-rs/src/services/chapter_candidate_runtime_state_service.rs"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][2],
+            "snapshot_chapter_candidate_runtime_state"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["state_fields"][10],
+            "winner_candidate_index"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["snapshot_policy"][5],
+            "rerank and word-budget flags use Python truthiness"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["sync_policy"][1],
+            "non-object runtime state is replaced with an object"
+        );
+        assert_eq!(
+            contract["active_consumers"][0],
+            "chapter_candidate_output_service"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profiles"][0],
+            "phase5-single-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profiles"][2],
+            "phase5-chapter-regeneration-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["single_generation_manifest_probe_count"],
+            6
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["batch_generation_manifest_probe_count"],
+            11
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["regeneration_manifest_probe_count"],
+            13
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["runtime_state_snapshot_owner"],
+            "snapshot_chapter_candidate_runtime_state"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_chapter_candidate_runtime_state_owner_ready_for_source_map_closeout_review"
+        );
     }
 }

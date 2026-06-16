@@ -1,21 +1,906 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::ai::service::AIService;
+use crate::models::project;
 use chrono::Utc;
+use encoding_rs::*;
+use sea_orm::DatabaseConnection;
 use sea_orm::{ActiveModelTrait, Set};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use super::book_import_ai_generation_service::{
-    execute_book_import_ai_step, BookImportAiExecutionContext, BookImportAiStepExecutionError,
-    BookImportAiStepKind,
-};
-use super::book_import_apply_execution_service::{
-    create_book_import_project, import_book_import_chapters, import_book_import_outlines,
-    read_book_import_project_suggestion,
-};
-use super::txt_parser_service::TxtParserService;
+use super::career_service::CareerService;
+use super::chapter_service::ChapterService;
+use super::character_service::CharacterService;
+use super::outline_service::OutlineService;
+use super::project_service::{CreateProjectParams, ProjectService};
+use super::prompt_template_service::PromptTemplateService;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BookImportProjectSuggestion {
+    pub title: String,
+    pub description: String,
+    pub theme: Option<String>,
+    pub genre: Option<String>,
+    pub narrative_perspective: Option<String>,
+    pub target_words: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BookImportChapterImportSummary {
+    pub chapter_count: usize,
+    pub total_words: usize,
+}
+
+pub fn read_book_import_project_suggestion(
+    project_suggestion: &Value,
+) -> BookImportProjectSuggestion {
+    BookImportProjectSuggestion {
+        title: project_suggestion["title"]
+            .as_str()
+            .unwrap_or("拆书导入项目")
+            .to_string(),
+        description: project_suggestion["description"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        theme: project_suggestion["theme"].as_str().map(str::to_string),
+        genre: project_suggestion["genre"].as_str().map(str::to_string),
+        narrative_perspective: project_suggestion["narrative_perspective"]
+            .as_str()
+            .map(str::to_string),
+        target_words: project_suggestion["target_words"]
+            .as_i64()
+            .unwrap_or(100000) as i32,
+    }
+}
+
+pub fn build_book_import_create_project_params(
+    user_id: &str,
+    import_mode: &str,
+    suggestion: &BookImportProjectSuggestion,
+) -> CreateProjectParams {
+    CreateProjectParams {
+        user_id: user_id.to_string(),
+        title: suggestion.title.clone(),
+        description: Some(suggestion.description.clone()),
+        theme: suggestion.theme.clone(),
+        genre: suggestion.genre.clone(),
+        target_words: suggestion.target_words,
+        outline_mode: import_mode.to_string(),
+        narrative_perspective: suggestion.narrative_perspective.clone(),
+        ..Default::default()
+    }
+}
+
+pub async fn create_book_import_project(
+    db: &DatabaseConnection,
+    user_id: &str,
+    import_mode: &str,
+    suggestion: &BookImportProjectSuggestion,
+) -> Result<crate::models::project::Model, String> {
+    let create_params = build_book_import_create_project_params(user_id, import_mode, suggestion);
+    ProjectService::create_full(db, create_params)
+        .await
+        .map_err(|error| format!("项目创建失败: {}", error))
+}
+
+pub async fn import_book_import_outlines(
+    db: &DatabaseConnection,
+    project_id: &str,
+    user_id: &str,
+    outlines: &[Value],
+) -> usize {
+    for (i, outline_item) in outlines.iter().enumerate() {
+        let default_title = format!("第{}节", i + 1);
+        let title = outline_item["title"].as_str().unwrap_or(&default_title);
+        let _ = OutlineService::create(
+            db,
+            project_id,
+            user_id,
+            title,
+            None,
+            Some((i + 1) as i32),
+            None,
+        )
+        .await;
+    }
+
+    outlines.len()
+}
+
+pub async fn import_book_import_chapters(
+    db: &DatabaseConnection,
+    project_id: &str,
+    user_id: &str,
+    chapters: &[Value],
+) -> BookImportChapterImportSummary {
+    let mut total_words = 0usize;
+
+    for (i, chapter_item) in chapters.iter().enumerate() {
+        let default_title = format!("第{}章", i + 1);
+        let title = chapter_item["title"].as_str().unwrap_or(&default_title);
+        let content = chapter_item["content"].as_str().unwrap_or("");
+        total_words += content.chars().count();
+        let _ = ChapterService::create(
+            db,
+            project_id,
+            user_id,
+            title,
+            (i + 1) as i32,
+            Some(content),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+    }
+
+    BookImportChapterImportSummary {
+        chapter_count: chapters.len(),
+        total_words,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BookImportAiStepKind {
+    WorldBuilding,
+    CareerSystem,
+    Characters,
+}
+
+impl BookImportAiStepKind {
+    pub const ALL: [BookImportAiStepKind; 3] = [
+        BookImportAiStepKind::WorldBuilding,
+        BookImportAiStepKind::CareerSystem,
+        BookImportAiStepKind::Characters,
+    ];
+
+    pub fn step_name(&self) -> &'static str {
+        match self {
+            BookImportAiStepKind::WorldBuilding => "world_building",
+            BookImportAiStepKind::CareerSystem => "career_system",
+            BookImportAiStepKind::Characters => "characters",
+        }
+    }
+
+    pub fn step_label(&self) -> &'static str {
+        match self {
+            BookImportAiStepKind::WorldBuilding => "世界观生成",
+            BookImportAiStepKind::CareerSystem => "职业体系生成",
+            BookImportAiStepKind::Characters => "角色与组织生成",
+        }
+    }
+
+    pub fn template_key(&self) -> &'static str {
+        match self {
+            BookImportAiStepKind::WorldBuilding => "WORLD_BUILDING",
+            BookImportAiStepKind::CareerSystem => "CAREER_SYSTEM_GENERATION",
+            BookImportAiStepKind::Characters => "CHARACTERS_BATCH_GENERATION",
+        }
+    }
+
+    pub fn missing_template_message(&self) -> &'static str {
+        match self {
+            BookImportAiStepKind::WorldBuilding => "世界观模板不存在",
+            BookImportAiStepKind::CareerSystem => "职业体系模板不存在",
+            BookImportAiStepKind::Characters => "角色模板不存在",
+        }
+    }
+
+    pub fn ai_progress_message(&self) -> &'static str {
+        match self {
+            BookImportAiStepKind::WorldBuilding => "🌍 AI正在生成世界观...",
+            BookImportAiStepKind::CareerSystem => "💼 AI正在生成职业体系...",
+            BookImportAiStepKind::Characters => "👥 AI正在生成角色...",
+        }
+    }
+
+    pub fn from_step_name(step: &str) -> Option<Self> {
+        match step {
+            "world_building" => Some(BookImportAiStepKind::WorldBuilding),
+            "career_system" => Some(BookImportAiStepKind::CareerSystem),
+            "characters" => Some(BookImportAiStepKind::Characters),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BookImportAiExecutionContext<'a> {
+    pub description: &'a str,
+    pub theme: Option<&'a str>,
+    pub genre: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BookImportAiStepExecutionError {
+    PromptFormat(String),
+    Ai(String),
+}
+
+pub fn build_book_import_world_building_prompt_params(
+    project: &project::Model,
+    context: BookImportAiExecutionContext<'_>,
+) -> HashMap<String, String> {
+    let mut params = HashMap::new();
+    params.insert("title".into(), project.title.clone());
+    params.insert(
+        "theme".into(),
+        context.theme.unwrap_or("未设定").to_string(),
+    );
+    params.insert("genre".into(), context.genre.unwrap_or("通用").to_string());
+    params.insert("description".into(), context.description.to_string());
+    params
+}
+
+pub fn build_book_import_career_system_prompt_params(
+    project: &project::Model,
+    context: BookImportAiExecutionContext<'_>,
+) -> HashMap<String, String> {
+    let mut params = HashMap::new();
+    params.insert("title".into(), project.title.clone());
+    params.insert(
+        "theme".into(),
+        project
+            .theme
+            .clone()
+            .or_else(|| context.theme.map(str::to_string))
+            .unwrap_or_else(|| "未设定".into()),
+    );
+    params.insert(
+        "genre".into(),
+        project
+            .genre
+            .clone()
+            .or_else(|| context.genre.map(str::to_string))
+            .unwrap_or_else(|| "通用".into()),
+    );
+    params.insert(
+        "time_period".into(),
+        project
+            .world_time_period
+            .clone()
+            .unwrap_or_else(|| "未设定".into()),
+    );
+    params.insert(
+        "location".into(),
+        project
+            .world_location
+            .clone()
+            .unwrap_or_else(|| "未设定".into()),
+    );
+    params.insert(
+        "atmosphere".into(),
+        project
+            .world_atmosphere
+            .clone()
+            .unwrap_or_else(|| "未设定".into()),
+    );
+    params.insert(
+        "rules".into(),
+        project
+            .world_rules
+            .clone()
+            .unwrap_or_else(|| "未设定".into()),
+    );
+    params.insert("description".into(), context.description.to_string());
+    params
+}
+
+pub fn build_book_import_characters_prompt_params(
+    project: &project::Model,
+    context: BookImportAiExecutionContext<'_>,
+) -> HashMap<String, String> {
+    let mut params = HashMap::new();
+    params.insert("count".into(), "5".into());
+    params.insert(
+        "time_period".into(),
+        project
+            .world_time_period
+            .clone()
+            .unwrap_or_else(|| "未设定".into()),
+    );
+    params.insert(
+        "location".into(),
+        project
+            .world_location
+            .clone()
+            .unwrap_or_else(|| "未设定".into()),
+    );
+    params.insert(
+        "atmosphere".into(),
+        project
+            .world_atmosphere
+            .clone()
+            .unwrap_or_else(|| "未设定".into()),
+    );
+    params.insert(
+        "rules".into(),
+        project
+            .world_rules
+            .clone()
+            .unwrap_or_else(|| "未设定".into()),
+    );
+    params.insert(
+        "theme".into(),
+        project
+            .theme
+            .clone()
+            .or_else(|| context.theme.map(str::to_string))
+            .unwrap_or_else(|| "未设定".into()),
+    );
+    params.insert(
+        "genre".into(),
+        project
+            .genre
+            .clone()
+            .or_else(|| context.genre.map(str::to_string))
+            .unwrap_or_else(|| "通用".into()),
+    );
+    params.insert("requirements".into(), String::new());
+    params.insert("external_assets".into(), String::new());
+    params.insert("reference_assets".into(), String::new());
+    params
+}
+
+async fn ai_call_with_retry(
+    ai_service: &AIService,
+    prompt: &str,
+    max_retries: u32,
+) -> Result<Value, String> {
+    let mut last_error = String::new();
+    for attempt in 0..max_retries {
+        match ai_service.generate_text(prompt, None, None).await {
+            Ok(response) => {
+                let cleaned =
+                    crate::services::wizard_service::clean_json_response(&response.content);
+                match serde_json::from_str::<Value>(&cleaned) {
+                    Ok(data) => return Ok(data),
+                    Err(error) => {
+                        last_error = format!("JSON解析失败: {}", error);
+                        if attempt + 1 < max_retries {
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                last_error = format!("AI调用失败: {}", error);
+                if attempt + 1 < max_retries {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
+        }
+    }
+    Err(last_error)
+}
+
+async fn apply_world_building_to_project(
+    db: &DatabaseConnection,
+    project: &project::Model,
+    data: &Value,
+) {
+    if let Some(obj) = data.as_object() {
+        let mut active: project::ActiveModel = project.clone().into();
+        let mut updated = false;
+        if let Some(value) = obj.get("time_period").and_then(|value| value.as_str()) {
+            active.world_time_period = Set(Some(value.to_string()));
+            updated = true;
+        }
+        if let Some(value) = obj.get("location").and_then(|value| value.as_str()) {
+            active.world_location = Set(Some(value.to_string()));
+            updated = true;
+        }
+        if let Some(value) = obj.get("atmosphere").and_then(|value| value.as_str()) {
+            active.world_atmosphere = Set(Some(value.to_string()));
+            updated = true;
+        }
+        if let Some(value) = obj.get("rules").and_then(|value| value.as_str()) {
+            active.world_rules = Set(Some(value.to_string()));
+            updated = true;
+        }
+        if updated {
+            active.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
+            let _ = active.update(db).await;
+        }
+    }
+}
+
+async fn persist_career_system(
+    db: &DatabaseConnection,
+    project: &project::Model,
+    data: &Value,
+) -> i32 {
+    let main_careers = data.get("main_careers").and_then(|value| value.as_array());
+    let sub_careers = data.get("sub_careers").and_then(|value| value.as_array());
+    let mut count = 0;
+
+    if let Some(mains) = main_careers {
+        for main in mains {
+            let name = main
+                .get("name")
+                .and_then(|value| value.as_str())
+                .unwrap_or("未命名主职业");
+            if CareerService::create_full(
+                db,
+                &project.id,
+                name,
+                "main",
+                main.get("description").and_then(|value| value.as_str()),
+                main.get("category").and_then(|value| value.as_str()),
+                main.get("stages")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
+                main.get("max_stage")
+                    .and_then(|value| value.as_i64())
+                    .unwrap_or(1) as i32,
+                main.get("requirements").and_then(|value| value.as_str()),
+                main.get("special_abilities")
+                    .and_then(|value| value.as_str()),
+                main.get("worldview_rules").and_then(|value| value.as_str()),
+                main.get("attribute_bonuses")
+                    .and_then(|value| value.as_str()),
+            )
+            .await
+            .is_ok()
+            {
+                count += 1;
+            }
+        }
+    }
+
+    if let Some(subs) = sub_careers {
+        for sub in subs {
+            let name = sub
+                .get("name")
+                .and_then(|value| value.as_str())
+                .unwrap_or("未命名副职业");
+            if CareerService::create_full(
+                db,
+                &project.id,
+                name,
+                "sub",
+                sub.get("description").and_then(|value| value.as_str()),
+                sub.get("category").and_then(|value| value.as_str()),
+                sub.get("stages")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
+                sub.get("max_stage")
+                    .and_then(|value| value.as_i64())
+                    .unwrap_or(1) as i32,
+                sub.get("requirements").and_then(|value| value.as_str()),
+                sub.get("special_abilities")
+                    .and_then(|value| value.as_str()),
+                sub.get("worldview_rules").and_then(|value| value.as_str()),
+                sub.get("attribute_bonuses")
+                    .and_then(|value| value.as_str()),
+            )
+            .await
+            .is_ok()
+            {
+                count += 1;
+            }
+        }
+    }
+
+    count
+}
+
+async fn persist_characters(
+    db: &DatabaseConnection,
+    project: &project::Model,
+    data: &Value,
+) -> i32 {
+    let characters: Vec<&Value> = if let Some(items) = data.as_array() {
+        items.iter().collect()
+    } else {
+        vec![data]
+    };
+    let mut count = 0i32;
+
+    for character in characters.iter().take(5) {
+        let name = character
+            .get("name")
+            .and_then(|value| value.as_str())
+            .unwrap_or("未命名角色");
+        let age_str: Option<String> = character.get("age").and_then(|value| {
+            if let Some(number) = value.as_i64() {
+                Some(number.to_string())
+            } else {
+                value.as_str().map(|text| text.to_string())
+            }
+        });
+        if CharacterService::create_full(
+            db,
+            &project.id,
+            name,
+            character
+                .get("is_organization")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
+            character.get("role_type").and_then(|value| value.as_str()),
+            character
+                .get("personality")
+                .and_then(|value| value.as_str()),
+            character.get("background").and_then(|value| value.as_str()),
+            character.get("appearance").and_then(|value| value.as_str()),
+            age_str.as_deref(),
+            character.get("gender").and_then(|value| value.as_str()),
+            character.get("traits").and_then(|value| value.as_str()),
+            character
+                .get("organization_type")
+                .and_then(|value| value.as_str()),
+            character
+                .get("organization_purpose")
+                .and_then(|value| value.as_str()),
+            character
+                .get("relationships_text")
+                .and_then(|value| value.as_str()),
+        )
+        .await
+        .is_ok()
+        {
+            count += 1;
+        }
+    }
+
+    count
+}
+
+pub async fn execute_book_import_ai_step(
+    db: &DatabaseConnection,
+    project: &project::Model,
+    ai_service: &AIService,
+    step: BookImportAiStepKind,
+    context: BookImportAiExecutionContext<'_>,
+) -> Result<Option<Value>, BookImportAiStepExecutionError> {
+    let Some(template) = PromptTemplateService::system_template_info(step.template_key()) else {
+        return Ok(None);
+    };
+
+    let params = match step {
+        BookImportAiStepKind::WorldBuilding => {
+            build_book_import_world_building_prompt_params(project, context)
+        }
+        BookImportAiStepKind::CareerSystem => {
+            build_book_import_career_system_prompt_params(project, context)
+        }
+        BookImportAiStepKind::Characters => {
+            build_book_import_characters_prompt_params(project, context)
+        }
+    };
+
+    let prompt = PromptTemplateService::format_prompt(&template.content, &params)
+        .map_err(|error| BookImportAiStepExecutionError::PromptFormat(error.to_string()))?;
+    let data = ai_call_with_retry(ai_service, &prompt, 3)
+        .await
+        .map_err(BookImportAiStepExecutionError::Ai)?;
+
+    let result = match step {
+        BookImportAiStepKind::WorldBuilding => {
+            apply_world_building_to_project(db, project, &data).await;
+            data
+        }
+        BookImportAiStepKind::CareerSystem => {
+            json!({ "count": persist_career_system(db, project, &data).await })
+        }
+        BookImportAiStepKind::Characters => {
+            json!({ "count": persist_characters(db, project, &data).await })
+        }
+    };
+
+    Ok(Some(result))
+}
+
+struct TxtParserService;
+
+impl TxtParserService {
+    fn decode_bytes(&self, content: &[u8]) -> (String, String) {
+        if let Ok(text) = String::from_utf8(content.to_vec()) {
+            return (text, "utf-8".to_string());
+        }
+
+        if content.len() >= 3 && &content[..3] == b"\xef\xbb\xbf" {
+            if let Ok(text) = String::from_utf8(content[3..].to_vec()) {
+                return (text, "utf-8-sig".to_string());
+            }
+        }
+
+        let (decoded, _, had_errors) = GB18030.decode(content);
+        if !had_errors || !decoded.is_empty() {
+            return (decoded.into_owned(), "gb18030".to_string());
+        }
+
+        let (decoded, _, had_errors) = BIG5.decode(content);
+        if !had_errors || !decoded.is_empty() {
+            return (decoded.into_owned(), "big5".to_string());
+        }
+
+        let (decoded, _, _) = UTF_8.decode(content);
+        (decoded.into_owned(), "utf-8(ignore)".to_string())
+    }
+
+    fn clean_text(&self, text: &str) -> String {
+        let normalized = text
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .replace('\u{feff}', "");
+        let normalized = normalized.replace('\u{3000}', "  ");
+
+        let mut lines = String::with_capacity(normalized.len());
+        for line in normalized.lines() {
+            lines.push_str(line.trim_end_matches(&[' ', '\t'] as &[_]));
+            lines.push('\n');
+        }
+
+        let mut compressed = String::with_capacity(lines.len());
+        let mut newline_count = 0;
+        for ch in lines.chars() {
+            if ch == '\n' {
+                newline_count += 1;
+                if newline_count <= 3 {
+                    compressed.push(ch);
+                }
+            } else {
+                newline_count = 0;
+                compressed.push(ch);
+            }
+        }
+
+        compressed.trim().to_string()
+    }
+
+    fn split_chapters(&self, text: &str) -> Vec<Value> {
+        if text.trim().is_empty() {
+            return vec![];
+        }
+
+        let lines: Vec<&str> = text.lines().collect();
+        let mut heading_indexes = Vec::new();
+
+        for (idx, line) in lines.iter().enumerate() {
+            let stripped = line.trim();
+            if stripped.is_empty() {
+                continue;
+            }
+            if self.is_strong_heading(stripped) || self.is_weak_heading(&lines, idx) {
+                heading_indexes.push(idx);
+            }
+        }
+
+        heading_indexes.sort_unstable();
+        heading_indexes.dedup();
+
+        if heading_indexes.is_empty() {
+            return self.fallback_split(text);
+        }
+
+        let mut chapters = Vec::new();
+        let mut chapter_no = 1;
+
+        let first_heading = heading_indexes[0];
+        if first_heading > 0 {
+            let preface = lines[..first_heading].join("\n").trim().to_string();
+            if preface.len() >= 200 {
+                chapters.push(json!({
+                    "title": "前言",
+                    "content": preface,
+                    "chapter_number": chapter_no,
+                }));
+                chapter_no += 1;
+            }
+        }
+
+        for (idx, &start_idx) in heading_indexes.iter().enumerate() {
+            let end_idx = if idx + 1 < heading_indexes.len() {
+                heading_indexes[idx + 1]
+            } else {
+                lines.len()
+            };
+
+            let title = {
+                let candidate = lines[start_idx].trim();
+                if candidate.len() > 200 {
+                    &candidate[..200]
+                } else {
+                    candidate
+                }
+            };
+
+            let body_start = start_idx + 1;
+            let body = if body_start < end_idx {
+                lines[body_start..end_idx].join("\n").trim().to_string()
+            } else {
+                String::new()
+            };
+
+            let body = if body.is_empty() && idx + 1 < heading_indexes.len() {
+                if start_idx + 1 < lines.len() {
+                    lines[start_idx + 1].trim().to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                body
+            };
+
+            let title = if title.is_empty() {
+                format!("第{}章", chapter_no)
+            } else {
+                title.to_string()
+            };
+
+            chapters.push(json!({
+                "title": title,
+                "content": body,
+                "chapter_number": chapter_no,
+            }));
+            chapter_no += 1;
+        }
+
+        let filtered: Vec<Value> = chapters
+            .into_iter()
+            .filter(|chapter| {
+                let title = chapter["title"].as_str().unwrap_or("");
+                let content = chapter["content"].as_str().unwrap_or("");
+                !title.is_empty() || !content.is_empty()
+            })
+            .collect();
+
+        if filtered.is_empty() {
+            self.fallback_split(text)
+        } else {
+            filtered
+        }
+    }
+
+    fn is_strong_heading(&self, line: &str) -> bool {
+        self.match_chinese_chapter(line)
+            || self.match_english_chapter(line)
+            || self.match_chap_abbrev(line)
+    }
+
+    fn match_chinese_chapter(&self, line: &str) -> bool {
+        let chars: Vec<char> = line.chars().collect();
+        if chars.is_empty() || chars[0] != '第' {
+            return false;
+        }
+
+        let mut has_digit = false;
+        let mut idx = 1;
+        while idx < chars.len() {
+            let ch = chars[idx];
+            if self.is_chinese_number(ch)
+                || ch.is_ascii_digit()
+                || ch == '零'
+                || ch == '〇'
+                || ch == '两'
+            {
+                has_digit = true;
+                idx += 1;
+            } else {
+                break;
+            }
+        }
+
+        if !has_digit || idx >= chars.len() {
+            return false;
+        }
+
+        ['章', '节', '回', '卷', '集', '部', '篇'].contains(&chars[idx])
+    }
+
+    fn is_chinese_number(&self, ch: char) -> bool {
+        matches!(
+            ch,
+            '一' | '二'
+                | '三'
+                | '四'
+                | '五'
+                | '六'
+                | '七'
+                | '八'
+                | '九'
+                | '十'
+                | '百'
+                | '千'
+                | '万'
+        )
+    }
+
+    fn match_english_chapter(&self, line: &str) -> bool {
+        let lower = line.to_lowercase();
+        let trimmed = lower.trim_start();
+        if !trimmed.starts_with("chapter") {
+            return false;
+        }
+        trimmed[7..]
+            .trim_start()
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_digit())
+    }
+
+    fn match_chap_abbrev(&self, line: &str) -> bool {
+        let lower = line.to_lowercase();
+        let trimmed = lower.trim_start();
+        if !trimmed.starts_with("chap.") {
+            return false;
+        }
+        trimmed[5..]
+            .trim_start()
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_digit())
+    }
+
+    fn is_weak_heading(&self, lines: &[&str], idx: usize) -> bool {
+        let line = lines[idx].trim();
+        if line.is_empty() || line.chars().count() > 25 {
+            return false;
+        }
+
+        let punctuation = [
+            '，', '。', '！', '？', '；', '：', ',', '.', '!', '?', ';', ':',
+        ];
+        if line.contains(&punctuation[..]) {
+            return false;
+        }
+
+        let prev_blank = idx == 0 || lines[idx - 1].trim().is_empty();
+        let next_blank = idx == lines.len() - 1 || lines[idx + 1].trim().is_empty();
+        prev_blank && next_blank
+    }
+
+    fn fallback_split(&self, text: &str) -> Vec<Value> {
+        let min_window = 3000usize;
+        let max_window = 5000usize;
+        let boundary: Vec<char> = "。！？!?\n".chars().collect();
+
+        let mut chapters = Vec::new();
+        let chars: Vec<char> = text.chars().collect();
+        let total = chars.len();
+        let mut start = 0;
+        let mut chapter_no = 1;
+
+        while start < total {
+            let ideal_end = (start + max_window).min(total);
+            let end = if ideal_end >= total {
+                total
+            } else {
+                let search_from = (start + min_window).min(total);
+                let segment: String = chars[search_from..ideal_end].iter().collect();
+                match boundary
+                    .iter()
+                    .filter_map(|marker| segment.rfind(*marker))
+                    .max()
+                {
+                    Some(offset) => search_from + offset + 1,
+                    None => ideal_end,
+                }
+            };
+
+            let chunk: String = chars[start..end].iter().collect();
+            let chunk = chunk.trim().to_string();
+            if !chunk.is_empty() {
+                chapters.push(json!({
+                    "title": format!("第{}章", chapter_no),
+                    "content": chunk,
+                    "chapter_number": chapter_no,
+                }));
+                chapter_no += 1;
+            }
+            start = end;
+        }
+
+        chapters
+    }
+}
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -1293,5 +2178,133 @@ fn detect_narrative_perspective(text: &str) -> &'static str {
         "第一人称"
     } else {
         "第三人称"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::NaiveDateTime;
+
+    use crate::models::project;
+
+    use super::{
+        build_book_import_career_system_prompt_params, build_book_import_characters_prompt_params,
+        build_book_import_world_building_prompt_params, BookImportAiExecutionContext,
+        BookImportAiStepKind,
+    };
+
+    fn sample_project() -> project::Model {
+        project::Model {
+            id: "project-1".to_string(),
+            user_id: "user-1".to_string(),
+            title: "测试项目".to_string(),
+            description: Some("项目简介".to_string()),
+            theme: Some("成长".to_string()),
+            genre: Some("玄幻".to_string()),
+            target_words: 100000,
+            current_words: 0,
+            status: "draft".to_string(),
+            wizard_status: "pending".to_string(),
+            wizard_step: 0,
+            outline_mode: "append".to_string(),
+            world_time_period: Some("古代".to_string()),
+            world_location: Some("王城".to_string()),
+            world_atmosphere: Some("紧张".to_string()),
+            world_rules: Some("强者为尊".to_string()),
+            chapter_count: Some(10),
+            narrative_perspective: Some("第三人称".to_string()),
+            character_count: 0,
+            default_creative_mode: None,
+            default_story_focus: None,
+            default_plot_stage: None,
+            default_story_creation_brief: None,
+            default_quality_preset: None,
+            default_quality_notes: None,
+            created_at: NaiveDateTime::default(),
+            updated_at: Some(NaiveDateTime::default()),
+        }
+    }
+
+    #[test]
+    fn should_build_world_building_prompt_params_from_context() {
+        let project = sample_project();
+        let params = build_book_import_world_building_prompt_params(
+            &project,
+            BookImportAiExecutionContext {
+                description: "外部简介",
+                theme: Some("复仇"),
+                genre: Some("悬疑"),
+            },
+        );
+
+        assert_eq!(params.get("title").map(String::as_str), Some("测试项目"));
+        assert_eq!(params.get("theme").map(String::as_str), Some("复仇"));
+        assert_eq!(params.get("genre").map(String::as_str), Some("悬疑"));
+        assert_eq!(
+            params.get("description").map(String::as_str),
+            Some("外部简介")
+        );
+    }
+
+    #[test]
+    fn should_build_career_system_prompt_params_from_project_runtime_fields() {
+        let project = sample_project();
+        let params = build_book_import_career_system_prompt_params(
+            &project,
+            BookImportAiExecutionContext {
+                description: "外部简介",
+                theme: None,
+                genre: None,
+            },
+        );
+
+        assert_eq!(params.get("theme").map(String::as_str), Some("成长"));
+        assert_eq!(params.get("genre").map(String::as_str), Some("玄幻"));
+        assert_eq!(params.get("time_period").map(String::as_str), Some("古代"));
+        assert_eq!(params.get("location").map(String::as_str), Some("王城"));
+        assert_eq!(params.get("atmosphere").map(String::as_str), Some("紧张"));
+        assert_eq!(params.get("rules").map(String::as_str), Some("强者为尊"));
+        assert_eq!(
+            params.get("description").map(String::as_str),
+            Some("外部简介")
+        );
+    }
+
+    #[test]
+    fn should_build_characters_prompt_params_with_defaults_and_step_metadata() {
+        let mut project = sample_project();
+        project.theme = None;
+        project.genre = None;
+
+        let params = build_book_import_characters_prompt_params(
+            &project,
+            BookImportAiExecutionContext {
+                description: "",
+                theme: None,
+                genre: None,
+            },
+        );
+
+        assert_eq!(params.get("count").map(String::as_str), Some("5"));
+        assert_eq!(params.get("theme").map(String::as_str), Some("未设定"));
+        assert_eq!(params.get("genre").map(String::as_str), Some("通用"));
+        assert_eq!(
+            BookImportAiStepKind::Characters.missing_template_message(),
+            "角色模板不存在"
+        );
+        assert_eq!(BookImportAiStepKind::Characters.step_name(), "characters");
+        assert_eq!(
+            BookImportAiStepKind::Characters.step_label(),
+            "角色与组织生成"
+        );
+        assert_eq!(
+            BookImportAiStepKind::Characters.ai_progress_message(),
+            "👥 AI正在生成角色..."
+        );
+        assert_eq!(
+            BookImportAiStepKind::from_step_name("characters"),
+            Some(BookImportAiStepKind::Characters)
+        );
+        assert_eq!(BookImportAiStepKind::from_step_name("unknown"), None);
     }
 }

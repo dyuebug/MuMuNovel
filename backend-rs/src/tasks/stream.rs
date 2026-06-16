@@ -29,10 +29,6 @@ impl TaskStreamHub {
         rx
     }
 
-    pub async fn unsubscribe(&self, task_id: &str) {
-        self.senders.write().await.remove(task_id);
-    }
-
     pub fn fanout(&self, task_id: &str, event: &TaskEvent) {
         if let Ok(senders) = self.senders.try_read() {
             if let Some(sender) = senders.get(task_id) {
@@ -41,30 +37,5 @@ impl TaskStreamHub {
                 }
             }
         }
-    }
-
-    pub async fn fanout_async(&self, task_id: &str, event: &TaskEvent) {
-        let senders = self.senders.read().await;
-        if let Some(sender) = senders.get(task_id) {
-            if let Ok(json) = serde_json::to_string(event) {
-                let _ = sender.send(format!("data: {}\n\n", json));
-            }
-        }
-    }
-
-    pub async fn has_subscribers(&self, task_id: &str) -> bool {
-        self.senders
-            .read()
-            .await
-            .get(task_id)
-            .map(|s| s.receiver_count() > 0)
-            .unwrap_or(false)
-    }
-
-    pub async fn cleanup_stale(&self) {
-        self.senders
-            .write()
-            .await
-            .retain(|_, sender| sender.receiver_count() > 0);
     }
 }

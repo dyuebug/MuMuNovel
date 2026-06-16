@@ -1,7 +1,7 @@
-// Staged Rust owner for Python chapter_candidate_record_service.py.
-// The candidate executor cutover will use this together with the generation
-// workflow owner; until then it stays focused and unit-tested.
-#![allow(dead_code)]
+// Rust owner for candidate record construction originally mapped from Python
+// chapter_candidate_record_service.py. Generation, repair, default dependency,
+// and production adapter owners now consume this module for sanitized records,
+// quality-gate normalization, and selection metadata.
 
 use serde_json::{Map, Value};
 
@@ -515,11 +515,125 @@ fn insert_f64(map: &mut Map<String, Value>, key: &str, value: f64) {
     }
 }
 
+pub(crate) fn build_chapter_candidate_record_owner_contract() -> Value {
+    serde_json::json!({
+        "owner": "chapter_candidate_record_service",
+        "scope": "candidate_record_sanitization_quality_gate_selection_owner",
+        "python_source_map": [
+            "backend/app/services/chapter_candidate_record_service.py",
+            "backend/app/services/chapter_candidate_generation_service.py",
+            "backend/app/services/chapter_candidate_finalize_service.py",
+            "backend/app/services/chapter_candidate_executor_service.py",
+            "backend/tests/test_services/test_chapter_candidate_record_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/services/chapter_candidate_record_service.rs",
+            "backend-rs/src/services/chapter_candidate_generation_service.rs",
+            "backend-rs/src/services/chapter_candidate_finalize_service.rs",
+            "backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs",
+            "backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs",
+            "backend-rs/src/services/chapter_narrative_cleaner_service.rs"
+        ],
+        "behavior_contract": {
+            "entrypoints": [
+                "build_generation_candidate_record"
+            ],
+            "request_fields": [
+                "full_content",
+                "candidate_chunks",
+                "target_word_count",
+                "source",
+                "generation_label",
+                "candidate_index",
+                "candidate_offset",
+                "generation_path",
+                "attempt_kind"
+            ],
+            "record_fields": [
+                "candidate_index",
+                "full_content",
+                "word_count",
+                "summary_preview",
+                "quality_metrics",
+                "quality_gate_plan",
+                "candidate_chunks",
+                "candidate_selection metadata fields"
+            ],
+            "record_policy": [
+                "sanitize generated narrative and log removed workflow/meta lines",
+                "reject empty narrative after sanitization",
+                "reject remaining workflow/meta text",
+                "evaluate quality metrics on sanitized content",
+                "build quality gate plan before and after candidate_selection attachment",
+                "fallback to initial quality gate plan when enriched plan is empty",
+                "copy normalized quality gate into quality_metrics",
+                "attach selection metadata to both top-level record and quality_metrics.candidate_selection"
+            ],
+            "quality_gate_policy": [
+                "allow_save has priority 3",
+                "auto_repair has priority 2",
+                "manual_review has priority 1",
+                "severe word budget pressure converts allow_save into auto_repair",
+                "quality gate defaults to allow_save when decision is absent"
+            ],
+            "selection_metadata_policy": [
+                "word_count and target_word_count are projected",
+                "candidate_index and candidate_count are projected",
+                "source, generation_path, and attempt_kind are projected",
+                "rerank_used is inferred from rerank_candidate attempt kind",
+                "word_budget_repair_used is inferred from word_budget_repair attempt kind"
+            ],
+            "error_contract": [
+                "{generation_label} generated empty narrative after sanitization",
+                "{generation_label} generated workflow/meta text"
+            ]
+        },
+        "validation_boundary": [
+            "cargo test services::chapter_candidate_record_service",
+            "cargo check --manifest-path backend-rs/Cargo.toml",
+            "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only"
+        ],
+        "active_consumers": [
+            "chapter_candidate_generation_service",
+            "chapter_candidate_finalize_service",
+            "chapter_candidate_executor_default_dependency_service",
+            "chapter_candidate_executor_production_adapter_service",
+            "chapter_candidate_route_gateway_service"
+        ],
+        "rollback_boundary": {
+            "python_source_map": "chapter_candidate_record_python_source_map",
+            "python_fallback_removal_ready": false,
+            "approval_required": "explicit source-map freeze/delete/repoint approval"
+        },
+        "service_runtime_closeout_status": {
+            "owner_profiles": [
+                "phase5-single-generation-owner",
+                "phase5-batch-generation-owner"
+            ],
+            "single_generation_manifest_probe_count": 6,
+            "batch_generation_manifest_probe_count": 11,
+            "rust_manifest_probe_count": 17,
+            "python_fallback_probe_count": 0,
+            "record_builder_owner": "build_generation_candidate_record",
+            "sanitization_owner": "sanitize_generated_narrative_text",
+            "quality_gate_normalization_owner": "normalize_candidate_quality_gate_plan",
+            "selection_metadata_owner": "build_attached_generation_candidate_selection_metadata",
+            "source_map_closeout_ready": true,
+            "physical_python_closeout_completed": false,
+            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+            "status": "rust_chapter_candidate_record_owner_ready_for_source_map_closeout_review"
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{json, Value};
 
-    use super::{build_generation_candidate_record, ChapterCandidateRecordRequest};
+    use super::{
+        build_chapter_candidate_record_owner_contract, build_generation_candidate_record,
+        ChapterCandidateRecordRequest,
+    };
 
     fn base_request() -> ChapterCandidateRecordRequest {
         ChapterCandidateRecordRequest {
@@ -676,5 +790,88 @@ mod tests {
         assert!(error.contains("generated empty narrative after sanitization"));
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("Sanitized 2 workflow/meta lines"));
+    }
+
+    #[test]
+    fn should_publish_chapter_candidate_record_owner_contract() {
+        let contract = build_chapter_candidate_record_owner_contract();
+
+        assert_eq!(contract["owner"], "chapter_candidate_record_service");
+        assert_eq!(
+            contract["scope"],
+            "candidate_record_sanitization_quality_gate_selection_owner"
+        );
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/app/services/chapter_candidate_record_service.py"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][0],
+            "backend-rs/src/services/chapter_candidate_record_service.rs"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][0],
+            "build_generation_candidate_record"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["request_fields"][8],
+            "attempt_kind"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["record_policy"][5],
+            "fallback to initial quality gate plan when enriched plan is empty"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["quality_gate_policy"][3],
+            "severe word budget pressure converts allow_save into auto_repair"
+        );
+        assert_eq!(
+            contract["active_consumers"][0],
+            "chapter_candidate_generation_service"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profiles"][0],
+            "phase5-single-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profiles"][1],
+            "phase5-batch-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["single_generation_manifest_probe_count"],
+            6
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["batch_generation_manifest_probe_count"],
+            11
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["rust_manifest_probe_count"],
+            17
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["record_builder_owner"],
+            "build_generation_candidate_record"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_chapter_candidate_record_owner_ready_for_source_map_closeout_review"
+        );
     }
 }

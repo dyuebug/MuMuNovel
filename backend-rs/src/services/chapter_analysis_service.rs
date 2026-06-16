@@ -1,32 +1,14 @@
-use crate::services::chapter_access_service::LoadAccessibleChapterError;
+pub(crate) mod analysis_owner;
 
-#[derive(Debug)]
-pub enum CreateChapterAnalysisTaskError {
-    ChapterEmpty,
-    ProjectMissing,
-    Internal(String),
-}
+pub(crate) use analysis_owner::{
+    apply_analysis_task_state_by_id, build_analysis_task_active_model,
+    load_chapter_analysis_read_context, AnalysisTaskStage, AutoRevisionDraftError,
+    CandidateDraftError, ChapterAnalysisQueryContextError, CreateChapterAnalysisTaskError,
+    LoadAnalysisTaskStatusError,
+};
 
-pub enum ChapterAnalysisQueryContextError {
-    Chapter(LoadAccessibleChapterError),
-    Internal(String),
-}
-
-pub type LoadAnalysisTaskStatusError = ChapterAnalysisQueryContextError;
-
-pub enum CandidateDraftError {
-    NotFound,
-    PreviewOnly,
-    EmptyContent,
-    WorkflowMetaText,
-    Stale,
-    Internal(String),
-}
-
-pub enum AutoRevisionDraftError {
-    NotFound,
-    EmptyContent,
-    WorkflowMetaText,
-    Stale,
-    Internal(String),
-}
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(crate) use analysis_owner::{
+    build_chapter_analysis_service_owner_contract, ChapterAnalysisReadContext,
+};

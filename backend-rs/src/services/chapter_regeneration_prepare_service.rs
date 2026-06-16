@@ -1,18 +1,28 @@
-use std::cmp::{max, min};
-
-use serde::Deserialize;
 use serde_json::Value;
 
-use crate::ai::service::AIService;
-use crate::models::chapter;
-use crate::services::chapter_generation_context_compaction_service::compact_generation_context;
-use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
-use crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload;
-use crate::services::chapter_generation_prompt_service::PreviousChapterPromptContext;
-use crate::services::chapter_generation_research_payload_service::build_single_chapter_research_provider_payload;
-use crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationTarget;
-use crate::services::settings_service::SettingsService;
-use crate::services::writing_style_service::WritingStyleService;
+pub(crate) mod prompt_prepare_owner;
+pub(crate) mod request_prepare_owner;
+#[cfg(test)]
+pub(crate) use self::prompt_prepare_owner::{
+    build_regeneration_prompt, prepare_partial_regeneration_input, PreparedPartialRegenerationInput,
+};
+pub(crate) use self::prompt_prepare_owner::{
+    prepare_chapter_regeneration_stream, prepare_partial_regeneration_stream,
+    FullChapterRegenerationStreamInput, PartialChapterRegenerationStreamInput,
+};
+pub(crate) use self::request_prepare_owner::{
+    build_full_chapter_regeneration_stream_request_from_route_payload,
+    build_partial_regeneration_stream_workflow_request_from_route_payload,
+    validate_full_chapter_regeneration_stream_request_bounds,
+    validate_partial_regeneration_stream_request_bounds, BuildRegenerationAiServiceError,
+    FullChapterRegenerationStreamRequest, FullChapterRegenerationStreamRouteRequest,
+    PartialRegenerationStreamRouteRequest, PartialRegenerationStreamWorkflowRequest,
+    PreparePartialRegenerationError, PreparePartialRegenerationStreamError,
+};
+#[cfg(test)]
+pub(crate) use self::request_prepare_owner::{
+    build_partial_length_requirement, calculate_partial_target_words, PartialRegenerationLengthMode,
+};
 
 const MIN_REGENERATION_TARGET_WORD_COUNT: i64 = 500;
 const MAX_REGENERATION_TARGET_WORD_COUNT: i64 = 10_000;
@@ -50,1144 +60,161 @@ const MAX_PARTIAL_REGENERATION_TARGET_WORD_COUNT: usize = 5000;
 const MAX_PARTIAL_REGENERATION_USER_INSTRUCTIONS_LENGTH: usize = 1000;
 const MAX_PARTIAL_REGENERATION_WEB_RESEARCH_QUERY_LENGTH: usize = 500;
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum BuildRegenerationAiServiceError {
-    InvalidConfig(String),
-    InvalidTargetWordCountTooSmall,
-    InvalidTargetWordCountTooLarge,
-    InvalidCreativeMode,
-    InvalidStoryFocus,
-    InvalidPlotStage,
-    InvalidQualityPreset,
-    StoryCreationBriefTooLong,
-    QualityNotesTooLong,
-    WebResearchQueryTooLong,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum PreparePartialRegenerationError {
-    InvalidRange,
-    EmptySelectedText,
-    EmptyUserInstructions,
-    UserInstructionsTooLong,
-    ContextCharsTooSmall,
-    ContextCharsTooLarge,
-    TargetWordCountTooSmall,
-    TargetWordCountTooLarge,
-    WebResearchQueryTooLong,
-}
-
-pub enum PreparePartialRegenerationStreamError {
-    Input(PreparePartialRegenerationError),
-    Style(String),
-    Config(BuildRegenerationAiServiceError),
-}
-
-pub struct FullChapterRegenerationStreamInput {
-    pub chapter_id: String,
-    pub chapter_word_count: usize,
-    pub prompt: String,
-    pub ai_service: AIService,
-}
-
-pub struct PartialChapterRegenerationStreamInput {
-    pub target_words: usize,
-    pub original_word_count: usize,
-    pub start_position: usize,
-    pub end_position: usize,
-    pub prompt: String,
-    pub ai_service: AIService,
-}
-
-pub struct PreparedPartialRegenerationInput {
-    pub original_word_count: usize,
-    pub target_words: usize,
-    pub max_tokens: u32,
-    pub prompt: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
-pub struct FullChapterRegenerationStreamRouteRequest {
-    pub target_word_count: Option<i64>,
-    pub custom_instructions: Option<String>,
-    #[serde(default)]
-    pub selected_suggestion_indices: Vec<Value>,
-    #[serde(default)]
-    pub focus_areas: Vec<Value>,
-    pub story_creation_brief: Option<String>,
-    pub quality_notes: Option<String>,
-    pub story_repair_summary: Option<String>,
-    pub creative_mode: Option<String>,
-    pub story_focus: Option<String>,
-    pub plot_stage: Option<String>,
-    pub quality_preset: Option<String>,
-    pub enable_web_research: Option<bool>,
-    pub web_research_query: Option<String>,
-    pub preserve_elements: Option<Value>,
-    #[serde(default)]
-    pub story_repair_targets: Vec<Value>,
-    #[serde(default)]
-    pub story_preserve_strengths: Vec<Value>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct FullChapterRegenerationStreamRequest {
-    target_word_count: Option<i64>,
-    custom_instructions: Option<String>,
-    selected_suggestion_indices: Vec<String>,
-    focus_areas: Vec<String>,
-    story_creation_brief: Option<String>,
-    quality_notes: Option<String>,
-    story_repair_summary: Option<String>,
-    creative_mode: Option<String>,
-    story_focus: Option<String>,
-    plot_stage: Option<String>,
-    quality_preset: Option<String>,
-    enable_web_research: Option<bool>,
-    web_research_query: Option<String>,
-    preserve_structure: bool,
-    preserve_dialogues: Vec<String>,
-    preserve_plot_points: Vec<String>,
-    preserve_character_traits: bool,
-    story_repair_targets: Vec<String>,
-    story_preserve_strengths: Vec<String>,
-}
-
-impl FullChapterRegenerationStreamRequest {
-    fn read_string_list(value: Option<&Value>) -> Vec<String> {
-        value
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    fn read_preserve_elements_string_list(preserve_elements: &Value, key: &str) -> Vec<String> {
-        Self::read_string_list(preserve_elements.get(key))
-    }
-
-    fn read_preserve_elements_bool(preserve_elements: &Value, key: &str, default: bool) -> bool {
-        preserve_elements
-            .get(key)
-            .and_then(Value::as_bool)
-            .unwrap_or(default)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        target_word_count: Option<i64>,
-        custom_instructions: Option<String>,
-        selected_suggestion_indices: Vec<String>,
-        focus_areas: Vec<String>,
-        story_creation_brief: Option<String>,
-        quality_notes: Option<String>,
-        story_repair_summary: Option<String>,
-        creative_mode: Option<String>,
-        story_focus: Option<String>,
-        plot_stage: Option<String>,
-        quality_preset: Option<String>,
-        enable_web_research: Option<bool>,
-        web_research_query: Option<String>,
-        preserve_structure: bool,
-        preserve_dialogues: Vec<String>,
-        preserve_plot_points: Vec<String>,
-        preserve_character_traits: bool,
-        story_repair_targets: Vec<String>,
-        story_preserve_strengths: Vec<String>,
-    ) -> Self {
-        Self {
-            target_word_count,
-            custom_instructions,
-            selected_suggestion_indices,
-            focus_areas,
-            story_creation_brief,
-            quality_notes,
-            story_repair_summary,
-            creative_mode,
-            story_focus,
-            plot_stage,
-            quality_preset,
-            enable_web_research,
-            web_research_query,
-            preserve_structure,
-            preserve_dialogues,
-            preserve_plot_points,
-            preserve_character_traits,
-            story_repair_targets,
-            story_preserve_strengths,
-        }
-    }
-
-    fn from_route_request(route_request: FullChapterRegenerationStreamRouteRequest) -> Self {
-        let preserve_elements = route_request.preserve_elements.unwrap_or_default();
-
-        Self::new(
-            route_request.target_word_count,
-            normalize_optional_regeneration_request_string(route_request.custom_instructions),
-            route_request
-                .selected_suggestion_indices
-                .into_iter()
-                .filter_map(|value| value.as_i64().map(|value| value.to_string()))
-                .collect(),
-            route_request
-                .focus_areas
-                .into_iter()
-                .filter_map(|value| value.as_str().map(str::to_owned))
-                .collect(),
-            normalize_optional_regeneration_request_string(route_request.story_creation_brief),
-            normalize_optional_regeneration_request_string(route_request.quality_notes),
-            normalize_optional_regeneration_request_string(route_request.story_repair_summary),
-            normalize_optional_regeneration_request_string(route_request.creative_mode),
-            normalize_optional_regeneration_request_string(route_request.story_focus),
-            normalize_optional_regeneration_request_string(route_request.plot_stage),
-            normalize_optional_regeneration_request_string(route_request.quality_preset),
-            route_request.enable_web_research,
-            normalize_optional_regeneration_request_string(route_request.web_research_query),
-            Self::read_preserve_elements_bool(&preserve_elements, "preserve_structure", false),
-            Self::read_preserve_elements_string_list(&preserve_elements, "preserve_dialogues"),
-            Self::read_preserve_elements_string_list(&preserve_elements, "preserve_plot_points"),
-            Self::read_preserve_elements_bool(
-                &preserve_elements,
-                "preserve_character_traits",
-                true,
-            ),
-            route_request
-                .story_repair_targets
-                .into_iter()
-                .filter_map(|value| value.as_str().map(str::to_owned))
-                .collect(),
-            route_request
-                .story_preserve_strengths
-                .into_iter()
-                .filter_map(|value| value.as_str().map(str::to_owned))
-                .collect(),
-        )
-    }
-
-    pub fn target_word_count(&self) -> i64 {
-        self.target_word_count.unwrap_or(3000)
-    }
-
-    pub fn custom_instructions(&self) -> &str {
-        self.custom_instructions.as_deref().unwrap_or_default()
-    }
-
-    pub fn selected_suggestion_indices(&self) -> &[String] {
-        &self.selected_suggestion_indices
-    }
-
-    pub fn focus_areas(&self) -> &[String] {
-        &self.focus_areas
-    }
-
-    pub fn story_creation_brief(&self) -> &str {
-        self.story_creation_brief.as_deref().unwrap_or_default()
-    }
-
-    pub fn quality_notes(&self) -> &str {
-        self.quality_notes.as_deref().unwrap_or_default()
-    }
-
-    pub fn story_repair_summary(&self) -> &str {
-        self.story_repair_summary.as_deref().unwrap_or_default()
-    }
-
-    pub fn creative_mode(&self) -> &str {
-        self.creative_mode.as_deref().unwrap_or_default()
-    }
-
-    pub fn story_focus(&self) -> &str {
-        self.story_focus.as_deref().unwrap_or_default()
-    }
-
-    #[cfg(test)]
-    pub fn plot_stage(&self) -> &str {
-        self.plot_stage.as_deref().unwrap_or_default()
-    }
-
-    pub fn quality_preset(&self) -> &str {
-        self.quality_preset.as_deref().unwrap_or_default()
-    }
-
-    fn validate_request_bounds(&self) -> Result<(), BuildRegenerationAiServiceError> {
-        if self.target_word_count() < MIN_REGENERATION_TARGET_WORD_COUNT {
-            return Err(BuildRegenerationAiServiceError::InvalidTargetWordCountTooSmall);
-        }
-        if self.target_word_count() > MAX_REGENERATION_TARGET_WORD_COUNT {
-            return Err(BuildRegenerationAiServiceError::InvalidTargetWordCountTooLarge);
-        }
-        if !is_valid_optional_regeneration_choice(
-            self.creative_mode.as_deref(),
-            REGENERATION_CREATIVE_MODE_VALUES,
-        ) {
-            return Err(BuildRegenerationAiServiceError::InvalidCreativeMode);
-        }
-        if !is_valid_optional_regeneration_choice(
-            self.story_focus.as_deref(),
-            REGENERATION_STORY_FOCUS_VALUES,
-        ) {
-            return Err(BuildRegenerationAiServiceError::InvalidStoryFocus);
-        }
-        if !is_valid_optional_regeneration_choice(
-            self.plot_stage.as_deref(),
-            REGENERATION_PLOT_STAGE_VALUES,
-        ) {
-            return Err(BuildRegenerationAiServiceError::InvalidPlotStage);
-        }
-        if !is_valid_optional_regeneration_choice(
-            self.quality_preset.as_deref(),
-            REGENERATION_QUALITY_PRESET_VALUES,
-        ) {
-            return Err(BuildRegenerationAiServiceError::InvalidQualityPreset);
-        }
-        if !is_valid_optional_regeneration_text_length(
-            self.story_creation_brief.as_deref(),
-            MAX_REGENERATION_STORY_CREATION_BRIEF_LENGTH,
-        ) {
-            return Err(BuildRegenerationAiServiceError::StoryCreationBriefTooLong);
-        }
-        if !is_valid_optional_regeneration_text_length(
-            self.quality_notes.as_deref(),
-            MAX_REGENERATION_QUALITY_NOTES_LENGTH,
-        ) {
-            return Err(BuildRegenerationAiServiceError::QualityNotesTooLong);
-        }
-        if !is_valid_optional_regeneration_text_length(
-            self.web_research_query.as_deref(),
-            MAX_REGENERATION_WEB_RESEARCH_QUERY_LENGTH,
-        ) {
-            return Err(BuildRegenerationAiServiceError::WebResearchQueryTooLong);
-        }
-
-        Ok(())
-    }
-
-    pub fn enable_web_research(&self) -> Option<bool> {
-        self.enable_web_research
-    }
-
-    pub fn web_research_query(&self) -> Option<&str> {
-        self.web_research_query.as_deref()
-    }
-
-    pub fn preserve_structure(&self) -> bool {
-        self.preserve_structure
-    }
-
-    pub fn preserve_dialogues(&self) -> &[String] {
-        &self.preserve_dialogues
-    }
-
-    pub fn preserve_plot_points(&self) -> &[String] {
-        &self.preserve_plot_points
-    }
-
-    pub fn preserve_character_traits(&self) -> bool {
-        self.preserve_character_traits
-    }
-
-    pub fn story_repair_targets(&self) -> &[String] {
-        &self.story_repair_targets
-    }
-
-    pub fn story_preserve_strengths(&self) -> &[String] {
-        &self.story_preserve_strengths
-    }
-
-    pub fn compat_options_with_web_research_default(
-        &self,
-        web_research_default: bool,
-    ) -> SingleChapterGenerationCompatOptions {
-        SingleChapterGenerationCompatOptions {
-            style_id: None,
-            enable_analysis: true,
-            enable_mcp: true,
-            web_research_enabled: self.enable_web_research.unwrap_or(web_research_default),
-            web_research_query: self.web_research_query.clone(),
-            narrative_perspective: None,
-            creative_mode: self.creative_mode.clone(),
-            story_focus: self.story_focus.clone(),
-            plot_stage: self.plot_stage.clone(),
-            story_creation_brief: self.story_creation_brief.clone(),
-            quality_preset: self.quality_preset.clone(),
-            quality_notes: self.quality_notes.clone(),
-            story_repair_summary: self.story_repair_summary.clone(),
-            story_repair_targets: self.story_repair_targets.clone(),
-            story_preserve_strengths: self.story_preserve_strengths.clone(),
-        }
-    }
-}
-
-pub fn build_full_chapter_regeneration_stream_request_from_route_payload(
-    route_request: FullChapterRegenerationStreamRouteRequest,
-) -> FullChapterRegenerationStreamRequest {
-    FullChapterRegenerationStreamRequest::from_route_request(route_request)
-}
-
-pub(crate) fn validate_full_chapter_regeneration_stream_request_bounds(
-    request: &FullChapterRegenerationStreamRequest,
-) -> Result<(), BuildRegenerationAiServiceError> {
-    request.validate_request_bounds()
-}
-
-fn normalize_optional_regeneration_request_string(value: Option<String>) -> Option<String> {
-    value
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn is_valid_optional_regeneration_choice(value: Option<&str>, allowed_values: &[&str]) -> bool {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| allowed_values.contains(&value))
-        .unwrap_or(true)
-}
-
-fn is_valid_optional_regeneration_text_length(value: Option<&str>, max_chars: usize) -> bool {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.chars().count() <= max_chars)
-        .unwrap_or(true)
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct PartialRegenerationStreamRouteRequest {
-    pub selected_text: String,
-    pub start_position: usize,
-    pub end_position: usize,
-    pub user_instructions: String,
-    pub context_chars: Option<usize>,
-    pub style_id: Option<i32>,
-    pub length_mode: Option<String>,
-    pub target_word_count: Option<usize>,
-    pub enable_web_research: Option<bool>,
-    pub web_research_query: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PartialRegenerationStreamWorkflowRequest {
-    selected_text: String,
-    start_position: usize,
-    end_position: usize,
-    context_chars: Option<usize>,
-    user_instructions: String,
-    length_mode: Option<String>,
-    target_word_count: Option<usize>,
-    style_id: Option<i32>,
-    enable_web_research: Option<bool>,
-    web_research_query: Option<String>,
-}
-
-impl PartialRegenerationStreamWorkflowRequest {
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        selected_text: String,
-        start_position: usize,
-        end_position: usize,
-        context_chars: Option<usize>,
-        user_instructions: String,
-        length_mode: Option<String>,
-        target_word_count: Option<usize>,
-        style_id: Option<i32>,
-        enable_web_research: Option<bool>,
-        web_research_query: Option<String>,
-    ) -> Self {
-        Self {
-            selected_text,
-            start_position,
-            end_position,
-            context_chars,
-            user_instructions,
-            length_mode,
-            target_word_count,
-            style_id,
-            enable_web_research,
-            web_research_query,
-        }
-    }
-
-    fn from_route_request(route_request: PartialRegenerationStreamRouteRequest) -> Self {
-        Self::new(
-            route_request.selected_text,
-            route_request.start_position,
-            route_request.end_position,
-            route_request.context_chars,
-            normalize_optional_regeneration_request_string(Some(route_request.user_instructions))
-                .unwrap_or_default(),
-            normalize_optional_regeneration_request_string(route_request.length_mode),
-            route_request.target_word_count,
-            route_request.style_id,
-            route_request.enable_web_research,
-            normalize_optional_regeneration_request_string(route_request.web_research_query),
-        )
-    }
-
-    pub fn selected_text(&self) -> &str {
-        &self.selected_text
-    }
-
-    pub fn start_position(&self) -> usize {
-        self.start_position
-    }
-
-    pub fn end_position(&self) -> usize {
-        self.end_position
-    }
-
-    pub fn context_chars(&self) -> usize {
-        normalize_partial_regeneration_context_chars(self.context_chars)
-    }
-
-    pub fn user_instructions(&self) -> &str {
-        &self.user_instructions
-    }
-
-    pub fn length_mode(&self) -> Option<&str> {
-        self.length_mode.as_deref()
-    }
-
-    pub fn target_word_count(&self) -> Option<usize> {
-        self.target_word_count
-    }
-
-    pub fn style_id(&self) -> Option<i32> {
-        self.style_id
-    }
-
-    #[cfg(test)]
-    pub fn web_research_enabled(&self) -> bool {
-        normalize_partial_regeneration_web_research_enabled(self.enable_web_research)
-    }
-
-    #[cfg(test)]
-    pub fn web_research_query(&self) -> Option<&str> {
-        self.web_research_query.as_deref()
-    }
-
-    fn validate_request_bounds(&self) -> Result<(), PreparePartialRegenerationError> {
-        if self.start_position >= self.end_position {
-            return Err(PreparePartialRegenerationError::InvalidRange);
-        }
-        if self.user_instructions.is_empty() {
-            return Err(PreparePartialRegenerationError::EmptyUserInstructions);
-        }
-        if self.user_instructions.chars().count()
-            > MAX_PARTIAL_REGENERATION_USER_INSTRUCTIONS_LENGTH
-        {
-            return Err(PreparePartialRegenerationError::UserInstructionsTooLong);
-        }
-        if let Some(context_chars) = self.context_chars {
-            if context_chars < MIN_PARTIAL_REGENERATION_CONTEXT_CHARS {
-                return Err(PreparePartialRegenerationError::ContextCharsTooSmall);
-            }
-            if context_chars > MAX_PARTIAL_REGENERATION_CONTEXT_CHARS {
-                return Err(PreparePartialRegenerationError::ContextCharsTooLarge);
-            }
-        }
-        if let Some(target_word_count) = self.target_word_count {
-            if target_word_count < MIN_PARTIAL_REGENERATION_TARGET_WORD_COUNT {
-                return Err(PreparePartialRegenerationError::TargetWordCountTooSmall);
-            }
-            if target_word_count > MAX_PARTIAL_REGENERATION_TARGET_WORD_COUNT {
-                return Err(PreparePartialRegenerationError::TargetWordCountTooLarge);
-            }
-        }
-        if !is_valid_optional_regeneration_text_length(
-            self.web_research_query.as_deref(),
-            MAX_PARTIAL_REGENERATION_WEB_RESEARCH_QUERY_LENGTH,
-        ) {
-            return Err(PreparePartialRegenerationError::WebResearchQueryTooLong);
-        }
-
-        Ok(())
-    }
-
-    pub fn compat_options_with_web_research_default(
-        &self,
-        web_research_default: bool,
-    ) -> SingleChapterGenerationCompatOptions {
-        SingleChapterGenerationCompatOptions {
-            style_id: self.style_id,
-            enable_analysis: true,
-            enable_mcp: true,
-            web_research_enabled: self.enable_web_research.unwrap_or(web_research_default),
-            web_research_query: self.web_research_query.clone(),
-            narrative_perspective: None,
-            creative_mode: None,
-            story_focus: None,
-            plot_stage: None,
-            story_creation_brief: None,
-            quality_preset: None,
-            quality_notes: None,
-            story_repair_summary: None,
-            story_repair_targets: Vec::new(),
-            story_preserve_strengths: Vec::new(),
-        }
-    }
-}
-
-pub fn build_partial_regeneration_stream_workflow_request_from_route_payload(
-    route_request: PartialRegenerationStreamRouteRequest,
-) -> PartialRegenerationStreamWorkflowRequest {
-    PartialRegenerationStreamWorkflowRequest::from_route_request(route_request)
-}
-
-pub(crate) fn validate_partial_regeneration_stream_request_bounds(
-    request: &PartialRegenerationStreamWorkflowRequest,
-) -> Result<(), PreparePartialRegenerationError> {
-    request.validate_request_bounds()
-}
-
-fn normalize_partial_regeneration_context_chars(context_chars: Option<usize>) -> usize {
-    context_chars.unwrap_or(500)
-}
-
-#[cfg(test)]
-fn normalize_partial_regeneration_web_research_enabled(enabled: Option<bool>) -> bool {
-    enabled.unwrap_or(false)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PartialRegenerationLengthMode {
-    Similar,
-    Expand,
-    Condense,
-    Custom,
-}
-
-impl PartialRegenerationLengthMode {
-    fn normalize(length_mode: Option<&str>) -> Self {
-        match length_mode.unwrap_or("similar") {
-            "expand" => PartialRegenerationLengthMode::Expand,
-            "condense" => PartialRegenerationLengthMode::Condense,
-            "custom" => PartialRegenerationLengthMode::Custom,
-            _ => PartialRegenerationLengthMode::Similar,
-        }
-    }
-
-    fn resolve_plan(
-        self,
-        target_word_count: Option<usize>,
-        original_word_count: usize,
-    ) -> PartialRegenerationLengthPlan {
-        match self {
-            PartialRegenerationLengthMode::Expand => {
-                let min_words = (original_word_count as f64 * 1.2) as usize;
-                let max_words = (original_word_count as f64 * 2.0) as usize;
-                PartialRegenerationLengthPlan {
-                    requirement: format!("建议扩写至 {}-{} 字", min_words, max_words),
-                    target_words: max_words,
-                }
-            }
-            PartialRegenerationLengthMode::Condense => {
-                let min_words = (original_word_count as f64 * 0.5) as usize;
-                let max_words = (original_word_count as f64 * 0.8) as usize;
-                PartialRegenerationLengthPlan {
-                    requirement: format!("建议压缩至 {}-{} 字", min_words, max_words),
-                    target_words: (original_word_count as f64 * 1.5) as usize,
-                }
-            }
-            PartialRegenerationLengthMode::Custom => PartialRegenerationLengthPlan {
-                requirement: target_word_count
-                    .map(|count| format!("目标长度约 {} 字，允许上下浮动 20%", count))
-                    .unwrap_or_else(|| {
-                        format!("默认按接近原文长度处理，原文约 {} 字", original_word_count)
-                    }),
-                target_words: target_word_count
-                    .unwrap_or_else(|| (original_word_count as f64 * 1.5) as usize),
+pub(crate) fn build_chapter_regeneration_prepare_owner_contract() -> Value {
+    serde_json::json!({
+        "owner": "chapter_regeneration_prepare_service",
+        "scope": "full_and_partial_regeneration_request_prompt_prepare_owner",
+        "python_source_map": [
+            "backend/app/api/chapter_regeneration_routes.py",
+            "backend/app/api/chapter_partial_regeneration_routes.py",
+            "backend/app/services/chapter_regeneration_stream_service.py",
+            "backend/app/services/partial_regeneration_service.py",
+            "backend/app/services/prompt_service.py",
+            "backend/app/services/chapter_web_research_service.py",
+            "backend/app/schemas/regeneration.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/services/chapter_regeneration_prepare_service.rs",
+            "backend-rs/src/services/chapter_regeneration_prepare_service/prompt_prepare_owner.rs",
+            "backend-rs/src/services/chapter_regeneration_prepare_service/request_prepare_owner.rs",
+            "backend-rs/src/services/chapter_regeneration_stream_workflow_service.rs",
+            "backend-rs/src/services/chapter_generation_prompt_service.rs",
+            "backend-rs/src/services/chapter_single_generation_prepare_service/research_payload_owner.rs",
+            "backend-rs/src/services/chapter_generation_execution_contract_service.rs",
+            "backend-rs/src/services/settings_service.rs",
+            "backend-rs/src/services/writing_style_service.rs"
+        ],
+        "behavior_contract": {
+            "entrypoints": [
+                "build_full_chapter_regeneration_stream_request_from_route_payload",
+                "validate_full_chapter_regeneration_stream_request_bounds",
+                "build_partial_regeneration_stream_workflow_request_from_route_payload",
+                "validate_partial_regeneration_stream_request_bounds",
+                "build_regeneration_prompt",
+                "prepare_partial_regeneration_input",
+                "prepare_chapter_regeneration_stream",
+                "prepare_partial_regeneration_stream",
+                "build_regeneration_ai_service",
+                "load_partial_style_content"
+            ],
+            "full_request_fields": [
+                "target_word_count",
+                "custom_instructions",
+                "selected_suggestion_indices",
+                "focus_areas",
+                "story_creation_brief",
+                "quality_notes",
+                "story_repair_summary",
+                "creative_mode",
+                "story_focus",
+                "plot_stage",
+                "quality_preset",
+                "enable_web_research",
+                "web_research_query",
+                "preserve_elements",
+                "story_repair_targets",
+                "story_preserve_strengths"
+            ],
+            "partial_request_fields": [
+                "selected_text",
+                "start_position",
+                "end_position",
+                "user_instructions",
+                "context_chars",
+                "style_id",
+                "length_mode",
+                "target_word_count",
+                "enable_web_research",
+                "web_research_query"
+            ],
+            "full_bounds": {
+                "target_word_count_min": MIN_REGENERATION_TARGET_WORD_COUNT,
+                "target_word_count_max": MAX_REGENERATION_TARGET_WORD_COUNT,
+                "story_creation_brief_max": MAX_REGENERATION_STORY_CREATION_BRIEF_LENGTH,
+                "quality_notes_max": MAX_REGENERATION_QUALITY_NOTES_LENGTH,
+                "web_research_query_max": MAX_REGENERATION_WEB_RESEARCH_QUERY_LENGTH
             },
-            PartialRegenerationLengthMode::Similar => {
-                let min_words = (original_word_count as f64 * 0.8) as usize;
-                let max_words = (original_word_count as f64 * 1.2) as usize;
-                PartialRegenerationLengthPlan {
-                    requirement: format!(
-                        "尽量保持与原文接近，原文约 {} 字，目标 {}-{} 字",
-                        original_word_count, min_words, max_words
-                    ),
-                    target_words: (original_word_count as f64 * 1.5) as usize,
-                }
-            }
+            "partial_bounds": {
+                "context_chars_min": MIN_PARTIAL_REGENERATION_CONTEXT_CHARS,
+                "context_chars_max": MAX_PARTIAL_REGENERATION_CONTEXT_CHARS,
+                "target_word_count_min": MIN_PARTIAL_REGENERATION_TARGET_WORD_COUNT,
+                "target_word_count_max": MAX_PARTIAL_REGENERATION_TARGET_WORD_COUNT,
+                "user_instructions_max": MAX_PARTIAL_REGENERATION_USER_INSTRUCTIONS_LENGTH,
+                "web_research_query_max": MAX_PARTIAL_REGENERATION_WEB_RESEARCH_QUERY_LENGTH
+            },
+            "choice_fields": {
+                "creative_mode": REGENERATION_CREATIVE_MODE_VALUES,
+                "story_focus": REGENERATION_STORY_FOCUS_VALUES,
+                "plot_stage": REGENERATION_PLOT_STAGE_VALUES,
+                "quality_preset": REGENERATION_QUALITY_PRESET_VALUES
+            },
+            "prompt_inputs": [
+                "chapter content and summary",
+                "prompt context provider payload",
+                "previous chapter context",
+                "custom instructions",
+                "selected suggestions and focus areas",
+                "story creation brief",
+                "quality notes and story repair summary",
+                "web research payload",
+                "preserve elements"
+            ],
+            "partial_prepare_policy": [
+                "selected text falls back to chapter slice",
+                "context window is clamped around selected range",
+                "length mode resolves default/shorten/expand/custom target words",
+                "style content is optional",
+                "max tokens are clamped between 500 and 8000",
+                "web research payload is injected when available"
+            ],
+            "stream_prepare_policy": [
+                "load settings-backed AI service",
+                "build full regeneration prompt before stream launch",
+                "load optional writing style for partial regeneration",
+                "materialize PartialChapterRegenerationStreamInput"
+            ],
+            "error_contract": [
+                "BuildRegenerationAiServiceError",
+                "PreparePartialRegenerationError",
+                "PreparePartialRegenerationStreamError"
+            ]
+        },
+        "validation_boundary": [
+            "cargo test services::chapter_regeneration_prepare_service",
+            "cargo check --manifest-path backend-rs/Cargo.toml",
+            "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only"
+        ],
+        "active_consumers": [
+            "chapter_regeneration_routes::regenerate_chapter_stream",
+            "chapter_regeneration_routes::partial_regenerate_stream",
+            "chapter_regeneration_stream_workflow_service",
+            "chapter-regeneration-full-stream-business-rust",
+            "chapter-regeneration-partial-stream-business-rust"
+        ],
+        "rollback_boundary": {
+            "python_source_map": "chapter_regeneration_prepare_python_source_map",
+            "python_fallback_removal_ready": false,
+            "approval_required": "explicit source-map freeze/delete/repoint approval"
+        },
+        "service_runtime_closeout_status": {
+            "owner_profile": "phase5-chapter-regeneration-owner",
+            "regeneration_manifest_probe_count": 13,
+            "rust_manifest_probe_count": 13,
+            "python_fallback_probe_count": 0,
+            "full_request_owner": "build_full_chapter_regeneration_stream_request_from_route_payload",
+            "full_bounds_owner": "validate_full_chapter_regeneration_stream_request_bounds",
+            "partial_request_owner": "build_partial_regeneration_stream_workflow_request_from_route_payload",
+            "partial_bounds_owner": "validate_partial_regeneration_stream_request_bounds",
+            "prompt_owner": "build_regeneration_prompt",
+            "partial_prepare_owner": "prepare_partial_regeneration_input",
+            "full_stream_prepare_owner": "prepare_chapter_regeneration_stream",
+            "partial_stream_prepare_owner": "prepare_partial_regeneration_stream",
+            "ai_service_owner": "build_regeneration_ai_service",
+            "source_map_closeout_ready": true,
+            "physical_python_closeout_completed": false,
+            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+            "status": "rust_chapter_regeneration_prepare_owner_ready_for_source_map_closeout_review"
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PartialRegenerationLengthPlan {
-    requirement: String,
-    target_words: usize,
-}
-
-impl PartialRegenerationLengthPlan {
-    fn requirement(self) -> String {
-        self.requirement
-    }
-
-    fn target_words(self) -> usize {
-        self.target_words
-    }
-}
-
-fn join_regeneration_prompt_items(items: &[String], separator: &str) -> String {
-    items.join(separator)
-}
-
-fn build_regeneration_external_assets_block(
-    external_assets: Option<&str>,
-    reference_assets: Option<&str>,
-) -> String {
-    let external_assets = external_assets.unwrap_or_default().trim();
-    let reference_assets = reference_assets.unwrap_or_default().trim();
-    if (external_assets.is_empty() || external_assets == "[]")
-        && (reference_assets.is_empty() || reference_assets == "[]")
-    {
-        return "（未提供）".to_string();
-    }
-
-    let mut lines = Vec::new();
-    if !external_assets.is_empty() && external_assets != "[]" {
-        lines.push(format!("external_assets: {}", external_assets));
-    }
-    if !reference_assets.is_empty() && reference_assets != "[]" {
-        lines.push(format!("reference_assets: {}", reference_assets));
-    }
-
-    if lines.is_empty() {
-        "（未提供）".to_string()
-    } else {
-        lines.join("\n")
-    }
-}
-
-pub fn build_regeneration_prompt(
-    chapter: &chapter::Model,
-    request: &FullChapterRegenerationStreamRequest,
-    provider_payload: &PromptContextProviderPayload,
-    web_research_note: Option<&str>,
-    external_assets: Option<&str>,
-    reference_assets: Option<&str>,
-) -> String {
-    let web_research_note = web_research_note.unwrap_or("（未启用）");
-    let external_assets_block =
-        build_regeneration_external_assets_block(external_assets, reference_assets);
-    format!(
-        "你是小说正文重写助手。请基于以下章节内容和要求输出重写后的正文，不要输出解释。\n\n章节标题：{}\n章节编号：{}\n目标字数：{}\n\n原章节内容：\n{}\n\n用户修改要求：\n{}\n\n选中建议索引：{}\n重点优化方向：{}\n创作模式：{}\n故事关注点：{}\n质量预设：{}\n\n最近章节规划：\n{}\n\n上一章已完成剧情：\n{}\n\n本章角色信息：\n{}\n\n本章职业信息：\n{}\n\n伏笔提醒：\n{}\n\n相关记忆：\n{}\n\n联网检索说明：{}\n外部参考资料：\n{}\n保留结构：{}\n保留对话：{}\n保留剧情点：{}\n保留人物特征：{}\n创作总控：{}\n质量补充偏好：{}\n剧情质量修复摘要：{}\n修复目标：{}\n保留优势：{}\n\n要求：\n- 只输出可直接替换的正文内容\n- 不要输出标题、编号、前言、后记或流程说明\n- 如果有角色/世界观信息，保持一致\n- 尽量保留原有剧情骨架",
-        chapter.title,
-        chapter.chapter_number,
-        request.target_word_count(),
-        chapter.content.clone().unwrap_or_default(),
-        request.custom_instructions(),
-        join_regeneration_prompt_items(request.selected_suggestion_indices(), ", "),
-        join_regeneration_prompt_items(request.focus_areas(), "、"),
-        request.creative_mode(),
-        request.story_focus(),
-        request.quality_preset(),
-        if provider_payload.recent_chapters_context.trim().is_empty() {
-            "（未提供）"
-        } else {
-            provider_payload.recent_chapters_context.as_str()
-        },
-        if provider_payload.previous_chapter_summary.trim().is_empty() {
-            "（未提供）"
-        } else {
-            provider_payload.previous_chapter_summary.as_str()
-        },
-        if provider_payload.characters_info.trim().is_empty()
-            || provider_payload.characters_info == "[]"
-        {
-            "（未提供）"
-        } else {
-            provider_payload.characters_info.as_str()
-        },
-        if provider_payload.chapter_careers.trim().is_empty()
-            || provider_payload.chapter_careers == "[]"
-        {
-            "（未提供）"
-        } else {
-            provider_payload.chapter_careers.as_str()
-        },
-        if provider_payload.foreshadow_reminders.trim().is_empty()
-            || provider_payload.foreshadow_reminders == "[]"
-        {
-            "（未提供）"
-        } else {
-            provider_payload.foreshadow_reminders.as_str()
-        },
-        if provider_payload.relevant_memories.trim().is_empty()
-            || provider_payload.relevant_memories == "[]"
-        {
-            "（未提供）"
-        } else {
-            provider_payload.relevant_memories.as_str()
-        },
-        web_research_note,
-        external_assets_block,
-        request.preserve_structure(),
-        join_regeneration_prompt_items(request.preserve_dialogues(), "、"),
-        join_regeneration_prompt_items(request.preserve_plot_points(), "、"),
-        request.preserve_character_traits(),
-        request.story_creation_brief(),
-        request.quality_notes(),
-        request.story_repair_summary(),
-        join_regeneration_prompt_items(request.story_repair_targets(), "、"),
-        join_regeneration_prompt_items(request.story_preserve_strengths(), "、"),
-    )
-}
-
-pub fn build_partial_length_requirement(
-    length_mode: Option<&str>,
-    target_word_count: Option<usize>,
-    original_word_count: usize,
-) -> String {
-    PartialRegenerationLengthMode::normalize(length_mode)
-        .resolve_plan(target_word_count, original_word_count)
-        .requirement()
-}
-
-pub fn calculate_partial_target_words(
-    length_mode: Option<&str>,
-    target_word_count: Option<usize>,
-    original_word_count: usize,
-) -> usize {
-    PartialRegenerationLengthMode::normalize(length_mode)
-        .resolve_plan(target_word_count, original_word_count)
-        .target_words()
-}
-
-pub fn build_partial_regeneration_prompt(
-    chapter: &chapter::Model,
-    selected_text: &str,
-    context_before: &str,
-    context_after: &str,
-    user_instructions: &str,
-    length_requirement: &str,
-    style_content: Option<&str>,
-    provider_payload: &PromptContextProviderPayload,
-    web_research_note: Option<&str>,
-    external_assets: Option<&str>,
-    reference_assets: Option<&str>,
-) -> String {
-    let style_content = style_content.unwrap_or("（未提供风格约束）");
-    let web_research_note = web_research_note.unwrap_or("（未启用）");
-    let external_assets_block =
-        build_regeneration_external_assets_block(external_assets, reference_assets);
-
-    format!(
-        "你是小说正文局部重写助手。请基于以下内容重写选中片段，只输出可直接替换的正文内容，不要输出解释。\n\n章节标题：{}\n章节编号：{}\n原文选中片段：\n{}\n\n前文上下文：\n{}\n\n后文上下文：\n{}\n\n用户修改要求：\n{}\n\n长度要求：{}\n\n风格约束：\n{}\n\n上一章已完成剧情：\n{}\n\n本章角色信息：\n{}\n\n本章职业信息：\n{}\n\n伏笔提醒：\n{}\n\n相关记忆：\n{}\n\n联网检索说明：{}\n\n外部参考资料：\n{}\n\n要求：\n- 只输出重写后的正文\n- 不要输出标题、编号、前言、后记或流程说明\n- 保持人物、设定与上下文一致\n- 尽量贴合原文节奏与叙事视角",
-        chapter.title,
-        chapter.chapter_number,
-        selected_text,
-        if context_before.is_empty() {
-            "（无前文上下文）"
-        } else {
-            context_before
-        },
-        if context_after.is_empty() {
-            "（无后文上下文）"
-        } else {
-            context_after
-        },
-        if user_instructions.is_empty() {
-            "（无额外要求）"
-        } else {
-            user_instructions
-        },
-        length_requirement,
-        style_content,
-        if provider_payload.previous_chapter_summary.trim().is_empty() {
-            "（未提供）"
-        } else {
-            provider_payload.previous_chapter_summary.as_str()
-        },
-        if provider_payload.characters_info.trim().is_empty()
-            || provider_payload.characters_info == "[]"
-        {
-            "（未提供）"
-        } else {
-            provider_payload.characters_info.as_str()
-        },
-        if provider_payload.chapter_careers.trim().is_empty()
-            || provider_payload.chapter_careers == "[]"
-        {
-            "（未提供）"
-        } else {
-            provider_payload.chapter_careers.as_str()
-        },
-        if provider_payload.foreshadow_reminders.trim().is_empty()
-            || provider_payload.foreshadow_reminders == "[]"
-        {
-            "（未提供）"
-        } else {
-            provider_payload.foreshadow_reminders.as_str()
-        },
-        if provider_payload.relevant_memories.trim().is_empty()
-            || provider_payload.relevant_memories == "[]"
-        {
-            "（未提供）"
-        } else {
-            provider_payload.relevant_memories.as_str()
-        },
-        web_research_note,
-        external_assets_block,
-    )
-}
-
-pub fn prepare_partial_regeneration_input(
-    chapter: &chapter::Model,
-    selected_text_override: &str,
-    start_position: usize,
-    end_position: usize,
-    context_chars: usize,
-    user_instructions: &str,
-    length_mode: Option<&str>,
-    target_word_count: Option<usize>,
-    style_content: Option<&str>,
-    provider_payload: &PromptContextProviderPayload,
-    web_research_note: Option<&str>,
-    external_assets: Option<&str>,
-    reference_assets: Option<&str>,
-) -> Result<PreparedPartialRegenerationInput, PreparePartialRegenerationError> {
-    let current_content = chapter.content.clone().unwrap_or_default();
-    let content_chars: Vec<char> = current_content.chars().collect();
-    let content_length = content_chars.len();
-    if start_position >= end_position || end_position > content_length {
-        return Err(PreparePartialRegenerationError::InvalidRange);
-    }
-
-    let selected_text_from_content: String =
-        content_chars[start_position..end_position].iter().collect();
-    let selected_text = {
-        let provided = selected_text_override.trim();
-        if provided.is_empty() {
-            selected_text_from_content
-        } else {
-            provided.to_string()
-        }
-    };
-    if selected_text.trim().is_empty() {
-        return Err(PreparePartialRegenerationError::EmptySelectedText);
-    }
-
-    let context_before_start = start_position.saturating_sub(context_chars);
-    let context_before: String = content_chars[context_before_start..start_position]
-        .iter()
-        .collect();
-    let context_after_end = end_position
-        .saturating_add(context_chars)
-        .min(content_length);
-    let context_after: String = content_chars[end_position..context_after_end]
-        .iter()
-        .collect();
-
-    let original_word_count = selected_text.chars().count();
-    let length_requirement =
-        build_partial_length_requirement(length_mode, target_word_count, original_word_count);
-    let target_words =
-        calculate_partial_target_words(length_mode, target_word_count, original_word_count);
-    let max_tokens = max(500, min(target_words.saturating_mul(3), 8000)) as u32;
-    let prompt = build_partial_regeneration_prompt(
-        chapter,
-        &selected_text,
-        &context_before,
-        &context_after,
-        user_instructions,
-        &length_requirement,
-        style_content,
-        provider_payload,
-        web_research_note,
-        external_assets,
-        reference_assets,
-    );
-
-    Ok(PreparedPartialRegenerationInput {
-        original_word_count,
-        target_words,
-        max_tokens,
-        prompt,
-    })
-}
-
-pub async fn build_regeneration_ai_service(
-    db: &sea_orm::DatabaseConnection,
-    user_id: &str,
-    max_tokens_override: Option<u32>,
-) -> Result<AIService, BuildRegenerationAiServiceError> {
-    let mut ai_config = SettingsService::build_ai_config(db, user_id, None, None, None)
-        .await
-        .map_err(BuildRegenerationAiServiceError::InvalidConfig)?;
-    if let Some(max_tokens) = max_tokens_override {
-        ai_config.max_tokens = max_tokens;
-    }
-    Ok(AIService::new(ai_config))
-}
-
-pub async fn load_partial_style_content(
-    db: &sea_orm::DatabaseConnection,
-    user_id: &str,
-    style_id: Option<i32>,
-) -> Result<Option<String>, String> {
-    let Some(style_id) = style_id else {
-        return Ok(None);
-    };
-
-    let value = WritingStyleService::get_style(db, user_id, style_id)
-        .await
-        .map_err(|error| error.to_string())?;
-
-    Ok(value
-        .get("prompt_content")
-        .and_then(Value::as_str)
-        .map(str::to_string))
-}
-
-pub async fn prepare_chapter_regeneration_stream(
-    db: &sea_orm::DatabaseConnection,
-    user_id: &str,
-    chapter: &chapter::Model,
-    request: &FullChapterRegenerationStreamRequest,
-) -> Result<FullChapterRegenerationStreamInput, BuildRegenerationAiServiceError> {
-    request.validate_request_bounds()?;
-
-    let web_research_default = SettingsService::resolve_web_research_enabled(db, user_id)
-        .await
-        .map_err(|error| BuildRegenerationAiServiceError::InvalidConfig(error.to_string()))?;
-    let compat_options = request.compat_options_with_web_research_default(web_research_default);
-    let provider_payload = build_single_chapter_research_provider_payload(
-        db,
-        user_id,
-        &SingleChapterGenerationTarget {
-            project_id: chapter.project_id.clone(),
-            chapter_id: chapter.id.clone(),
-            chapter_number: chapter.chapter_number,
-            title: chapter.title.clone(),
-        },
-        &compat_options,
-    )
-    .await
-    .map_err(BuildRegenerationAiServiceError::InvalidConfig)?;
-    let (provider_payload, _) = compact_generation_context(
-        "one-to-many",
-        request.target_word_count() as i32,
-        provider_payload,
-        PreviousChapterPromptContext::default(),
-    );
-    let web_research_note = if compat_options.web_research_enabled() {
-        compat_options
-            .web_research_query()
-            .map(|query| format!("已请求联网检索，检索问题：{}", query))
-            .or_else(|| Some("已请求联网检索，请优先吸收外部资料中的事实与细节。".to_string()))
-    } else {
-        None
-    };
-    let prompt = build_regeneration_prompt(
-        chapter,
-        request,
-        &provider_payload,
-        web_research_note.as_deref(),
-        Some(&provider_payload.external_assets),
-        Some(&provider_payload.reference_assets),
-    );
-    let ai_service = build_regeneration_ai_service(db, user_id, None).await?;
-
-    Ok(FullChapterRegenerationStreamInput {
-        chapter_id: chapter.id.clone(),
-        chapter_word_count: chapter.word_count as usize,
-        prompt,
-        ai_service,
-    })
-}
-
-pub async fn prepare_partial_regeneration_stream(
-    db: &sea_orm::DatabaseConnection,
-    user_id: &str,
-    chapter: &chapter::Model,
-    request: &PartialRegenerationStreamWorkflowRequest,
-) -> Result<PartialChapterRegenerationStreamInput, PreparePartialRegenerationStreamError> {
-    request
-        .validate_request_bounds()
-        .map_err(PreparePartialRegenerationStreamError::Input)?;
-
-    let style_content = load_partial_style_content(db, user_id, request.style_id())
-        .await
-        .map_err(PreparePartialRegenerationStreamError::Style)?;
-
-    let web_research_default = SettingsService::resolve_web_research_enabled(db, user_id)
-        .await
-        .map_err(|error| {
-            PreparePartialRegenerationStreamError::Config(
-                BuildRegenerationAiServiceError::InvalidConfig(error.to_string()),
-            )
-        })?;
-    let compat_options = request.compat_options_with_web_research_default(web_research_default);
-    let provider_payload = build_single_chapter_research_provider_payload(
-        db,
-        user_id,
-        &SingleChapterGenerationTarget {
-            project_id: chapter.project_id.clone(),
-            chapter_id: chapter.id.clone(),
-            chapter_number: chapter.chapter_number,
-            title: chapter.title.clone(),
-        },
-        &compat_options,
-    )
-    .await
-    .map_err(|error| {
-        PreparePartialRegenerationStreamError::Config(
-            BuildRegenerationAiServiceError::InvalidConfig(error),
-        )
-    })?;
-    let (provider_payload, _) = compact_generation_context(
-        "one-to-one",
-        request
-            .target_word_count()
-            .unwrap_or(chapter.word_count as usize) as i32,
-        provider_payload,
-        PreviousChapterPromptContext::default(),
-    );
-
-    let web_research_note = if compat_options.web_research_enabled() {
-        compat_options
-            .web_research_query()
-            .map(|query| format!("已请求联网检索，检索问题：{}", query))
-            .or_else(|| Some("已请求联网检索，请优先吸收外部资料中的事实与细节。".to_string()))
-    } else {
-        None
-    };
-
-    let prepared = prepare_partial_regeneration_input(
-        chapter,
-        request.selected_text(),
-        request.start_position(),
-        request.end_position(),
-        request.context_chars(),
-        request.user_instructions(),
-        request.length_mode(),
-        request.target_word_count(),
-        style_content.as_deref(),
-        &provider_payload,
-        web_research_note.as_deref(),
-        Some(&provider_payload.external_assets),
-        Some(&provider_payload.reference_assets),
-    )
-    .map_err(PreparePartialRegenerationStreamError::Input)?;
-
-    let ai_service = build_regeneration_ai_service(db, user_id, Some(prepared.max_tokens))
-        .await
-        .map_err(PreparePartialRegenerationStreamError::Config)?;
-
-    Ok(PartialChapterRegenerationStreamInput {
-        target_words: prepared.target_words,
-        original_word_count: prepared.original_word_count,
-        start_position: request.start_position(),
-        end_position: request.end_position(),
-        prompt: prepared.prompt,
-        ai_service,
     })
 }
 
@@ -1197,11 +224,12 @@ mod tests {
     use serde_json::Value;
 
     use crate::models::chapter;
-    use crate::services::chapter_generation_prompt_context_provider_service::{
+    use crate::services::chapter_generation_prompt_service::{
         build_placeholder_prompt_context_provider_payload, PromptContextProviderPayload,
     };
 
     use super::{
+        build_chapter_regeneration_prepare_owner_contract,
         build_full_chapter_regeneration_stream_request_from_route_payload,
         build_partial_length_requirement,
         build_partial_regeneration_stream_workflow_request_from_route_payload,
@@ -1210,7 +238,8 @@ mod tests {
         FullChapterRegenerationStreamRequest, FullChapterRegenerationStreamRouteRequest,
         PartialRegenerationLengthMode, PartialRegenerationStreamRouteRequest,
         PartialRegenerationStreamWorkflowRequest, PreparePartialRegenerationError,
-        PreparedPartialRegenerationInput,
+        PreparedPartialRegenerationInput, MAX_PARTIAL_REGENERATION_CONTEXT_CHARS,
+        MIN_REGENERATION_TARGET_WORD_COUNT,
     };
 
     fn chapter_with_content(content: &str) -> chapter::Model {
@@ -1947,5 +976,88 @@ mod tests {
             error,
             PreparePartialRegenerationError::EmptySelectedText
         ));
+    }
+
+    #[test]
+    fn should_publish_chapter_regeneration_prepare_owner_contract() {
+        let contract = build_chapter_regeneration_prepare_owner_contract();
+
+        assert_eq!(contract["owner"], "chapter_regeneration_prepare_service");
+        assert_eq!(
+            contract["scope"],
+            "full_and_partial_regeneration_request_prompt_prepare_owner"
+        );
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/app/api/chapter_regeneration_routes.py"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][0],
+            "backend-rs/src/services/chapter_regeneration_prepare_service.rs"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][7],
+            "prepare_partial_regeneration_stream"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["full_bounds"]["target_word_count_min"],
+            MIN_REGENERATION_TARGET_WORD_COUNT
+        );
+        assert_eq!(
+            contract["behavior_contract"]["partial_bounds"]["context_chars_max"],
+            MAX_PARTIAL_REGENERATION_CONTEXT_CHARS
+        );
+        assert_eq!(
+            contract["behavior_contract"]["choice_fields"]["creative_mode"][0],
+            "balanced"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["partial_prepare_policy"][4],
+            "max tokens are clamped between 500 and 8000"
+        );
+        assert_eq!(
+            contract["active_consumers"][1],
+            "chapter_regeneration_routes::partial_regenerate_stream"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profile"],
+            "phase5-chapter-regeneration-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["regeneration_manifest_probe_count"],
+            13
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["rust_manifest_probe_count"],
+            13
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["full_request_owner"],
+            "build_full_chapter_regeneration_stream_request_from_route_payload"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["partial_prepare_owner"],
+            "prepare_partial_regeneration_input"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_chapter_regeneration_prepare_owner_ready_for_source_map_closeout_review"
+        );
     }
 }

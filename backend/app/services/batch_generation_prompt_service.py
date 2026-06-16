@@ -1,13 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
 
-from sqlalchemy.ext.asyncio import AsyncSession
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active batch prompt/runtime prompt-materialization chain; "
+    "this Python helper is kept only as frozen rollback/source-map material "
+    "for legacy batch prompt construction."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/services/chapter_generation_prompt_service.rs; "
+    "backend-rs/src/services/chapter_generation_execution_contract_service.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_batch_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from app.logger import get_logger
-from app.models.chapter import Chapter
-from app.models.project import Project
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter import Chapter
+    from app.models.project import Project
 
 
 logger = get_logger(__name__)
@@ -105,9 +120,9 @@ def _build_web_research_grounding_block(research_assets: Optional[list[Any]]) ->
 
 async def build_batch_generation_prompt(
     *,
-    db_session: AsyncSession,
-    chapter: Chapter,
-    project: Project,
+    db_session: "AsyncSession",
+    chapter: "Chapter",
+    project: "Project",
     chapter_context: Any,
     outline_mode: str,
     current_user_id: str,
@@ -116,7 +131,7 @@ async def build_batch_generation_prompt(
     previous_summary_context: Optional[str],
     prompt_quality_kwargs: Dict[str, Any],
     style_content: str,
-    get_template_fn: Callable[[str, str, AsyncSession], Awaitable[str]],
+    get_template_fn: Callable[[str, str, "AsyncSession"], Awaitable[str]],
     format_prompt_fn: Callable[..., str],
     apply_style_to_prompt_fn: Callable[[str, str], str],
 ) -> BatchGenerationPrompt:
@@ -260,9 +275,9 @@ def build_batch_generation_request_payload(
 
 async def execute_batch_generation_prompt_stage(
     *,
-    db_session: AsyncSession,
-    chapter: Chapter,
-    project: Project,
+    db_session: "AsyncSession",
+    chapter: "Chapter",
+    project: "Project",
     chapter_context: Any,
     outline_mode: str,
     current_user_id: str,
@@ -277,7 +292,7 @@ async def execute_batch_generation_prompt_stage(
     custom_model: Optional[str],
     story_runtime_contract: Optional[Dict[str, Any]],
     research_assets: Optional[list[Any]] = None,
-    get_template_fn: Callable[[str, str, AsyncSession], Awaitable[str]],
+    get_template_fn: Callable[[str, str, "AsyncSession"], Awaitable[str]],
     format_prompt_fn: Callable[..., str],
     apply_style_to_prompt_fn: Callable[[str, str], str],
     build_runtime_system_prompt_fn: Callable[..., str],

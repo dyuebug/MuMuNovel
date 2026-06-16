@@ -2,26 +2,48 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from sqlalchemy.ext.asyncio import AsyncSession
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active batch terminal-state and failed-chapter persistence "
+    "chain; this Python helper is kept only as frozen rollback/source-map "
+    "material for legacy batch failure handling."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs; "
+    "backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_batch_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from app.logger import get_logger
-from app.models.batch_generation_task import BatchGenerationTask
-from app.models.chapter import Chapter
-from app.models.project import Project
-from app.services.batch_generation_chapter_persistence_service import build_batch_chapter_draft_attempt
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.batch_generation_task import BatchGenerationTask
+    from app.models.chapter import Chapter
+    from app.models.project import Project
 
 
 logger = get_logger(__name__)
 
 
+def build_batch_chapter_draft_attempt(*args, **kwargs):
+    from app.services.batch_generation_chapter_persistence_service import (
+        build_batch_chapter_draft_attempt as build_batch_chapter_draft_attempt_service,
+    )
+
+    return build_batch_chapter_draft_attempt_service(*args, **kwargs)
+
+
 async def fail_batch_generation_for_manual_review(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
-    task: BatchGenerationTask,
-    chapter: Chapter,
-    project: Project,
+    task: "BatchGenerationTask",
+    chapter: "Chapter",
+    project: "Project",
     batch_id: str,
     chapter_id: str,
     retry_count: int,
@@ -97,10 +119,10 @@ async def fail_batch_generation_for_manual_review(
 
 
 async def fail_batch_generation_after_analysis(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
-    task: BatchGenerationTask,
-    chapter: Chapter,
+    task: "BatchGenerationTask",
+    chapter: "Chapter",
     chapter_id: str,
     analysis_error: Optional[str],
     write_lock,
@@ -138,10 +160,10 @@ async def fail_batch_generation_after_analysis(
 
 
 async def fail_batch_generation_after_max_retries(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
-    task: BatchGenerationTask,
-    chapter: Optional[Chapter],
+    task: "BatchGenerationTask",
+    chapter: Optional["Chapter"],
     chapter_id: str,
     last_error: str,
     retry_count: int,

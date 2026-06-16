@@ -1,7 +1,6 @@
-// Staged Rust owner for Python chapter_candidate_rerank_service.py.
-// This ports the rerank-heavy formula group as one cutover dependency owner;
-// the active Python executor path is not retired until Rust wiring consumes it.
-#![allow(dead_code)]
+// Rust owner for the rerank-heavy formula group originally mapped from
+// Python chapter_candidate_rerank_service.py. Generation, finalize, repair,
+// and default executor dependency owners consume these formulas directly.
 
 use std::collections::HashSet;
 
@@ -125,9 +124,7 @@ pub(crate) fn build_candidate_retry_prompt_suffix(
 ) -> Option<String> {
     let plan = quality_gate_plan.as_ref().and_then(Value::as_object)?;
     let quality_gate = plan.get("quality_gate").and_then(Value::as_object);
-    let payload = plan
-        .get("active_story_repair_payload")
-        .and_then(Value::as_object);
+    let payload = active_story_repair_payload_object_from_plan(Some(plan));
 
     let summary = payload
         .and_then(|payload| safe_text(payload.get("summary")))
@@ -1180,6 +1177,15 @@ fn normalize_candidate_quality_gate(
     gate
 }
 
+fn active_story_repair_payload_object_from_plan<'a>(
+    plan: Option<&'a Map<String, Value>>,
+) -> Option<&'a Map<String, Value>> {
+    plan.and_then(|plan| {
+        plan.get("active_story_repair_payload")
+            .and_then(Value::as_object)
+    })
+}
+
 fn resolve_target_word_bounds(target_word_count: i64) -> (i64, i64) {
     let safe_target_word_count = target_word_count.max(200);
     let lower_bound = (safe_target_word_count - 120)
@@ -1246,10 +1252,7 @@ fn extract_failed_metric_labels_and_focus_areas(
             }
         }
     }
-    if let Some(payload) = plan
-        .get("active_story_repair_payload")
-        .and_then(Value::as_object)
-    {
+    if let Some(payload) = active_story_repair_payload_object_from_plan(Some(plan)) {
         for item in normalize_items(payload.get("focus_areas"), 4) {
             if let Some(focus_area) = normalize_focus_area(Some(&Value::String(item))) {
                 if !focus_areas.contains(&focus_area) {
@@ -1342,10 +1345,7 @@ fn candidate_has_explicit_quality_repair_pressure(candidate: &Map<String, Value>
             }
         }
     }
-    if let Some(payload) = plan
-        .get("active_story_repair_payload")
-        .and_then(Value::as_object)
-    {
+    if let Some(payload) = active_story_repair_payload_object_from_plan(Some(plan)) {
         if safe_text(payload.get("summary")).is_some()
             || !normalize_items(payload.get("repair_targets"), 1).is_empty()
             || !normalize_items(payload.get("focus_areas"), 1).is_empty()
@@ -1707,10 +1707,6 @@ fn candidate_rank_key(candidate: &Value) -> (i64, i64, i64, i64, i64) {
     )
 }
 
-fn candidates_len_from_pool_size(winner: &Map<String, Value>) -> i64 {
-    map_i64(winner, "rerank_pool_size").max(1)
-}
-
 fn build_focus_strategy_lines(runtime_context: &Map<String, Value>) -> Vec<String> {
     let story_focus = map_text(runtime_context, "story_focus");
     let creative_mode = map_text(runtime_context, "creative_mode");
@@ -1828,9 +1824,7 @@ fn build_continuity_repair_lines(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let payload = plan
-        .get("active_story_repair_payload")
-        .and_then(Value::as_object)
+    let payload = active_story_repair_payload_object_from_plan(Some(plan))
         .cloned()
         .unwrap_or_default();
     let mut has_pressure = array_items(gate.get("failed_metrics"))
@@ -2127,13 +2121,126 @@ fn push_joined_line(lines: &mut Vec<String>, label: &str, values: &[String]) {
     }
 }
 
+pub(crate) fn build_chapter_candidate_rerank_owner_contract() -> Value {
+    json!({
+        "owner": "chapter_candidate_rerank_service",
+        "scope": "candidate_rerank_retry_repair_formula_owner",
+        "python_source_map": [
+            "backend/app/services/chapter_candidate_rerank_service.py",
+            "backend/app/services/chapter_candidate_generation_service.py",
+            "backend/app/services/chapter_candidate_finalize_service.py",
+            "backend/app/services/chapter_candidate_word_budget_repair_service.py",
+            "backend/app/services/chapter_candidate_targeted_final_repair_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/services/chapter_candidate_rerank_service.rs",
+            "backend-rs/src/services/chapter_candidate_generation_service.rs",
+            "backend-rs/src/services/chapter_candidate_finalize_service.rs",
+            "backend-rs/src/services/chapter_candidate_word_budget_repair_service.rs",
+            "backend-rs/src/services/chapter_candidate_targeted_final_repair_service.rs",
+            "backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs"
+        ],
+        "behavior_contract": {
+            "entrypoints": [
+                "normalize_candidate_quality_gate_plan",
+                "build_candidate_retry_prompt_suffix",
+                "build_candidate_retry_strategy_suffix",
+                "resolve_candidate_retry_temperature",
+                "build_candidate_selection_metadata",
+                "attach_candidate_selection_metadata",
+                "build_candidate_pool_summary",
+                "select_best_generation_candidate",
+                "should_generate_additional_candidate",
+                "should_apply_word_budget_repair",
+                "build_word_budget_repair_suffix",
+                "resolve_word_budget_repair_temperature",
+                "should_apply_targeted_final_repair",
+                "build_targeted_final_repair_suffix",
+                "resolve_targeted_final_repair_temperature",
+                "select_targeted_final_repair_seed_candidate"
+            ],
+            "formula_groups": [
+                "quality gate normalization under word-pressure",
+                "candidate selection metadata and summary projection",
+                "pool winner ranking by gate priority, selection score, overall score, word fit, and candidate index",
+                "additional candidate pressure from quality gate and retry capacity",
+                "retry prompt and strategy suffix materialization",
+                "retry temperature adjustment from runtime context",
+                "word-budget repair char/token/keep/prefer formulas",
+                "targeted final repair seed/followup/keep/prefer formulas"
+            ],
+            "ranking_policy": [
+                "prefer higher quality gate priority",
+                "prefer higher selection score",
+                "prefer higher overall score",
+                "prefer higher word count fit score",
+                "prefer lower candidate index as stable tie-breaker"
+            ],
+            "repair_policy": [
+                "word-budget repair is driven by severe length pressure and repair quality",
+                "targeted final repair is driven by manual-review focus areas and followup pressure",
+                "content-sensitive focus areas relax repair length limits",
+                "edge anchors are preserved for word-budget repair suffixes"
+            ],
+            "error_contract": [
+                "safe text and numeric coercion ignore malformed values",
+                "non-finite temperatures are rejected before JSON number insertion",
+                "empty or non-object candidates are ranked below valid candidates"
+            ]
+        },
+        "validation_boundary": [
+            "cargo test services::chapter_candidate_rerank_service",
+            "cargo check --manifest-path backend-rs/Cargo.toml",
+            "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only"
+        ],
+        "active_consumers": [
+            "chapter_candidate_generation_service",
+            "chapter_candidate_finalize_service",
+            "chapter_candidate_word_budget_repair_service",
+            "chapter_candidate_targeted_final_repair_service",
+            "chapter_candidate_executor_default_dependency_service",
+            "chapter_candidate_route_gateway_service"
+        ],
+        "service_runtime_closeout_status": {
+            "owner_profiles": [
+                "phase5-single-generation-owner",
+                "phase5-batch-generation-owner"
+            ],
+            "single_generation_manifest_probe_count": 6,
+            "batch_generation_manifest_probe_count": 11,
+            "rust_manifest_probe_count": 17,
+            "python_fallback_probe_count": 0,
+            "quality_gate_normalization_owner": "normalize_candidate_quality_gate_plan",
+            "selection_metadata_owner": "build_candidate_selection_metadata",
+            "candidate_pool_summary_owner": "build_candidate_pool_summary",
+            "candidate_selection_owner": "select_best_generation_candidate",
+            "additional_candidate_pressure_owner": "should_generate_additional_candidate",
+            "retry_prompt_owner": "build_candidate_retry_prompt_suffix",
+            "retry_strategy_owner": "build_candidate_retry_strategy_suffix",
+            "retry_temperature_owner": "resolve_candidate_retry_temperature",
+            "word_budget_repair_owner": "build_word_budget_repair_suffix",
+            "targeted_final_repair_owner": "build_targeted_final_repair_suffix",
+            "source_map_closeout_ready": true,
+            "physical_python_closeout_completed": false,
+            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+            "status": "rust_chapter_candidate_rerank_owner_ready_for_source_map_closeout_review"
+        },
+        "rollback_boundary": {
+            "python_source_map": "chapter_candidate_rerank_python_source_map",
+            "python_fallback_removal_ready": false,
+            "approval_required": "explicit source-map freeze/delete/repoint approval"
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::{
-        attach_candidate_selection_metadata, build_candidate_pool_summary,
-        build_candidate_retry_prompt_suffix, build_candidate_selection_metadata,
+        active_story_repair_payload_object_from_plan, attach_candidate_selection_metadata,
+        build_candidate_pool_summary, build_candidate_retry_prompt_suffix,
+        build_candidate_selection_metadata, build_chapter_candidate_rerank_owner_contract,
         build_targeted_final_repair_suffix, build_word_budget_repair_suffix,
         normalize_candidate_quality_gate_plan, resolve_candidate_retry_temperature,
         resolve_targeted_final_repair_char_limit, resolve_targeted_final_repair_max_tokens,
@@ -2158,6 +2265,31 @@ mod tests {
         assert_eq!(plan["quality_gate"]["decision"], "auto_repair");
         assert_eq!(plan["quality_gate"]["allow_save"], false);
         assert_eq!(plan["quality_gate"]["can_auto_repair"], true);
+    }
+
+    #[test]
+    fn should_extract_active_story_repair_payload_object_from_quality_gate_plan() {
+        let plan = json!({
+            "quality_gate": {"decision": "auto_repair"},
+            "active_story_repair_payload": {
+                "summary": "ending is soft",
+                "repair_targets": ["final hook"]
+            }
+        });
+
+        let payload = active_story_repair_payload_object_from_plan(plan.as_object());
+
+        assert_eq!(
+            payload.and_then(|payload| payload.get("summary")),
+            Some(&json!("ending is soft"))
+        );
+        assert_eq!(
+            payload
+                .and_then(|payload| payload.get("repair_targets"))
+                .and_then(|items| items.as_array())
+                .and_then(|items| items.first()),
+            Some(&json!("final hook"))
+        );
     }
 
     #[test]
@@ -2379,5 +2511,88 @@ mod tests {
         .expect("temperature");
 
         assert_eq!(temperature, 0.62);
+    }
+
+    #[test]
+    fn should_publish_chapter_candidate_rerank_owner_contract() {
+        let contract = build_chapter_candidate_rerank_owner_contract();
+
+        assert_eq!(contract["owner"], "chapter_candidate_rerank_service");
+        assert_eq!(
+            contract["scope"],
+            "candidate_rerank_retry_repair_formula_owner"
+        );
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/app/services/chapter_candidate_rerank_service.py"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][0],
+            "backend-rs/src/services/chapter_candidate_rerank_service.rs"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][7],
+            "select_best_generation_candidate"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["formula_groups"][6],
+            "word-budget repair char/token/keep/prefer formulas"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["ranking_policy"][4],
+            "prefer lower candidate index as stable tie-breaker"
+        );
+        assert_eq!(
+            contract["active_consumers"][0],
+            "chapter_candidate_generation_service"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profiles"][0],
+            "phase5-single-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profiles"][1],
+            "phase5-batch-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["single_generation_manifest_probe_count"],
+            json!(6)
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["batch_generation_manifest_probe_count"],
+            json!(11)
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            json!(0)
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["candidate_selection_owner"],
+            "select_best_generation_candidate"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["word_budget_repair_owner"],
+            "build_word_budget_repair_suffix"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["targeted_final_repair_owner"],
+            "build_targeted_final_repair_suffix"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_chapter_candidate_rerank_owner_ready_for_source_map_closeout_review"
+        );
     }
 }

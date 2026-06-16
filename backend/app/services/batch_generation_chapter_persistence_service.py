@@ -2,20 +2,49 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from sqlalchemy.ext.asyncio import AsyncSession
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active batch chapter draft-attempt, payload, and snapshot "
+    "projection chain; this Python helper is kept only as frozen "
+    "rollback/source-map material for legacy batch persistence fallback."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs; "
+    "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_batch_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from app.logger import get_logger
-from app.models.chapter import Chapter
-from app.models.chapter_draft_attempt import ChapterDraftAttempt
-from app.models.generation_history import GenerationHistory
-from app.models.project import Project
-from app.schemas.generation_payload import build_chapter_generation_quality_history_payload
-from app.services.foreshadow_service import foreshadow_service
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter import Chapter
+    from app.models.chapter_draft_attempt import ChapterDraftAttempt
+    from app.models.generation_history import GenerationHistory
+    from app.models.project import Project
 
 
 logger = get_logger(__name__)
+
+
+def _generation_payload_schema():
+    from app.schemas import generation_payload
+
+    return generation_payload
+
+
+def _foreshadow_service_instance():
+    from app.services.foreshadow_service import foreshadow_service
+
+    return foreshadow_service
+
+
+def build_chapter_generation_quality_history_payload(*args, **kwargs):
+    return _generation_payload_schema().build_chapter_generation_quality_history_payload(*args, **kwargs)
 
 
 def _normalize_json_payload(value: Any) -> Any:
@@ -47,7 +76,9 @@ def build_batch_chapter_draft_attempt(
     summary_preview: Optional[str] = None,
     quality_metrics: Optional[Dict[str, Any]] = None,
     repair_payload: Optional[Dict[str, Any]] = None,
-) -> ChapterDraftAttempt:
+) -> "ChapterDraftAttempt":
+    from app.models.chapter_draft_attempt import ChapterDraftAttempt
+
     normalized_content = str(full_content or "")
     normalized_summary = str(summary_preview or "").strip()
     if not normalized_summary and normalized_content:
@@ -97,16 +128,18 @@ def _build_generation_history_payload(
 
 
 async def apply_generated_batch_chapter_candidate(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
-    chapter: Chapter,
-    project: Project,
+    chapter: "Chapter",
+    project: "Project",
     write_lock,
     full_content: str,
     word_count: int,
     quality_metrics: Optional[Dict[str, Any]] = None,
     story_runtime_contract: Optional[Dict[str, Any]] = None,
 ) -> None:
+    from app.models.generation_history import GenerationHistory
+
     async with write_lock:
         old_word_count = chapter.word_count or 0
         chapter.content = full_content
@@ -134,7 +167,7 @@ async def apply_generated_batch_chapter_candidate(
 
     try:
         async with write_lock:
-            plant_result = await foreshadow_service.auto_plant_pending_foreshadows(
+            plant_result = await _foreshadow_service_instance().auto_plant_pending_foreshadows(
                 db=db_session,
                 project_id=chapter.project_id,
                 chapter_id=chapter.id,

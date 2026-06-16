@@ -9,23 +9,23 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import PROJECT_ROOT, settings
 from app.logger import get_logger
-from app.models.chapter import Chapter
-from app.models.memory import StoryMemory
-from app.models.outline import Outline
-from app.models.project import Project
-from app.models.settings import Settings
 from app.services.ai_clients.openai_client import OpenAIClient
 from app.services.grok_search_adapter import GrokSearchAdapter, GrokSearchAdapterError
 from app.services.memory_service import memory_service
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter import Chapter
+    from app.models.outline import Outline
+    from app.models.project import Project
 
 logger = get_logger(__name__)
 
@@ -113,6 +113,10 @@ class ChapterWebResearchService:
         )
 
     async def get_runtime_config(self, *, user_id: Optional[str], db_session: Optional[AsyncSession]) -> WebResearchRuntimeConfig:
+        from sqlalchemy import select
+
+        from app.models.settings import Settings
+
         if not user_id or db_session is None:
             return self._default_runtime_config()
         result = await db_session.execute(select(Settings).where(Settings.user_id == user_id))

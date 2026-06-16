@@ -20,10 +20,273 @@ use uuid::Uuid;
 use crate::ai::service::AIService;
 use crate::models::{character, generation_history, organization, organization_member, project};
 use crate::services::auth::Claims;
-use crate::services::organization_service::OrganizationService;
 use crate::services::prompt_template_service::PromptTemplateService;
 use crate::services::settings_service::SettingsService;
 use crate::services::wizard_service::clean_json_response;
+
+const ORGANIZATIONS_LIST_CREATE_ROUTE: &str = "/organizations";
+const ORGANIZATIONS_GENERATE_STREAM_ROUTE: &str = "/organizations/generate-stream";
+const ORGANIZATIONS_PROJECT_LIST_ROUTE: &str = "/organizations/project/{project_id}";
+const ORGANIZATIONS_MEMBER_DETAIL_ROUTE: &str = "/organizations/members/{member_id}";
+const ORGANIZATIONS_MEMBERS_ROUTE: &str = "/organizations/{org_id}/members";
+const ORGANIZATIONS_DETAIL_ROUTE: &str = "/organizations/{org_id}";
+
+#[cfg(test)]
+fn build_organizations_route_owner_contract() -> Value {
+    json!({
+        "owner": "organizations",
+        "rust_owner": "backend-rs/src/api/organizations.rs",
+        "routes": {
+            "list": ORGANIZATIONS_LIST_CREATE_ROUTE,
+            "create": ORGANIZATIONS_LIST_CREATE_ROUTE,
+            "generate_stream": ORGANIZATIONS_GENERATE_STREAM_ROUTE,
+            "project_list": ORGANIZATIONS_PROJECT_LIST_ROUTE,
+            "member_detail": ORGANIZATIONS_MEMBER_DETAIL_ROUTE,
+            "member_update": ORGANIZATIONS_MEMBER_DETAIL_ROUTE,
+            "member_delete": ORGANIZATIONS_MEMBER_DETAIL_ROUTE,
+            "members": ORGANIZATIONS_MEMBERS_ROUTE,
+            "member_create": ORGANIZATIONS_MEMBERS_ROUTE,
+            "detail": ORGANIZATIONS_DETAIL_ROUTE,
+            "update": ORGANIZATIONS_DETAIL_ROUTE,
+            "delete": ORGANIZATIONS_DETAIL_ROUTE
+        },
+        "methods": {
+            "list": ["GET"],
+            "create": ["POST"],
+            "generate_stream": ["POST"],
+            "project_list": ["GET"],
+            "member_detail": ["GET", "PUT", "DELETE"],
+            "members": ["GET", "POST"],
+            "detail": ["GET", "PUT", "DELETE"]
+        },
+        "service_owners": [
+            "backend-rs/src/api/organizations.rs",
+            "backend-rs/src/api/background_tasks.rs",
+            "backend-rs/src/models/organization.rs",
+            "backend-rs/src/models/organization_member.rs",
+            "backend-rs/src/models/character.rs"
+        ],
+        "readiness_probes": [
+            "organizations-project-list-auth-guard-rust",
+            "organizations-generate-stream-auth-guard-rust",
+            "organizations-business-project-create-rust",
+            "organizations-business-character-create-rust",
+            "organizations-create-business-rust",
+            "organizations-list-business-rust",
+            "organizations-project-list-business-rust",
+            "organizations-detail-business-rust",
+            "organizations-update-business-rust",
+            "organizations-business-member-character-create-rust",
+            "organizations-member-add-business-rust",
+            "organizations-members-list-business-rust",
+            "organizations-member-update-business-rust",
+            "organizations-detail-after-member-business-rust",
+            "organizations-generate-configure-mock-openai-business-rust",
+            "organizations-generate-stream-business-rust",
+            "organizations-member-delete-business-rust",
+            "organizations-delete-business-rust",
+            "organizations-missing-detail-business-rust"
+        ],
+        "owner_profile": {
+            "name": "phase5-organizations-business-owner",
+            "business_probes": [
+                "organizations-business-project-create-rust",
+                "organizations-business-character-create-rust",
+                "organizations-create-business-rust",
+                "organizations-list-business-rust",
+                "organizations-project-list-business-rust",
+                "organizations-detail-business-rust",
+                "organizations-update-business-rust",
+                "organizations-business-member-character-create-rust",
+                "organizations-member-add-business-rust",
+                "organizations-members-list-business-rust",
+                "organizations-member-update-business-rust",
+                "organizations-detail-after-member-business-rust",
+                "organizations-generate-configure-mock-openai-business-rust",
+                "organizations-generate-stream-business-rust",
+                "organizations-member-delete-business-rust",
+                "organizations-delete-business-rust",
+                "organizations-missing-detail-business-rust"
+            ],
+            "python_fallback_probe_count": 0
+        },
+        "source_map_files": [
+            "backend/app/api/organizations.py",
+            "backend/app/models/relationship.py",
+            "backend/app/schemas/relationship.py",
+            "backend/app/services/auto_organization_service.py"
+        ],
+        "rollback_boundary": {
+            "source_map_policy": "keep_python_organizations_route_relationship_model_schema_auto_service_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_freeze_candidate_ready": true,
+            "full_module_freeze_ready": false,
+            "python_fallback_removal_ready": false,
+            "remaining_blockers": [
+                "explicit source-map freeze/delete/repoint approval"
+            ],
+            "freeze_reason": "Rust organizations route group has dedicated phase5-organizations-business-owner probes for project/character setup, organization CRUD, project list, member add/list/update/delete, detail-after-member, generate-stream, delete, and missing-detail behavior; final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy."
+        },
+        "business_smoke_status": {
+            "owner_profile": "phase5-organizations-business-owner",
+            "readiness_probe_count": 19,
+            "business_probe_count": 17,
+            "python_fallback_probe_count": 0,
+            "status": "covered_by_dedicated_rust_owner_profile"
+        },
+        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+        "migration_policy": "Organizations route business smoke is covered by phase5-organizations-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+    })
+}
+
+struct OrganizationService;
+
+impl OrganizationService {
+    async fn verify_project_access(
+        db: &DatabaseConnection,
+        project_id: &str,
+        user_id: &str,
+    ) -> Result<bool, String> {
+        let exists = project::Entity::find()
+            .filter(project::Column::Id.eq(project_id))
+            .filter(project::Column::UserId.eq(user_id))
+            .one(db)
+            .await
+            .map_err(|error| format!("{}", error))?;
+        Ok(exists.is_some())
+    }
+
+    async fn create(
+        db: &DatabaseConnection,
+        project_id: &str,
+        character_id: &str,
+        user_id: &str,
+        parent_org_id: Option<&str>,
+        level: Option<i32>,
+        power_level: Option<i32>,
+        location: Option<&str>,
+        motto: Option<&str>,
+        color: Option<&str>,
+    ) -> Result<Option<organization::Model>, String> {
+        if !Self::verify_project_access(db, project_id, user_id).await? {
+            return Ok(None);
+        }
+        let now = Utc::now().naive_utc();
+        let model = organization::ActiveModel {
+            id: Set(Uuid::new_v4().to_string()),
+            character_id: Set(character_id.to_string()),
+            project_id: Set(project_id.to_string()),
+            parent_org_id: Set(parent_org_id.map(|value| value.to_string())),
+            level: Set(level.unwrap_or(0)),
+            power_level: Set(power_level.unwrap_or(50)),
+            member_count: Set(0),
+            location: Set(location.map(|value| value.to_string())),
+            motto: Set(motto.map(|value| value.to_string())),
+            color: Set(color.map(|value| value.to_string())),
+            created_at: Set(now),
+            updated_at: Set(Some(now)),
+        };
+        model
+            .insert(db)
+            .await
+            .map_err(|error| format!("{}", error))
+            .map(Some)
+    }
+
+    async fn list(
+        db: &DatabaseConnection,
+        project_id: &str,
+        user_id: &str,
+    ) -> Result<Option<Vec<organization::Model>>, String> {
+        if !Self::verify_project_access(db, project_id, user_id).await? {
+            return Ok(None);
+        }
+        organization::Entity::find()
+            .filter(organization::Column::ProjectId.eq(project_id))
+            .order_by_asc(organization::Column::CharacterId)
+            .all(db)
+            .await
+            .map_err(|error| format!("{}", error))
+            .map(Some)
+    }
+
+    async fn get(
+        db: &DatabaseConnection,
+        org_id: &str,
+        user_id: &str,
+    ) -> Result<Option<organization::Model>, String> {
+        let organization = organization::Entity::find_by_id(org_id)
+            .one(db)
+            .await
+            .map_err(|error| format!("{}", error))?;
+        match organization {
+            Some(ref org) => {
+                if !Self::verify_project_access(db, &org.project_id, user_id).await? {
+                    return Ok(None);
+                }
+                Ok(Some(org.clone()))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn update(
+        db: &DatabaseConnection,
+        org_id: &str,
+        user_id: &str,
+        parent_org_id: Option<&str>,
+        level: Option<i32>,
+        power_level: Option<i32>,
+        location: Option<&str>,
+        motto: Option<&str>,
+        color: Option<&str>,
+    ) -> Result<Option<organization::Model>, String> {
+        let existing = Self::get(db, org_id, user_id).await?;
+        let Some(model) = existing else {
+            return Ok(None);
+        };
+        let mut active: organization::ActiveModel = model.into();
+        if let Some(value) = parent_org_id {
+            active.parent_org_id = Set(Some(value.to_string()));
+        }
+        if let Some(value) = level {
+            active.level = Set(value);
+        }
+        if let Some(value) = power_level {
+            active.power_level = Set(value);
+        }
+        if let Some(value) = location {
+            active.location = Set(Some(value.to_string()));
+        }
+        if let Some(value) = motto {
+            active.motto = Set(Some(value.to_string()));
+        }
+        if let Some(value) = color {
+            active.color = Set(Some(value.to_string()));
+        }
+        active.updated_at = Set(Some(Utc::now().naive_utc()));
+        active
+            .update(db)
+            .await
+            .map_err(|error| format!("{}", error))
+            .map(Some)
+    }
+
+    async fn delete(
+        db: &DatabaseConnection,
+        org_id: &str,
+        user_id: &str,
+    ) -> Result<Option<()>, String> {
+        let existing = Self::get(db, org_id, user_id).await?;
+        if existing.is_none() {
+            return Ok(None);
+        }
+        organization::Entity::delete_by_id(org_id)
+            .exec(db)
+            .await
+            .map_err(|error| format!("{}", error))?;
+        Ok(Some(()))
+    }
+}
 
 #[derive(Deserialize)]
 struct CreateRequest {
@@ -917,34 +1180,39 @@ async fn delete_member(
 
 pub fn routes() -> Router {
     Router::new()
-        .route("/organizations", post(create_org).get(list_orgs))
         .route(
-            "/organizations/generate-stream",
+            ORGANIZATIONS_LIST_CREATE_ROUTE,
+            post(create_org).get(list_orgs),
+        )
+        .route(
+            ORGANIZATIONS_GENERATE_STREAM_ROUTE,
             post(generate_org_stream_legacy),
         )
+        .route(ORGANIZATIONS_PROJECT_LIST_ROUTE, get(list_project_orgs))
         .route(
-            "/organizations/project/{project_id}",
-            get(list_project_orgs),
-        )
-        .route(
-            "/organizations/members/{member_id}",
+            ORGANIZATIONS_MEMBER_DETAIL_ROUTE,
             get(|| async { StatusCode::METHOD_NOT_ALLOWED })
                 .put(update_member)
                 .delete(delete_member),
         )
         .route(
-            "/organizations/{org_id}/members",
+            ORGANIZATIONS_MEMBERS_ROUTE,
             get(list_members).post(add_member),
         )
         .route(
-            "/organizations/{org_id}",
+            ORGANIZATIONS_DETAIL_ROUTE,
             get(get_org).put(update_org).delete(delete_org),
         )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::GenerateOrganizationTaskError;
+    use super::{
+        build_organizations_route_owner_contract, GenerateOrganizationTaskError,
+        ORGANIZATIONS_DETAIL_ROUTE, ORGANIZATIONS_GENERATE_STREAM_ROUTE,
+        ORGANIZATIONS_LIST_CREATE_ROUTE, ORGANIZATIONS_MEMBERS_ROUTE,
+        ORGANIZATIONS_MEMBER_DETAIL_ROUTE, ORGANIZATIONS_PROJECT_LIST_ROUTE,
+    };
 
     #[test]
     fn organization_task_error_display_keeps_project_access_message() {
@@ -963,5 +1231,111 @@ mod tests {
             .to_string(),
             "组织生成结果不是有效 JSON: boom"
         );
+    }
+
+    #[test]
+    fn should_publish_organizations_route_owner_contract() {
+        let contract = build_organizations_route_owner_contract();
+
+        assert_eq!(contract["owner"], "organizations");
+        assert_eq!(
+            contract["rust_owner"],
+            "backend-rs/src/api/organizations.rs"
+        );
+        assert_eq!(contract["routes"]["list"], ORGANIZATIONS_LIST_CREATE_ROUTE);
+        assert_eq!(
+            contract["routes"]["generate_stream"],
+            ORGANIZATIONS_GENERATE_STREAM_ROUTE
+        );
+        assert_eq!(
+            contract["routes"]["project_list"],
+            ORGANIZATIONS_PROJECT_LIST_ROUTE
+        );
+        assert_eq!(
+            contract["routes"]["member_detail"],
+            ORGANIZATIONS_MEMBER_DETAIL_ROUTE
+        );
+        assert_eq!(contract["routes"]["members"], ORGANIZATIONS_MEMBERS_ROUTE);
+        assert_eq!(contract["routes"]["detail"], ORGANIZATIONS_DETAIL_ROUTE);
+        assert_eq!(contract["readiness_probes"].as_array().unwrap().len(), 19);
+        assert_eq!(
+            contract["readiness_probes"][18],
+            "organizations-missing-detail-business-rust"
+        );
+        assert_eq!(
+            contract["owner_profile"]["name"],
+            "phase5-organizations-business-owner"
+        );
+        assert_eq!(
+            contract["owner_profile"]["business_probes"]
+                .as_array()
+                .expect("business probes should be present")
+                .len(),
+            17
+        );
+        assert_eq!(
+            contract["owner_profile"]["business_probes"][13],
+            "organizations-generate-stream-business-rust"
+        );
+        assert_eq!(contract["owner_profile"]["python_fallback_probe_count"], 0);
+        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 4);
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["full_module_freeze_ready"],
+            false
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            false
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["status"],
+            "covered_by_dedicated_rust_owner_profile"
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["readiness_probe_count"],
+            19
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["business_probe_count"],
+            17
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["next_cutover_gate"],
+            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+        );
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("organizations migration policy should be present")
+            .contains("phase5-organizations-business-owner"));
+    }
+
+    #[test]
+    fn should_keep_organizations_route_group_paths_stable() {
+        assert_eq!(ORGANIZATIONS_LIST_CREATE_ROUTE, "/organizations");
+        assert_eq!(
+            ORGANIZATIONS_GENERATE_STREAM_ROUTE,
+            "/organizations/generate-stream"
+        );
+        assert_eq!(
+            ORGANIZATIONS_PROJECT_LIST_ROUTE,
+            "/organizations/project/{project_id}"
+        );
+        assert_eq!(
+            ORGANIZATIONS_MEMBER_DETAIL_ROUTE,
+            "/organizations/members/{member_id}"
+        );
+        assert_eq!(
+            ORGANIZATIONS_MEMBERS_ROUTE,
+            "/organizations/{org_id}/members"
+        );
+        assert_eq!(ORGANIZATIONS_DETAIL_ROUTE, "/organizations/{org_id}");
     }
 }

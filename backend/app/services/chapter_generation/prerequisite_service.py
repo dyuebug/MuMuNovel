@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import TYPE_CHECKING
 
-from app.models.chapter import Chapter
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active single-generation prerequisite contract; this "
+    "Python module is kept only as frozen rollback/source-map material after "
+    "explicit support-shell freeze approval."
+)
+SOURCE_MAP_RUST_OWNER = "backend-rs/src/services/chapter_single_generation_prepare_service.rs"
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_single_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter import Chapter
 
 
 async def check_chapter_generation_prerequisites(
@@ -13,6 +25,10 @@ async def check_chapter_generation_prerequisites(
     chapter: Chapter,
 ) -> tuple[bool, str, list[Chapter]]:
     """Check whether a chapter can start generation based on previous chapters."""
+    from sqlalchemy import select
+
+    from app.models.chapter import Chapter
+
     if chapter.chapter_number == 1:
         return True, "", []
 

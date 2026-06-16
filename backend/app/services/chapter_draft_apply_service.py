@@ -2,18 +2,34 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Mapping, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, TypeVar
+
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active chapter-draft apply response and history-write "
+    "workflow contract; this Python service is kept only as frozen "
+    "rollback/source-map material behind repointed draft route shells."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/api/chapter_draft_routes.rs; "
+    "backend-rs/src/services/chapter_draft_history_service.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_chapter_draft_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.chapter import Chapter
-from app.models.generation_history import GenerationHistory
-from app.services.chapter_content_apply_service import ChapterContentApplyResult, apply_chapter_content_update
-from app.services.chapter_generation_history_service import (
+from app.services.chapter_generation.history_service import (
     build_generation_history_payload,
     build_reviser_apply_history_payload,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter import Chapter
+    from app.models.generation_history import GenerationHistory
+    from app.services.chapter_content_apply_service import ChapterContentApplyResult
 
 
 @dataclass(frozen=True)
@@ -136,6 +152,8 @@ def create_reviser_apply_history_entry_factory(
     stale_applied: bool,
     allow_stale: bool,
 ) -> Callable[[int, int], GenerationHistory]:
+    from app.models.generation_history import GenerationHistory
+
     title = chapter.title or ''
     chapter_number = chapter.chapter_number
     critical_count = int(reviser_result.get('critical_count') or 0)
@@ -182,6 +200,8 @@ def create_candidate_apply_history_entry_factory(
     candidate_content: str,
     quality_metrics: Optional[dict[str, Any]],
 ) -> Callable[[int, int], GenerationHistory]:
+    from app.models.generation_history import GenerationHistory
+
     title = chapter.title or ''
     chapter_number = chapter.chapter_number
     normalized_quality_metrics = dict(quality_metrics or {}) if isinstance(quality_metrics, dict) else {}
@@ -210,6 +230,8 @@ async def apply_draft_content_with_history(
     content: str,
     history_entry_factory: Callable[[int, int], Any],
 ) -> ChapterContentApplyResult:
+    from app.services.chapter_content_apply_service import apply_chapter_content_update
+
     old_word_count = chapter.word_count or len(chapter.content or '')
     new_word_count = len(content)
     history_entry = history_entry_factory(old_word_count, new_word_count)

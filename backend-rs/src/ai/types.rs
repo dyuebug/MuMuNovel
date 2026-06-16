@@ -81,17 +81,6 @@ impl AIRequestError {
         }
     }
 
-    pub fn with_transport_diagnostics(
-        message: impl Into<String>,
-        transport_diagnostics: Value,
-    ) -> Self {
-        Self {
-            message: message.into(),
-            transport_diagnostics: Some(transport_diagnostics),
-            status_code: None,
-        }
-    }
-
     pub fn with_transport_status(
         message: impl Into<String>,
         transport_diagnostics: Value,

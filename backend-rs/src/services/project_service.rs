@@ -15,6 +15,12 @@ use crate::models::{
 
 pub struct ProjectService;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectAccessQueryError {
+    NotFoundOrAccessDenied,
+    Internal(String),
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct WizardCleanupDeletedCounts {
     pub characters: u64,
@@ -252,6 +258,18 @@ impl ProjectService {
             .one(db)
             .await
             .map_err(|e| format!("{}", e))
+    }
+
+    pub async fn ensure_owned_access(
+        db: &DatabaseConnection,
+        project_id: &str,
+        user_id: &str,
+    ) -> Result<(), ProjectAccessQueryError> {
+        Self::get(db, project_id, user_id)
+            .await
+            .map_err(ProjectAccessQueryError::Internal)?
+            .ok_or(ProjectAccessQueryError::NotFoundOrAccessDenied)
+            .map(|_| ())
     }
 
     pub async fn update(
@@ -536,5 +554,22 @@ impl ProjectService {
             outlines: deleted_outlines.rows_affected,
             chapters: deleted_chapters.rows_affected,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProjectAccessQueryError;
+
+    #[test]
+    fn project_access_query_error_equality_is_stable() {
+        assert_eq!(
+            ProjectAccessQueryError::NotFoundOrAccessDenied,
+            ProjectAccessQueryError::NotFoundOrAccessDenied
+        );
+        assert_eq!(
+            ProjectAccessQueryError::Internal("boom".to_string()),
+            ProjectAccessQueryError::Internal("boom".to_string())
+        );
     }
 }

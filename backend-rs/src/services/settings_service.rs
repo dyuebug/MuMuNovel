@@ -1,5 +1,6 @@
 use std::env;
 
+use axum::{http::StatusCode, response::Json};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use serde_json::{json, Value};
@@ -7,18 +8,117 @@ use uuid::Uuid;
 
 use crate::ai::config::AIConfig;
 use crate::models::settings;
-use crate::services::settings_preset_request_service::{
-    CreateSettingsPresetRequest, UpdateSettingsPresetRequest,
-};
-use crate::services::settings_update_request_service::{
-    SettingsApiBackupUrlsField, SettingsUpdateRequest,
-};
 
 const PLACEHOLDER_MASK: &str = "********";
+const WEB_RESEARCH_KEYS: [&str; 9] = [
+    "web_research_enabled",
+    "web_research_exa_enabled",
+    "web_research_grok_enabled",
+    "web_research_exa_api_key",
+    "web_research_exa_base_url",
+    "web_research_grok_api_key",
+    "web_research_grok_base_url",
+    "web_research_grok_model",
+    "web_research_grok_search_enabled",
+];
 
 const WEB_RESEARCH_PREF_KEY: &str = "web_research";
 pub(crate) const SETTINGS_UPDATE_MISSING_DETAIL: &str = "设置不存在，请先创建设置";
 pub(crate) const SETTINGS_DELETE_MISSING_DETAIL: &str = "设置不存在";
+pub(crate) type SettingsRouteError = (StatusCode, Json<Value>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SettingsApiBackupUrlsField {
+    Missing,
+    Invalid,
+    Provided(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SettingsUpdateRequest {
+    pub api_provider: Option<String>,
+    pub clear_api_key: bool,
+    pub api_key: Option<String>,
+    pub api_base_url: Option<String>,
+    pub api_backup_urls: SettingsApiBackupUrlsField,
+    pub provider_type: Option<String>,
+    pub fallback_strategy: Option<String>,
+    pub azure_api_version: Option<String>,
+    pub llm_model: Option<String>,
+    pub provider_switch_requested: bool,
+    pub temperature: Option<f64>,
+    pub max_tokens: Option<i64>,
+    pub system_prompt: Option<String>,
+    pub preferences: Option<String>,
+    pub web_research_patch: Value,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct EffectiveSettingsOverrides {
+    pub provider: Option<String>,
+    pub api_key: Option<String>,
+    pub api_base_url: Option<String>,
+    pub model: Option<String>,
+    pub temperature: Option<f64>,
+    pub max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ResolvedEffectiveSettings {
+    pub provider: String,
+    pub api_key: String,
+    pub base_url: String,
+    pub model: String,
+    pub temperature: f64,
+    pub max_tokens: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateSettingsPresetRequest {
+    name: String,
+    description: Option<Value>,
+    config: Value,
+}
+
+impl CreateSettingsPresetRequest {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn description(&self) -> Option<&Value> {
+        self.description.as_ref()
+    }
+
+    pub fn config(&self) -> &Value {
+        &self.config
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UpdateSettingsPresetRequest {
+    name: Option<String>,
+    description: Option<Value>,
+    has_description: bool,
+    config: Option<Value>,
+}
+
+impl UpdateSettingsPresetRequest {
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn description(&self) -> Option<&Value> {
+        self.description.as_ref()
+    }
+
+    pub fn has_description(&self) -> bool {
+        self.has_description
+    }
+
+    pub fn config(&self) -> Option<&Value> {
+        self.config.as_ref()
+    }
+}
 
 fn web_research_defaults() -> Value {
     json!({
@@ -90,6 +190,114 @@ fn set_web_research(prefs_json: Option<&str>, wr: &Value) -> serde_json::Result<
     serde_json::to_string(&prefs)
 }
 
+pub(crate) fn build_settings_update_request_from_route_body(body: &Value) -> SettingsUpdateRequest {
+    SettingsUpdateRequest {
+        api_provider: body
+            .get("api_provider")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        clear_api_key: body
+            .get("clear_api_key")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        api_key: body
+            .get("api_key")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        api_base_url: body
+            .get("api_base_url")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        api_backup_urls: build_api_backup_urls_field(body.get("api_backup_urls")),
+        provider_type: body
+            .get("provider_type")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        fallback_strategy: body
+            .get("fallback_strategy")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        azure_api_version: body
+            .get("azure_api_version")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        llm_model: body
+            .get("llm_model")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        provider_switch_requested: body.get("provider_type").is_some()
+            || body.get("api_provider").is_some(),
+        temperature: body.get("temperature").and_then(Value::as_f64),
+        max_tokens: body.get("max_tokens").and_then(Value::as_i64),
+        system_prompt: body
+            .get("system_prompt")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        preferences: body
+            .get("preferences")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        web_research_patch: extract_web_research_patch_from_route_body(body),
+    }
+}
+
+pub(crate) fn build_create_settings_preset_request_from_route_payload(
+    body: &Value,
+) -> CreateSettingsPresetRequest {
+    CreateSettingsPresetRequest {
+        name: body
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        description: body.get("description").cloned(),
+        config: body.get("config").cloned().unwrap_or_else(|| json!({})),
+    }
+}
+
+pub(crate) fn build_update_settings_preset_request_from_route_payload(
+    body: &Value,
+) -> UpdateSettingsPresetRequest {
+    UpdateSettingsPresetRequest {
+        name: body
+            .get("name")
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        description: body.get("description").cloned(),
+        has_description: body.get("description").is_some(),
+        config: body.get("config").cloned(),
+    }
+}
+
+fn build_api_backup_urls_field(value: Option<&Value>) -> SettingsApiBackupUrlsField {
+    match value {
+        None => SettingsApiBackupUrlsField::Missing,
+        Some(Value::Array(items)) => SettingsApiBackupUrlsField::Provided(
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(String::from))
+                .collect(),
+        ),
+        Some(_) => SettingsApiBackupUrlsField::Invalid,
+    }
+}
+
+fn extract_web_research_patch_from_route_body(body: &Value) -> Value {
+    let mut patch = json!({});
+
+    if let Some(obj) = body.as_object() {
+        if let Some(patch_obj) = patch.as_object_mut() {
+            for key in &WEB_RESEARCH_KEYS {
+                if let Some(value) = obj.get(*key) {
+                    patch_obj.insert((*key).to_string(), value.clone());
+                }
+            }
+        }
+    }
+
+    patch
+}
+
 pub struct SettingsService;
 
 fn format_timestamp(value: NaiveDateTime) -> String {
@@ -108,6 +316,26 @@ fn env_u32(key: &str, default: u32) -> u32 {
         .ok()
         .and_then(|v| v.trim().parse::<u32>().ok())
         .unwrap_or(default)
+}
+
+fn trim_to_non_empty(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn map_settings_internal_error(detail: String) -> SettingsRouteError {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({"detail": detail})),
+    )
+}
+
+fn map_settings_bad_request(detail: impl Into<String>) -> SettingsRouteError {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({"detail": detail.into()})),
+    )
 }
 
 fn normalize_api_key(key: Option<String>) -> Option<String> {
@@ -246,6 +474,14 @@ pub fn default_model_for_provider(provider: &str) -> String {
     }
 }
 
+fn default_runtime_model_for_provider(provider: &str) -> String {
+    match provider {
+        "anthropic" => "claude-3-5-sonnet-latest".to_string(),
+        "gemini" => "gemini-2.5-flash".to_string(),
+        _ => "gpt-4o-mini".to_string(),
+    }
+}
+
 fn default_temperature() -> f64 {
     env::var("DEFAULT_TEMPERATURE")
         .ok()
@@ -273,7 +509,7 @@ fn env_base_url_for_provider(provider: &str) -> Option<String> {
     }
 }
 
-fn normalize_openai_compatible_base_url(base_url: &str) -> String {
+pub(crate) fn normalize_openai_compatible_base_url(base_url: &str) -> String {
     let trimmed = base_url.trim().trim_end_matches('/');
     if trimmed.is_empty() {
         return "https://api.openai.com/v1".to_string();
@@ -288,6 +524,32 @@ fn normalize_openai_compatible_base_url(base_url: &str) -> String {
     }
 
     trimmed.to_string()
+}
+
+fn normalize_anthropic_base_url(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return "https://api.anthropic.com".to_string();
+    }
+
+    trimmed.to_string()
+}
+
+fn normalize_gemini_base_url(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return "https://generativelanguage.googleapis.com/v1beta".to_string();
+    }
+
+    trimmed.to_string()
+}
+
+fn resolve_effective_provider_base_url(provider: &str, raw_base_url: &str) -> String {
+    match provider {
+        "gemini" => normalize_gemini_base_url(raw_base_url),
+        "anthropic" => normalize_anthropic_base_url(raw_base_url),
+        _ => normalize_openai_compatible_base_url(raw_base_url),
+    }
 }
 
 fn resolve_provider(
@@ -371,7 +633,79 @@ async fn load_or_create_settings_model(
     Ok(model.insert(db).await?)
 }
 
+async fn load_settings_model(
+    db: &DatabaseConnection,
+    user_id: &str,
+) -> Result<Option<settings::Model>, String> {
+    settings::Entity::find()
+        .filter(settings::Column::UserId.eq(user_id))
+        .one(db)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 impl SettingsService {
+    pub(crate) async fn resolve_effective_runtime_settings(
+        db: &DatabaseConnection,
+        user_id: &str,
+        overrides: EffectiveSettingsOverrides,
+    ) -> Result<ResolvedEffectiveSettings, SettingsRouteError> {
+        let stored = load_settings_model(db, user_id)
+            .await
+            .map_err(map_settings_internal_error)?;
+
+        let stored_provider = stored
+            .as_ref()
+            .map(|model| model.provider_type.clone())
+            .unwrap_or_else(|| "openai".to_string());
+        let effective_provider = trim_to_non_empty(overrides.provider)
+            .map(|value| value.to_lowercase())
+            .unwrap_or(stored_provider);
+
+        let stored_key = stored
+            .as_ref()
+            .map(|model| model.api_key.trim().to_string())
+            .unwrap_or_default();
+        let effective_key = trim_to_non_empty(overrides.api_key).unwrap_or(stored_key);
+        if effective_key.is_empty() {
+            return Err(map_settings_bad_request("API key is required"));
+        }
+
+        let stored_base = stored
+            .as_ref()
+            .map(|model| model.api_base_url.trim().to_string())
+            .unwrap_or_default();
+        let raw_base_url = trim_to_non_empty(overrides.api_base_url).unwrap_or(stored_base);
+        let effective_base_url =
+            resolve_effective_provider_base_url(&effective_provider, &raw_base_url);
+
+        let stored_model = stored
+            .as_ref()
+            .map(|model| model.llm_model.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| default_runtime_model_for_provider(&effective_provider));
+        let effective_model = trim_to_non_empty(overrides.model).unwrap_or(stored_model);
+
+        Ok(ResolvedEffectiveSettings {
+            provider: effective_provider,
+            api_key: effective_key,
+            base_url: effective_base_url,
+            model: effective_model,
+            temperature: overrides.temperature.unwrap_or(
+                stored
+                    .as_ref()
+                    .map(|model| model.temperature)
+                    .unwrap_or(0.7),
+            ),
+            max_tokens: overrides.max_tokens.unwrap_or(
+                stored
+                    .as_ref()
+                    .map(|model| model.max_tokens as u32)
+                    .unwrap_or(32000),
+            ),
+        })
+    }
+
     pub(crate) async fn resolve_web_research_settings(
         db: &DatabaseConnection,
         user_id: &str,
@@ -727,8 +1061,6 @@ impl SettingsService {
             temperature: temperature_override.unwrap_or(s.temperature),
             max_tokens,
             system_prompt: s.system_prompt,
-            max_retries: 3,
-            request_delay_ms: 200,
             prefer_normalized_v1_candidate: false,
             read_timeout_secs: None,
             transport_max_retries: None,
@@ -762,8 +1094,6 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
-    use crate::services::settings_preset_request_service::build_create_settings_preset_request_from_route_payload;
-    use crate::services::settings_update_request_service::build_settings_update_request_from_route_body;
 
     async fn setup_settings_db() -> DatabaseConnection {
         let db = Database::connect("sqlite::memory:")
@@ -1107,6 +1437,43 @@ mod tests {
         assert_eq!(created["config"]["temperature"], json!(0.5));
         assert_eq!(created["config"]["max_tokens"], json!(2048));
         assert_eq!(created["config"]["system_prompt"], json!("current-prompt"));
+    }
+
+    #[test]
+    fn openai_compatible_base_url_defaults_to_v1() {
+        assert_eq!(
+            normalize_openai_compatible_base_url(""),
+            "https://api.openai.com/v1"
+        );
+        assert_eq!(
+            normalize_openai_compatible_base_url("https://example.com"),
+            "https://example.com/v1"
+        );
+    }
+
+    #[test]
+    fn anthropic_and_gemini_base_urls_keep_provider_specific_defaults() {
+        assert_eq!(
+            normalize_anthropic_base_url(""),
+            "https://api.anthropic.com"
+        );
+        assert_eq!(
+            normalize_gemini_base_url(""),
+            "https://generativelanguage.googleapis.com/v1beta"
+        );
+    }
+
+    #[test]
+    fn runtime_default_model_mapping_keeps_runtime_probe_defaults() {
+        assert_eq!(
+            default_runtime_model_for_provider("anthropic"),
+            "claude-3-5-sonnet-latest"
+        );
+        assert_eq!(
+            default_runtime_model_for_provider("gemini"),
+            "gemini-2.5-flash"
+        );
+        assert_eq!(default_runtime_model_for_provider("openai"), "gpt-4o-mini");
     }
 }
 

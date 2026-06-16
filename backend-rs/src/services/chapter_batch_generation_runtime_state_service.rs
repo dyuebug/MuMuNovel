@@ -1,4575 +1,314 @@
-use chrono::{NaiveDateTime, Utc};
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
-};
 use serde_json::{json, Value};
-use tokio::time::{sleep, Duration};
+pub(crate) mod attempt_input_owner;
+pub(crate) mod follow_up_analysis_owner;
+pub(crate) mod quality_payload_owner;
+pub(crate) mod resume_restore_owner;
+pub(crate) mod resume_semantics_owner;
+pub(crate) mod retry_routing_owner;
+pub(crate) mod runtime_checkpoint_owner;
+pub(crate) mod runtime_driver_owner;
+pub(crate) mod runtime_launch_owner;
+pub(crate) mod runtime_persistence_owner;
+pub(crate) mod runtime_snapshot_owner;
+pub(crate) mod selected_candidate_event_owner;
+pub(crate) mod startup_and_command_projection_owner;
+pub(crate) mod terminal_runtime_patch_owner;
+pub(crate) mod terminal_semantics_owner;
 
-use crate::ai::{service::AIService, AIConfig};
-use crate::models::{batch_generation_snapshot, batch_generation_task, chapter, plot_analysis};
-use crate::services::chapter_analysis_runtime_service::{
-    analyze_generated_chapter_follow_up, prepare_chapter_analysis_execution,
+pub(crate) use self::attempt_input_owner::{
+    build_batch_generation_attempt_input_owner_contract, BatchGenerationAttemptInputPlan,
 };
-use crate::services::chapter_batch_generation_read_context_service::build_batch_generation_status_task_payload_with_quality_context;
+#[cfg(test)]
+pub(crate) use self::follow_up_analysis_owner::{
+    build_batch_generation_analysis_completed_snapshot, format_analysis_error_message,
+    BatchGenerationAnalysisAttemptPlan, BatchGenerationAnalysisAttemptResolution,
+    BatchGenerationAnalysisCompletionPersistencePlan, BatchGenerationAnalysisRoutingPlan,
+    BatchGenerationAnalysisStartedPersistencePlan,
+};
+pub(crate) use self::follow_up_analysis_owner::{
+    build_batch_generation_follow_up_analysis_owner_contract, BatchGenerationFollowUpAnalysisPlan,
+};
+pub(crate) use self::quality_payload_owner::{
+    build_batch_generation_quality_payload_owner_contract,
+    build_batch_generation_runtime_state_payload_from_current_quality,
+    build_batch_generation_runtime_state_payload_preserving_quality_state,
+    build_current_chapter_latest_quality_metrics_from_plot_analysis,
+    build_current_chapter_quality_summary_from_plot_analysis,
+};
+#[cfg(test)]
+pub(crate) use self::resume_restore_owner::build_batch_generation_resume_runtime_checkpoint;
+pub(crate) use self::resume_restore_owner::restore_batch_generation_runtime_compat_options_from_persisted_runtime_context;
+pub(crate) use self::resume_restore_owner::{
+    build_batch_generation_resume_restore_owner_contract,
+    prepare_batch_generation_resume_restored_runtime_state, BatchGenerationPersistedRuntimeContext,
+    PrepareBatchGenerationResumeRuntimeStateError, PreparedBatchGenerationResumeRuntimeLaunch,
+    PreparedSingleChapterResumeRuntimeLaunch, RestoredResumeRuntimeStateProjection,
+};
+pub(crate) use self::resume_semantics_owner::{
+    build_batch_generation_resume_semantics_owner_contract, ResolveResumeExecutionSelectionError,
+    ResumeBatchGenerationCommandState, ResumeExecutionSelection, ResumeResetSemantics,
+};
+#[cfg(test)]
+pub(crate) use self::retry_routing_owner::{
+    batch_generation_retry_backoff_seconds, build_batch_generation_failed_task_error_message,
+    should_retry_batch_generation_attempt, BatchGenerationRetryPersistenceContract,
+    BatchGenerationRetryPersistencePlan, BatchGenerationRetryProgressionPlan,
+};
+pub(crate) use self::retry_routing_owner::{
+    build_batch_generation_retry_routing_owner_contract, BatchGenerationGenericFailureRoutingPlan,
+    BatchGenerationQualityGateRoutingPlan,
+};
+pub(crate) use self::runtime_checkpoint_owner::{
+    build_batch_generation_runtime_checkpoint_for_stage,
+    build_batch_generation_runtime_checkpoint_owner_contract, BatchGenerationFailureKind,
+    BatchGenerationSnapshotStage,
+};
+#[cfg(test)]
+pub(crate) use self::runtime_checkpoint_owner::{
+    build_pending_batch_generation_runtime_checkpoint,
+    checkpoint_message_for_batch_generation_failure, compute_batch_running_progress,
+};
+pub(crate) use self::runtime_driver_owner::{
+    build_batch_generation_runtime_driver_owner_contract, BatchGenerationAttemptProgression,
+    BatchGenerationRuntimeDriverProgression, BatchGenerationRuntimeLifecyclePlan,
+    BatchGenerationStepProgress,
+};
+#[cfg(test)]
+pub(crate) use self::runtime_driver_owner::{
+    BatchGenerationPostAnalysisTerminalOutcome, BatchGenerationPostAnalysisTerminalPlan,
+    BatchGenerationPostWriteGuardOutcome, BatchGenerationPostWriteGuardPlan,
+    PreparedBatchGenerationStepExecution,
+};
+pub(crate) use self::runtime_launch_owner::{
+    build_batch_generation_execution_input,
+    build_batch_generation_runtime_launch_input_from_runtime_state_seed,
+    build_batch_generation_runtime_launch_owner_contract, dispatch_batch_generation_runtime,
+    prepare_batch_generation_runtime_launch_input_from_request_runtime_state,
+    BatchGenerationExecutionInput, BatchGenerationRuntimeSession,
+};
+#[cfg(test)]
+pub(crate) use self::runtime_persistence_owner::{
+    append_failed_chapter_entry, build_batch_generation_failed_chapter_entry,
+    build_quality_gate_blocked_failed_chapter_entry,
+    extract_quality_gate_failed_metrics_from_runtime_state, ModelFieldUpdate, TaskTimestampUpdate,
+};
+pub(crate) use self::runtime_persistence_owner::{
+    build_batch_generation_runtime_persistence_owner_contract,
+    BatchGenerationResumeTaskResetMutationPlan, BatchGenerationRuntimePersistencePlan,
+    BatchGenerationTaskStage,
+};
+pub(crate) use self::runtime_snapshot_owner::{
+    build_batch_generation_runtime_snapshot_owner_contract, merge_batch_generation_runtime_state,
+    persist_batch_generation_runtime_plan, persist_batch_generation_runtime_snapshot_replace,
+    project_merged_batch_generation_runtime_state, upsert_batch_generation_runtime_snapshot,
+};
+pub(crate) use self::selected_candidate_event_owner::{
+    build_batch_generation_selected_candidate_event_owner_contract,
+    build_batch_generation_selected_candidate_event_snapshot,
+};
+#[cfg(test)]
+pub(crate) use self::startup_and_command_projection_owner::PrepareBatchGenerationCancelPersistenceError;
+pub(crate) use self::startup_and_command_projection_owner::{
+    build_batch_generation_startup_and_command_projection_owner_contract,
+    build_batch_generation_startup_snapshot_and_runtime_launch_input_from_runtime_state_seed,
+    cancel_owned_batch_generation_runtime_command, reset_batch_generation_task_for_resume,
+    BatchGenerationQueuedCreateResponseChapter, BatchGenerationQueuedSnapshotPlan,
+    BatchGenerationResumeResetPersistencePlan, CancelBatchGenerationTaskCommandError,
+};
+#[cfg(test)]
+pub(crate) use self::startup_and_command_projection_owner::{
+    prepare_batch_generation_cancel_persistence_plan, BatchGenerationCancelledPersistencePlan,
+    BatchGenerationResumeSnapshotPlan,
+};
+pub(crate) use self::terminal_runtime_patch_owner::{
+    apply_manual_review_terminal_fields, build_generation_terminal_runtime_patch_owner_contract,
+    build_quality_gate_blocked_runtime_state_patch_from_workflow_state,
+    build_retry_quality_runtime_patch_contract_from_workflow_state,
+};
+pub(crate) use self::terminal_semantics_owner::{
+    build_batch_generation_terminal_semantics_owner_contract,
+    resolve_batch_generation_quality_gate_terminal_semantics,
+};
+
 use crate::services::chapter_batch_generation_task_payload_base_service::{
-    build_batch_generation_command_summary_payload,
-    build_batch_generation_task_response_payload_from_runtime_parts,
-    resolve_failed_terminal_semantics_from_sources, BatchGenerationCommandProgressSummary,
-    BatchGenerationFailedTerminalKind, BatchGenerationFailedTerminalSemantics,
-    BatchGenerationQualityStatusContext, BatchGenerationTaskResponsePayloadOptions,
-    BatchGenerationTaskResponseQualityPayload,
+    estimated_task_minutes, BatchGenerationQualityStatusContext,
 };
-use crate::services::chapter_batch_generation_write_workflow_service::load_recent_batch_story_repair_quality_summary;
-use crate::services::chapter_generation_execution_config_service::prepare_generation_execution_config;
-use crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig;
 use crate::services::chapter_generation_execution_contract_service::{
-    build_prompt_overrides_from_compat_options, SingleChapterGenerationCompatOptions,
+    build_batch_request_runtime_state_owner_contract, PreparedGenerationExecutionConfig,
 };
-use crate::services::chapter_generation_prerequisite_service::check_chapter_generation_prerequisites;
-use crate::services::chapter_generation_quality_runtime_context_service::{
-    apply_batch_quality_runtime_context_to_payload,
-    apply_generation_quality_runtime_context_to_payload,
-    resolve_batch_quality_runtime_context_from_current_quality,
-    resolve_batch_quality_runtime_context_from_persisted_sources,
-    resolve_batch_quality_runtime_context_from_snapshot_and_runtime_state,
-    resolve_batch_quality_runtime_context_preserving_existing_quality_state,
-    resolve_generation_quality_runtime_context_from_persisted_sources,
-    BatchGenerationQualityRuntimeContext,
+use crate::services::chapter_generation_runtime_service::quality_runtime_context_owner::build_generation_quality_runtime_owner_contract;
+use crate::services::chapter_generation_runtime_service::snapshot_persistence_owner::{
+    build_chapter_generation_snapshot_owner_contract, load_chapter_generation_snapshot,
 };
-use crate::services::chapter_generation_request_runtime_state_service::{
-    active_story_repair_payload_from_runtime_state, parse_batch_generation_request_runtime_state,
-    BatchGenerationRequestRuntimeState,
-};
-use crate::services::chapter_generation_research_payload_service::build_single_chapter_research_provider_payload;
-use crate::services::chapter_generation_runtime_service::{
-    generate_and_persist_chapter_content_with_provider_payload, GeneratedChapterResult,
-};
-use crate::services::chapter_generation_snapshot_service::load_chapter_generation_snapshot;
-use crate::services::chapter_generation_snapshot_service::{
-    merge_chapter_generation_runtime_state, persist_chapter_generation_runtime_snapshot,
-    upsert_chapter_generation_runtime_snapshot, ChapterGenerationSnapshotWriteMode,
-};
-use crate::services::chapter_generation_task_semantics_service::{
-    batch_generation_task_kind, batch_generation_task_type, BatchGenerationTaskKind,
-};
-use crate::services::chapter_generation_terminal_runtime_patch_service::{
-    apply_manual_review_terminal_fields as shared_apply_manual_review_terminal_fields,
-    build_quality_gate_blocked_runtime_state_patch_from_workflow_state as shared_build_quality_gate_blocked_runtime_state_patch_from_workflow_state,
-    build_retry_quality_runtime_patch_contract_from_workflow_state as shared_build_retry_quality_runtime_patch_contract_from_workflow_state,
-};
-use crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationTarget;
-use crate::services::chapter_single_generation_runtime_restore_service::prepare_single_chapter_runtime_launch_input_from_request_runtime_state;
-use crate::services::chapter_single_generation_runtime_state_service::SingleGenerationRuntimeLaunchInput;
-use crate::services::chapter_story_repair_quality_context_service::{
-    resolve_active_story_repair_payload_with_quality_fallback,
-    resolve_resumed_active_story_repair_payload,
-    restore_story_repair_compat_options_from_active_snapshot,
-};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BatchGenerationFailureKind {
-    MissingChapter,
-    LoadChapterError,
-    GenerationError,
-    QualityGateBlocked,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BatchGenerationSnapshotStage {
-    Queued,
-    Resumed { include_progress_totals: bool },
-    Preparing,
-    ChapterStarted,
-    ChapterSucceeded,
-    Cancelled,
-    Failed(BatchGenerationFailureKind),
-}
-
-pub(crate) fn build_pending_batch_generation_runtime_checkpoint(
-    last_event: &str,
-    last_message: &str,
-    chapter_id: Option<&str>,
-    current_chapter_number: Option<i32>,
-    progress_totals: Option<(i32, i32)>,
-) -> Value {
-    let mut checkpoint = json!({
-        "phase": "pending",
-        "progress": 0,
-        "status": "pending",
-        "last_event": last_event,
-        "last_message": last_message,
-        "chapter_id": chapter_id,
-        "current_chapter_id": chapter_id,
-        "current_chapter_number": current_chapter_number,
-        "updated_at": Utc::now().to_rfc3339(),
-    });
-    if let Some((completed, total)) = progress_totals {
-        if let Some(object) = checkpoint.as_object_mut() {
-            object.insert("completed".to_string(), json!(completed.max(0)));
-            object.insert("total".to_string(), json!(total.max(0)));
-        }
-    }
-    checkpoint
-}
-
-pub(crate) fn compute_batch_running_progress(completed_chapters: i32, total_chapters: i32) -> i32 {
-    if total_chapters <= 0 {
-        return 15;
-    }
-
-    let base_progress = ((completed_chapters * 100) / total_chapters).clamp(0, 100);
-    (base_progress + 15).clamp(15, 95)
-}
-
-pub(crate) fn checkpoint_message_for_batch_generation_failure(
-    kind: BatchGenerationFailureKind,
-) -> &'static str {
-    match kind {
-        BatchGenerationFailureKind::MissingChapter => "批量生成失败：章节不存在",
-        BatchGenerationFailureKind::LoadChapterError => "批量生成失败：加载章节异常",
-        BatchGenerationFailureKind::GenerationError => "批量生成失败",
-        BatchGenerationFailureKind::QualityGateBlocked => "批量生成失败：质量门禁阻断，需人工复核",
-    }
-}
-
-fn clear_batch_analysis_runtime_metadata(checkpoint: &mut Value) {
-    if let Some(object) = checkpoint.as_object_mut() {
-        object.insert("analysis_task_id".to_string(), Value::Null);
-        object.insert("analysis_task_message".to_string(), Value::Null);
-        object.insert("analysis_task_progress".to_string(), Value::Null);
-        object.insert("analysis_started_chapter_id".to_string(), Value::Null);
-        object.insert("analysis_started_chapter_number".to_string(), Value::Null);
-        object.insert("analysis_started_at".to_string(), Value::Null);
-    }
-}
-
-impl BatchGenerationSnapshotStage {
-    fn build_checkpoint(
-        self,
-        chapter_id: Option<&str>,
-        completed_chapters: i32,
-        total_chapters: i32,
-        current_chapter_number: Option<i32>,
-    ) -> Value {
-        let build_runtime_checkpoint =
-            |phase: &str, progress: i32, status: &str, last_event: &str, last_message: &str| {
-                let mut checkpoint = json!({
-                    "phase": phase,
-                    "progress": progress.clamp(0, 100),
-                    "status": status,
-                    "last_event": last_event,
-                    "last_message": last_message,
-                    "chapter_id": chapter_id,
-                    "current_chapter_id": chapter_id,
-                    "current_chapter_number": current_chapter_number,
-                    "updated_at": Utc::now().to_rfc3339(),
-                });
-                if let Some(object) = checkpoint.as_object_mut() {
-                    object.insert("completed".to_string(), json!(completed_chapters.max(0)));
-                    object.insert("total".to_string(), json!(total_chapters.max(0)));
-                }
-                checkpoint
-            };
-
-        match self {
-            BatchGenerationSnapshotStage::Queued => {
-                let mut checkpoint = build_pending_batch_generation_runtime_checkpoint(
-                    "queued",
-                    "批量生成任务已创建，等待开始...",
-                    chapter_id,
-                    current_chapter_number,
-                    Some((0, total_chapters)),
-                );
-                clear_batch_analysis_runtime_metadata(&mut checkpoint);
-                checkpoint
-            }
-            BatchGenerationSnapshotStage::Resumed {
-                include_progress_totals,
-            } => {
-                let mut checkpoint = build_pending_batch_generation_runtime_checkpoint(
-                    "resume",
-                    "批量生成任务已恢复，等待重新开始...",
-                    chapter_id,
-                    current_chapter_number,
-                    include_progress_totals.then_some((0, total_chapters)),
-                );
-                clear_batch_analysis_runtime_metadata(&mut checkpoint);
-                checkpoint
-            }
-            BatchGenerationSnapshotStage::Preparing => {
-                let mut checkpoint = build_runtime_checkpoint(
-                    "generating",
-                    10,
-                    "running",
-                    "progress",
-                    "正在准备批量生成...",
-                );
-                clear_batch_analysis_runtime_metadata(&mut checkpoint);
-                checkpoint
-            }
-            BatchGenerationSnapshotStage::ChapterStarted => {
-                let mut checkpoint = build_runtime_checkpoint(
-                    "generating",
-                    compute_batch_running_progress(completed_chapters, total_chapters),
-                    "running",
-                    "chapter_start",
-                    &match current_chapter_number {
-                        Some(chapter_number) => format!("正在生成第 {} 章...", chapter_number),
-                        None => "正在生成章节...".to_string(),
-                    },
-                );
-                clear_batch_analysis_runtime_metadata(&mut checkpoint);
-                checkpoint
-            }
-            BatchGenerationSnapshotStage::ChapterSucceeded => {
-                if completed_chapters >= total_chapters {
-                    return build_runtime_checkpoint(
-                        "completed",
-                        100,
-                        "completed",
-                        "done",
-                        "批量生成完成",
-                    );
-                }
-
-                let completed_progress = if total_chapters <= 0 {
-                    100
-                } else {
-                    ((completed_chapters * 100) / total_chapters).clamp(0, 100)
-                };
-
-                build_runtime_checkpoint(
-                    "generating",
-                    completed_progress,
-                    "running",
-                    "progress",
-                    "当前章节生成完成，继续下一章...",
-                )
-            }
-            BatchGenerationSnapshotStage::Cancelled => {
-                let mut checkpoint = build_runtime_checkpoint(
-                    "cancelled",
-                    100,
-                    "cancelled",
-                    "cancelled",
-                    "批量生成已取消",
-                );
-                clear_batch_analysis_runtime_metadata(&mut checkpoint);
-                checkpoint
-            }
-            BatchGenerationSnapshotStage::Failed(failure_kind) => {
-                let mut checkpoint = build_runtime_checkpoint(
-                    "failed",
-                    100,
-                    "failed",
-                    "error",
-                    checkpoint_message_for_batch_generation_failure(failure_kind),
-                );
-                clear_batch_analysis_runtime_metadata(&mut checkpoint);
-                checkpoint
-            }
-        }
-    }
-}
-
-pub(crate) fn build_batch_generation_runtime_checkpoint_for_stage(
-    stage: BatchGenerationSnapshotStage,
-    chapter_id: Option<&str>,
-    current_chapter_number: Option<i32>,
-    completed_chapters: i32,
-    total_chapters: i32,
-) -> Value {
-    stage.build_checkpoint(
-        chapter_id,
-        completed_chapters,
-        total_chapters,
-        current_chapter_number,
-    )
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResumeBatchGenerationCommandState {
-    pub(crate) batch_id: String,
-    pub(crate) project_id: String,
-    pub(crate) status: String,
-    pub(crate) chapter_count: i32,
-    pub(crate) chapter_ids: Value,
-    pub(crate) target_word_count: i32,
-    pub(crate) total_chapters: i32,
-    pub(crate) completed_chapters: i32,
-    pub(crate) failed_chapters: Value,
-    pub(crate) current_retry_count: i32,
-    pub(crate) current_chapter_id: Option<String>,
-    pub(crate) current_chapter_number: Option<i32>,
-    pub(crate) max_retries: i32,
-    pub(crate) created_at: Option<NaiveDateTime>,
-}
-
-impl ResumeBatchGenerationCommandState {
-    pub(crate) fn from_task(task: &batch_generation_task::Model) -> Self {
-        Self {
-            batch_id: task.id.clone(),
-            project_id: task.project_id.clone(),
-            status: task.status.clone(),
-            chapter_count: task.chapter_count,
-            chapter_ids: task.chapter_ids.clone(),
-            target_word_count: task.target_word_count,
-            total_chapters: task.total_chapters,
-            completed_chapters: task.completed_chapters,
-            failed_chapters: task.failed_chapters.clone(),
-            current_retry_count: task.current_retry_count,
-            current_chapter_id: task.current_chapter_id.clone(),
-            current_chapter_number: task.current_chapter_number,
-            max_retries: task.max_retries,
-            created_at: task.created_at,
-        }
-    }
-
-    pub(crate) fn task_kind(&self) -> BatchGenerationTaskKind {
-        batch_generation_task_kind(self.chapter_count, &self.chapter_ids)
-    }
-
-    pub(crate) fn resolve_runtime_semantics(&self) -> ResumeRuntimeSemantics {
-        match self.task_kind() {
-            BatchGenerationTaskKind::SingleChapter => ResumeRuntimeSemantics {
-                current_chapter_id: self.current_chapter_id.clone(),
-                current_chapter_number: self.current_chapter_number,
-                include_progress_totals: false,
-            },
-            BatchGenerationTaskKind::Batch => ResumeRuntimeSemantics {
-                current_chapter_id: None,
-                current_chapter_number: None,
-                include_progress_totals: true,
-            },
-        }
-    }
-
-    pub(crate) fn resolve_reset_semantics(&self) -> ResumeResetSemantics {
-        let runtime = self.resolve_runtime_semantics();
-        ResumeResetSemantics {
-            status: "pending",
-            current_chapter_id: runtime.current_chapter_id,
-            current_chapter_number: runtime.current_chapter_number,
-            include_progress_totals: runtime.include_progress_totals,
-            completed_chapters: 0,
-            failed_chapters: json!([]),
-            current_retry_count: 0,
-        }
-    }
-
-    pub(crate) fn resolve_execution_selection(
-        &self,
-    ) -> Result<ResumeExecutionSelection, ResolveResumeExecutionSelectionError> {
-        match self.task_kind() {
-            BatchGenerationTaskKind::SingleChapter => self
-                .current_chapter_id
-                .clone()
-                .map(|chapter_id| ResumeExecutionSelection::SingleChapter { chapter_id })
-                .ok_or(ResolveResumeExecutionSelectionError::NoResumableChaptersFound),
-            BatchGenerationTaskKind::Batch => self
-                .resolve_remaining_batch_chapter_ids()
-                .map(|chapter_ids| ResumeExecutionSelection::Batch { chapter_ids }),
-        }
-    }
-
-    fn resolve_remaining_batch_chapter_ids(
-        &self,
-    ) -> Result<Vec<String>, ResolveResumeExecutionSelectionError> {
-        let chapter_ids = self.parse_batch_chapter_ids();
-        if chapter_ids.is_empty() {
-            return Err(ResolveResumeExecutionSelectionError::NoResumableChaptersFound);
-        }
-
-        let resume_start_index = self
-            .current_chapter_id
-            .as_deref()
-            .and_then(|current_chapter_id| {
-                chapter_ids
-                    .iter()
-                    .position(|chapter_id| chapter_id == current_chapter_id)
-            })
-            .unwrap_or_else(|| self.completed_chapters.max(0) as usize);
-
-        if resume_start_index >= chapter_ids.len() {
-            return Err(ResolveResumeExecutionSelectionError::NoChaptersLeftToResume);
-        }
-
-        Ok(chapter_ids[resume_start_index..].to_vec())
-    }
-
-    fn parse_batch_chapter_ids(&self) -> Vec<String> {
-        self.chapter_ids
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|item| {
-                item.as_str().map(str::to_string).or_else(|| {
-                    item.get("id")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string)
-                })
-            })
-            .collect()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResumeRuntimeSemantics {
-    pub(crate) current_chapter_id: Option<String>,
-    pub(crate) current_chapter_number: Option<i32>,
-    pub(crate) include_progress_totals: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResumeResetSemantics {
-    pub(crate) status: &'static str,
-    pub(crate) current_chapter_id: Option<String>,
-    pub(crate) current_chapter_number: Option<i32>,
-    pub(crate) include_progress_totals: bool,
-    pub(crate) completed_chapters: i32,
-    pub(crate) failed_chapters: Value,
-    pub(crate) current_retry_count: i32,
-}
-
-impl ResumeResetSemantics {
-    pub(crate) fn build_resume_checkpoint(&self, total_chapters: i32) -> Value {
-        build_batch_generation_runtime_checkpoint_for_stage(
-            BatchGenerationSnapshotStage::Resumed {
-                include_progress_totals: self.include_progress_totals,
-            },
-            self.current_chapter_id.as_deref(),
-            self.current_chapter_number,
-            self.completed_chapters,
-            total_chapters,
-        )
-    }
-
-    pub(crate) fn build_resume_checkpoint_with_seed(
-        &self,
-        total_chapters: i32,
-        runtime_state_seed: Option<Value>,
-    ) -> Value {
-        let mut checkpoint = self.build_resume_checkpoint(total_chapters);
-        if let (Some(checkpoint_object), Some(Value::Object(seed_object))) =
-            (checkpoint.as_object_mut(), runtime_state_seed)
-        {
-            checkpoint_object.extend(seed_object);
-        }
-        checkpoint
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ResumeExecutionSelection {
-    SingleChapter { chapter_id: String },
-    Batch { chapter_ids: Vec<String> },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ResolveResumeExecutionSelectionError {
-    NoResumableChaptersFound,
-    NoChaptersLeftToResume,
-}
-
-#[cfg(test)]
-mod resume_semantics_contract_tests {
-    use serde_json::json;
-
-    use crate::models::batch_generation_task;
-    use crate::services::chapter_generation_task_semantics_service::BatchGenerationTaskKind;
-
-    use super::{
-        ResolveResumeExecutionSelectionError, ResumeBatchGenerationCommandState,
-        ResumeExecutionSelection, ResumeResetSemantics,
-    };
-
-    fn task(
-        chapter_count: i32,
-        chapter_ids: serde_json::Value,
-        current_chapter_id: Option<&str>,
-        current_chapter_number: Option<i32>,
-    ) -> batch_generation_task::Model {
-        batch_generation_task::Model {
-            id: "task-1".to_string(),
-            project_id: "project-1".to_string(),
-            user_id: "user-1".to_string(),
-            start_chapter_number: 1,
-            chapter_count,
-            chapter_ids,
-            style_id: None,
-            target_word_count: 3000,
-            enable_analysis: false,
-            status: "failed".to_string(),
-            total_chapters: chapter_count,
-            completed_chapters: 0,
-            failed_chapters: json!([]),
-            current_chapter_id: current_chapter_id.map(ToString::to_string),
-            current_chapter_number,
-            current_retry_count: 0,
-            max_retries: 3,
-            created_at: None,
-            started_at: None,
-            completed_at: None,
-            error_message: None,
-        }
-    }
-
-    #[test]
-    fn should_resolve_resume_runtime_position_for_single_task_only() {
-        let single = ResumeBatchGenerationCommandState::from_task(&task(
-            1,
-            json!(["chapter-1"]),
-            Some("chapter-1"),
-            Some(1),
-        ));
-        let batch = ResumeBatchGenerationCommandState::from_task(&task(
-            2,
-            json!(["chapter-1", "chapter-2"]),
-            Some("chapter-1"),
-            Some(1),
-        ));
-        let malformed_single = ResumeBatchGenerationCommandState::from_task(&task(
-            1,
-            json!({"chapter_id": "chapter-1"}),
-            Some("chapter-1"),
-            Some(1),
-        ));
-
-        let single_semantics = single.resolve_runtime_semantics();
-        assert_eq!(
-            (
-                single_semantics.current_chapter_id,
-                single_semantics.current_chapter_number,
-            ),
-            (Some("chapter-1".to_string()), Some(1))
-        );
-
-        let batch_semantics = batch.resolve_runtime_semantics();
-        assert_eq!(
-            (
-                batch_semantics.current_chapter_id,
-                batch_semantics.current_chapter_number,
-            ),
-            (None, None)
-        );
-
-        let malformed_semantics = malformed_single.resolve_runtime_semantics();
-        assert_eq!(
-            (
-                malformed_semantics.current_chapter_id,
-                malformed_semantics.current_chapter_number,
-            ),
-            (None, None)
-        );
-    }
-
-    #[test]
-    fn should_resolve_resume_runtime_semantics_for_single_batch_and_malformed_single_tasks() {
-        let single = ResumeBatchGenerationCommandState::from_task(&task(
-            1,
-            json!(["chapter-1"]),
-            Some("chapter-1"),
-            Some(1),
-        ));
-        let batch = ResumeBatchGenerationCommandState::from_task(&task(
-            2,
-            json!(["chapter-1", "chapter-2"]),
-            Some("chapter-1"),
-            Some(1),
-        ));
-        let malformed_single = ResumeBatchGenerationCommandState::from_task(&task(
-            1,
-            json!({"chapter_id": "chapter-1"}),
-            Some("chapter-1"),
-            Some(1),
-        ));
-
-        let single_semantics = single.resolve_runtime_semantics();
-        assert_eq!(
-            single_semantics.current_chapter_id.as_deref(),
-            Some("chapter-1")
-        );
-        assert_eq!(single_semantics.current_chapter_number, Some(1));
-        assert!(!single_semantics.include_progress_totals);
-
-        let batch_semantics = batch.resolve_runtime_semantics();
-        assert!(batch_semantics.current_chapter_id.is_none());
-        assert!(batch_semantics.current_chapter_number.is_none());
-        assert!(batch_semantics.include_progress_totals);
-
-        let malformed_semantics = malformed_single.resolve_runtime_semantics();
-        assert!(malformed_semantics.current_chapter_id.is_none());
-        assert!(malformed_semantics.current_chapter_number.is_none());
-        assert!(malformed_semantics.include_progress_totals);
-    }
-
-    #[test]
-    fn should_resolve_resume_reset_semantics_for_single_batch_and_malformed_single_tasks() {
-        let single = ResumeBatchGenerationCommandState::from_task(&task(
-            1,
-            json!(["chapter-1"]),
-            Some("chapter-1"),
-            Some(1),
-        ));
-        let batch = ResumeBatchGenerationCommandState::from_task(&task(
-            2,
-            json!(["chapter-1", "chapter-2"]),
-            Some("chapter-1"),
-            Some(1),
-        ));
-        let malformed_single = ResumeBatchGenerationCommandState::from_task(&task(
-            1,
-            json!({"chapter_id": "chapter-1"}),
-            Some("chapter-1"),
-            Some(1),
-        ));
-
-        let single_reset = single.resolve_reset_semantics();
-        assert_eq!(single_reset.status, "pending");
-        assert_eq!(
-            single_reset.current_chapter_id.as_deref(),
-            Some("chapter-1")
-        );
-        assert_eq!(single_reset.current_chapter_number, Some(1));
-        assert!(!single_reset.include_progress_totals);
-        assert_eq!(single_reset.completed_chapters, 0);
-        assert_eq!(single_reset.failed_chapters, json!([]));
-        assert_eq!(single_reset.current_retry_count, 0);
-
-        let batch_reset = batch.resolve_reset_semantics();
-        assert_eq!(batch_reset.status, "pending");
-        assert!(batch_reset.current_chapter_id.is_none());
-        assert!(batch_reset.current_chapter_number.is_none());
-        assert!(batch_reset.include_progress_totals);
-        assert_eq!(batch_reset.completed_chapters, 0);
-        assert_eq!(batch_reset.failed_chapters, json!([]));
-        assert_eq!(batch_reset.current_retry_count, 0);
-
-        let malformed_reset = malformed_single.resolve_reset_semantics();
-        assert_eq!(malformed_reset.status, "pending");
-        assert!(malformed_reset.current_chapter_id.is_none());
-        assert!(malformed_reset.current_chapter_number.is_none());
-        assert!(malformed_reset.include_progress_totals);
-        assert_eq!(malformed_reset.completed_chapters, 0);
-        assert_eq!(malformed_reset.failed_chapters, json!([]));
-        assert_eq!(malformed_reset.current_retry_count, 0);
-    }
-
-    #[test]
-    fn should_build_resume_checkpoint_from_reset_semantics() {
-        let single_checkpoint = ResumeResetSemantics {
-            status: "pending",
-            current_chapter_id: Some("chapter-1".to_string()),
-            current_chapter_number: Some(3),
-            include_progress_totals: false,
-            completed_chapters: 0,
-            failed_chapters: json!([]),
-            current_retry_count: 0,
-        }
-        .build_resume_checkpoint(5);
-        assert_eq!(single_checkpoint["phase"], "pending");
-        assert_eq!(single_checkpoint["status"], "pending");
-        assert_eq!(single_checkpoint["last_event"], "resume");
-        assert_eq!(
-            single_checkpoint["last_message"],
-            "批量生成任务已恢复，等待重新开始..."
-        );
-        assert_eq!(single_checkpoint["chapter_id"], "chapter-1");
-        assert_eq!(single_checkpoint["current_chapter_id"], "chapter-1");
-        assert_eq!(single_checkpoint["current_chapter_number"], 3);
-        assert!(single_checkpoint.get("completed").is_none());
-        assert!(single_checkpoint.get("total").is_none());
-
-        let batch_checkpoint = ResumeResetSemantics {
-            status: "pending",
-            current_chapter_id: None,
-            current_chapter_number: None,
-            include_progress_totals: true,
-            completed_chapters: 0,
-            failed_chapters: json!([]),
-            current_retry_count: 0,
-        }
-        .build_resume_checkpoint(4);
-        assert_eq!(batch_checkpoint["phase"], "pending");
-        assert_eq!(batch_checkpoint["status"], "pending");
-        assert_eq!(batch_checkpoint["last_event"], "resume");
-        assert_eq!(batch_checkpoint["completed"], 0);
-        assert_eq!(batch_checkpoint["total"], 4);
-        assert!(batch_checkpoint["chapter_id"].is_null());
-        assert!(batch_checkpoint["current_chapter_id"].is_null());
-        assert!(batch_checkpoint["current_chapter_number"].is_null());
-    }
-
-    #[test]
-    fn should_build_resume_checkpoint_with_seed_from_reset_semantics_owner() {
-        let checkpoint = ResumeResetSemantics {
-            status: "pending",
-            current_chapter_id: Some("chapter-2".to_string()),
-            current_chapter_number: Some(2),
-            include_progress_totals: false,
-            completed_chapters: 0,
-            failed_chapters: json!([]),
-            current_retry_count: 0,
-        }
-        .build_resume_checkpoint_with_seed(
-            5,
-            Some(json!({
-                "resume_from_batch_id": "task-1",
-                "current_retry_count": 0,
-                "max_retries": 3
-            })),
-        );
-
-        assert_eq!(checkpoint["phase"], "pending");
-        assert_eq!(checkpoint["status"], "pending");
-        assert_eq!(checkpoint["last_event"], "resume");
-        assert_eq!(checkpoint["current_chapter_id"], "chapter-2");
-        assert_eq!(checkpoint["current_chapter_number"], 2);
-        assert_eq!(checkpoint["resume_from_batch_id"], "task-1");
-        assert_eq!(checkpoint["current_retry_count"], 0);
-        assert_eq!(checkpoint["max_retries"], 3);
-    }
-
-    #[test]
-    fn should_resolve_resume_execution_selection_for_resumable_targets_only() {
-        let single = ResumeBatchGenerationCommandState::from_task(&task(
-            1,
-            json!(["chapter-1"]),
-            Some("chapter-1"),
-            Some(1),
-        ));
-        let batch = ResumeBatchGenerationCommandState::from_task(&task(
-            2,
-            json!(["chapter-1", {"id": "chapter-2"}, {"name": "ignored"}]),
-            Some("chapter-1"),
-            Some(1),
-        ));
-        let malformed_single = ResumeBatchGenerationCommandState::from_task(&task(
-            1,
-            json!({"chapter_id": "chapter-1"}),
-            Some("chapter-1"),
-            Some(1),
-        ));
-
-        assert_eq!(
-            single.resolve_execution_selection(),
-            Ok(ResumeExecutionSelection::SingleChapter {
-                chapter_id: "chapter-1".to_string(),
-            })
-        );
-        assert_eq!(
-            batch.resolve_execution_selection(),
-            Ok(ResumeExecutionSelection::Batch {
-                chapter_ids: vec!["chapter-1".to_string(), "chapter-2".to_string()],
-            })
-        );
-        assert_eq!(
-            malformed_single.resolve_execution_selection(),
-            Err(ResolveResumeExecutionSelectionError::NoResumableChaptersFound)
-        );
-    }
-
-    #[test]
-    fn should_resume_batch_execution_from_current_chapter_position() {
-        let mut task_model = task(
-            4,
-            json!(["chapter-1", "chapter-2", "chapter-3", "chapter-4"]),
-            Some("chapter-3"),
-            Some(3),
-        );
-        task_model.completed_chapters = 2;
-
-        let batch = ResumeBatchGenerationCommandState::from_task(&task_model);
-
-        assert_eq!(
-            batch.resolve_execution_selection(),
-            Ok(ResumeExecutionSelection::Batch {
-                chapter_ids: vec!["chapter-3".to_string(), "chapter-4".to_string()],
-            })
-        );
-    }
-
-    #[test]
-    fn should_resume_batch_execution_from_completed_chapter_count_when_position_missing() {
-        let mut task_model = task(
-            4,
-            json!(["chapter-1", "chapter-2", "chapter-3", "chapter-4"]),
-            None,
-            None,
-        );
-        task_model.completed_chapters = 2;
-
-        let batch = ResumeBatchGenerationCommandState::from_task(&task_model);
-
-        assert_eq!(
-            batch.resolve_execution_selection(),
-            Ok(ResumeExecutionSelection::Batch {
-                chapter_ids: vec!["chapter-3".to_string(), "chapter-4".to_string()],
-            })
-        );
-    }
-
-    #[test]
-    fn should_fail_resume_execution_selection_when_no_batch_chapters_left() {
-        let mut task_model = task(2, json!(["chapter-1", "chapter-2"]), None, None);
-        task_model.completed_chapters = 2;
-
-        let batch = ResumeBatchGenerationCommandState::from_task(&task_model);
-
-        assert_eq!(
-            batch.resolve_execution_selection(),
-            Err(ResolveResumeExecutionSelectionError::NoChaptersLeftToResume)
-        );
-    }
-
-    #[test]
-    fn should_resolve_shared_resume_task_boundaries_for_single_and_batch_tasks() {
-        let single = ResumeBatchGenerationCommandState::from_task(&task(
-            1,
-            json!(["chapter-1"]),
-            Some("chapter-1"),
-            Some(1),
-        ));
-        let batch = ResumeBatchGenerationCommandState::from_task(&task(
-            2,
-            json!(["chapter-1", {"id": "chapter-2"}]),
-            Some("chapter-1"),
-            Some(1),
-        ));
-
-        assert_eq!(
-            single.resolve_execution_selection(),
-            Ok(ResumeExecutionSelection::SingleChapter {
-                chapter_id: "chapter-1".to_string(),
-            })
-        );
-        assert_eq!(
-            single.resolve_runtime_semantics(),
-            super::ResumeRuntimeSemantics {
-                current_chapter_id: Some("chapter-1".to_string()),
-                current_chapter_number: Some(1),
-                include_progress_totals: false,
-            }
-        );
-
-        assert_eq!(
-            batch.resolve_execution_selection(),
-            Ok(ResumeExecutionSelection::Batch {
-                chapter_ids: vec!["chapter-1".to_string(), "chapter-2".to_string()],
-            })
-        );
-        assert_eq!(
-            batch.resolve_runtime_semantics(),
-            super::ResumeRuntimeSemantics {
-                current_chapter_id: None,
-                current_chapter_number: None,
-                include_progress_totals: true,
-            }
-        );
-    }
-
-    #[test]
-    fn should_build_resume_command_state_from_task_projection() {
-        let mut task = task(
-            2,
-            json!(["chapter-1", "chapter-2"]),
-            Some("chapter-2"),
-            Some(2),
-        );
-        task.id = "task-9".to_string();
-        task.project_id = "project-9".to_string();
-        task.total_chapters = 2;
-        task.completed_chapters = 1;
-
-        let state = ResumeBatchGenerationCommandState::from_task(&task);
-
-        assert_eq!(state.batch_id, "task-9");
-        assert_eq!(state.project_id, "project-9");
-        assert_eq!(state.completed_chapters, 1);
-        assert_eq!(state.total_chapters, 2);
-        assert_eq!(state.task_kind(), BatchGenerationTaskKind::Batch);
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct BatchGenerationExecutionInput {
-    pub(crate) user_id: String,
-    pub(crate) chapter_ids: Vec<String>,
-    pub(crate) target_word_count: i32,
-    pub(crate) compat_options: SingleChapterGenerationCompatOptions,
-    pub(crate) ai_config: AIConfig,
-}
-
-pub(crate) fn build_batch_generation_execution_input(
-    user_id: String,
-    chapter_ids: Vec<String>,
-    target_word_count: i32,
-    compat_options: SingleChapterGenerationCompatOptions,
-    execution_config: PreparedGenerationExecutionConfig,
-) -> BatchGenerationExecutionInput {
-    BatchGenerationExecutionInput {
-        user_id,
-        chapter_ids,
-        target_word_count,
-        compat_options,
-        ai_config: execution_config.ai_config,
-    }
-}
-
-pub(crate) fn restore_batch_generation_runtime_compat_options_from_runtime_state_seed(
-    base_compat_options: &SingleChapterGenerationCompatOptions,
-    runtime_state_seed: Option<&Value>,
-) -> SingleChapterGenerationCompatOptions {
-    match runtime_state_seed {
-        Some(runtime_state_seed) => {
-            let persisted_runtime_context = BatchGenerationPersistedRuntimeContext::from_sources(
-                Some(runtime_state_seed.clone()),
-                None,
-                None,
-                None,
-            );
-            restore_batch_generation_runtime_compat_options_from_persisted_runtime_context(
-                base_compat_options,
-                &persisted_runtime_context,
-            )
-        }
-        None => base_compat_options.clone(),
-    }
-}
-
-pub(crate) fn build_batch_generation_runtime_launch_input_from_runtime_state_seed(
-    user_id: String,
-    chapter_ids: Vec<String>,
-    target_word_count: i32,
-    request_runtime_state: &BatchGenerationRequestRuntimeState,
-    runtime_state_seed: Option<&Value>,
-    execution_config: PreparedGenerationExecutionConfig,
-) -> BatchGenerationExecutionInput {
-    let resolved_compat_options =
-        restore_batch_generation_runtime_compat_options_from_runtime_state_seed(
-            &request_runtime_state.compat_options,
-            runtime_state_seed,
-        );
-
-    build_batch_generation_execution_input(
-        user_id,
-        chapter_ids,
-        target_word_count,
-        resolved_compat_options,
-        execution_config,
-    )
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct BatchGenerationQueuedSnapshotPlan {
-    runtime_state: Value,
-    quality_runtime_context: BatchGenerationQualityRuntimeContext,
-    active_story_repair_payload: Option<Value>,
-    quality_history_context: Option<Value>,
-}
-
-impl BatchGenerationQueuedSnapshotPlan {
-    pub(crate) fn from_runtime_state_seed(
-        total_chapters: i32,
-        runtime_state_seed: Option<Value>,
-    ) -> Self {
-        let runtime_state = match runtime_state_seed {
-            Some(seed) => merge_batch_generation_runtime_state(
-                Some(build_batch_generation_runtime_checkpoint_for_stage(
-                    BatchGenerationSnapshotStage::Queued,
-                    None,
-                    None,
-                    0,
-                    total_chapters,
-                )),
-                seed,
-            ),
-            None => build_batch_generation_runtime_checkpoint_for_stage(
-                BatchGenerationSnapshotStage::Queued,
-                None,
-                None,
-                0,
-                total_chapters,
-            ),
-        };
-
-        let quality_runtime_context =
-            resolve_batch_quality_runtime_context_from_snapshot_and_runtime_state(
-                None,
-                Some(&runtime_state),
-            );
-        let active_story_repair_payload =
-            active_story_repair_payload_from_runtime_state(Some(&runtime_state));
-        let quality_history_context = runtime_state
-            .get("quality_history_context")
-            .cloned()
-            .or_else(|| quality_runtime_context.quality_history_context.clone());
-
-        Self {
-            runtime_state,
-            quality_runtime_context,
-            active_story_repair_payload,
-            quality_history_context,
-        }
-    }
-
-    pub(crate) fn runtime_state(&self) -> &Value {
-        &self.runtime_state
-    }
-
-    pub(crate) fn quality_runtime_context(&self) -> BatchGenerationQualityRuntimeContext {
-        self.quality_runtime_context.clone()
-    }
-
-    pub(crate) fn quality_metrics_summary(&self) -> Option<&Value> {
-        self.quality_runtime_context
-            .quality_metrics_summary
-            .as_ref()
-    }
-
-    pub(crate) fn active_story_repair_payload(&self) -> Option<Value> {
-        self.active_story_repair_payload.clone()
-    }
-
-    pub(crate) fn quality_history_context(&self) -> Option<Value> {
-        self.quality_history_context.clone()
-    }
-
-    pub(crate) async fn persist(
-        self,
-        db: &DatabaseConnection,
-        task_id: &str,
-    ) -> Result<(), String> {
-        upsert_batch_generation_runtime_snapshot(db, task_id, self.runtime_state).await
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BatchGenerationResumeSnapshotPlan {
-    runtime_state: Value,
-}
-
-impl BatchGenerationResumeSnapshotPlan {
-    fn from_resume_checkpoint(
-        existing_workflow_runtime_state: Option<Value>,
-        resume_checkpoint: Value,
-    ) -> Self {
-        Self {
-            runtime_state: merge_batch_generation_runtime_state(
-                existing_workflow_runtime_state,
-                resume_checkpoint,
-            ),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn runtime_state(&self) -> &Value {
-        &self.runtime_state
-    }
-
-    async fn persist_replace(self, db: &DatabaseConnection, task_id: &str) -> Result<(), String> {
-        persist_chapter_generation_runtime_snapshot(
-            db,
-            task_id,
-            self.runtime_state,
-            ChapterGenerationSnapshotWriteMode::ReplaceRuntimeState,
-            Utc::now().naive_utc(),
-        )
-        .await
-    }
-}
-
-fn merge_batch_generation_runtime_state(
-    current_workflow_runtime_state: Option<Value>,
-    incoming_workflow_runtime_state: Value,
-) -> Value {
-    merge_chapter_generation_runtime_state(
-        current_workflow_runtime_state,
-        incoming_workflow_runtime_state,
-    )
-}
-
-fn project_merged_batch_generation_runtime_state(
-    current_workflow_runtime_state: Option<&Value>,
-    incoming_workflow_runtime_state: &Value,
-) -> Value {
-    merge_batch_generation_runtime_state(
-        current_workflow_runtime_state.cloned(),
-        incoming_workflow_runtime_state.clone(),
-    )
-}
-
-async fn upsert_batch_generation_runtime_snapshot(
-    db: &DatabaseConnection,
-    task_id: &str,
-    workflow_runtime_state: Value,
-) -> Result<(), String> {
-    upsert_chapter_generation_runtime_snapshot(
-        db,
-        task_id,
-        workflow_runtime_state,
-        Utc::now().naive_utc(),
-    )
-    .await
-}
-
-pub(crate) fn build_batch_generation_startup_snapshot_and_runtime_launch_input_from_runtime_state_seed(
-    user_id: String,
-    chapter_ids: Vec<String>,
-    total_chapters: i32,
-    target_word_count: i32,
-    runtime_state_seed: Value,
-    execution_config: PreparedGenerationExecutionConfig,
-) -> (
-    BatchGenerationQueuedSnapshotPlan,
-    BatchGenerationExecutionInput,
-) {
-    let request_runtime_state =
-        parse_batch_generation_request_runtime_state(Some(&runtime_state_seed));
-    let runtime_input = build_batch_generation_runtime_launch_input_from_runtime_state_seed(
-        user_id,
-        chapter_ids,
-        target_word_count,
-        &request_runtime_state,
-        Some(&runtime_state_seed),
-        execution_config,
-    );
-    let startup_snapshot_plan = BatchGenerationQueuedSnapshotPlan::from_runtime_state_seed(
-        total_chapters,
-        Some(runtime_state_seed),
-    );
-
-    (startup_snapshot_plan, runtime_input)
-}
-
-pub(crate) async fn prepare_batch_generation_runtime_launch_input_from_request_runtime_state(
-    db: &DatabaseConnection,
-    user_id: &str,
-    chapter_ids: Vec<String>,
-    target_word_count: i32,
-    request_runtime_state: &BatchGenerationRequestRuntimeState,
-    runtime_state_seed: Option<&Value>,
-) -> Result<BatchGenerationExecutionInput, String> {
-    let model_override = request_runtime_state.model_override.clone();
-    let execution_config =
-        prepare_generation_execution_config(db, user_id, model_override.as_deref()).await?;
-
-    Ok(
-        build_batch_generation_runtime_launch_input_from_runtime_state_seed(
-            user_id.to_string(),
-            chapter_ids,
-            target_word_count,
-            request_runtime_state,
-            runtime_state_seed,
-            execution_config,
-        ),
-    )
-}
-
-pub(crate) fn dispatch_batch_generation_runtime(
-    db: DatabaseConnection,
-    task_id: String,
-    execution_input: BatchGenerationExecutionInput,
-) {
-    tokio::spawn(async move {
-        BatchGenerationRuntimeLifecyclePlan::start(&db, &task_id, execution_input).await;
-    });
-}
-
-struct BatchGenerationRuntimeSession {
-    ai_service: AIService,
-    user_id: String,
-    target_word_count: i32,
-    compat_options: SingleChapterGenerationCompatOptions,
-    total_chapters: i32,
-}
-
-impl BatchGenerationRuntimeSession {
-    fn from_execution_input(execution_input: BatchGenerationExecutionInput) -> (Self, Vec<String>) {
-        let BatchGenerationExecutionInput {
-            user_id,
-            chapter_ids,
-            target_word_count,
-            compat_options,
-            ai_config,
-        } = execution_input;
-
-        (
-            Self {
-                ai_service: AIService::new(ai_config),
-                user_id,
-                target_word_count,
-                compat_options,
-                total_chapters: chapter_ids.len() as i32,
-            },
-            chapter_ids,
-        )
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ModelFieldUpdate<T> {
-    Keep,
-    Set(T),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TaskTimestampUpdate {
-    Keep,
-    Clear,
-    Now,
-}
-
-pub(crate) async fn reset_batch_generation_task_for_resume(
-    db: &DatabaseConnection,
-    plan: BatchGenerationResumeResetPersistencePlan,
-) -> Result<(), String> {
-    plan.persist(db).await
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct BatchGenerationCancelledPersistencePlan {
-    batch_id: String,
-    merged_runtime_state: Value,
-    quality_status_context: BatchGenerationQualityStatusContext,
-}
-
-impl BatchGenerationCancelledPersistencePlan {
-    pub(crate) fn from_sources(
-        task: &batch_generation_task::Model,
-        snapshot: Option<&batch_generation_snapshot::Model>,
-    ) -> Self {
-        let checkpoint = build_batch_generation_runtime_checkpoint_for_stage(
-            BatchGenerationSnapshotStage::Cancelled,
-            None,
-            None,
-            task.completed_chapters,
-            task.total_chapters,
-        );
-        let merged_runtime_state = project_merged_batch_generation_runtime_state(
-            snapshot.and_then(|item| item.workflow_runtime_state.as_ref()),
-            &checkpoint,
-        );
-        let quality_status_context =
-            BatchGenerationQualityStatusContext::from_snapshot_and_runtime_state(
-                snapshot,
-                Some(&merged_runtime_state),
-            );
-
-        Self {
-            batch_id: task.id.clone(),
-            merged_runtime_state,
-            quality_status_context,
-        }
-    }
-
-    fn build_status_payload_for_task(&self, task: &batch_generation_task::Model) -> Value {
-        build_batch_generation_status_task_payload_with_quality_context(
-            &task,
-            Some(&self.merged_runtime_state),
-            &self.quality_status_context,
-        )
-    }
-
-    fn build_response_payload_for_task(&self, task: batch_generation_task::Model) -> Value {
-        let mut payload = match self.build_status_payload_for_task(&task) {
-            Value::Object(payload) => payload,
-            _ => serde_json::Map::new(),
-        };
-        let summary_payload = build_batch_generation_command_summary_payload(
-            BatchGenerationCommandProgressSummary {
-                batch_id: task.id.clone(),
-                total_chapters: task.total_chapters,
-                completed_chapters: task.completed_chapters,
-            },
-            "Batch generation cancelled",
-        );
-        if let Value::Object(summary_fields) = summary_payload {
-            payload.extend(summary_fields);
-        }
-
-        Value::Object(payload)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn response_payload_for_test(&self, task: batch_generation_task::Model) -> Value {
-        self.build_response_payload_for_task(task)
-    }
-
-    pub(crate) async fn persist(self, db: &DatabaseConnection) -> Result<Value, String> {
-        let BatchGenerationCancelledPersistencePlan {
-            batch_id,
-            merged_runtime_state,
-            quality_status_context,
-        } = self;
-
-        let response_task = if let Some(task_model) =
-            batch_generation_task::Entity::find_by_id(&batch_id)
-                .one(db)
-                .await
-                .map_err(|error| error.to_string())?
-        {
-            let completed_chapters = task_model.completed_chapters;
-            let total_chapters = task_model.total_chapters;
-            let mut active: batch_generation_task::ActiveModel = task_model.into();
-            BatchGenerationTaskStage::Cancelled.apply_to_active_model(
-                &mut active,
-                None,
-                None,
-                completed_chapters,
-                total_chapters,
-                None,
-                Utc::now().naive_utc(),
-            );
-            active.update(db).await.map_err(|error| error.to_string())?
-        } else {
-            return Err("Batch generation task not found during cancel persistence".to_string());
-        };
-        let response_owner = BatchGenerationCancelledPersistencePlan {
-            batch_id: batch_id.clone(),
-            merged_runtime_state: merged_runtime_state.clone(),
-            quality_status_context,
-        };
-        upsert_batch_generation_runtime_snapshot(db, &batch_id, merged_runtime_state).await?;
-
-        Ok(response_owner.build_response_payload_for_task(response_task))
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn build_batch_generation_resume_runtime_checkpoint(
-    task: &ResumeBatchGenerationCommandState,
-    runtime_state_seed: Option<Value>,
-) -> Value {
-    task.resolve_reset_semantics()
-        .build_resume_checkpoint_with_seed(task.total_chapters, runtime_state_seed)
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct BatchGenerationResumeResetPersistencePlan {
-    batch_id: String,
-    total_chapters: i32,
-    reset_semantics: ResumeResetSemantics,
-    resume_checkpoint: Value,
-    task_reset_plan: BatchGenerationResumeTaskResetMutationPlan,
-    resume_snapshot_plan: BatchGenerationResumeSnapshotPlan,
-}
-
-impl BatchGenerationResumeResetPersistencePlan {
-    #[cfg(test)]
-    pub(crate) fn from_resume_task(
-        task: &ResumeBatchGenerationCommandState,
-        runtime_state_seed: Option<Value>,
-    ) -> Self {
-        Self::from_resume_task_with_existing_runtime_state(task, runtime_state_seed, None)
-    }
-
-    pub(crate) fn from_resume_task_with_existing_runtime_state(
-        task: &ResumeBatchGenerationCommandState,
-        runtime_state_seed: Option<Value>,
-        existing_workflow_runtime_state: Option<Value>,
-    ) -> Self {
-        let reset_semantics = task.resolve_reset_semantics();
-        let resume_checkpoint = reset_semantics
-            .build_resume_checkpoint_with_seed(task.total_chapters, runtime_state_seed);
-        Self {
-            batch_id: task.batch_id.clone(),
-            total_chapters: task.total_chapters,
-            task_reset_plan: BatchGenerationResumeTaskResetMutationPlan::from_reset_semantics(
-                task.total_chapters,
-                &reset_semantics,
-            ),
-            resume_snapshot_plan: BatchGenerationResumeSnapshotPlan::from_resume_checkpoint(
-                existing_workflow_runtime_state,
-                resume_checkpoint.clone(),
-            ),
-            resume_checkpoint,
-            reset_semantics,
-        }
-    }
-
-    pub(crate) fn total_chapters(&self) -> i32 {
-        self.total_chapters
-    }
-
-    pub(crate) fn completed_chapters(&self) -> i32 {
-        self.reset_semantics.completed_chapters
-    }
-
-    pub(crate) fn status(&self) -> &'static str {
-        self.reset_semantics.status
-    }
-
-    pub(crate) fn current_chapter_id(&self) -> Option<&str> {
-        self.reset_semantics.current_chapter_id.as_deref()
-    }
-
-    pub(crate) fn checkpoint(&self) -> &Value {
-        &self.resume_checkpoint
-    }
-
-    #[cfg(test)]
-    pub(crate) fn resume_snapshot_plan(&self) -> &BatchGenerationResumeSnapshotPlan {
-        &self.resume_snapshot_plan
-    }
-
-    pub(crate) fn single_quality_runtime_context(
-        &self,
-    ) -> crate::services::chapter_generation_quality_runtime_context_service::GenerationQualityRuntimeContext
-    {
-        resolve_generation_quality_runtime_context_from_persisted_sources(
-            "chapter",
-            self.latest_quality_metrics(),
-            self.quality_metrics_history(),
-            self.quality_metrics_summary_state(),
-            self.quality_metrics_summary(),
-        )
-    }
-
-    pub(crate) fn batch_quality_runtime_context(&self) -> BatchGenerationQualityRuntimeContext {
-        resolve_batch_quality_runtime_context_from_persisted_sources(
-            self.latest_quality_metrics(),
-            self.quality_metrics_history(),
-            self.quality_metrics_summary_state(),
-            self.quality_metrics_summary(),
-        )
-    }
-
-    pub(crate) fn latest_quality_metrics(&self) -> Option<&Value> {
-        self.resume_checkpoint.get("latest_quality_metrics")
-    }
-
-    pub(crate) fn quality_metrics_history(&self) -> Option<&Value> {
-        self.resume_checkpoint.get("quality_metrics_history")
-    }
-
-    pub(crate) fn quality_metrics_summary_state(&self) -> Option<&Value> {
-        self.resume_checkpoint.get("quality_metrics_summary_state")
-    }
-
-    pub(crate) fn quality_metrics_summary(&self) -> Option<&Value> {
-        self.resume_checkpoint.get("quality_metrics_summary")
-    }
-
-    pub(crate) fn active_story_repair_payload(&self) -> Option<Value> {
-        active_story_repair_payload_from_runtime_state(Some(&self.resume_checkpoint))
-    }
-
-    pub(crate) fn quality_history_context_for_task_kind(
-        &self,
-        task_kind: BatchGenerationTaskKind,
-    ) -> Option<Value> {
-        self.resume_checkpoint
-            .get("quality_history_context")
-            .cloned()
-            .or_else(|| match task_kind {
-                BatchGenerationTaskKind::SingleChapter => {
-                    self.single_quality_runtime_context()
-                        .quality_history_context
-                }
-                BatchGenerationTaskKind::Batch => {
-                    self.batch_quality_runtime_context().quality_history_context
-                }
-            })
-    }
-
-    pub(crate) fn into_resume_response_payload(
-        self,
-        command_state: &ResumeBatchGenerationCommandState,
-    ) -> Value {
-        let task_kind = command_state.task_kind();
-        let summary = BatchGenerationCommandProgressSummary {
-            batch_id: command_state.batch_id.clone(),
-            total_chapters: self.total_chapters(),
-            completed_chapters: self.completed_chapters(),
-        };
-        let quality_payload = match task_kind {
-            BatchGenerationTaskKind::SingleChapter => {
-                Some(BatchGenerationTaskResponseQualityPayload::Single {
-                    quality_runtime_context: self.single_quality_runtime_context(),
-                    latest_quality_metrics: self.latest_quality_metrics().cloned(),
-                    quality_metrics_summary: self.quality_metrics_summary().cloned(),
-                    quality_metrics_history: self.quality_metrics_history().cloned(),
-                })
-            }
-            BatchGenerationTaskKind::Batch => {
-                Some(BatchGenerationTaskResponseQualityPayload::Batch {
-                    quality_runtime_context: self.batch_quality_runtime_context(),
-                    quality_metrics_summary: self.quality_metrics_summary().cloned(),
-                })
-            }
-        };
-        let payload = build_batch_generation_task_response_payload_from_runtime_parts(
-            command_state.batch_id.as_str(),
-            batch_generation_task_type(task_kind),
-            &command_state.project_id,
-            self.status(),
-            self.current_chapter_id(),
-            command_state.created_at,
-            Some(self.checkpoint()),
-            BatchGenerationTaskResponsePayloadOptions {
-                checkpoint_override: Some((
-                    "chapter_id".to_string(),
-                    json!(self.current_chapter_id()),
-                )),
-                summary_payload: Some(build_batch_generation_command_summary_payload(
-                    summary,
-                    "Task resumed and queued",
-                )),
-                quality_payload,
-                active_story_repair_payload: self.active_story_repair_payload(),
-                quality_history_context: self.quality_history_context_for_task_kind(task_kind),
-                extra_fields: vec![(
-                    "resumed_from_batch_id".to_string(),
-                    json!(command_state.batch_id.clone()),
-                )],
-                apply_loading_stage_fields: true,
-            },
-        );
-
-        Value::Object(payload)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_contract_for_test(
-        batch_id: String,
-        total_chapters: i32,
-        reset_semantics: ResumeResetSemantics,
-        resume_checkpoint: Value,
-    ) -> Self {
-        let task_reset_plan = BatchGenerationResumeTaskResetMutationPlan::from_reset_semantics(
-            total_chapters,
-            &reset_semantics,
-        );
-        let resume_snapshot_plan = BatchGenerationResumeSnapshotPlan::from_resume_checkpoint(
-            None,
-            resume_checkpoint.clone(),
-        );
-        Self {
-            batch_id,
-            total_chapters,
-            reset_semantics,
-            resume_checkpoint,
-            task_reset_plan,
-            resume_snapshot_plan,
-        }
-    }
-
-    pub(crate) async fn persist(self, db: &DatabaseConnection) -> Result<(), String> {
-        let BatchGenerationResumeResetPersistencePlan {
-            batch_id,
-            task_reset_plan,
-            resume_snapshot_plan,
-            ..
-        } = self;
-        let mut active = batch_generation_task::ActiveModel {
-            id: Set(batch_id.clone()),
-            ..Default::default()
-        };
-        task_reset_plan.apply_to_active_model(&mut active, Utc::now().naive_utc());
-
-        active.update(db).await.map_err(|error| error.to_string())?;
-        resume_snapshot_plan.persist_replace(db, &batch_id).await
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct BatchGenerationResumeTaskResetMutationPlan {
-    failed_chapters: Value,
-    current_chapter_id: Option<String>,
-    current_chapter_number: Option<i32>,
-    completed_chapters: i32,
-    total_chapters: i32,
-}
-
-impl BatchGenerationResumeTaskResetMutationPlan {
-    fn from_reset_semantics(total_chapters: i32, reset_semantics: &ResumeResetSemantics) -> Self {
-        Self {
-            failed_chapters: reset_semantics.failed_chapters.clone(),
-            current_chapter_id: reset_semantics.current_chapter_id.clone(),
-            current_chapter_number: reset_semantics.current_chapter_number,
-            completed_chapters: reset_semantics.completed_chapters,
-            total_chapters,
-        }
-    }
-
-    fn apply_to_active_model(
-        self,
-        active: &mut batch_generation_task::ActiveModel,
-        now: chrono::NaiveDateTime,
-    ) {
-        active.failed_chapters = Set(self.failed_chapters);
-        BatchGenerationTaskStage::ResumeReset.apply_to_active_model(
-            active,
-            self.current_chapter_id.as_deref(),
-            self.current_chapter_number,
-            self.completed_chapters,
-            self.total_chapters,
-            None,
-            now,
-        );
-    }
-}
-
-fn append_failed_chapter_entry(failed_chapters: &Value, failed_entry: Option<&Value>) -> Value {
-    let mut items = failed_chapters.as_array().cloned().unwrap_or_default();
-    if let Some(entry) = failed_entry.filter(|entry| entry.is_object()) {
-        items.push(entry.clone());
-    }
-    Value::Array(items)
-}
-
-fn build_batch_generation_failed_chapter_entry(
-    chapter_id: Option<&str>,
-    chapter_number: Option<i32>,
-    chapter_title: Option<&str>,
-    task_error_message: &str,
-    retry_count: i32,
-) -> Value {
+use crate::services::chapter_single_generation_runtime_seed_service::prepare_single_chapter_runtime_launch_input_from_request_runtime_state;
+pub(crate) fn build_batch_generation_runtime_state_owner_contract() -> Value {
     json!({
-        "chapter_id": chapter_id,
-        "chapter_number": chapter_number,
-        "title": chapter_title,
-        "error": task_error_message,
-        "retry_count": retry_count.max(0),
+        "owner": "chapter_batch_generation_runtime_state_service",
+        "scope": "batch_generation_runtime_lifecycle_execution_input_checkpoint_candidate_events_retry_terminal_and_follow_up_analysis",
+        "python_source_map": [
+            "backend/app/api/chapter_batch_generation_routes.py",
+            "backend/app/api/chapters.py",
+            "backend/app/services/batch_generation_orchestration_service.py",
+            "backend/app/services/batch_generation_candidate_service.py",
+            "backend/app/services/batch_generation_run_service.py",
+            "backend/app/services/batch_generation_analysis_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
+            "backend-rs/src/services/chapter_generation_runtime_service/story_repair_quality_context_owner.rs",
+            "backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs",
+            "backend-rs/src/services/chapter_batch_generation_read_context_service.rs",
+            "backend-rs/src/services/chapter_generation_runtime_service.rs",
+            "backend-rs/src/services/chapter_generation_runtime_service/snapshot_persistence_owner.rs",
+            "backend-rs/src/api/health.rs"
+        ],
+        "behavior_contract": {
+            "runtime_entrypoints": [
+                "build_batch_generation_execution_input",
+                "BatchGenerationRuntimeLifecyclePlan::from_execution_input",
+                "BatchGenerationRuntimeLifecyclePlan::start",
+                "PreparedBatchGenerationStepExecution::start"
+            ],
+            "response_payload_entrypoints": [
+                "CancelledBatchGenerationStatusProjection::build_status_payload_for_task",
+                "build_batch_generation_status_task_payload_with_quality_context",
+                "BatchGenerationQueuedSnapshotPlan::into_create_response_payload",
+                "BatchGenerationResumeResetPersistencePlan::into_resume_response_payload",
+                "BatchGenerationCancelledPersistencePlan::build_response_payload_for_task"
+            ],
+            "cancel_prepare_entrypoints": [
+                "prepare_batch_generation_cancel_persistence_plan",
+                "BatchGenerationCancelledPersistencePlan::from_sources"
+            ],
+            "cancel_command_entrypoints": [
+                "cancel_owned_batch_generation_runtime_command",
+                "BatchGenerationCancelledPersistencePlan::persist"
+            ],
+            "resume_restore_entrypoints": [
+                "prepare_batch_generation_resume_restored_runtime_state",
+                "BatchGenerationPersistedRuntimeContext::from_snapshot",
+                "RestoredResumeRuntimeStateProjection::from_persisted_runtime_context"
+            ],
+            "candidate_gateway_entrypoints": [
+                "generate_and_persist_chapter_content_with_candidate_route_gateway",
+                "build_batch_generation_selected_candidate_event_snapshot",
+                "build_batch_generation_selected_candidate_event_batch"
+            ],
+            "checkpoint_entrypoints": [
+                "build_pending_batch_generation_runtime_checkpoint",
+                "BatchGenerationSnapshotStage::build_checkpoint",
+                "BatchGenerationRuntimePersistencePlan::persist"
+            ],
+            "retry_and_terminal_entrypoints": [
+                "BatchGenerationRetryPersistencePlan",
+                "BatchGenerationRetryProgressionPlan::execute",
+                "BatchGenerationQualityGateRoutingPlan",
+                "BatchGenerationPostAnalysisTerminalPlan",
+                "resolve_batch_generation_quality_gate_terminal_semantics",
+                "resolve_failed_terminal_semantics_from_sources"
+            ],
+            "follow_up_analysis_entrypoints": [
+                "BatchGenerationFollowUpAnalysisPlan::from_generated_result",
+                "prepare_chapter_analysis_execution",
+                "analyze_generated_chapter_follow_up"
+            ],
+            "runtime_state_keys": [
+                "progress",
+                "checkpoint",
+                "candidate_gateway",
+                "selected_candidate_events",
+                "quality_metrics_summary_state",
+                "active_story_repair_payload"
+            ],
+            "gateway_config": [
+                "ChapterCandidateRouteGatewayConfig",
+                "batch create/resume routes pass route/AppConfig supplied gateway config into runtime launch"
+            ]
+        },
+        "active_consumers": [
+            "chapter_batch_generation_write_workflow_service",
+            "chapter_batch_generation_resume_task_command_service",
+            "chapter_batch_generation_read_context_service",
+            "chapter_batch_generation_active_gateway_smoke_service",
+            "chapter_batch_generation"
+        ],
+        "selected_candidate_event_owner_contract": build_batch_generation_selected_candidate_event_owner_contract(),
+        "terminal_runtime_patch_owner_contract": build_generation_terminal_runtime_patch_owner_contract(),
+        "resume_restore_owner_contract": build_batch_generation_resume_restore_owner_contract(),
+        "follow_up_analysis_owner_contract": build_batch_generation_follow_up_analysis_owner_contract(),
+        "retry_routing_owner_contract": build_batch_generation_retry_routing_owner_contract(),
+        "startup_and_command_projection_owner_contract": build_batch_generation_startup_and_command_projection_owner_contract(),
+        "runtime_driver_owner_contract": build_batch_generation_runtime_driver_owner_contract(),
+        "attempt_input_owner_contract": build_batch_generation_attempt_input_owner_contract(),
+        "runtime_persistence_owner_contract": build_batch_generation_runtime_persistence_owner_contract(),
+        "quality_payload_owner_contract": build_batch_generation_quality_payload_owner_contract(),
+        "runtime_checkpoint_owner_contract": build_batch_generation_runtime_checkpoint_owner_contract(),
+        "resume_semantics_owner_contract": build_batch_generation_resume_semantics_owner_contract(),
+        "runtime_launch_owner_contract": build_batch_generation_runtime_launch_owner_contract(),
+        "runtime_snapshot_owner_contract": build_batch_generation_runtime_snapshot_owner_contract(),
+        "terminal_semantics_owner_contract": build_batch_generation_terminal_semantics_owner_contract(),
+        "snapshot_persistence_owner_contract": build_chapter_generation_snapshot_owner_contract(),
+        "service_runtime_closeout_status": {
+            "owner_profile": "phase5-batch-generation-owner",
+            "batch_generation_manifest_probe_count": 11,
+            "rust_manifest_probe_count": 11,
+            "python_fallback_probe_count": 0,
+            "runtime_lifecycle_owner": "BatchGenerationRuntimeLifecyclePlan::start",
+            "step_execution_owner": "PreparedBatchGenerationStepExecution::start",
+            "candidate_gateway_owner": "generate_and_persist_chapter_content_with_candidate_route_gateway",
+            "selected_candidate_event_owner": "build_batch_generation_selected_candidate_event_batch",
+            "checkpoint_owner": "BatchGenerationRuntimePersistencePlan::persist",
+            "retry_progression_owner": "BatchGenerationRetryProgressionPlan::execute",
+            "terminal_runtime_owner": "BatchGenerationPostAnalysisTerminalPlan",
+            "follow_up_analysis_owner": "BatchGenerationFollowUpAnalysisPlan::from_generated_result",
+            "create_response_payload_owner": "BatchGenerationQueuedSnapshotPlan::into_create_response_payload",
+            "resume_response_payload_owner": "BatchGenerationResumeResetPersistencePlan::into_resume_response_payload",
+            "cancel_response_payload_owner": "BatchGenerationCancelledPersistencePlan::build_response_payload_for_task",
+            "cancel_prepare_owner": "prepare_batch_generation_cancel_persistence_plan",
+            "cancel_task_command_owner": "cancel_owned_batch_generation_runtime_command",
+            "resume_restore_owner": "prepare_batch_generation_resume_restored_runtime_state",
+            "gateway_config_owner": "ChapterCandidateRouteGatewayConfig",
+            "source_map_closeout_ready": true,
+            "physical_python_closeout_completed": false,
+            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+            "status": "rust_batch_generation_runtime_state_owner_ready_for_source_map_closeout_review"
+        },
+        "validation_boundary": [
+            "cargo test chapter_batch_generation_runtime_state_service",
+            "cargo test api::health",
+            "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only",
+            "cargo check"
+        ],
+        "rollback_boundary": {
+            "runtime_knob": "python_candidate_executor_fallback",
+            "source_map_policy": "keep_python_batch_generation_runtime_orchestration_shells_as_source_map_until_explicit_freeze_delete_round",
+            "python_fallback_removal_ready": false,
+            "rollback_files": [
+                "backend/app/api/chapter_batch_generation_routes.py",
+                "backend/app/api/chapters.py",
+                "backend/app/services/batch_generation_orchestration_service.py",
+                "backend/app/services/batch_generation_candidate_service.py"
+            ]
+        }
     })
-}
-
-fn build_quality_gate_blocked_failed_chapter_entry(
-    chapter_id: Option<&str>,
-    chapter_number: Option<i32>,
-    chapter_title: Option<&str>,
-    task_error_message: &str,
-    retry_count: i32,
-    terminal_semantics: &BatchGenerationFailedTerminalSemantics,
-    workflow_runtime_state: Option<&Value>,
-) -> Value {
-    let mut entry = build_batch_generation_failed_chapter_entry(
-        chapter_id,
-        chapter_number,
-        chapter_title,
-        task_error_message,
-        retry_count,
-    );
-    if let Some(object) = entry.as_object_mut() {
-        if terminal_semantics.kind == BatchGenerationFailedTerminalKind::ManualReview {
-            apply_manual_review_terminal_fields(object, &terminal_semantics.label);
-        }
-        object.insert("quality_gate_status".to_string(), json!("failed"));
-        object.insert(
-            "quality_gate_failed_metrics".to_string(),
-            json!(extract_quality_gate_failed_metrics_from_runtime_state(
-                workflow_runtime_state
-            )),
-        );
-    }
-    entry
-}
-
-fn extract_quality_gate_failed_metrics_from_runtime_state(
-    workflow_runtime_state: Option<&Value>,
-) -> Vec<String> {
-    let mut collected = Vec::new();
-
-    for candidate in [
-        workflow_runtime_state.and_then(|state| state.get("active_story_repair_payload")),
-        workflow_runtime_state.and_then(|state| state.get("quality_metrics_summary")),
-        workflow_runtime_state.and_then(|state| state.get("latest_quality_metrics")),
-    ] {
-        collected.extend(extract_quality_gate_failed_metrics_from_payload(candidate));
-        if !collected.is_empty() {
-            break;
-        }
-    }
-
-    let mut seen = std::collections::HashSet::new();
-    collected
-        .into_iter()
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .filter(|item| seen.insert(item.clone()))
-        .collect()
-}
-
-fn extract_quality_gate_failed_metrics_from_payload(value: Option<&Value>) -> Vec<String> {
-    let Some(payload) = value.and_then(Value::as_object) else {
-        return Vec::new();
-    };
-
-    let direct_items = payload
-        .get("quality_gate_failed_metrics")
-        .and_then(Value::as_array);
-    let nested_items = payload
-        .get("quality_gate")
-        .and_then(Value::as_object)
-        .and_then(|gate| gate.get("failed_metrics"))
-        .and_then(Value::as_array);
-
-    direct_items
-        .or(nested_items)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    item.as_str().map(str::to_string).or_else(|| {
-                        item.as_object()
-                            .and_then(|entry| entry.get("label"))
-                            .and_then(Value::as_str)
-                            .map(str::to_string)
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BatchGenerationTaskStage {
-    ResumeReset,
-    Preparing,
-    ChapterStarted,
-    ChapterSucceeded,
-    Cancelled,
-    Failed,
-}
-
-impl BatchGenerationTaskStage {
-    fn status(self, completed_chapters: i32, total_chapters: i32) -> &'static str {
-        match self {
-            Self::ResumeReset => "pending",
-            Self::Preparing | Self::ChapterStarted => "running",
-            Self::ChapterSucceeded => {
-                if completed_chapters >= total_chapters {
-                    "completed"
-                } else {
-                    "running"
-                }
-            }
-            Self::Cancelled => "cancelled",
-            Self::Failed => "failed",
-        }
-    }
-
-    fn started_at_update(self) -> TaskTimestampUpdate {
-        match self {
-            Self::ResumeReset => TaskTimestampUpdate::Clear,
-            Self::Preparing => TaskTimestampUpdate::Now,
-            Self::ChapterStarted | Self::ChapterSucceeded | Self::Cancelled | Self::Failed => {
-                TaskTimestampUpdate::Keep
-            }
-        }
-    }
-
-    fn completed_at_update(
-        self,
-        completed_chapters: i32,
-        total_chapters: i32,
-    ) -> TaskTimestampUpdate {
-        match self {
-            Self::ResumeReset | Self::Preparing => TaskTimestampUpdate::Clear,
-            Self::ChapterStarted => TaskTimestampUpdate::Keep,
-            Self::ChapterSucceeded => {
-                if completed_chapters >= total_chapters {
-                    TaskTimestampUpdate::Now
-                } else {
-                    TaskTimestampUpdate::Keep
-                }
-            }
-            Self::Cancelled | Self::Failed => TaskTimestampUpdate::Now,
-        }
-    }
-
-    fn error_message_update(
-        self,
-        error_message: Option<String>,
-    ) -> ModelFieldUpdate<Option<String>> {
-        match self {
-            Self::ResumeReset | Self::Preparing | Self::ChapterStarted | Self::ChapterSucceeded => {
-                ModelFieldUpdate::Set(None)
-            }
-            Self::Cancelled => ModelFieldUpdate::Keep,
-            Self::Failed => ModelFieldUpdate::Set(error_message),
-        }
-    }
-
-    fn completed_chapters_update(self, completed_chapters: i32) -> ModelFieldUpdate<i32> {
-        match self {
-            Self::ResumeReset | Self::ChapterStarted | Self::ChapterSucceeded | Self::Failed => {
-                ModelFieldUpdate::Set(completed_chapters)
-            }
-            Self::Preparing | Self::Cancelled => ModelFieldUpdate::Keep,
-        }
-    }
-
-    fn current_retry_count_update(self) -> ModelFieldUpdate<i32> {
-        match self {
-            Self::ResumeReset | Self::Preparing => ModelFieldUpdate::Set(0),
-            Self::ChapterStarted | Self::ChapterSucceeded | Self::Cancelled | Self::Failed => {
-                ModelFieldUpdate::Keep
-            }
-        }
-    }
-
-    fn current_chapter_id_update(
-        self,
-        current_chapter_id: Option<&str>,
-    ) -> ModelFieldUpdate<Option<String>> {
-        match self {
-            Self::ResumeReset | Self::ChapterStarted | Self::ChapterSucceeded | Self::Failed => {
-                ModelFieldUpdate::Set(current_chapter_id.map(str::to_string))
-            }
-            Self::Preparing | Self::Cancelled => ModelFieldUpdate::Keep,
-        }
-    }
-
-    fn current_chapter_number_update(
-        self,
-        current_chapter_number: Option<i32>,
-    ) -> ModelFieldUpdate<Option<i32>> {
-        match self {
-            Self::ResumeReset | Self::ChapterStarted | Self::ChapterSucceeded | Self::Failed => {
-                ModelFieldUpdate::Set(current_chapter_number)
-            }
-            Self::Preparing | Self::Cancelled => ModelFieldUpdate::Keep,
-        }
-    }
-
-    fn total_chapters_update(self, total_chapters: i32) -> ModelFieldUpdate<i32> {
-        match self {
-            Self::ChapterStarted => ModelFieldUpdate::Set(total_chapters),
-            Self::ResumeReset
-            | Self::Preparing
-            | Self::ChapterSucceeded
-            | Self::Cancelled
-            | Self::Failed => ModelFieldUpdate::Keep,
-        }
-    }
-
-    async fn persist_for_task(
-        self,
-        db: &DatabaseConnection,
-        task_id: &str,
-        current_chapter_id: Option<&str>,
-        current_chapter_number: Option<i32>,
-        completed_chapters: i32,
-        total_chapters: i32,
-        error_message: Option<String>,
-        now: chrono::NaiveDateTime,
-    ) -> Result<(), String> {
-        if let Some(task_model) = batch_generation_task::Entity::find_by_id(task_id)
-            .one(db)
-            .await
-            .map_err(|error| error.to_string())?
-        {
-            let mut active: batch_generation_task::ActiveModel = task_model.into();
-            self.apply_to_active_model(
-                &mut active,
-                current_chapter_id,
-                current_chapter_number,
-                completed_chapters,
-                total_chapters,
-                error_message,
-                now,
-            );
-            active.update(db).await.map_err(|error| error.to_string())?;
-        }
-
-        Ok(())
-    }
-
-    fn apply_to_active_model(
-        self,
-        active: &mut batch_generation_task::ActiveModel,
-        current_chapter_id: Option<&str>,
-        current_chapter_number: Option<i32>,
-        completed_chapters: i32,
-        total_chapters: i32,
-        error_message: Option<String>,
-        now: chrono::NaiveDateTime,
-    ) {
-        active.status = Set(self.status(completed_chapters, total_chapters).to_string());
-
-        match self.started_at_update() {
-            TaskTimestampUpdate::Keep => {}
-            TaskTimestampUpdate::Clear => active.started_at = Set(None),
-            TaskTimestampUpdate::Now => active.started_at = Set(Some(now)),
-        }
-
-        match self.completed_at_update(completed_chapters, total_chapters) {
-            TaskTimestampUpdate::Keep => {}
-            TaskTimestampUpdate::Clear => active.completed_at = Set(None),
-            TaskTimestampUpdate::Now => active.completed_at = Set(Some(now)),
-        }
-
-        match self.error_message_update(error_message) {
-            ModelFieldUpdate::Keep => {}
-            ModelFieldUpdate::Set(value) => active.error_message = Set(value),
-        }
-
-        match self.completed_chapters_update(completed_chapters) {
-            ModelFieldUpdate::Keep => {}
-            ModelFieldUpdate::Set(value) => active.completed_chapters = Set(value),
-        }
-
-        match self.current_retry_count_update() {
-            ModelFieldUpdate::Keep => {}
-            ModelFieldUpdate::Set(value) => active.current_retry_count = Set(value),
-        }
-
-        match self.current_chapter_id_update(current_chapter_id) {
-            ModelFieldUpdate::Keep => {}
-            ModelFieldUpdate::Set(value) => active.current_chapter_id = Set(value),
-        }
-
-        match self.current_chapter_number_update(current_chapter_number) {
-            ModelFieldUpdate::Keep => {}
-            ModelFieldUpdate::Set(value) => active.current_chapter_number = Set(value),
-        }
-
-        match self.total_chapters_update(total_chapters) {
-            ModelFieldUpdate::Keep => {}
-            ModelFieldUpdate::Set(value) => active.total_chapters = Set(value),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BatchGenerationRuntimePersistencePlan {
-    task_stage: BatchGenerationTaskStage,
-    checkpoint_stage: BatchGenerationSnapshotStage,
-    current_chapter_id: Option<String>,
-    current_chapter_number: Option<i32>,
-    completed_chapters: i32,
-    total_chapters: i32,
-    current_retry_count: Option<i32>,
-    error_message: Option<String>,
-    failed_chapter_entry: Option<Value>,
-}
-
-impl BatchGenerationRuntimePersistencePlan {
-    fn preparing(total_chapters: i32) -> Self {
-        Self {
-            task_stage: BatchGenerationTaskStage::Preparing,
-            checkpoint_stage: BatchGenerationSnapshotStage::Preparing,
-            current_chapter_id: None,
-            current_chapter_number: None,
-            completed_chapters: 0,
-            total_chapters,
-            current_retry_count: Some(0),
-            error_message: None,
-            failed_chapter_entry: None,
-        }
-    }
-
-    pub(crate) fn cancelled(completed_chapters: i32, total_chapters: i32) -> Self {
-        Self {
-            task_stage: BatchGenerationTaskStage::Cancelled,
-            checkpoint_stage: BatchGenerationSnapshotStage::Cancelled,
-            current_chapter_id: None,
-            current_chapter_number: None,
-            completed_chapters,
-            total_chapters,
-            current_retry_count: None,
-            error_message: None,
-            failed_chapter_entry: None,
-        }
-    }
-
-    fn chapter_started(
-        chapter_model: &chapter::Model,
-        completed_chapters: i32,
-        total_chapters: i32,
-        retry_count: i32,
-    ) -> Self {
-        Self {
-            task_stage: BatchGenerationTaskStage::ChapterStarted,
-            checkpoint_stage: BatchGenerationSnapshotStage::ChapterStarted,
-            current_chapter_id: Some(chapter_model.id.clone()),
-            current_chapter_number: Some(chapter_model.chapter_number),
-            completed_chapters,
-            total_chapters,
-            current_retry_count: Some(retry_count.max(0)),
-            error_message: None,
-            failed_chapter_entry: None,
-        }
-    }
-
-    fn chapter_succeeded(
-        chapter_model: &chapter::Model,
-        completed_chapters: i32,
-        total_chapters: i32,
-    ) -> Self {
-        Self {
-            task_stage: BatchGenerationTaskStage::ChapterSucceeded,
-            checkpoint_stage: BatchGenerationSnapshotStage::ChapterSucceeded,
-            current_chapter_id: Some(chapter_model.id.clone()),
-            current_chapter_number: Some(chapter_model.chapter_number),
-            completed_chapters,
-            total_chapters,
-            current_retry_count: Some(0),
-            error_message: None,
-            failed_chapter_entry: None,
-        }
-    }
-
-    fn failed(
-        chapter_id: Option<&str>,
-        chapter_number: Option<i32>,
-        chapter_title: Option<&str>,
-        completed_chapters: i32,
-        total_chapters: i32,
-        failure_kind: BatchGenerationFailureKind,
-        failed_retry_count: i32,
-        failed_entry_error: String,
-        task_error_message: String,
-    ) -> Self {
-        let failed_chapter_entry = Some(build_batch_generation_failed_chapter_entry(
-            chapter_id,
-            chapter_number,
-            chapter_title,
-            &failed_entry_error,
-            failed_retry_count,
-        ));
-        Self {
-            task_stage: BatchGenerationTaskStage::Failed,
-            checkpoint_stage: BatchGenerationSnapshotStage::Failed(failure_kind),
-            current_chapter_id: chapter_id.map(str::to_string),
-            current_chapter_number: chapter_number,
-            completed_chapters,
-            total_chapters,
-            current_retry_count: Some(failed_retry_count.max(0)),
-            error_message: Some(task_error_message),
-            failed_chapter_entry,
-        }
-    }
-
-    fn failed_quality_gate_blocked(
-        chapter_id: Option<&str>,
-        chapter_number: Option<i32>,
-        chapter_title: Option<&str>,
-        completed_chapters: i32,
-        total_chapters: i32,
-        retry_count: i32,
-        terminal_semantics: &BatchGenerationFailedTerminalSemantics,
-        workflow_runtime_state: Option<&Value>,
-        task_error_message: String,
-    ) -> Self {
-        let failed_chapter_entry = Some(build_quality_gate_blocked_failed_chapter_entry(
-            chapter_id,
-            chapter_number,
-            chapter_title,
-            &task_error_message,
-            retry_count,
-            terminal_semantics,
-            workflow_runtime_state,
-        ));
-        Self {
-            task_stage: BatchGenerationTaskStage::Failed,
-            checkpoint_stage: BatchGenerationSnapshotStage::Failed(
-                BatchGenerationFailureKind::QualityGateBlocked,
-            ),
-            current_chapter_id: chapter_id.map(str::to_string),
-            current_chapter_number: chapter_number,
-            completed_chapters,
-            total_chapters,
-            current_retry_count: Some(retry_count.max(0)),
-            error_message: Some(task_error_message),
-            failed_chapter_entry,
-        }
-    }
-
-    pub(crate) async fn persist(
-        self,
-        db: &DatabaseConnection,
-        task_id: &str,
-    ) -> Result<(), String> {
-        let now = Utc::now().naive_utc();
-        if let Some(task_model) = batch_generation_task::Entity::find_by_id(task_id)
-            .one(db)
-            .await
-            .map_err(|error| error.to_string())?
-        {
-            let existing_failed_chapters = task_model.failed_chapters.clone();
-            let mut active: batch_generation_task::ActiveModel = task_model.into();
-            self.task_stage.apply_to_active_model(
-                &mut active,
-                self.current_chapter_id.as_deref(),
-                self.current_chapter_number,
-                self.completed_chapters,
-                self.total_chapters,
-                self.error_message.clone(),
-                now,
-            );
-            if let Some(retry_count) = self.current_retry_count {
-                active.current_retry_count = Set(retry_count.max(0));
-            }
-            if matches!(self.task_stage, BatchGenerationTaskStage::Failed) {
-                active.failed_chapters = Set(append_failed_chapter_entry(
-                    &existing_failed_chapters,
-                    self.failed_chapter_entry.as_ref(),
-                ));
-            }
-            active.update(db).await.map_err(|error| error.to_string())?;
-        }
-
-        upsert_batch_generation_runtime_snapshot(
-            db,
-            task_id,
-            build_batch_generation_runtime_checkpoint_for_stage(
-                self.checkpoint_stage,
-                self.current_chapter_id.as_deref(),
-                self.current_chapter_number,
-                self.completed_chapters,
-                self.total_chapters,
-            ),
-        )
-        .await
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BatchGenerationStepProgress {
-    completed: i32,
-    total_chapters: i32,
-}
-
-impl BatchGenerationStepProgress {
-    fn new(completed: i32, total_chapters: i32) -> Self {
-        Self {
-            completed,
-            total_chapters,
-        }
-    }
-
-    fn advance(&self) -> Self {
-        Self {
-            completed: self.completed + 1,
-            total_chapters: self.total_chapters,
-        }
-    }
-}
-
-fn should_retry_batch_generation_attempt(next_retry_count: i32, max_retries: i32) -> bool {
-    next_retry_count >= 0 && next_retry_count <= max_retries.max(0)
-}
-
-fn batch_generation_retry_backoff_seconds(next_retry_count: i32) -> u64 {
-    let exponent = next_retry_count.clamp(0, 4) as u32;
-    2_u64.pow(exponent).min(10)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BatchGenerationRetryPersistenceContract {
-    Generic,
-    QualityGate {
-        terminal_semantics: BatchGenerationFailedTerminalSemantics,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BatchGenerationRetryPersistencePlan {
-    current_chapter_id: String,
-    current_chapter_number: Option<i32>,
-    completed_chapters: i32,
-    total_chapters: i32,
-    next_retry_count: i32,
-    max_retries: i32,
-    wait_seconds: u64,
-    error_message: String,
-    retry_contract: BatchGenerationRetryPersistenceContract,
-}
-
-impl BatchGenerationRetryPersistencePlan {
-    fn new(
-        chapter_model: &chapter::Model,
-        progress: &BatchGenerationStepProgress,
-        next_retry_count: i32,
-        max_retries: i32,
-        error_message: &str,
-        retry_contract: BatchGenerationRetryPersistenceContract,
-    ) -> Self {
-        Self::from_step_context(
-            &chapter_model.id,
-            Some(chapter_model.chapter_number),
-            progress,
-            next_retry_count,
-            max_retries,
-            error_message,
-            retry_contract,
-        )
-    }
-
-    fn from_step_context(
-        chapter_id: &str,
-        chapter_number: Option<i32>,
-        progress: &BatchGenerationStepProgress,
-        next_retry_count: i32,
-        max_retries: i32,
-        error_message: &str,
-        retry_contract: BatchGenerationRetryPersistenceContract,
-    ) -> Self {
-        Self {
-            current_chapter_id: chapter_id.to_string(),
-            current_chapter_number: chapter_number,
-            completed_chapters: progress.completed,
-            total_chapters: progress.total_chapters,
-            next_retry_count: next_retry_count.max(0),
-            max_retries,
-            wait_seconds: batch_generation_retry_backoff_seconds(next_retry_count),
-            error_message: error_message.to_string(),
-            retry_contract,
-        }
-    }
-
-    fn build_waiting_snapshot(&self) -> Value {
-        let mut checkpoint = build_batch_generation_runtime_checkpoint_for_stage(
-            BatchGenerationSnapshotStage::ChapterStarted,
-            Some(&self.current_chapter_id),
-            self.current_chapter_number,
-            self.completed_chapters,
-            self.total_chapters,
-        );
-        if let Some(checkpoint_object) = checkpoint.as_object_mut() {
-            checkpoint_object.insert(
-                "last_event".to_string(),
-                Value::String("chapter_retry".to_string()),
-            );
-            checkpoint_object.insert(
-                "last_message".to_string(),
-                Value::String(match self.current_chapter_number {
-                    Some(chapter_number) => format!(
-                        "第 {} 章生成失败，{} 秒后进行第 {} 次重试",
-                        chapter_number, self.wait_seconds, self.next_retry_count
-                    ),
-                    None => format!(
-                        "章节生成失败，{} 秒后进行第 {} 次重试",
-                        self.wait_seconds, self.next_retry_count
-                    ),
-                }),
-            );
-            checkpoint_object.insert(
-                "current_retry_count".to_string(),
-                Value::Number(self.next_retry_count.into()),
-            );
-            checkpoint_object.insert(
-                "max_retries".to_string(),
-                Value::Number(self.max_retries.into()),
-            );
-            checkpoint_object.insert(
-                "retry_backoff_seconds".to_string(),
-                Value::Number((self.wait_seconds as i64).into()),
-            );
-            checkpoint_object.insert(
-                "last_error".to_string(),
-                Value::String(self.error_message.clone()),
-            );
-            if let BatchGenerationRetryPersistenceContract::QualityGate { terminal_semantics } =
-                &self.retry_contract
-            {
-                checkpoint_object.insert(
-                    "terminal_reason".to_string(),
-                    json!(terminal_semantics.reason),
-                );
-                checkpoint_object.insert(
-                    "terminal_label".to_string(),
-                    json!(terminal_semantics.label.clone()),
-                );
-                checkpoint_object.insert(
-                    "review_required".to_string(),
-                    json!(terminal_semantics.review_required),
-                );
-                checkpoint_object.insert(
-                    "can_resume".to_string(),
-                    json!(terminal_semantics.can_resume),
-                );
-                if terminal_semantics.kind == BatchGenerationFailedTerminalKind::Retry {
-                    checkpoint_object
-                        .insert("quality_gate_decision".to_string(), json!("auto_repair"));
-                    checkpoint_object.insert(
-                        "quality_gate_label".to_string(),
-                        json!(terminal_semantics.label.clone()),
-                    );
-                    checkpoint_object.insert("phase".to_string(), json!("repair_pending"));
-                }
-            }
-        }
-        checkpoint
-    }
-
-    fn apply_to_active_model(&self, active: &mut batch_generation_task::ActiveModel) {
-        active.status = Set("running".to_string());
-        active.error_message = Set(None);
-        active.current_chapter_id = Set(Some(self.current_chapter_id.clone()));
-        active.current_chapter_number = Set(self.current_chapter_number);
-        active.current_retry_count = Set(self.next_retry_count);
-    }
-
-    async fn persist(self, db: &DatabaseConnection, task_id: &str) {
-        if let Ok(Some(task_model)) = batch_generation_task::Entity::find_by_id(task_id)
-            .one(db)
-            .await
-        {
-            let mut active: batch_generation_task::ActiveModel = task_model.into();
-            self.apply_to_active_model(&mut active);
-            let _ = active.update(db).await;
-        }
-
-        let _ =
-            upsert_batch_generation_runtime_snapshot(db, task_id, self.build_waiting_snapshot())
-                .await;
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BatchGenerationGenericFailureRoutingPlan {
-    Retry(BatchGenerationRetryPersistencePlan),
-    Stop(BatchGenerationRuntimePersistencePlan),
-}
-
-impl BatchGenerationGenericFailureRoutingPlan {
-    fn from_step_error(
-        chapter_model: &chapter::Model,
-        progress: &BatchGenerationStepProgress,
-        current_retry_count: i32,
-        max_retries: i32,
-        failure_kind: BatchGenerationFailureKind,
-        error_message: &str,
-    ) -> Self {
-        Self::from_step_context(
-            &chapter_model.id,
-            Some(chapter_model.chapter_number),
-            Some(&chapter_model.title),
-            progress,
-            current_retry_count,
-            max_retries,
-            failure_kind,
-            error_message,
-        )
-    }
-
-    fn from_step_context(
-        chapter_id: &str,
-        chapter_number: Option<i32>,
-        chapter_title: Option<&str>,
-        progress: &BatchGenerationStepProgress,
-        current_retry_count: i32,
-        max_retries: i32,
-        failure_kind: BatchGenerationFailureKind,
-        error_message: &str,
-    ) -> Self {
-        let next_retry_count = current_retry_count + 1;
-        if should_retry_batch_generation_attempt(next_retry_count, max_retries) {
-            return Self::Retry(BatchGenerationRetryPersistencePlan::from_step_context(
-                chapter_id,
-                chapter_number,
-                progress,
-                next_retry_count,
-                max_retries,
-                error_message,
-                BatchGenerationRetryPersistenceContract::Generic,
-            ));
-        }
-
-        Self::Stop(BatchGenerationRuntimePersistencePlan::failed(
-            Some(chapter_id),
-            chapter_number,
-            chapter_title,
-            progress.completed,
-            progress.total_chapters,
-            failure_kind,
-            next_retry_count - 1,
-            error_message.to_string(),
-            build_batch_generation_failed_task_error_message(
-                chapter_number,
-                next_retry_count - 1,
-                error_message,
-            ),
-        ))
-    }
-
-    async fn persist_and_resolve(
-        self,
-        db: &DatabaseConnection,
-        task_id: &str,
-    ) -> BatchGenerationAttemptProgression {
-        match self {
-            BatchGenerationGenericFailureRoutingPlan::Retry(plan) => {
-                let next_retry_count = plan.next_retry_count;
-                plan.persist(db, task_id).await;
-                BatchGenerationRetryProgressionPlan::new(next_retry_count)
-                    .execute()
-                    .await
-            }
-            BatchGenerationGenericFailureRoutingPlan::Stop(plan) => {
-                persist_batch_generation_runtime_plan(db, task_id, plan).await;
-                BatchGenerationAttemptProgression::Driver(
-                    BatchGenerationRuntimeDriverProgression::Stop,
-                )
-            }
-        }
-    }
-}
-
-fn build_batch_generation_failed_task_error_message(
-    chapter_number: Option<i32>,
-    retry_count: i32,
-    error_message: &str,
-) -> String {
-    match chapter_number {
-        Some(chapter_number) => format!(
-            "第{}章生成失败(重试{}次): {}",
-            chapter_number,
-            retry_count.max(0),
-            error_message
-        ),
-        None => format!(
-            "章节生成失败(重试{}次): {}",
-            retry_count.max(0),
-            error_message
-        ),
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BatchGenerationQualityGateRoutingPlan {
-    Retry {
-        runtime_state_patch: Value,
-        persistence_plan: BatchGenerationRetryPersistencePlan,
-        next_retry_count: i32,
-    },
-    Stop {
-        runtime_state_patch: Value,
-        persistence_plan: BatchGenerationRuntimePersistencePlan,
-    },
-}
-
-impl BatchGenerationQualityGateRoutingPlan {
-    fn from_terminal_semantics(
-        chapter_model: &chapter::Model,
-        progress: &BatchGenerationStepProgress,
-        workflow_runtime_state: Option<&Value>,
-        current_retry_count: i32,
-        max_retries: i32,
-        terminal_semantics: BatchGenerationFailedTerminalSemantics,
-    ) -> Option<Self> {
-        match terminal_semantics.kind {
-            BatchGenerationFailedTerminalKind::ManualReview => {
-                let manual_review_label = terminal_semantics.label.clone();
-                let failure_message = format!(
-                    "第{}章触发质量门禁，需人工复核: {}",
-                    chapter_model.chapter_number, manual_review_label
-                );
-                Some(Self::Stop {
-                    runtime_state_patch:
-                        shared_build_quality_gate_blocked_runtime_state_patch_from_workflow_state(
-                            workflow_runtime_state,
-                            chapter_model.chapter_number,
-                            &manual_review_label,
-                        ),
-                    persistence_plan:
-                        BatchGenerationRuntimePersistencePlan::failed_quality_gate_blocked(
-                            Some(&chapter_model.id),
-                            Some(chapter_model.chapter_number),
-                            Some(&chapter_model.title),
-                            progress.completed,
-                            progress.total_chapters,
-                            current_retry_count,
-                            &terminal_semantics,
-                            workflow_runtime_state,
-                            failure_message,
-                        ),
-                })
-            }
-            BatchGenerationFailedTerminalKind::Retry => {
-                let next_retry_count = current_retry_count + 1;
-                if !should_retry_batch_generation_attempt(next_retry_count, max_retries) {
-                    return None;
-                }
-
-                let retry_label = terminal_semantics.label.clone();
-                let retry_message = format!(
-                    "第{}章触发质量修复重试: {}",
-                    chapter_model.chapter_number, retry_label
-                );
-                Some(Self::Retry {
-                    runtime_state_patch: Value::Object(
-                        shared_build_retry_quality_runtime_patch_contract_from_workflow_state(
-                            workflow_runtime_state,
-                            chapter_model.chapter_number,
-                            &retry_label,
-                        ),
-                    ),
-                    persistence_plan: BatchGenerationRetryPersistencePlan::new(
-                        chapter_model,
-                        progress,
-                        next_retry_count,
-                        max_retries,
-                        &retry_message,
-                        BatchGenerationRetryPersistenceContract::QualityGate { terminal_semantics },
-                    ),
-                    next_retry_count,
-                })
-            }
-            BatchGenerationFailedTerminalKind::Error => None,
-        }
-    }
-
-    async fn persist_and_resolve(
-        self,
-        db: &DatabaseConnection,
-        task_id: &str,
-    ) -> BatchGenerationAttemptProgression {
-        match self {
-            BatchGenerationQualityGateRoutingPlan::Retry {
-                runtime_state_patch,
-                persistence_plan,
-                next_retry_count,
-            } => {
-                persistence_plan.persist(db, task_id).await;
-                let _ = upsert_batch_generation_runtime_snapshot(db, task_id, runtime_state_patch)
-                    .await;
-                BatchGenerationRetryProgressionPlan::new(next_retry_count)
-                    .execute()
-                    .await
-            }
-            BatchGenerationQualityGateRoutingPlan::Stop {
-                runtime_state_patch,
-                persistence_plan,
-            } => {
-                let _ = upsert_batch_generation_runtime_snapshot(db, task_id, runtime_state_patch)
-                    .await;
-                persist_batch_generation_runtime_plan(db, task_id, persistence_plan).await;
-                BatchGenerationAttemptProgression::Driver(
-                    BatchGenerationRuntimeDriverProgression::Stop,
-                )
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BatchGenerationAnalysisCompletionPersistencePlan {
-    current_quality_snapshot: Option<Value>,
-    completed_snapshot: Value,
-}
-
-impl BatchGenerationAnalysisCompletionPersistencePlan {
-    async fn build_current_quality_snapshot(
-        db: &DatabaseConnection,
-        batch_task_id: &str,
-        chapter_id: &str,
-    ) -> Option<Value> {
-        let latest_analysis = plot_analysis::Entity::find()
-            .filter(plot_analysis::Column::ChapterId.eq(chapter_id))
-            .order_by_desc(plot_analysis::Column::CreatedAt)
-            .one(db)
-            .await
-            .ok()
-            .flatten()?;
-        let quality_summary =
-            build_current_chapter_quality_summary_from_plot_analysis(&latest_analysis)?;
-        let latest_quality_metrics =
-            build_current_chapter_latest_quality_metrics_from_plot_analysis(&latest_analysis);
-        let persisted_runtime_context = load_chapter_generation_snapshot(db, batch_task_id)
-            .await
-            .ok()
-            .map(BatchGenerationPersistedRuntimeContext::from_snapshot)
-            .unwrap_or_default();
-
-        Some(
-            persisted_runtime_context.build_current_chapter_quality_runtime_snapshot(
-                &quality_summary,
-                latest_quality_metrics.as_ref(),
-            ),
-        )
-    }
-
-    async fn from_generated_result(
-        db: &DatabaseConnection,
-        batch_task_id: &str,
-        generated: &GeneratedChapterResult,
-        analysis_retry_count: i32,
-    ) -> Self {
-        Self {
-            current_quality_snapshot: Self::build_current_quality_snapshot(
-                db,
-                batch_task_id,
-                &generated.chapter_id,
-            )
-            .await,
-            completed_snapshot: build_batch_generation_analysis_completed_snapshot(
-                generated,
-                analysis_retry_count,
-            ),
-        }
-    }
-
-    async fn persist(self, db: &DatabaseConnection, batch_task_id: &str) -> Option<Value> {
-        if let Some(current_quality_snapshot) = self.current_quality_snapshot.as_ref() {
-            let _ = upsert_batch_generation_runtime_snapshot(
-                db,
-                batch_task_id,
-                current_quality_snapshot.clone(),
-            )
-            .await;
-        }
-        let _ =
-            upsert_batch_generation_runtime_snapshot(db, batch_task_id, self.completed_snapshot)
-                .await;
-
-        self.current_quality_snapshot
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BatchGenerationAnalysisStartedPersistencePlan {
-    started_snapshot: Value,
-}
-
-impl BatchGenerationAnalysisStartedPersistencePlan {
-    fn from_generated_result(
-        analysis_task_id: Option<&str>,
-        generated: &GeneratedChapterResult,
-        analysis_retry_count: i32,
-    ) -> Self {
-        Self {
-            started_snapshot: build_batch_generation_analysis_started_snapshot(
-                analysis_task_id,
-                generated,
-                analysis_retry_count,
-            ),
-        }
-    }
-
-    async fn persist(self, db: &DatabaseConnection, batch_task_id: &str) {
-        let _ = upsert_batch_generation_runtime_snapshot(db, batch_task_id, self.started_snapshot)
-            .await;
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BatchGenerationAnalysisRoutingPlan {
-    Retry {
-        retry_snapshot: Value,
-        next_retry_count: i32,
-        wait_seconds: u64,
-    },
-    Stop {
-        error_message: String,
-    },
-}
-
-impl BatchGenerationAnalysisRoutingPlan {
-    fn from_analysis_error_message(
-        chapter_number: i32,
-        error_message: String,
-        analysis_retry_count: i32,
-    ) -> Self {
-        if should_stop_batch_generation_analysis_without_retry(&error_message) {
-            return Self::Stop { error_message };
-        }
-
-        if analysis_retry_count < 2 {
-            let next_retry_count = analysis_retry_count + 1;
-            let wait_seconds = 2_i32.pow(next_retry_count as u32).min(10) as u64;
-            return Self::Retry {
-                retry_snapshot: json!({
-                    "last_event": "analysis_retry",
-                    "last_message": format!("第 {} 章分析失败，准备重试", chapter_number),
-                    "progress": 85,
-                    "phase": "parsing",
-                    "analysis_task_message": format!("第 {} 章分析失败，准备重试", chapter_number),
-                    "analysis_task_progress": 85,
-                    "analysis_last_error": error_message,
-                    "analysis_retry_count": next_retry_count,
-                    "analysis_max_retries": 3,
-                }),
-                next_retry_count,
-                wait_seconds,
-            };
-        }
-
-        Self::Stop { error_message }
-    }
-
-    async fn persist_and_resolve(
-        self,
-        db: &DatabaseConnection,
-        batch_task_id: &str,
-    ) -> Result<(), String> {
-        match self {
-            BatchGenerationAnalysisRoutingPlan::Retry {
-                retry_snapshot,
-                wait_seconds,
-                ..
-            } => {
-                let _ = upsert_batch_generation_runtime_snapshot(db, batch_task_id, retry_snapshot)
-                    .await;
-                sleep(Duration::from_secs(wait_seconds)).await;
-                Ok(())
-            }
-            BatchGenerationAnalysisRoutingPlan::Stop { error_message } => Err(error_message),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BatchGenerationAnalysisAttemptResolution {
-    Completed(Option<Value>),
-    Retry,
-}
-
-fn should_stop_batch_generation_analysis_without_retry(error_message: &str) -> bool {
-    matches!(
-        error_message,
-        "章节不存在或内容为空"
-            | "章节或项目已删除，无法继续分析"
-            | "Chapter or project was deleted before analysis"
-    )
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct BatchGenerationAnalysisAttemptPlan {
-    generated_result: GeneratedChapterResult,
-    analysis_retry_count: i32,
-}
-
-impl BatchGenerationAnalysisAttemptPlan {
-    fn from_generated_result(
-        generated_result: &GeneratedChapterResult,
-        analysis_retry_count: i32,
-    ) -> Self {
-        Self {
-            generated_result: generated_result.clone(),
-            analysis_retry_count,
-        }
-    }
-
-    async fn persist_started(
-        &self,
-        db: &DatabaseConnection,
-        batch_task_id: &str,
-        analysis_task_id: Option<&str>,
-    ) {
-        BatchGenerationAnalysisStartedPersistencePlan::from_generated_result(
-            analysis_task_id,
-            &self.generated_result,
-            self.analysis_retry_count,
-        )
-        .persist(db, batch_task_id)
-        .await;
-    }
-
-    async fn execute(
-        self,
-        db: &DatabaseConnection,
-        batch_task_id: &str,
-        session: &BatchGenerationRuntimeSession,
-    ) -> Result<BatchGenerationAnalysisAttemptResolution, String> {
-        let prepared_analysis = prepare_chapter_analysis_execution(
-            db,
-            &self.generated_result.chapter_id,
-            &session.user_id,
-        )
-        .await
-        .ok();
-        let analysis_task_id = prepared_analysis.as_ref().map(|item| item.task_id());
-        self.persist_started(db, batch_task_id, analysis_task_id)
-            .await;
-
-        let generated_result = self.generated_result;
-        let analysis_retry_count = self.analysis_retry_count;
-
-        let result = if let Some(prepared_analysis) = prepared_analysis {
-            prepared_analysis.execute(db, &session.user_id).await
-        } else {
-            analyze_generated_chapter_follow_up(db, &session.user_id, &generated_result)
-                .await
-                .map_err(|error| format_analysis_error_message(&error))
-        };
-
-        Self::resolve_result(
-            db,
-            batch_task_id,
-            &generated_result,
-            analysis_retry_count,
-            result,
-        )
-        .await
-    }
-
-    async fn resolve_result(
-        db: &DatabaseConnection,
-        batch_task_id: &str,
-        generated_result: &GeneratedChapterResult,
-        analysis_retry_count: i32,
-        result: Result<Value, String>,
-    ) -> Result<BatchGenerationAnalysisAttemptResolution, String> {
-        match result {
-            Ok(_) => {
-                let completion_plan =
-                    BatchGenerationAnalysisCompletionPersistencePlan::from_generated_result(
-                        db,
-                        batch_task_id,
-                        generated_result,
-                        analysis_retry_count,
-                    )
-                    .await;
-                Ok(BatchGenerationAnalysisAttemptResolution::Completed(
-                    completion_plan.persist(db, batch_task_id).await,
-                ))
-            }
-            Err(error_message) => {
-                match BatchGenerationAnalysisRoutingPlan::from_analysis_error_message(
-                    generated_result.chapter_number,
-                    error_message,
-                    analysis_retry_count,
-                )
-                .persist_and_resolve(db, batch_task_id)
-                .await
-                {
-                    Ok(()) => Ok(BatchGenerationAnalysisAttemptResolution::Retry),
-                    Err(error_message) => Err(error_message),
-                }
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub(crate) struct BatchGenerationPersistedRuntimeContext {
-    workflow_runtime_state: Option<Value>,
-    request_runtime_state: BatchGenerationRequestRuntimeState,
-    explicit_story_repair_payload: Option<Value>,
-    quality_metrics_history: Option<Value>,
-    quality_metrics_summary_state: Option<Value>,
-    quality_metrics_summary: Option<Value>,
-    latest_quality_metrics: Option<Value>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RestoredResumeRuntimeStateProjection {
-    pub(crate) quality_status_context: BatchGenerationQualityStatusContext,
-    pub(crate) request_runtime_state: BatchGenerationRequestRuntimeState,
-    pub(crate) runtime_state_seed: Option<Value>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct RestoredResumeRuntimeLaunchParts {
-    pub(crate) request_runtime_state: BatchGenerationRequestRuntimeState,
-    pub(crate) runtime_state_seed: Option<Value>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PreparedBatchGenerationResumeRuntimeLaunch {
-    pub(crate) runtime_input: BatchGenerationExecutionInput,
-    pub(crate) runtime_state_seed: Option<Value>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PreparedSingleChapterResumeRuntimeLaunch {
-    pub(crate) runtime_input: SingleGenerationRuntimeLaunchInput,
-    pub(crate) runtime_state_seed: Option<Value>,
-}
-
-impl RestoredResumeRuntimeStateProjection {
-    pub(crate) fn from_persisted_runtime_context(
-        task_kind: BatchGenerationTaskKind,
-        batch_id: &str,
-        max_retries: i32,
-        persisted_runtime_context: &BatchGenerationPersistedRuntimeContext,
-    ) -> Self {
-        persisted_runtime_context.build_restored_resume_runtime_state(
-            task_kind,
-            batch_id,
-            max_retries,
-        )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_sources(
-        task_kind: BatchGenerationTaskKind,
-        batch_id: &str,
-        max_retries: i32,
-        workflow_runtime_state: Option<&Value>,
-        snapshot: Option<&batch_generation_snapshot::Model>,
-        request_runtime_state: &BatchGenerationRequestRuntimeState,
-    ) -> Self {
-        let workflow_runtime_state = match workflow_runtime_state.cloned() {
-            Some(Value::Object(mut state)) => {
-                state
-                    .entry("batch_request_runtime_state".to_string())
-                    .or_insert_with(|| json!(request_runtime_state));
-                Some(Value::Object(state))
-            }
-            _ => {
-                let state = serde_json::Map::from_iter([(
-                    "batch_request_runtime_state".to_string(),
-                    json!(request_runtime_state),
-                )]);
-                Some(Value::Object(state))
-            }
-        };
-        let persisted_runtime_context = BatchGenerationPersistedRuntimeContext::from_sources(
-            workflow_runtime_state,
-            snapshot.and_then(|item| item.quality_metrics_history.clone()),
-            snapshot.and_then(|item| item.quality_metrics_summary.clone()),
-            snapshot.and_then(|item| item.latest_quality_metrics.clone()),
-        );
-
-        Self::from_persisted_runtime_context(
-            task_kind,
-            batch_id,
-            max_retries,
-            &persisted_runtime_context,
-        )
-    }
-
-    pub(crate) fn is_manual_review_blocked(
-        &self,
-        command_state: &ResumeBatchGenerationCommandState,
-    ) -> bool {
-        resolve_failed_terminal_semantics_from_sources(
-            Some(&command_state.failed_chapters),
-            Some(&self.quality_status_context),
-            command_state.current_retry_count,
-            command_state.max_retries,
-        )
-        .as_ref()
-        .is_some_and(|semantics| semantics.kind == BatchGenerationFailedTerminalKind::ManualReview)
-    }
-
-    pub(crate) fn into_launch_parts(self) -> RestoredResumeRuntimeLaunchParts {
-        RestoredResumeRuntimeLaunchParts {
-            request_runtime_state: self.request_runtime_state,
-            runtime_state_seed: self.runtime_state_seed,
-        }
-    }
-
-    pub(crate) async fn prepare_batch_runtime_launch(
-        self,
-        db: &DatabaseConnection,
-        user_id: &str,
-        chapter_ids: Vec<String>,
-        target_word_count: i32,
-    ) -> Result<PreparedBatchGenerationResumeRuntimeLaunch, String> {
-        let RestoredResumeRuntimeLaunchParts {
-            request_runtime_state,
-            runtime_state_seed,
-        } = self.into_launch_parts();
-        let runtime_input =
-            prepare_batch_generation_runtime_launch_input_from_request_runtime_state(
-                db,
-                user_id,
-                chapter_ids,
-                target_word_count,
-                &request_runtime_state,
-                runtime_state_seed.as_ref(),
-            )
-            .await?;
-
-        Ok(PreparedBatchGenerationResumeRuntimeLaunch {
-            runtime_input,
-            runtime_state_seed,
-        })
-    }
-
-    pub(crate) async fn prepare_single_chapter_runtime_launch(
-        self,
-        db: &DatabaseConnection,
-        user_id: &str,
-        chapter_target: &SingleChapterGenerationTarget,
-        target_word_count: i32,
-    ) -> Result<PreparedSingleChapterResumeRuntimeLaunch, String> {
-        let RestoredResumeRuntimeLaunchParts {
-            request_runtime_state,
-            runtime_state_seed,
-        } = self.into_launch_parts();
-        let runtime_input = prepare_single_chapter_runtime_launch_input_from_request_runtime_state(
-            db,
-            user_id,
-            chapter_target,
-            &request_runtime_state,
-            target_word_count,
-        )
-        .await
-        .map_err(|error| error.detail_message())?;
-
-        Ok(PreparedSingleChapterResumeRuntimeLaunch {
-            runtime_input,
-            runtime_state_seed,
-        })
-    }
-}
-
-impl BatchGenerationPersistedRuntimeContext {
-    pub(crate) fn from_snapshot(snapshot: Option<batch_generation_snapshot::Model>) -> Self {
-        let workflow_runtime_state = snapshot
-            .as_ref()
-            .and_then(|item| item.workflow_runtime_state.clone());
-        let snapshot_quality_metrics_history = snapshot
-            .as_ref()
-            .and_then(|item| item.quality_metrics_history.clone());
-        let snapshot_quality_metrics_summary = snapshot
-            .as_ref()
-            .and_then(|item| item.quality_metrics_summary.clone());
-        let snapshot_latest_quality_metrics = snapshot
-            .as_ref()
-            .and_then(|item| item.latest_quality_metrics.clone());
-
-        Self::from_sources(
-            workflow_runtime_state,
-            snapshot_quality_metrics_history,
-            snapshot_quality_metrics_summary,
-            snapshot_latest_quality_metrics,
-        )
-    }
-
-    pub(crate) fn from_sources(
-        workflow_runtime_state: Option<Value>,
-        snapshot_quality_metrics_history: Option<Value>,
-        snapshot_quality_metrics_summary: Option<Value>,
-        snapshot_latest_quality_metrics: Option<Value>,
-    ) -> Self {
-        let request_runtime_state =
-            parse_batch_generation_request_runtime_state(workflow_runtime_state.as_ref());
-        let explicit_story_repair_payload =
-            active_story_repair_payload_from_runtime_state(workflow_runtime_state.as_ref());
-        let latest_quality_metrics = snapshot_latest_quality_metrics.or_else(|| {
-            workflow_runtime_state
-                .as_ref()
-                .and_then(Value::as_object)
-                .and_then(|state| state.get("latest_quality_metrics").cloned())
-        });
-        let quality_metrics_history = snapshot_quality_metrics_history.or_else(|| {
-            workflow_runtime_state
-                .as_ref()
-                .and_then(Value::as_object)
-                .and_then(|state| state.get("quality_metrics_history").cloned())
-        });
-        let quality_metrics_summary_state = workflow_runtime_state
-            .as_ref()
-            .and_then(Value::as_object)
-            .and_then(|state| state.get("quality_metrics_summary_state").cloned());
-        let quality_metrics_summary = snapshot_quality_metrics_summary.or_else(|| {
-            workflow_runtime_state
-                .as_ref()
-                .and_then(Value::as_object)
-                .and_then(|state| state.get("quality_metrics_summary").cloned())
-        });
-
-        Self {
-            workflow_runtime_state,
-            request_runtime_state,
-            explicit_story_repair_payload,
-            quality_metrics_history,
-            quality_metrics_summary_state,
-            quality_metrics_summary,
-            latest_quality_metrics,
-        }
-    }
-
-    pub(crate) fn has_workflow_runtime_state(&self) -> bool {
-        self.workflow_runtime_state.is_some()
-    }
-
-    pub(crate) fn request_runtime_state(&self) -> &BatchGenerationRequestRuntimeState {
-        &self.request_runtime_state
-    }
-
-    pub(crate) fn explicit_story_repair_payload(&self) -> Option<&Value> {
-        self.explicit_story_repair_payload.as_ref()
-    }
-
-    pub(crate) fn quality_metrics_history(&self) -> Option<&Value> {
-        self.quality_metrics_history.as_ref()
-    }
-
-    pub(crate) fn quality_metrics_summary_state(&self) -> Option<&Value> {
-        self.quality_metrics_summary_state.as_ref()
-    }
-
-    pub(crate) fn quality_metrics_summary(&self) -> Option<&Value> {
-        self.quality_metrics_summary.as_ref()
-    }
-
-    pub(crate) fn latest_quality_metrics(&self) -> Option<&Value> {
-        self.latest_quality_metrics.as_ref()
-    }
-
-    pub(crate) fn restored_quality_runtime_context(
-        &self,
-        task_kind: BatchGenerationTaskKind,
-    ) -> BatchGenerationQualityRuntimeContext {
-        match task_kind {
-            BatchGenerationTaskKind::SingleChapter => {
-                let resolved = resolve_generation_quality_runtime_context_from_persisted_sources(
-                    "chapter",
-                    self.latest_quality_metrics(),
-                    self.quality_metrics_history(),
-                    self.quality_metrics_summary_state(),
-                    self.quality_metrics_summary(),
-                );
-
-                BatchGenerationQualityRuntimeContext {
-                    latest_quality_metrics: resolved.latest_quality_metrics,
-                    quality_metrics_history: resolved.quality_metrics_history,
-                    quality_metrics_summary_state: resolved.quality_metrics_summary_state,
-                    quality_metrics_summary: resolved.quality_metrics_summary,
-                    quality_history_context: resolved.quality_history_context,
-                }
-            }
-            BatchGenerationTaskKind::Batch => {
-                resolve_batch_quality_runtime_context_from_persisted_sources(
-                    self.latest_quality_metrics(),
-                    self.quality_metrics_history(),
-                    self.quality_metrics_summary_state(),
-                    self.quality_metrics_summary(),
-                )
-            }
-        }
-    }
-
-    pub(crate) fn restored_resume_compat_options(
-        &self,
-        restored_quality_context: &BatchGenerationQualityRuntimeContext,
-    ) -> SingleChapterGenerationCompatOptions {
-        restore_story_repair_compat_options_from_active_snapshot(
-            &self.request_runtime_state.compat_options,
-            self.explicit_story_repair_payload(),
-            restored_quality_context.quality_metrics_summary.as_ref(),
-            restored_quality_context.latest_quality_metrics.as_ref(),
-        )
-    }
-
-    pub(crate) fn resolved_resume_active_story_repair_payload(
-        &self,
-        request_active_story_repair_payload: Option<&Value>,
-        restored_quality_context: &BatchGenerationQualityRuntimeContext,
-        scope: &str,
-    ) -> Option<Value> {
-        resolve_resumed_active_story_repair_payload(
-            self.explicit_story_repair_payload(),
-            restored_quality_context.quality_metrics_summary.as_ref(),
-            restored_quality_context.latest_quality_metrics.as_ref(),
-            request_active_story_repair_payload,
-            scope,
-            "recent_history_summary",
-            "Recent history summary",
-        )
-    }
-
-    pub(crate) fn resume_quality_status_context(
-        &self,
-        restored_quality_context: &BatchGenerationQualityRuntimeContext,
-    ) -> BatchGenerationQualityStatusContext {
-        BatchGenerationQualityStatusContext::from_runtime_quality_context_and_active_payload(
-            restored_quality_context,
-            self.explicit_story_repair_payload(),
-        )
-    }
-
-    pub(crate) fn build_restored_resume_runtime_state(
-        &self,
-        task_kind: BatchGenerationTaskKind,
-        batch_id: &str,
-        max_retries: i32,
-    ) -> RestoredResumeRuntimeStateProjection {
-        let restored_quality_context = self.restored_quality_runtime_context(task_kind);
-        let restored_compat_options =
-            self.restored_resume_compat_options(&restored_quality_context);
-        let runtime_scope = match task_kind {
-            BatchGenerationTaskKind::SingleChapter => "chapter",
-            BatchGenerationTaskKind::Batch => "batch",
-        };
-        let restored_request_runtime_state = BatchGenerationRequestRuntimeState::new(
-            restored_compat_options,
-            self.request_runtime_state.model_override.clone(),
-        );
-        let request_active_story_repair_payload =
-            restored_request_runtime_state.active_story_repair_payload_with_scope(runtime_scope);
-        let active_story_repair_payload = self.resolved_resume_active_story_repair_payload(
-            request_active_story_repair_payload.as_ref(),
-            &restored_quality_context,
-            runtime_scope,
-        );
-        let quality_status_context = self.resume_quality_status_context(&restored_quality_context);
-        let runtime_state_seed = build_resume_runtime_state_seed(
-            task_kind,
-            batch_id,
-            max_retries,
-            active_story_repair_payload,
-            restored_quality_context,
-        );
-
-        RestoredResumeRuntimeStateProjection {
-            quality_status_context,
-            request_runtime_state: restored_request_runtime_state,
-            runtime_state_seed,
-        }
-    }
-
-    pub(crate) fn restored_batch_runtime_compat_options(
-        &self,
-        base_compat_options: &SingleChapterGenerationCompatOptions,
-    ) -> SingleChapterGenerationCompatOptions {
-        if !self.has_workflow_runtime_state() {
-            return base_compat_options.clone();
-        }
-
-        let restored_quality_context =
-            self.restored_quality_runtime_context(BatchGenerationTaskKind::Batch);
-
-        restore_story_repair_compat_options_from_active_snapshot(
-            base_compat_options,
-            self.explicit_story_repair_payload(),
-            restored_quality_context.quality_metrics_summary.as_ref(),
-            restored_quality_context.latest_quality_metrics.as_ref(),
-        )
-    }
-
-    pub(crate) fn build_refreshed_runtime_state_preserving_quality(
-        &self,
-        refreshed_quality_summary: Option<&Value>,
-    ) -> Option<Value> {
-        self.has_workflow_runtime_state().then(|| {
-            build_batch_generation_runtime_state_payload_preserving_quality_state(
-                self.request_runtime_state(),
-                self.explicit_story_repair_payload(),
-                self.quality_metrics_summary_state(),
-                self.quality_metrics_history(),
-                self.quality_metrics_summary(),
-                refreshed_quality_summary,
-                self.latest_quality_metrics(),
-            )
-        })
-    }
-
-    pub(crate) fn build_current_chapter_quality_runtime_snapshot(
-        &self,
-        quality_summary: &Value,
-        latest_quality_metrics: Option<&Value>,
-    ) -> Value {
-        build_batch_generation_runtime_state_payload_from_current_quality(
-            self.request_runtime_state(),
-            self.explicit_story_repair_payload(),
-            self.quality_metrics_summary_state(),
-            self.quality_metrics_history(),
-            quality_summary,
-            latest_quality_metrics,
-        )
-    }
-}
-
-fn restore_batch_generation_runtime_compat_options_from_persisted_runtime_context(
-    base_compat_options: &SingleChapterGenerationCompatOptions,
-    persisted_runtime_context: &BatchGenerationPersistedRuntimeContext,
-) -> SingleChapterGenerationCompatOptions {
-    persisted_runtime_context.restored_batch_runtime_compat_options(base_compat_options)
-}
-
-fn build_resume_runtime_state_seed(
-    task_kind: BatchGenerationTaskKind,
-    batch_id: &str,
-    max_retries: i32,
-    active_story_repair_payload: Option<Value>,
-    restored_quality_context: BatchGenerationQualityRuntimeContext,
-) -> Option<Value> {
-    let mut runtime_state = serde_json::Map::from_iter([
-        (
-            "resume_from_batch_id".to_string(),
-            json!(batch_id.to_string()),
-        ),
-        ("current_retry_count".to_string(), json!(0)),
-        ("max_retries".to_string(), json!(max_retries)),
-    ]);
-
-    if let Some(payload) = active_story_repair_payload {
-        runtime_state.insert("active_story_repair_payload".to_string(), payload);
-    }
-    match task_kind {
-        BatchGenerationTaskKind::SingleChapter => {
-            let quality_runtime_context =
-                crate::services::chapter_generation_quality_runtime_context_service::GenerationQualityRuntimeContext {
-                    latest_quality_metrics: restored_quality_context.latest_quality_metrics.clone(),
-                    quality_metrics_history: restored_quality_context.quality_metrics_history.clone(),
-                    quality_metrics_summary_state: restored_quality_context
-                        .quality_metrics_summary_state
-                        .clone(),
-                    quality_metrics_summary: restored_quality_context
-                        .quality_metrics_summary
-                        .clone(),
-                    quality_history_context: restored_quality_context
-                        .quality_history_context
-                        .clone(),
-                };
-            apply_generation_quality_runtime_context_to_payload(
-                &mut runtime_state,
-                quality_runtime_context,
-                None,
-                None,
-                None,
-            );
-        }
-        BatchGenerationTaskKind::Batch => {
-            apply_batch_quality_runtime_context_to_payload(
-                &mut runtime_state,
-                restored_quality_context,
-                None,
-            );
-        }
-    }
-
-    Some(Value::Object(runtime_state))
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct BatchGenerationAttemptInputPlan {
-    provider_payload:
-        crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload,
-    prompt_overrides:
-        crate::services::chapter_generation_prompt_service::ChapterGenerationPromptOverrides,
-}
-
-impl BatchGenerationAttemptInputPlan {
-    async fn resolve_compat_options(
-        db: &DatabaseConnection,
-        task_id: &str,
-        base_compat_options: &SingleChapterGenerationCompatOptions,
-    ) -> SingleChapterGenerationCompatOptions {
-        let persisted_runtime_context = load_chapter_generation_snapshot(db, task_id)
-            .await
-            .ok()
-            .map(BatchGenerationPersistedRuntimeContext::from_snapshot)
-            .unwrap_or_default();
-
-        restore_batch_generation_runtime_compat_options_from_persisted_runtime_context(
-            base_compat_options,
-            &persisted_runtime_context,
-        )
-    }
-
-    async fn prepare(
-        db: &DatabaseConnection,
-        task_id: &str,
-        session: &BatchGenerationRuntimeSession,
-        chapter_model: &chapter::Model,
-    ) -> Result<Self, String> {
-        let resolved_compat_options =
-            Self::resolve_compat_options(db, task_id, &session.compat_options).await;
-        let prompt_overrides = build_prompt_overrides_from_compat_options(&resolved_compat_options);
-        let provider_payload = build_single_chapter_research_provider_payload(
-            db,
-            &session.user_id,
-            &SingleChapterGenerationTarget {
-                project_id: chapter_model.project_id.clone(),
-                chapter_id: chapter_model.id.clone(),
-                chapter_number: chapter_model.chapter_number,
-                title: chapter_model.title.clone(),
-            },
-            &resolved_compat_options,
-        )
-        .await?;
-
-        Ok(Self {
-            provider_payload,
-            prompt_overrides,
-        })
-    }
-
-    async fn execute(
-        db: &DatabaseConnection,
-        task_id: &str,
-        session: &BatchGenerationRuntimeSession,
-        chapter_model: &chapter::Model,
-    ) -> Result<GeneratedChapterResult, String> {
-        let attempt_input = Self::prepare(db, task_id, session, chapter_model).await?;
-        let Self {
-            provider_payload,
-            prompt_overrides,
-        } = attempt_input;
-
-        generate_and_persist_chapter_content_with_provider_payload(
-            db,
-            &session.ai_service,
-            &session.user_id,
-            &chapter_model.id,
-            session.target_word_count,
-            provider_payload,
-            &prompt_overrides,
-        )
-        .await
-    }
-
-    #[cfg(test)]
-    fn from_sources(
-        provider_payload: crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload,
-        prompt_overrides: crate::services::chapter_generation_prompt_service::ChapterGenerationPromptOverrides,
-    ) -> Self {
-        Self {
-            provider_payload,
-            prompt_overrides,
-        }
-    }
-}
-
-fn normalized_quality_guidance_items(value: Option<&Value>, limit: usize) -> Vec<String> {
-    value
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .map(str::to_string)
-                .take(limit)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
-}
-
-fn build_current_chapter_quality_summary_from_plot_analysis(
-    analysis: &plot_analysis::Model,
-) -> Option<Value> {
-    let overall_score = analysis.overall_quality_score?;
-    let pacing_score = analysis.pacing_score;
-    let engagement_score = analysis.engagement_score;
-    let coherence_score = analysis.coherence_score;
-    let suggestions = normalized_quality_guidance_items(analysis.suggestions.as_ref(), 4);
-
-    let metric_pairs = [
-        ("pacing", "节奏", pacing_score),
-        ("engagement", "吸引力", engagement_score),
-        ("coherence", "连贯性", coherence_score),
-    ];
-    let weakest_metric = metric_pairs
-        .into_iter()
-        .filter_map(|(key, label, value)| value.map(|score| (key, label, score)))
-        .min_by(|left, right| left.2.total_cmp(&right.2));
-    let weakest_metric_key = weakest_metric.map(|item| item.0.to_string());
-    let weakest_metric_label = weakest_metric.map(|item| item.1.to_string());
-    let weakest_metric_value = weakest_metric.map(|item| item.2);
-
-    let mut focus_areas = Vec::new();
-    if pacing_score.is_some_and(|score| score < 8.0) {
-        focus_areas.push("节奏".to_string());
-    }
-    if engagement_score.is_some_and(|score| score < 8.0) {
-        focus_areas.push("吸引力".to_string());
-    }
-    if coherence_score.is_some_and(|score| score < 8.0) {
-        focus_areas.push("连贯性".to_string());
-    }
-
-    let mut preserve_strengths = Vec::new();
-    if pacing_score.is_some_and(|score| score >= 8.5) {
-        preserve_strengths.push("节奏稳定".to_string());
-    }
-    if engagement_score.is_some_and(|score| score >= 8.5) {
-        preserve_strengths.push("追读牵引".to_string());
-    }
-    if coherence_score.is_some_and(|score| score >= 8.5) {
-        preserve_strengths.push("逻辑连贯".to_string());
-    }
-    if preserve_strengths.is_empty() && analysis.hooks_count > 0 {
-        preserve_strengths.push("钩子密度".to_string());
-    }
-
-    let repair_summary = suggestions
-        .first()
-        .cloned()
-        .or_else(|| analysis.analysis_report.clone())
-        .unwrap_or_else(|| "当前章节质量分析已完成，建议继续按分析结果微调正文。".to_string());
-
-    let (quality_gate_status, quality_gate_decision, quality_gate_label) = if overall_score < 6.0 {
-        ("failed", "manual_review", "需要人工复核")
-    } else if overall_score < 8.0 {
-        ("warning", "auto_repair", "建议继续修复")
-    } else {
-        ("passed", "passed", "当前章节通过")
-    };
-
-    let failed_metrics = weakest_metric_label
-        .as_ref()
-        .map(|label| vec![json!({"label": label})])
-        .unwrap_or_default();
-
-    Some(json!({
-        "overall_score": overall_score,
-        "chapter_count": 1,
-        "repair_guidance": {
-            "summary": repair_summary,
-            "repair_targets": suggestions,
-            "preserve_strengths": preserve_strengths,
-            "focus_areas": focus_areas,
-            "weakest_metric_key": weakest_metric_key,
-            "weakest_metric_label": weakest_metric_label,
-            "weakest_metric_value": weakest_metric_value,
-        },
-        "quality_gate": {
-            "status": quality_gate_status,
-            "decision": quality_gate_decision,
-            "label": quality_gate_label,
-            "summary": repair_summary,
-            "failed_metrics": failed_metrics,
-        },
-        "quality_runtime_context": {
-            "scope": "batch",
-            "recent_metrics": [{
-                "history_index": 0,
-                "overall_score": overall_score,
-                "repair_guidance": {
-                    "summary": repair_summary,
-                    "repair_targets": suggestions,
-                    "preserve_strengths": preserve_strengths,
-                    "focus_areas": focus_areas,
-                },
-                "quality_gate": {
-                    "status": quality_gate_status,
-                    "decision": quality_gate_decision,
-                    "label": quality_gate_label,
-                    "summary": repair_summary,
-                    "failed_metrics": failed_metrics,
-                }
-            }]
-        }
-    }))
-}
-
-fn build_current_chapter_latest_quality_metrics_from_plot_analysis(
-    analysis: &plot_analysis::Model,
-) -> Option<Value> {
-    let overall_score = analysis.overall_quality_score?;
-    let pacing_score = analysis.pacing_score;
-    let engagement_score = analysis.engagement_score;
-    let coherence_score = analysis.coherence_score;
-    let suggestions = normalized_quality_guidance_items(analysis.suggestions.as_ref(), 4);
-
-    let metric_pairs = [
-        ("pacing", "节奏", pacing_score),
-        ("engagement", "吸引力", engagement_score),
-        ("coherence", "连贯性", coherence_score),
-    ];
-    let weakest_metric = metric_pairs
-        .into_iter()
-        .filter_map(|(key, label, value)| value.map(|score| (key, label, score)))
-        .min_by(|left, right| left.2.total_cmp(&right.2));
-    let weakest_metric_key = weakest_metric.map(|item| item.0.to_string());
-    let weakest_metric_label = weakest_metric.map(|item| item.1.to_string());
-    let weakest_metric_value = weakest_metric.map(|item| item.2);
-
-    let mut focus_areas = Vec::new();
-    if pacing_score.is_some_and(|score| score < 8.0) {
-        focus_areas.push("节奏".to_string());
-    }
-    if engagement_score.is_some_and(|score| score < 8.0) {
-        focus_areas.push("吸引力".to_string());
-    }
-    if coherence_score.is_some_and(|score| score < 8.0) {
-        focus_areas.push("连贯性".to_string());
-    }
-
-    let mut preserve_strengths = Vec::new();
-    if pacing_score.is_some_and(|score| score >= 8.5) {
-        preserve_strengths.push("节奏稳定".to_string());
-    }
-    if engagement_score.is_some_and(|score| score >= 8.5) {
-        preserve_strengths.push("追读牵引".to_string());
-    }
-    if coherence_score.is_some_and(|score| score >= 8.5) {
-        preserve_strengths.push("逻辑连贯".to_string());
-    }
-    if preserve_strengths.is_empty() && analysis.hooks_count > 0 {
-        preserve_strengths.push("钩子密度".to_string());
-    }
-
-    let repair_summary = suggestions
-        .first()
-        .cloned()
-        .or_else(|| analysis.analysis_report.clone())
-        .unwrap_or_else(|| "当前章节质量分析已完成，建议继续按分析结果微调正文。".to_string());
-
-    let (quality_gate_status, quality_gate_decision, quality_gate_label) = if overall_score < 6.0 {
-        ("failed", "manual_review", "需要人工复核")
-    } else if overall_score < 8.0 {
-        ("warning", "auto_repair", "建议继续修复")
-    } else {
-        ("passed", "passed", "当前章节通过")
-    };
-
-    let failed_metrics = weakest_metric_label
-        .as_ref()
-        .map(|label| vec![json!({"label": label})])
-        .unwrap_or_default();
-
-    Some(json!({
-        "overall_score": overall_score,
-        "pacing_score": pacing_score,
-        "engagement_score": engagement_score,
-        "coherence_score": coherence_score,
-        "repair_guidance": {
-            "summary": repair_summary,
-            "repair_targets": suggestions,
-            "preserve_strengths": preserve_strengths,
-            "focus_areas": focus_areas,
-            "weakest_metric_key": weakest_metric_key,
-            "weakest_metric_label": weakest_metric_label,
-            "weakest_metric_value": weakest_metric_value,
-        },
-        "quality_gate": {
-            "status": quality_gate_status,
-            "decision": quality_gate_decision,
-            "label": quality_gate_label,
-            "summary": repair_summary,
-            "failed_metrics": failed_metrics,
-        },
-        "quality_runtime_context": {
-            "scope": "batch",
-            "source": "plot_analysis",
-        }
-    }))
-}
-
-fn build_batch_generation_runtime_state_payload_preserving_quality_state(
-    request_runtime_state: &BatchGenerationRequestRuntimeState,
-    explicit_story_repair_payload: Option<&Value>,
-    existing_quality_metrics_summary_state: Option<&Value>,
-    existing_quality_metrics_history: Option<&Value>,
-    existing_quality_summary: Option<&Value>,
-    refreshed_quality_summary: Option<&Value>,
-    latest_quality_metrics: Option<&Value>,
-) -> Value {
-    let resolved_quality_context =
-        resolve_batch_quality_runtime_context_preserving_existing_quality_state(
-            existing_quality_metrics_summary_state,
-            existing_quality_metrics_history,
-            existing_quality_summary,
-            refreshed_quality_summary,
-            latest_quality_metrics,
-        );
-    let resolved_quality_summary = resolved_quality_context
-        .quality_metrics_summary
-        .clone()
-        .unwrap_or(Value::Null);
-    let mut payload = serde_json::Map::from_iter([(
-        "batch_request_runtime_state".to_string(),
-        json!(request_runtime_state),
-    )]);
-
-    let active_story_repair_payload = resolve_active_story_repair_payload_with_quality_fallback(
-        explicit_story_repair_payload,
-        Some(&resolved_quality_summary),
-        latest_quality_metrics,
-        "batch",
-        "current_quality_state_refresh",
-        "Current quality state refresh",
-    );
-
-    if let Some(active_story_repair_payload) = active_story_repair_payload {
-        payload.insert(
-            "active_story_repair_payload".to_string(),
-            active_story_repair_payload,
-        );
-    }
-    apply_batch_quality_runtime_context_to_payload(
-        &mut payload,
-        resolved_quality_context,
-        Some(resolved_quality_summary.clone()),
-    );
-
-    Value::Object(payload)
-}
-
-fn build_batch_generation_runtime_state_payload_from_current_quality(
-    request_runtime_state: &BatchGenerationRequestRuntimeState,
-    explicit_story_repair_payload: Option<&Value>,
-    existing_quality_metrics_summary_state: Option<&Value>,
-    existing_quality_metrics_history: Option<&Value>,
-    quality_summary: &Value,
-    latest_quality_metrics: Option<&Value>,
-) -> Value {
-    let resolved_quality_context = resolve_batch_quality_runtime_context_from_current_quality(
-        existing_quality_metrics_summary_state,
-        existing_quality_metrics_history,
-        quality_summary,
-        latest_quality_metrics,
-    );
-    let resolved_quality_summary = resolved_quality_context
-        .quality_metrics_summary
-        .clone()
-        .unwrap_or_else(|| quality_summary.clone());
-    let mut payload = serde_json::Map::from_iter([(
-        "batch_request_runtime_state".to_string(),
-        json!(request_runtime_state),
-    )]);
-
-    let active_story_repair_payload = resolve_active_story_repair_payload_with_quality_fallback(
-        explicit_story_repair_payload,
-        Some(&resolved_quality_summary),
-        latest_quality_metrics,
-        "batch",
-        "current_chapter_quality",
-        "Current chapter quality",
-    );
-
-    if let Some(active_story_repair_payload) = active_story_repair_payload {
-        payload.insert(
-            "active_story_repair_payload".to_string(),
-            active_story_repair_payload,
-        );
-    }
-    apply_batch_quality_runtime_context_to_payload(
-        &mut payload,
-        resolved_quality_context,
-        Some(resolved_quality_summary.clone()),
-    );
-
-    Value::Object(payload)
-}
-
-async fn persist_batch_generation_runtime_plan(
-    db: &DatabaseConnection,
-    task_id: &str,
-    persistence_plan: BatchGenerationRuntimePersistencePlan,
-) {
-    let _ = persistence_plan.persist(db, task_id).await;
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct PreparedBatchGenerationStepExecution {
-    chapter_model: chapter::Model,
-    retry_count: i32,
-    max_retries: i32,
-}
-
-impl PreparedBatchGenerationStepExecution {
-    async fn start(
-        db: &DatabaseConnection,
-        task_id: &str,
-        session: &BatchGenerationRuntimeSession,
-        chapter_id: &str,
-        progress: &BatchGenerationStepProgress,
-    ) -> BatchGenerationRuntimeDriverProgression {
-        let mut preparation_retry_count = None;
-
-        loop {
-            let prepared_step = match Self::prepare(db, task_id, chapter_id, progress).await {
-                Ok(prepared_step) => prepared_step,
-                Err(BatchGenerationAttemptProgression::Retry(next_retry_count)) => {
-                    preparation_retry_count = Some(next_retry_count);
-                    continue;
-                }
-                Err(BatchGenerationAttemptProgression::Driver(driver_progression)) => {
-                    return driver_progression;
-                }
-            };
-
-            let prepared_step = if let Some(retry_count) = preparation_retry_count.take() {
-                Self {
-                    retry_count,
-                    ..prepared_step
-                }
-            } else {
-                prepared_step
-            };
-
-            return prepared_step.execute(db, task_id, session, progress).await;
-        }
-    }
-
-    async fn prepare(
-        db: &DatabaseConnection,
-        task_id: &str,
-        chapter_id: &str,
-        progress: &BatchGenerationStepProgress,
-    ) -> Result<Self, BatchGenerationAttemptProgression> {
-        let Some(task_model) = batch_generation_task::Entity::find_by_id(task_id)
-            .one(db)
-            .await
-            .ok()
-            .flatten()
-        else {
-            return Err(BatchGenerationAttemptProgression::Driver(
-                BatchGenerationRuntimeDriverProgression::Stop,
-            ));
-        };
-        if task_model.status == "cancelled" {
-            persist_batch_generation_runtime_plan(
-                db,
-                task_id,
-                BatchGenerationRuntimePersistencePlan::cancelled(
-                    progress.completed,
-                    progress.total_chapters,
-                ),
-            )
-            .await;
-            return Err(BatchGenerationAttemptProgression::Driver(
-                BatchGenerationRuntimeDriverProgression::Stop,
-            ));
-        }
-
-        let chapter_model = match chapter::Entity::find_by_id(chapter_id).one(db).await {
-            Ok(Some(chapter_model)) => chapter_model,
-            Ok(None) => {
-                return Err(BatchGenerationGenericFailureRoutingPlan::from_step_context(
-                    chapter_id,
-                    None,
-                    None,
-                    progress,
-                    task_model.current_retry_count,
-                    task_model.max_retries.max(0),
-                    BatchGenerationFailureKind::MissingChapter,
-                    &format!("章节 {} 不存在", chapter_id),
-                )
-                .persist_and_resolve(db, task_id)
-                .await);
-            }
-            Err(error) => {
-                return Err(BatchGenerationGenericFailureRoutingPlan::from_step_context(
-                    chapter_id,
-                    None,
-                    None,
-                    progress,
-                    task_model.current_retry_count,
-                    task_model.max_retries.max(0),
-                    BatchGenerationFailureKind::LoadChapterError,
-                    &format!("加载章节失败: {}", error),
-                )
-                .persist_and_resolve(db, task_id)
-                .await);
-            }
-        };
-        if chapter_model.project_id != task_model.project_id {
-            return Err(BatchGenerationGenericFailureRoutingPlan::from_step_context(
-                chapter_id,
-                None,
-                None,
-                progress,
-                task_model.current_retry_count,
-                task_model.max_retries.max(0),
-                BatchGenerationFailureKind::GenerationError,
-                &format!("章节 {} 项目不匹配", chapter_id),
-            )
-            .persist_and_resolve(db, task_id)
-            .await);
-        }
-
-        Ok(Self {
-            chapter_model,
-            retry_count: task_model.current_retry_count.max(0),
-            max_retries: task_model.max_retries.max(0),
-        })
-    }
-
-    async fn execute(
-        self,
-        db: &DatabaseConnection,
-        task_id: &str,
-        session: &BatchGenerationRuntimeSession,
-        progress: &BatchGenerationStepProgress,
-    ) -> BatchGenerationRuntimeDriverProgression {
-        let Self {
-            chapter_model,
-            retry_count: initial_retry_count,
-            max_retries,
-        } = self;
-        let mut retry_count = initial_retry_count;
-
-        loop {
-            let _ = BatchGenerationRuntimePersistencePlan::chapter_started(
-                &chapter_model,
-                progress.completed,
-                progress.total_chapters,
-                retry_count,
-            )
-            .persist(db, task_id)
-            .await;
-
-            let prerequisite =
-                match check_chapter_generation_prerequisites(db, &chapter_model).await {
-                    Ok(prerequisite) => prerequisite,
-                    Err(error) => {
-                        match BatchGenerationGenericFailureRoutingPlan::from_step_error(
-                            &chapter_model,
-                            progress,
-                            retry_count,
-                            max_retries,
-                            BatchGenerationFailureKind::GenerationError,
-                            &error,
-                        )
-                        .persist_and_resolve(db, task_id)
-                        .await
-                        {
-                            BatchGenerationAttemptProgression::Retry(next_retry_count) => {
-                                retry_count = next_retry_count;
-                                continue;
-                            }
-                            BatchGenerationAttemptProgression::Driver(driver_progression) => {
-                                return driver_progression;
-                            }
-                        }
-                    }
-                };
-            if !prerequisite.can_generate {
-                match BatchGenerationGenericFailureRoutingPlan::from_step_error(
-                    &chapter_model,
-                    progress,
-                    retry_count,
-                    max_retries,
-                    BatchGenerationFailureKind::GenerationError,
-                    &format!("章节生成失败: {}", prerequisite.error_message),
-                )
-                .persist_and_resolve(db, task_id)
-                .await
-                {
-                    BatchGenerationAttemptProgression::Retry(next_retry_count) => {
-                        retry_count = next_retry_count;
-                        continue;
-                    }
-                    BatchGenerationAttemptProgression::Driver(driver_progression) => {
-                        return driver_progression;
-                    }
-                }
-            }
-
-            match BatchGenerationAttemptInputPlan::execute(db, task_id, session, &chapter_model)
-                .await
-            {
-                Ok(generated_result) => {
-                    match BatchGenerationPostWriteGuardPlan::for_chapter(&chapter_model.id)
-                        .execute(db, task_id)
-                        .await
-                    {
-                        Ok(BatchGenerationPostWriteGuardOutcome::Continue) => {}
-                        Ok(BatchGenerationPostWriteGuardOutcome::Stop) => {
-                            return BatchGenerationRuntimeDriverProgression::Stop;
-                        }
-                        Err(error) => {
-                            match BatchGenerationGenericFailureRoutingPlan::from_step_error(
-                                &chapter_model,
-                                progress,
-                                retry_count,
-                                max_retries,
-                                BatchGenerationFailureKind::GenerationError,
-                                &error,
-                            )
-                            .persist_and_resolve(db, task_id)
-                            .await
-                            {
-                                BatchGenerationAttemptProgression::Retry(next_retry_count) => {
-                                    retry_count = next_retry_count;
-                                    continue;
-                                }
-                                BatchGenerationAttemptProgression::Driver(driver_progression) => {
-                                    return driver_progression;
-                                }
-                            }
-                        }
-                    }
-
-                    match BatchGenerationFollowUpAnalysisPlan::from_generated_result(
-                        &generated_result,
-                    )
-                    .execute(db, task_id, session)
-                    .await
-                    {
-                        Ok(current_quality_runtime_state) => {
-                            match BatchGenerationPostAnalysisTerminalPlan::on_success(
-                                &chapter_model,
-                                progress,
-                                current_quality_runtime_state,
-                            )
-                            .execute(db, task_id)
-                            .await
-                            {
-                                BatchGenerationAttemptProgression::Retry(next_retry_count) => {
-                                    retry_count = next_retry_count;
-                                    continue;
-                                }
-                                BatchGenerationAttemptProgression::Driver(driver_progression) => {
-                                    return driver_progression;
-                                }
-                            }
-                        }
-                        Err(analysis_error) => {
-                            match BatchGenerationPostAnalysisTerminalPlan::on_failure(
-                                &chapter_model,
-                                progress,
-                                analysis_error,
-                            )
-                            .execute(db, task_id)
-                            .await
-                            {
-                                BatchGenerationAttemptProgression::Retry(next_retry_count) => {
-                                    retry_count = next_retry_count;
-                                    continue;
-                                }
-                                BatchGenerationAttemptProgression::Driver(driver_progression) => {
-                                    return driver_progression;
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(task_error_message) => {
-                    match BatchGenerationGenericFailureRoutingPlan::from_step_error(
-                        &chapter_model,
-                        progress,
-                        retry_count,
-                        max_retries,
-                        BatchGenerationFailureKind::GenerationError,
-                        &task_error_message,
-                    )
-                    .persist_and_resolve(db, task_id)
-                    .await
-                    {
-                        BatchGenerationAttemptProgression::Retry(next_retry_count) => {
-                            retry_count = next_retry_count;
-                        }
-                        BatchGenerationAttemptProgression::Driver(driver_progression) => {
-                            return driver_progression;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[cfg(test)]
-    fn from_task_and_chapter(
-        task_model: &batch_generation_task::Model,
-        chapter_model: &chapter::Model,
-    ) -> Self {
-        Self {
-            chapter_model: chapter_model.clone(),
-            retry_count: task_model.current_retry_count.max(0),
-            max_retries: task_model.max_retries.max(0),
-        }
-    }
-}
-
-struct BatchGenerationRuntimeLifecyclePlan {
-    session: BatchGenerationRuntimeSession,
-    chapter_ids: Vec<String>,
-}
-
-impl BatchGenerationRuntimeLifecyclePlan {
-    async fn start(
-        db: &DatabaseConnection,
-        task_id: &str,
-        execution_input: BatchGenerationExecutionInput,
-    ) {
-        Self::from_execution_input(execution_input)
-            .execute(db, task_id)
-            .await;
-    }
-
-    fn from_execution_input(execution_input: BatchGenerationExecutionInput) -> Self {
-        let (session, chapter_ids) =
-            BatchGenerationRuntimeSession::from_execution_input(execution_input);
-
-        Self {
-            session,
-            chapter_ids,
-        }
-    }
-
-    async fn execute(self, db: &DatabaseConnection, task_id: &str) {
-        let _ = BatchGenerationRuntimePersistencePlan::preparing(self.session.total_chapters)
-            .persist(db, task_id)
-            .await;
-        let mut progress = BatchGenerationStepProgress::new(0, self.session.total_chapters);
-
-        for chapter_id in &self.chapter_ids {
-            match PreparedBatchGenerationStepExecution::start(
-                db,
-                task_id,
-                &self.session,
-                chapter_id,
-                &progress,
-            )
-            .await
-            {
-                BatchGenerationRuntimeDriverProgression::Continue(next_progress) => {
-                    progress = next_progress;
-                }
-                BatchGenerationRuntimeDriverProgression::Stop => {
-                    return;
-                }
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct BatchGenerationRetryProgressionPlan {
-    next_retry_count: i32,
-}
-
-impl BatchGenerationRetryProgressionPlan {
-    fn new(next_retry_count: i32) -> Self {
-        Self { next_retry_count }
-    }
-
-    async fn execute(self) -> BatchGenerationAttemptProgression {
-        sleep(Duration::from_secs(batch_generation_retry_backoff_seconds(
-            self.next_retry_count,
-        )))
-        .await;
-        BatchGenerationAttemptProgression::Retry(self.next_retry_count)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BatchGenerationPostWriteGuardPlan {
-    chapter_id: String,
-}
-
-impl BatchGenerationPostWriteGuardPlan {
-    fn for_chapter(chapter_id: &str) -> Self {
-        Self {
-            chapter_id: chapter_id.to_string(),
-        }
-    }
-
-    async fn execute(
-        self,
-        db: &DatabaseConnection,
-        task_id: &str,
-    ) -> Result<BatchGenerationPostWriteGuardOutcome, String> {
-        let task_exists = batch_generation_task::Entity::find_by_id(task_id)
-            .one(db)
-            .await
-            .map_err(|error| error.to_string())?
-            .is_some();
-        if !task_exists {
-            return Ok(Self::resolve(false, true));
-        }
-
-        let chapter_exists = chapter::Entity::find_by_id(&self.chapter_id)
-            .one(db)
-            .await
-            .map_err(|error| error.to_string())?
-            .is_some();
-        Ok(Self::resolve(true, chapter_exists))
-    }
-
-    fn resolve(task_exists: bool, chapter_exists: bool) -> BatchGenerationPostWriteGuardOutcome {
-        if task_exists && chapter_exists {
-            BatchGenerationPostWriteGuardOutcome::Continue
-        } else {
-            BatchGenerationPostWriteGuardOutcome::Stop
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum BatchGenerationPostAnalysisTerminalOutcome {
-    Success {
-        current_quality_runtime_state: Option<Value>,
-    },
-    Failure {
-        analysis_error: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct BatchGenerationPostAnalysisTerminalPlan {
-    chapter_model: chapter::Model,
-    progress: BatchGenerationStepProgress,
-    outcome: BatchGenerationPostAnalysisTerminalOutcome,
-}
-
-impl BatchGenerationPostAnalysisTerminalPlan {
-    fn on_success(
-        chapter_model: &chapter::Model,
-        progress: &BatchGenerationStepProgress,
-        current_quality_runtime_state: Option<Value>,
-    ) -> Self {
-        Self {
-            chapter_model: chapter_model.clone(),
-            progress: progress.clone(),
-            outcome: BatchGenerationPostAnalysisTerminalOutcome::Success {
-                current_quality_runtime_state,
-            },
-        }
-    }
-
-    fn on_failure(
-        chapter_model: &chapter::Model,
-        progress: &BatchGenerationStepProgress,
-        analysis_error: String,
-    ) -> Self {
-        Self {
-            chapter_model: chapter_model.clone(),
-            progress: progress.clone(),
-            outcome: BatchGenerationPostAnalysisTerminalOutcome::Failure { analysis_error },
-        }
-    }
-
-    async fn execute(
-        self,
-        db: &DatabaseConnection,
-        task_id: &str,
-    ) -> BatchGenerationAttemptProgression {
-        let Self {
-            chapter_model,
-            progress,
-            outcome,
-        } = self;
-
-        match outcome {
-            BatchGenerationPostAnalysisTerminalOutcome::Success {
-                current_quality_runtime_state,
-            } => {
-                Self {
-                    chapter_model,
-                    progress,
-                    outcome: BatchGenerationPostAnalysisTerminalOutcome::Success {
-                        current_quality_runtime_state: None,
-                    },
-                }
-                .resolve_analysis_success_outcome(db, task_id, current_quality_runtime_state)
-                .await
-            }
-            BatchGenerationPostAnalysisTerminalOutcome::Failure { analysis_error } => {
-                Self {
-                    chapter_model,
-                    progress,
-                    outcome: BatchGenerationPostAnalysisTerminalOutcome::Failure {
-                        analysis_error: String::new(),
-                    },
-                }
-                .fail_after_analysis(db, task_id, analysis_error)
-                .await
-            }
-        }
-    }
-
-    async fn resolve_analysis_success_outcome(
-        self,
-        db: &DatabaseConnection,
-        task_id: &str,
-        current_quality_runtime_state: Option<Value>,
-    ) -> BatchGenerationAttemptProgression {
-        if let Some(quality_gate_outcome) = self
-            .resolve_quality_gate_outcome(db, task_id, current_quality_runtime_state.as_ref())
-            .await
-        {
-            return quality_gate_outcome;
-        }
-
-        let next_progress = self.progress.advance();
-        BatchGenerationAttemptProgression::Driver(
-            self.persist_post_generation_success(db, task_id, next_progress)
-                .await,
-        )
-    }
-
-    async fn resolve_quality_gate_outcome(
-        &self,
-        db: &DatabaseConnection,
-        task_id: &str,
-        current_quality_runtime_state: Option<&Value>,
-    ) -> Option<BatchGenerationAttemptProgression> {
-        let (snapshot, current_retry_count, max_retries) =
-            Self::load_quality_gate_retry_budget_context(db, task_id).await;
-        let persisted_workflow_runtime_state = snapshot
-            .as_ref()
-            .and_then(|item| item.workflow_runtime_state.as_ref());
-        let workflow_runtime_state =
-            current_quality_runtime_state.or(persisted_workflow_runtime_state);
-        let Some(terminal_semantics) = resolve_batch_generation_quality_gate_terminal_semantics(
-            snapshot.as_ref(),
-            workflow_runtime_state,
-            current_retry_count,
-            max_retries,
-        ) else {
-            return None;
-        };
-
-        let routing_plan = BatchGenerationQualityGateRoutingPlan::from_terminal_semantics(
-            &self.chapter_model,
-            &self.progress,
-            workflow_runtime_state,
-            current_retry_count,
-            max_retries,
-            terminal_semantics,
-        )?;
-
-        Some(routing_plan.persist_and_resolve(db, task_id).await)
-    }
-
-    async fn load_quality_gate_retry_budget_context(
-        db: &DatabaseConnection,
-        task_id: &str,
-    ) -> (Option<batch_generation_snapshot::Model>, i32, i32) {
-        let snapshot = load_chapter_generation_snapshot(db, task_id)
-            .await
-            .ok()
-            .flatten();
-        let task_retry_context = batch_generation_task::Entity::find_by_id(task_id)
-            .one(db)
-            .await
-            .ok()
-            .flatten();
-        let current_retry_count = task_retry_context
-            .as_ref()
-            .map(|task| task.current_retry_count.max(0))
-            .unwrap_or(0);
-        let max_retries = task_retry_context
-            .as_ref()
-            .map(|task| task.max_retries.max(0))
-            .unwrap_or(0);
-
-        (snapshot, current_retry_count, max_retries)
-    }
-
-    async fn fail_after_analysis(
-        self,
-        db: &DatabaseConnection,
-        task_id: &str,
-        analysis_error: String,
-    ) -> BatchGenerationAttemptProgression {
-        let _ = upsert_batch_generation_runtime_snapshot(
-            db,
-            task_id,
-            json!({
-                "last_event": "analysis_failed",
-                "last_message": format!("第 {} 章分析失败，批量任务终止", self.chapter_model.chapter_number),
-                "progress": 100,
-                "phase": "failed",
-                "analysis_task_message": format!("第 {} 章分析失败，批量任务终止", self.chapter_model.chapter_number),
-                "analysis_task_progress": 100,
-                "analysis_last_error": analysis_error,
-                "analysis_retry_count": 3,
-                "analysis_max_retries": 3,
-            }),
-        )
-        .await;
-
-        persist_batch_generation_runtime_plan(
-            db,
-            task_id,
-            BatchGenerationRuntimePersistencePlan::failed(
-                Some(&self.chapter_model.id),
-                Some(self.chapter_model.chapter_number),
-                Some(&self.chapter_model.title),
-                self.progress.completed,
-                self.progress.total_chapters,
-                BatchGenerationFailureKind::GenerationError,
-                3,
-                format!("章节分析失败，已重试3次: {}", analysis_error),
-                format!(
-                    "第{}章分析失败，已重试3次: {}",
-                    self.chapter_model.chapter_number, analysis_error
-                ),
-            ),
-        )
-        .await;
-
-        BatchGenerationAttemptProgression::Driver(BatchGenerationRuntimeDriverProgression::Stop)
-    }
-
-    async fn persist_post_generation_success(
-        self,
-        db: &DatabaseConnection,
-        task_id: &str,
-        next_progress: BatchGenerationStepProgress,
-    ) -> BatchGenerationRuntimeDriverProgression {
-        self.refresh_runtime_story_repair_state(db, task_id).await;
-        persist_batch_generation_runtime_plan(
-            db,
-            task_id,
-            BatchGenerationRuntimePersistencePlan::chapter_succeeded(
-                &self.chapter_model,
-                next_progress.completed,
-                next_progress.total_chapters,
-            ),
-        )
-        .await;
-
-        BatchGenerationRuntimeDriverProgression::Continue(next_progress)
-    }
-
-    async fn refresh_runtime_story_repair_state(&self, db: &DatabaseConnection, task_id: &str) {
-        let persisted_runtime_context = load_chapter_generation_snapshot(db, task_id)
-            .await
-            .ok()
-            .map(BatchGenerationPersistedRuntimeContext::from_snapshot)
-            .unwrap_or_default();
-        if !persisted_runtime_context.has_workflow_runtime_state() {
-            return;
-        }
-
-        let quality_summary = load_recent_batch_story_repair_quality_summary(
-            db,
-            &self.chapter_model.project_id,
-            self.chapter_model.chapter_number + 1,
-        )
-        .await
-        .ok()
-        .flatten();
-        let Some(refreshed_runtime_state) = persisted_runtime_context
-            .build_refreshed_runtime_state_preserving_quality(quality_summary.as_ref())
-        else {
-            return;
-        };
-
-        let _ =
-            upsert_batch_generation_runtime_snapshot(db, task_id, refreshed_runtime_state).await;
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct BatchGenerationFollowUpAnalysisPlan {
-    generated_result: GeneratedChapterResult,
-}
-
-impl BatchGenerationFollowUpAnalysisPlan {
-    fn from_generated_result(generated_result: &GeneratedChapterResult) -> Self {
-        Self {
-            generated_result: generated_result.clone(),
-        }
-    }
-
-    async fn execute(
-        self,
-        db: &DatabaseConnection,
-        batch_task_id: &str,
-        session: &BatchGenerationRuntimeSession,
-    ) -> Result<Option<Value>, String> {
-        if !session.compat_options.enable_analysis() {
-            return Ok(None);
-        }
-
-        for analysis_retry_count in 0..3 {
-            match BatchGenerationAnalysisAttemptPlan::from_generated_result(
-                &self.generated_result,
-                analysis_retry_count,
-            )
-            .execute(db, batch_task_id, session)
-            .await?
-            {
-                BatchGenerationAnalysisAttemptResolution::Completed(current_quality_snapshot) => {
-                    return Ok(current_quality_snapshot);
-                }
-                BatchGenerationAnalysisAttemptResolution::Retry => {
-                    continue;
-                }
-            }
-        }
-
-        Err("章节分析失败".to_string())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BatchGenerationRuntimeDriverProgression {
-    Continue(BatchGenerationStepProgress),
-    Stop,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum BatchGenerationAttemptProgression {
-    Retry(i32),
-    Driver(BatchGenerationRuntimeDriverProgression),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BatchGenerationPostWriteGuardOutcome {
-    Continue,
-    Stop,
-}
-
-fn build_batch_generation_analysis_completed_snapshot(
-    generated: &GeneratedChapterResult,
-    analysis_retry_count: i32,
-) -> serde_json::Value {
-    json!({
-        "last_event": "analysis_completed",
-        "last_message": format!("第 {} 章分析完成", generated.chapter_number),
-        "progress": 100,
-        "analysis_task_message": format!("第 {} 章分析完成", generated.chapter_number),
-        "analysis_task_progress": 100,
-        "analysis_last_error": Value::Null,
-        "analysis_retry_count": analysis_retry_count,
-        "analysis_max_retries": 3,
-    })
-}
-
-fn build_batch_generation_analysis_started_snapshot(
-    analysis_task_id: Option<&str>,
-    generated: &GeneratedChapterResult,
-    analysis_retry_count: i32,
-) -> serde_json::Value {
-    json!({
-        "last_event": "analysis_started",
-        "last_message": "正在分析章节",
-        "progress": 85,
-        "phase": "parsing",
-        "analysis_task_id": analysis_task_id,
-        "analysis_task_message": format!("第 {} 章分析任务已启动", generated.chapter_number),
-        "analysis_task_progress": 85,
-        "analysis_started_chapter_id": generated.chapter_id,
-        "analysis_started_chapter_number": generated.chapter_number,
-        "analysis_started_at": chrono::Utc::now().to_rfc3339(),
-        "analysis_retry_count": analysis_retry_count,
-        "analysis_max_retries": 3,
-    })
-}
-
-fn apply_manual_review_terminal_fields(
-    object: &mut serde_json::Map<String, Value>,
-    manual_review_label: &str,
-) {
-    shared_apply_manual_review_terminal_fields(object, manual_review_label);
-}
-
-fn resolve_batch_generation_quality_gate_terminal_semantics(
-    snapshot: Option<&crate::models::batch_generation_snapshot::Model>,
-    workflow_runtime_state: Option<&Value>,
-    current_retry_count: i32,
-    max_retries: i32,
-) -> Option<BatchGenerationFailedTerminalSemantics> {
-    let quality_status_context =
-        BatchGenerationQualityStatusContext::from_snapshot_and_runtime_state(
-            snapshot,
-            workflow_runtime_state,
-        );
-    resolve_failed_terminal_semantics_from_sources(
-        Some(&json!([])),
-        Some(&quality_status_context),
-        current_retry_count,
-        max_retries,
-    )
-}
-
-fn format_analysis_error_message(
-    error: &crate::services::chapter_analysis_service::CreateChapterAnalysisTaskError,
-) -> String {
-    match error {
-        crate::services::chapter_analysis_service::CreateChapterAnalysisTaskError::ChapterEmpty => {
-            "章节不存在或内容为空".to_string()
-        }
-        crate::services::chapter_analysis_service::CreateChapterAnalysisTaskError::ProjectMissing => {
-            "章节或项目已删除，无法继续分析".to_string()
-        }
-        crate::services::chapter_analysis_service::CreateChapterAnalysisTaskError::Internal(message) => {
-            message.clone()
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        batch_generation_retry_backoff_seconds, build_batch_generation_execution_input,
-        build_batch_generation_resume_runtime_checkpoint,
+        batch_generation_retry_backoff_seconds, build_batch_generation_attempt_input_owner_contract,
+        build_batch_generation_execution_input, build_batch_generation_resume_runtime_checkpoint,
         build_batch_generation_runtime_checkpoint_for_stage,
         build_batch_generation_runtime_launch_input_from_runtime_state_seed,
+        build_batch_generation_quality_payload_owner_contract,
+        build_batch_generation_runtime_persistence_owner_contract,
+        build_batch_generation_selected_candidate_event_owner_contract,
+        build_batch_generation_runtime_state_owner_contract,
         build_pending_batch_generation_runtime_checkpoint,
+        prepare_batch_generation_cancel_persistence_plan,
+        prepare_batch_generation_resume_restored_runtime_state,
+        build_quality_gate_blocked_runtime_state_patch_from_workflow_state,
+        build_retry_quality_runtime_patch_contract_from_workflow_state,
         checkpoint_message_for_batch_generation_failure, compute_batch_running_progress,
         dispatch_batch_generation_runtime, merge_batch_generation_runtime_state,
         restore_batch_generation_runtime_compat_options_from_persisted_runtime_context,
@@ -4579,6 +318,8 @@ mod tests {
         BatchGenerationFollowUpAnalysisPlan, BatchGenerationPersistedRuntimeContext,
         BatchGenerationPostAnalysisTerminalOutcome, BatchGenerationPostAnalysisTerminalPlan,
         BatchGenerationPostWriteGuardOutcome, BatchGenerationPostWriteGuardPlan,
+        PrepareBatchGenerationCancelPersistenceError,
+        PrepareBatchGenerationResumeRuntimeStateError,
         BatchGenerationQueuedSnapshotPlan, BatchGenerationResumeSnapshotPlan,
         BatchGenerationRetryProgressionPlan, BatchGenerationRuntimeDriverProgression,
         BatchGenerationRuntimeLifecyclePlan, BatchGenerationRuntimeSession,
@@ -4592,25 +333,748 @@ mod tests {
         BatchGenerationFailedTerminalKind, BatchGenerationFailedTerminalSemantics,
     };
     use crate::services::chapter_batch_generation_write_workflow_service::build_batch_generation_runtime_state_payload_from_parts_with_explicit_payload;
-    use crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig;
+    use crate::services::chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig;
+    use crate::services::chapter_generation_execution_contract_service::BatchGenerationRequestRuntimeState;
+    use crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig;
     use crate::services::chapter_generation_execution_contract_service::{
         build_prompt_overrides_from_compat_options, SingleChapterGenerationCompatOptions,
     };
-    use crate::services::chapter_generation_quality_runtime_context_service::{
+    use crate::services::chapter_generation_runtime_service::quality_runtime_context_owner::{
         normalize_terminal_quality_history as shared_normalize_terminal_quality_history,
         normalize_terminal_quality_history_context as shared_normalize_terminal_quality_history_context,
     };
-    use crate::services::chapter_generation_request_runtime_state_service::BatchGenerationRequestRuntimeState;
-    use crate::services::chapter_generation_runtime_service::GeneratedChapterResult;
-    use crate::services::chapter_generation_terminal_runtime_patch_service::{
-        apply_terminal_quality_runtime_patch_contract as shared_apply_terminal_quality_runtime_patch_contract,
-        build_manual_review_terminal_runtime_patch_contract as shared_build_manual_review_terminal_runtime_patch_contract,
-        build_quality_gate_blocked_runtime_state_patch_from_workflow_state as shared_build_quality_gate_blocked_runtime_state_patch_from_workflow_state,
-        build_retry_quality_runtime_patch_contract_from_workflow_state as shared_build_retry_quality_runtime_patch_contract_from_workflow_state,
+    use crate::services::chapter_batch_generation_runtime_state_service::terminal_runtime_patch_owner::{
+        apply_terminal_quality_runtime_patch_contract,
+        build_manual_review_terminal_runtime_patch_contract,
     };
+    use crate::services::chapter_generation_runtime_service::GeneratedChapterResult;
     use chrono::NaiveDate;
-    use sea_orm::Set;
+    use sea_orm::{
+        ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
+        QueryFilter, Schema, Set,
+    };
     use serde_json::{json, Value};
+
+    #[test]
+    fn should_publish_batch_generation_runtime_state_owner_contract() {
+        let contract = build_batch_generation_runtime_state_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_runtime_state_service"
+        );
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/app/api/chapter_batch_generation_routes.py"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][0],
+            "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][1],
+            "backend-rs/src/services/chapter_generation_runtime_service/story_repair_quality_context_owner.rs"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_entrypoints"][0],
+            "build_batch_generation_execution_input"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["candidate_gateway_entrypoints"][1],
+            "build_batch_generation_selected_candidate_event_snapshot"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["response_payload_entrypoints"][0],
+            "CancelledBatchGenerationStatusProjection::build_status_payload_for_task"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["response_payload_entrypoints"][1],
+            "build_batch_generation_status_task_payload_with_quality_context"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["response_payload_entrypoints"][2],
+            "BatchGenerationQueuedSnapshotPlan::into_create_response_payload"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["response_payload_entrypoints"][3],
+            "BatchGenerationResumeResetPersistencePlan::into_resume_response_payload"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["cancel_prepare_entrypoints"][0],
+            "prepare_batch_generation_cancel_persistence_plan"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["cancel_command_entrypoints"][0],
+            "cancel_owned_batch_generation_runtime_command"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["resume_restore_entrypoints"][0],
+            "prepare_batch_generation_resume_restored_runtime_state"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["create_response_payload_owner"],
+            "BatchGenerationQueuedSnapshotPlan::into_create_response_payload"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["resume_response_payload_owner"],
+            "BatchGenerationResumeResetPersistencePlan::into_resume_response_payload"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["cancel_prepare_owner"],
+            "prepare_batch_generation_cancel_persistence_plan"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["cancel_task_command_owner"],
+            "cancel_owned_batch_generation_runtime_command"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["resume_restore_owner"],
+            "prepare_batch_generation_resume_restored_runtime_state"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["cancel_response_payload_owner"],
+            "BatchGenerationCancelledPersistencePlan::build_response_payload_for_task"
+        );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::snapshot_persistence_owner"
+        );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["behavior_contract"]["write_functions"]
+                [0],
+            "persist_chapter_generation_runtime_snapshot"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["retry_and_terminal_entrypoints"][3],
+            "BatchGenerationPostAnalysisTerminalPlan"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["retry_and_terminal_entrypoints"][4],
+            "resolve_batch_generation_quality_gate_terminal_semantics"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["retry_and_terminal_entrypoints"][5],
+            "resolve_failed_terminal_semantics_from_sources"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["follow_up_analysis_entrypoints"][2],
+            "analyze_generated_chapter_follow_up"
+        );
+        assert_eq!(
+            contract["active_consumers"][3],
+            "chapter_batch_generation_active_gateway_smoke_service"
+        );
+        assert_eq!(contract["active_consumers"][4], "chapter_batch_generation");
+        assert_eq!(
+            contract["selected_candidate_event_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::selected_candidate_event_owner"
+        );
+        assert_eq!(
+            contract["terminal_runtime_patch_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::terminal_runtime_patch"
+        );
+        assert_eq!(
+            contract["resume_restore_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::resume_restore_runtime_projection"
+        );
+        assert_eq!(
+            contract["follow_up_analysis_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::follow_up_analysis_runtime_projection"
+        );
+        assert_eq!(
+            contract["retry_routing_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::retry_failure_quality_gate_routing"
+        );
+        assert_eq!(
+            contract["startup_and_command_projection_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::startup_cancel_resume_task_payload_projection"
+        );
+        assert_eq!(
+            contract["runtime_driver_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::runtime_driver_execution_chain"
+        );
+        assert_eq!(
+            contract["attempt_input_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::attempt_input_prompt_provider_gateway_execution"
+        );
+        assert_eq!(
+            contract["runtime_persistence_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::runtime_persistence_task_mutation_projection"
+        );
+        assert_eq!(
+            contract["runtime_launch_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::runtime_launch_session_dispatch"
+        );
+        assert_eq!(
+            contract["runtime_snapshot_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::runtime_snapshot_merge_write_projection"
+        );
+        assert_eq!(
+            contract["terminal_semantics_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::quality_gate_terminal_semantics_projection"
+        );
+        assert_eq!(
+            contract["quality_payload_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::quality_payload_current_quality_projection"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profile"],
+            "phase5-batch-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["batch_generation_manifest_probe_count"],
+            11
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["rust_manifest_probe_count"],
+            11
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["runtime_lifecycle_owner"],
+            "BatchGenerationRuntimeLifecyclePlan::start"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["candidate_gateway_owner"],
+            "generate_and_persist_chapter_content_with_candidate_route_gateway"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["selected_candidate_event_owner"],
+            "build_batch_generation_selected_candidate_event_batch"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_batch_generation_runtime_state_owner_ready_for_source_map_closeout_review"
+        );
+    }
+
+    #[test]
+    fn should_publish_selected_candidate_event_owner_contract() {
+        let contract = build_batch_generation_selected_candidate_event_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_runtime_state_service::selected_candidate_event_owner"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][0],
+            "build_batch_generation_selected_candidate_event_snapshot"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][1],
+            "build_batch_generation_selected_candidate_event_batch"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["projection_helpers"][0],
+            "snapshot_chapter_candidate_event_view"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["projection_helpers"][3],
+            "quality_gate_plan_allows_selected_candidate_chunks"
+        );
+        assert!(contract
+            .as_object()
+            .and_then(|item| item.get("terminal_runtime_patch_owner_contract"))
+            .is_none());
+        assert_eq!(
+            contract["active_consumers"][1],
+            "chapter_batch_generation_active_gateway_smoke_service"
+        );
+    }
+
+    #[test]
+    fn should_publish_terminal_runtime_patch_owner_contract() {
+        let contract = super::build_generation_terminal_runtime_patch_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_runtime_state_service::terminal_runtime_patch"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["patch_entrypoints"][0],
+            "build_quality_gate_blocked_runtime_state_patch"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["patch_entrypoints"][3],
+            "build_retry_quality_runtime_patch_contract_from_workflow_state"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["patch_helpers"][0],
+            "infer_quality_scope_from_workflow_runtime_state"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["patch_helpers"][5],
+            "insert_retry_active_story_repair_payload"
+        );
+        assert_eq!(
+            contract["quality_runtime_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::quality_runtime_context_owner"
+        );
+        assert_eq!(
+            contract["quality_runtime_owner_contract"]["behavior_contract"]["quality_fields"],
+            json!([
+                "latest_quality_metrics",
+                "quality_metrics_history",
+                "quality_metrics_summary_state",
+                "quality_metrics_summary",
+                "quality_history_context"
+            ])
+        );
+        assert_eq!(
+            contract["request_runtime_state_owner_contract"]["owner"],
+            "chapter_generation_execution_contract_service::request_runtime_state"
+        );
+        assert_eq!(
+            contract["request_runtime_state_owner_contract"]["behavior_contract"]["entrypoints"][3],
+            "parse_batch_generation_request_runtime_state"
+        );
+        assert_eq!(
+            contract["active_consumers"][2],
+            "chapter_batch_generation_active_gateway_smoke_service"
+        );
+    }
+
+    #[test]
+    fn should_publish_resume_restore_owner_contract() {
+        let contract = super::build_batch_generation_resume_restore_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_runtime_state_service::resume_restore_runtime_projection"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["restore_entrypoints"][0],
+            "prepare_batch_generation_resume_restored_runtime_state"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["restore_entrypoints"][3],
+            "BatchGenerationPersistedRuntimeContext::build_restored_resume_runtime_state"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["compat_and_quality_restore_helpers"][0],
+            "BatchGenerationPersistedRuntimeContext::restored_resume_compat_options"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["compat_and_quality_restore_helpers"][3],
+            "BatchGenerationPersistedRuntimeContext::restored_quality_runtime_context"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["launch_projection_entrypoints"][2],
+            "RestoredResumeRuntimeStateProjection::into_launch_parts"
+        );
+        assert_eq!(
+            contract["quality_runtime_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::quality_runtime_context_owner"
+        );
+        assert_eq!(
+            contract["quality_runtime_owner_contract"]["rust_owner_map"][2],
+            "resolve_generation_quality_runtime_context_from_persisted_sources"
+        );
+        assert_eq!(
+            contract["request_runtime_state_owner_contract"]["owner"],
+            "chapter_generation_execution_contract_service::request_runtime_state"
+        );
+        assert_eq!(
+            contract["request_runtime_state_owner_contract"]["behavior_contract"]["entrypoints"][3],
+            "parse_batch_generation_request_runtime_state"
+        );
+        assert_eq!(
+            contract["story_repair_quality_context_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::story_repair_quality_context_owner"
+        );
+        assert_eq!(
+            contract["story_repair_quality_context_owner_contract"]["behavior_contract"]
+                ["resume_precedence"][0],
+            "runtime_active_story_repair_payload"
+        );
+        assert_eq!(
+            contract["story_repair_quality_context_owner_contract"]["behavior_contract"]
+                ["active_payload_fields"][0],
+            "summary"
+        );
+        assert_eq!(
+            contract["active_consumers"][0],
+            "chapter_batch_generation_resume_task_command_service"
+        );
+    }
+
+    #[test]
+    fn should_publish_follow_up_analysis_owner_contract() {
+        let contract = super::build_batch_generation_follow_up_analysis_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_runtime_state_service::follow_up_analysis_runtime_projection"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["attempt_entrypoints"][0],
+            "BatchGenerationFollowUpAnalysisPlan::from_generated_result"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["attempt_entrypoints"][4],
+            "BatchGenerationAnalysisAttemptPlan::resolve_result"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["persistence_entrypoints"][3],
+            "BatchGenerationAnalysisCompletionPersistencePlan::persist"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["routing_entrypoints"][2],
+            "should_stop_batch_generation_analysis_without_retry"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["analysis_gateways"][1],
+            "analyze_generated_chapter_follow_up"
+        );
+        assert_eq!(
+            contract["analysis_runtime_owner_contract"]["owner"],
+            "chapter_analysis_runtime_service"
+        );
+        assert_eq!(
+            contract["analysis_runtime_owner_contract"]["behavior_contract"]
+                ["runtime_trigger_owner"],
+            "trigger_runtime_owner::execute_prepared_chapter_analysis_trigger"
+        );
+        assert_eq!(
+            contract["analysis_runtime_owner_contract"]["behavior_contract"]["query_owner_module"],
+            "chapter_analysis_runtime_service::query_owner"
+        );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::snapshot_persistence_owner"
+        );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["behavior_contract"]["read_functions"]
+                [0],
+            "load_chapter_generation_snapshot"
+        );
+        assert_eq!(
+            contract["quality_runtime_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::quality_runtime_context_owner"
+        );
+        assert_eq!(
+            contract["quality_runtime_owner_contract"]["rust_owner_map"][2],
+            "resolve_generation_quality_runtime_context_from_persisted_sources"
+        );
+        assert_eq!(
+            contract["active_consumers"][0],
+            "chapter_batch_generation_runtime_state_service"
+        );
+    }
+
+    #[test]
+    fn should_publish_retry_routing_owner_contract() {
+        let contract = super::build_batch_generation_retry_routing_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_runtime_state_service::retry_failure_quality_gate_routing"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["retry_persistence_entrypoints"][0],
+            "BatchGenerationRetryPersistencePlan::new"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["retry_persistence_entrypoints"][3],
+            "BatchGenerationRetryPersistencePlan::persist"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["routing_entrypoints"][0],
+            "BatchGenerationGenericFailureRoutingPlan::from_step_error"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["routing_entrypoints"][4],
+            "BatchGenerationQualityGateRoutingPlan::persist_and_resolve"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["progression_entrypoints"][1],
+            "BatchGenerationRetryProgressionPlan::execute"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["retry_policy_helpers"][2],
+            "build_batch_generation_failed_task_error_message"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_state_patch_dependencies"][1],
+            "build_retry_quality_runtime_patch_contract_from_workflow_state"
+        );
+        assert_eq!(
+            contract["terminal_runtime_patch_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::terminal_runtime_patch"
+        );
+        assert_eq!(
+            contract["terminal_runtime_patch_owner_contract"]["behavior_contract"]
+                ["patch_entrypoints"][0],
+            "build_quality_gate_blocked_runtime_state_patch"
+        );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::snapshot_persistence_owner"
+        );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["behavior_contract"]["write_functions"]
+                [1],
+            "upsert_chapter_generation_runtime_snapshot"
+        );
+        assert_eq!(
+            contract["active_consumers"][1],
+            "chapter_batch_generation_active_gateway_smoke_service"
+        );
+    }
+
+    #[test]
+    fn should_publish_startup_and_command_projection_owner_contract() {
+        let contract =
+            super::build_batch_generation_startup_and_command_projection_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_runtime_state_service::startup_cancel_resume_task_payload_projection"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["startup_snapshot_entrypoints"][1],
+            "BatchGenerationQueuedSnapshotPlan::into_create_response_payload"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["cancel_command_entrypoints"][3],
+            "cancel_owned_batch_generation_runtime_command"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["resume_reset_entrypoints"][1],
+            "BatchGenerationResumeResetPersistencePlan::into_resume_response_payload"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["response_projection_fields"][0],
+            "checkpoint"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["response_projection_fields"][11],
+            "can_resume"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_state_seed_dependencies"][0],
+            "runtime_state_with_candidate_gateway_metadata"
+        );
+        assert_eq!(contract["active_consumers"][3], "chapter_batch_generation");
+        assert_eq!(
+            contract["task_payload_owner_contract"]["owner"],
+            "chapter_batch_generation_task_payload_base_service"
+        );
+        assert_eq!(
+            contract["task_payload_owner_contract"]["quality_terminal_status_owner_contract"]
+                ["owner"],
+            "chapter_batch_generation_task_payload_base_service::quality_terminal_status_owner"
+        );
+        assert_eq!(
+            contract["quality_runtime_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::quality_runtime_context_owner"
+        );
+        assert_eq!(
+            contract["request_runtime_state_owner_contract"]["owner"],
+            "chapter_generation_execution_contract_service::request_runtime_state"
+        );
+        assert_eq!(
+            contract["story_repair_quality_context_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::story_repair_quality_context_owner"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["runtime_state_keys"][7],
+            "resumed_from_batch_id"
+        );
+    }
+
+    #[test]
+    fn should_publish_runtime_driver_owner_contract() {
+        let contract = super::build_batch_generation_runtime_driver_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_runtime_state_service::runtime_driver_execution_chain"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_lifecycle_entrypoints"][0],
+            "BatchGenerationRuntimeLifecyclePlan::start"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["step_execution_entrypoints"][2],
+            "PreparedBatchGenerationStepExecution::execute"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["post_write_and_terminal_entrypoints"][4],
+            "BatchGenerationPostAnalysisTerminalPlan::execute"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["follow_up_analysis_entrypoints"][1],
+            "BatchGenerationFollowUpAnalysisPlan::execute"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["driver_outcome_contract"]["retry_owner"],
+            "BatchGenerationAttemptProgression::Retry"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_dependencies"][3],
+            "load_recent_batch_story_repair_quality_summary"
+        );
+        assert_eq!(
+            contract["selected_candidate_event_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::selected_candidate_event_owner"
+        );
+        assert_eq!(
+            contract["follow_up_analysis_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::follow_up_analysis_runtime_projection"
+        );
+        assert_eq!(
+            contract["story_repair_quality_context_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::story_repair_quality_context_owner"
+        );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::snapshot_persistence_owner"
+        );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["behavior_contract"]["write_functions"]
+                [1],
+            "upsert_chapter_generation_runtime_snapshot"
+        );
+        assert_eq!(
+            contract["active_consumers"][1],
+            "chapter_batch_generation_active_gateway_smoke_service"
+        );
+    }
+
+    #[test]
+    fn should_publish_runtime_persistence_owner_contract() {
+        let contract = build_batch_generation_runtime_persistence_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_runtime_state_service::runtime_persistence_task_mutation_projection"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["task_mutation_entrypoints"][0],
+            "BatchGenerationResumeTaskResetMutationPlan::from_reset_semantics"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["task_stage_helpers"][2],
+            "BatchGenerationTaskStage::completed_at_update"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["failed_entry_entrypoints"][2],
+            "build_quality_gate_blocked_failed_chapter_entry"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_checkpoint_entrypoints"][6],
+            "BatchGenerationRuntimePersistencePlan::persist"
+        );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::snapshot_persistence_owner"
+        );
+        assert_eq!(
+            contract["terminal_runtime_patch_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service::terminal_runtime_patch"
+        );
+        assert_eq!(
+            contract["active_consumers"][2],
+            "chapter_batch_generation_runtime_state_service::retry_routing_owner"
+        );
+    }
+
+    #[test]
+    fn should_publish_attempt_input_owner_contract() {
+        let contract = build_batch_generation_attempt_input_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_runtime_state_service::attempt_input_prompt_provider_gateway_execution"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["compat_restore_entrypoints"][0],
+            "BatchGenerationAttemptInputPlan::resolve_compat_options"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["prepare_entrypoints"][2],
+            "build_single_chapter_research_provider_payload"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["execute_entrypoints"][1],
+            "generate_and_persist_chapter_content_with_candidate_route_gateway"
+        );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::snapshot_persistence_owner"
+        );
+        assert_eq!(
+            contract["request_runtime_state_owner_contract"]["owner"],
+            "chapter_generation_execution_contract_service::request_runtime_state"
+        );
+        assert_eq!(
+            contract["active_consumers"][1],
+            "chapter_batch_generation_runtime_state_service::runtime_driver_owner"
+        );
+    }
+
+    #[test]
+    fn should_publish_quality_payload_owner_contract() {
+        let contract = build_batch_generation_quality_payload_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_runtime_state_service::quality_payload_current_quality_projection"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["plot_analysis_projection_entrypoints"][1],
+            "build_current_chapter_quality_summary_from_plot_analysis"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_payload_entrypoints"][1],
+            "build_batch_generation_runtime_state_payload_from_current_quality"
+        );
+        assert_eq!(
+            contract["quality_runtime_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::quality_runtime_context_owner"
+        );
+        assert_eq!(
+            contract["story_repair_quality_context_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::story_repair_quality_context_owner"
+        );
+        assert_eq!(
+            contract["request_runtime_state_owner_contract"]["owner"],
+            "chapter_generation_execution_contract_service::request_runtime_state"
+        );
+        assert_eq!(
+            contract["active_consumers"][1],
+            "chapter_batch_generation_runtime_state_service::follow_up_analysis_owner"
+        );
+    }
+
+    fn test_candidate_gateway_config() -> ChapterCandidateRouteGatewayConfig {
+        ChapterCandidateRouteGatewayConfig {
+            rust_executor_enabled: true,
+            fallback_on_rust_error: false,
+            disabled_reason: Some("test batch candidate gateway".to_string()),
+            rollback_boundary: "test_batch_candidate_gateway".to_string(),
+        }
+    }
 
     fn build_task(status: &str) -> batch_generation_task::Model {
         batch_generation_task::Model {
@@ -4864,6 +1328,86 @@ mod tests {
             checkpoint["active_story_repair_payload"]["summary"],
             "补强前章伏笔"
         );
+    }
+
+    #[test]
+    fn should_prepare_resume_restored_runtime_state_owner_contract() {
+        let mut task = build_task("failed");
+        task.id = "task-resume-owner-1".to_string();
+        task.current_retry_count = 2;
+        let command_state = ResumeBatchGenerationCommandState::from_task(&task);
+        let snapshot = build_snapshot_with_runtime_state(
+            json!({
+                "phase": "failed",
+                "last_event": "error",
+                "active_story_repair_payload": {
+                    "summary": "继续沿用"
+                }
+            }),
+            Some(json!([{"overall_score": 88}])),
+        );
+
+        let (restored_runtime_state, existing_workflow_runtime_state) =
+            prepare_batch_generation_resume_restored_runtime_state(&command_state, Some(&snapshot))
+                .expect("resume launch restored state");
+
+        assert_eq!(
+            existing_workflow_runtime_state.expect("workflow runtime state")["phase"],
+            "failed"
+        );
+        let runtime_state_seed = restored_runtime_state
+            .runtime_state_seed
+            .as_ref()
+            .expect("runtime state seed");
+        assert_eq!(runtime_state_seed["current_retry_count"], 0);
+        assert_eq!(runtime_state_seed["max_retries"], 3);
+        assert_eq!(
+            runtime_state_seed["resume_from_batch_id"],
+            "task-resume-owner-1"
+        );
+        assert_eq!(
+            runtime_state_seed["active_story_repair_payload"]["summary"],
+            "继续沿用"
+        );
+        assert_eq!(
+            runtime_state_seed["quality_metrics_history"][0]["overall_score"],
+            88
+        );
+    }
+
+    #[test]
+    fn should_reject_resume_restore_when_status_is_not_resumable() {
+        let command_state = ResumeBatchGenerationCommandState::from_task(&build_task("running"));
+
+        let result = prepare_batch_generation_resume_restored_runtime_state(&command_state, None);
+
+        assert!(matches!(
+            result,
+            Err(PrepareBatchGenerationResumeRuntimeStateError::InvalidStatus)
+        ));
+    }
+
+    #[test]
+    fn should_reject_resume_restore_when_manual_review_is_blocked() {
+        let command_state = ResumeBatchGenerationCommandState::from_task(&build_task("failed"));
+        let snapshot = build_snapshot_with_runtime_state(
+            json!({
+                "active_story_repair_payload": {
+                    "summary": "需要人工处理",
+                    "quality_gate_decision": "manual_review",
+                    "quality_gate_label": "等待人工复核"
+                }
+            }),
+            None,
+        );
+
+        let result =
+            prepare_batch_generation_resume_restored_runtime_state(&command_state, Some(&snapshot));
+
+        assert!(matches!(
+            result,
+            Err(PrepareBatchGenerationResumeRuntimeStateError::ManualReviewBlocked)
+        ));
     }
 
     #[test]
@@ -6481,6 +3025,209 @@ mod tests {
     }
 
     #[test]
+    fn should_prepare_cancel_persistence_plan_from_runtime_owner() {
+        let mut task = build_task("running");
+        task.id = "task-cancel-owner-1".to_string();
+        task.project_id = "project-cancel-1".to_string();
+        task.total_chapters = 2;
+        task.completed_chapters = 1;
+        task.current_chapter_id = Some("chapter-2".to_string());
+        task.current_chapter_number = Some(2);
+
+        let snapshot = build_snapshot(
+            None,
+            None,
+            Some(json!({
+                "progress": 55,
+                "phase": "generating",
+                "status": "running"
+            })),
+        );
+
+        let persistence_plan =
+            prepare_batch_generation_cancel_persistence_plan(&task, Some(&snapshot))
+                .expect("running task should prepare cancel persistence plan");
+        let payload = persistence_plan.response_payload_for_test(batch_generation_task::Model {
+            status: "cancelled".to_string(),
+            ..task
+        });
+
+        assert_eq!(payload["batch_id"], "task-cancel-owner-1");
+        assert_eq!(payload["status"], "cancelled");
+        assert_eq!(payload["message"], "Batch generation cancelled");
+        assert_eq!(payload["checkpoint"]["phase"], "cancelled");
+    }
+
+    #[test]
+    fn should_reject_terminal_status_inside_cancel_prepare_runtime_owner() {
+        let mut task = build_task("cancelled");
+        task.id = "task-cancel-owner-2".to_string();
+
+        let error = prepare_batch_generation_cancel_persistence_plan(&task, None)
+            .expect_err("cancelled task should fail cancel preparation");
+
+        assert!(matches!(
+            error,
+            PrepareBatchGenerationCancelPersistenceError::InvalidStatus(ref status)
+                if status == "cancelled"
+        ));
+        assert_eq!(
+            error.detail_message(),
+            "Cannot cancel task in status cancelled"
+        );
+    }
+
+    async fn setup_cancel_runtime_owner_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite memory db");
+        let builder = db.get_database_backend();
+        let schema = Schema::new(builder);
+
+        db.execute(builder.build(&schema.create_table_from_entity(batch_generation_task::Entity)))
+            .await
+            .expect("create batch_generation_task table");
+        db.execute(
+            builder.build(&schema.create_table_from_entity(batch_generation_snapshot::Entity)),
+        )
+        .await
+        .expect("create batch_generation_snapshot table");
+
+        db
+    }
+
+    async fn seed_cancel_runtime_owner_fixture(db: &DatabaseConnection) {
+        let now = chrono::Utc::now().naive_utc();
+
+        batch_generation_task::ActiveModel {
+            id: Set("batch-cancel-db-smoke".to_string()),
+            project_id: Set("project-cancel-db-smoke".to_string()),
+            user_id: Set("user-cancel-db-smoke".to_string()),
+            start_chapter_number: Set(2),
+            chapter_count: Set(3),
+            chapter_ids: Set(json!([
+                "chapter-cancel-2",
+                "chapter-cancel-3",
+                "chapter-cancel-4"
+            ])),
+            style_id: Set(None),
+            target_word_count: Set(2800),
+            enable_analysis: Set(true),
+            status: Set("running".to_string()),
+            total_chapters: Set(3),
+            completed_chapters: Set(1),
+            failed_chapters: Set(json!([])),
+            current_chapter_id: Set(Some("chapter-cancel-3".to_string())),
+            current_chapter_number: Set(Some(3)),
+            current_retry_count: Set(0),
+            max_retries: Set(3),
+            created_at: Set(Some(now)),
+            started_at: Set(Some(now)),
+            completed_at: Set(None),
+            error_message: Set(None),
+        }
+        .insert(db)
+        .await
+        .expect("insert cancel db smoke task");
+
+        batch_generation_snapshot::ActiveModel {
+            id: Set("snapshot-cancel-db-smoke".to_string()),
+            batch_task_id: Set("batch-cancel-db-smoke".to_string()),
+            latest_quality_metrics: Set(Some(json!({
+                "overall_score": 89.0,
+                "source": "cancel-db-smoke"
+            }))),
+            quality_metrics_history: Set(None),
+            quality_metrics_summary: Set(Some(json!({
+                "chapter_count": 1,
+                "avg_score": 89.0
+            }))),
+            workflow_runtime_state: Set(Some(json!({
+                "phase": "generating",
+                "progress": 48,
+                "last_event": "selected_candidate",
+                "last_message": "Rust cancel smoke before cancellation",
+                "candidate_gateway": {
+                    "execution_path": "rust_candidate_executor",
+                    "fallback_applied": false,
+                    "rollback_boundary": "python_candidate_executor_fallback",
+                    "rust_error": null
+                },
+                "active_story_repair_payload": {
+                    "scope": "batch",
+                    "mode": "cancel-db-smoke"
+                }
+            }))),
+            created_at: Set(Some(now)),
+            updated_at: Set(Some(now)),
+        }
+        .insert(db)
+        .await
+        .expect("insert cancel db smoke snapshot");
+    }
+
+    #[tokio::test]
+    async fn should_persist_db_backed_cancelled_batch_generation_from_runtime_command_owner() {
+        let db = setup_cancel_runtime_owner_db().await;
+        seed_cancel_runtime_owner_fixture(&db).await;
+
+        let payload = super::cancel_owned_batch_generation_runtime_command(
+            &db,
+            "batch-cancel-db-smoke",
+            "user-cancel-db-smoke",
+        )
+        .await
+        .expect("db-backed cancel payload");
+        let updated_task = batch_generation_task::Entity::find_by_id("batch-cancel-db-smoke")
+            .one(&db)
+            .await
+            .expect("load cancelled task")
+            .expect("cancelled task exists");
+        let updated_snapshot = batch_generation_snapshot::Entity::find()
+            .filter(batch_generation_snapshot::Column::BatchTaskId.eq("batch-cancel-db-smoke"))
+            .one(&db)
+            .await
+            .expect("load cancelled snapshot")
+            .expect("cancelled snapshot exists");
+        let runtime_state = updated_snapshot
+            .workflow_runtime_state
+            .expect("cancelled runtime state");
+
+        assert_eq!(payload["batch_id"], "batch-cancel-db-smoke");
+        assert_eq!(payload["status"], "cancelled");
+        assert_eq!(payload["message"], "Batch generation cancelled");
+        assert_eq!(payload["checkpoint"]["phase"], "cancelled");
+        assert_eq!(payload["checkpoint"]["status"], "cancelled");
+        assert_eq!(payload["checkpoint"]["progress"], 100);
+        assert_eq!(
+            payload["candidate_gateway"]["execution_path"],
+            "rust_candidate_executor"
+        );
+        assert_eq!(
+            payload["active_story_repair_payload"]["mode"],
+            "cancel-db-smoke"
+        );
+        assert_eq!(payload["terminal_reason"], "cancelled");
+        assert_eq!(payload["can_resume"], true);
+
+        assert_eq!(updated_task.status, "cancelled");
+        assert!(updated_task.completed_at.is_some());
+        assert_eq!(runtime_state["phase"], "cancelled");
+        assert_eq!(runtime_state["status"], "cancelled");
+        assert_eq!(runtime_state["progress"], 100);
+        assert_eq!(runtime_state["last_event"], "cancelled");
+        assert_eq!(runtime_state["last_message"], "批量生成已取消");
+        assert_eq!(
+            runtime_state["candidate_gateway"]["rollback_boundary"],
+            "python_candidate_executor_fallback"
+        );
+        assert_eq!(
+            runtime_state["active_story_repair_payload"]["mode"],
+            "cancel-db-smoke"
+        );
+    }
+
+    #[test]
     fn should_build_batch_generation_execution_input_from_runtime_owner() {
         let input = build_batch_generation_execution_input(
             "user-10".to_string(),
@@ -6489,14 +3236,16 @@ mod tests {
             SingleChapterGenerationCompatOptions::default(),
             PreparedGenerationExecutionConfig {
                 ai_config: AIConfig::default(),
-                provider_payload: crate::services::chapter_generation_prompt_context_provider_service::build_placeholder_prompt_context_provider_payload(),
+                provider_payload: crate::services::chapter_generation_prompt_service::build_placeholder_prompt_context_provider_payload(),
             },
+            test_candidate_gateway_config(),
         );
 
         assert_eq!(input.user_id, "user-10");
         assert_eq!(input.chapter_ids, vec!["chapter-3".to_string()]);
         assert_eq!(input.target_word_count, 2800);
         assert_eq!(input.ai_config.provider, AIConfig::default().provider);
+        assert!(input.candidate_gateway_config.rust_executor_enabled);
     }
 
     #[test]
@@ -6550,8 +3299,9 @@ mod tests {
             Some(&runtime_state_seed),
             PreparedGenerationExecutionConfig {
                 ai_config: AIConfig::default(),
-                provider_payload: crate::services::chapter_generation_prompt_context_provider_service::build_placeholder_prompt_context_provider_payload(),
+                provider_payload: crate::services::chapter_generation_prompt_service::build_placeholder_prompt_context_provider_payload(),
             },
+            test_candidate_gateway_config(),
         );
 
         assert_eq!(input.user_id, "user-10");
@@ -6577,6 +3327,30 @@ mod tests {
             input.compat_options.web_research_query(),
             Some("江南夜航税卡")
         );
+
+        let (startup_snapshot_plan, startup_input) =
+            super::build_batch_generation_startup_snapshot_and_runtime_launch_input_from_runtime_state_seed(
+                "user-10".to_string(),
+                vec!["chapter-3".to_string(), "chapter-4".to_string()],
+                2,
+                3200,
+                runtime_state_seed,
+                PreparedGenerationExecutionConfig {
+                    ai_config: AIConfig::default(),
+                    provider_payload: crate::services::chapter_generation_prompt_service::build_placeholder_prompt_context_provider_payload(),
+                },
+                test_candidate_gateway_config(),
+            );
+
+        assert_eq!(
+            startup_snapshot_plan.runtime_state()["candidate_gateway"]["execution_path"],
+            "rust_candidate_executor"
+        );
+        assert_eq!(
+            startup_snapshot_plan.runtime_state()["candidate_gateway"]["rollback_boundary"],
+            "test_batch_candidate_gateway"
+        );
+        assert!(startup_input.candidate_gateway_config.rust_executor_enabled);
     }
 
     #[test]
@@ -6588,11 +3362,14 @@ mod tests {
                 target_word_count: 2800,
                 compat_options: SingleChapterGenerationCompatOptions::default(),
                 ai_config: AIConfig::default(),
+                candidate_gateway_config: test_candidate_gateway_config(),
             });
 
         assert_eq!(session.user_id, "user-10");
         assert_eq!(session.target_word_count, 2800);
         assert_eq!(session.total_chapters, 2);
+        assert!(session.candidate_gateway_config.rust_executor_enabled);
+        assert!(!session.candidate_gateway_config.fallback_on_rust_error);
         assert_eq!(
             session.compat_options,
             SingleChapterGenerationCompatOptions::default()
@@ -6601,6 +3378,67 @@ mod tests {
             chapter_ids,
             vec!["chapter-3".to_string(), "chapter-4".to_string()]
         );
+    }
+
+    #[test]
+    fn should_build_selected_candidate_event_snapshot_from_generated_result_owner() {
+        let snapshot = super::build_batch_generation_selected_candidate_event_snapshot(
+            &GeneratedChapterResult {
+                chapter_id: "chapter-3".to_string(),
+                chapter_number: 3,
+                title: "第三章".to_string(),
+                content: "正文".to_string(),
+                word_count: 1200,
+                selected_candidate_event_source: Some(json!({
+                    "full_content": "候选正文",
+                    "candidate_chunks": ["候选", "正文"],
+                    "candidate_index": 1,
+                    "candidate_count": 2,
+                    "winner_candidate_index": 1,
+                    "generation_path": "rust_candidate_executor",
+                    "quality_gate_plan": {"action": "continue"}
+                })),
+                ..Default::default()
+            },
+            true,
+        )
+        .expect("selected candidate event snapshot");
+
+        assert_eq!(snapshot["last_event"], "selected_candidate");
+        assert_eq!(snapshot["selected_candidate_events"][0]["type"], "progress");
+        assert_eq!(
+            snapshot["selected_candidate_events"][0]["generation_path"],
+            "rust_candidate_executor"
+        );
+        assert_eq!(snapshot["selected_candidate_events"][1]["type"], "chunk");
+        assert_eq!(snapshot["selected_candidate_events"][2]["content"], "正文");
+    }
+
+    #[test]
+    fn should_skip_selected_candidate_chunks_for_retry_gate_snapshot() {
+        let snapshot = super::build_batch_generation_selected_candidate_event_snapshot(
+            &GeneratedChapterResult {
+                chapter_id: "chapter-3".to_string(),
+                chapter_number: 3,
+                title: "第三章".to_string(),
+                content: "正文".to_string(),
+                word_count: 1200,
+                selected_candidate_event_source: Some(json!({
+                    "full_content": "候选正文",
+                    "candidate_chunks": ["候选", "正文"],
+                    "quality_gate_plan": {"action": "retry"}
+                })),
+                ..Default::default()
+            },
+            true,
+        )
+        .expect("selected candidate event snapshot");
+
+        let events = snapshot["selected_candidate_events"]
+            .as_array()
+            .expect("selected candidate events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["type"], "progress");
     }
 
     #[test]
@@ -6947,7 +3785,7 @@ mod tests {
 
     #[test]
     fn should_build_quality_gate_blocked_runtime_state_patch_with_terminal_repair_payload() {
-        let patch = shared_build_quality_gate_blocked_runtime_state_patch_from_workflow_state(
+        let patch = build_quality_gate_blocked_runtime_state_patch_from_workflow_state(
             Some(&json!({
                 "quality_metrics_summary": {
                     "overall_score": 7.2,
@@ -7109,7 +3947,7 @@ mod tests {
 
     #[test]
     fn should_build_quality_gate_blocked_runtime_state_patch_from_summary_only_quality_context() {
-        let patch = shared_build_quality_gate_blocked_runtime_state_patch_from_workflow_state(
+        let patch = build_quality_gate_blocked_runtime_state_patch_from_workflow_state(
             Some(&json!({
                 "batch_request_runtime_state": {
                     "compat_options": {}
@@ -7290,6 +4128,7 @@ mod tests {
                 ..Default::default()
             },
             ai_config: AIConfig::default(),
+            candidate_gateway_config: test_candidate_gateway_config(),
         };
 
         let lifecycle =
@@ -7311,7 +4150,7 @@ mod tests {
     #[test]
     fn should_keep_batch_generation_attempt_input_plan_owner_contract() {
         let provider_payload =
-            crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload {
+            crate::services::chapter_generation_prompt_service::PromptContextProviderPayload {
                 characters_info: "[]".to_string(),
                 chapter_careers: "[]".to_string(),
                 recent_chapters_context: "前情".to_string(),
@@ -7901,7 +4740,7 @@ mod tests {
         assert_eq!(payload["phase"], "quality_blocked");
 
         let mut gate = json!({});
-        crate::services::chapter_generation_quality_runtime_context_service::normalize_terminal_quality_gate_payload(
+        crate::services::chapter_generation_runtime_service::quality_runtime_context_owner::normalize_terminal_quality_gate_payload(
             &mut gate,
             "等待人工复核",
         );
@@ -8009,7 +4848,7 @@ mod tests {
         });
 
         let mut payload = serde_json::Map::new();
-        shared_apply_terminal_quality_runtime_patch_contract(
+        apply_terminal_quality_runtime_patch_contract(
             &mut payload,
             Some(&runtime_state),
             runtime_state.get("active_story_repair_payload"),
@@ -8060,9 +4899,8 @@ mod tests {
             }
         });
 
-        let mut payload =
-            shared_build_manual_review_terminal_runtime_patch_contract(7, "等待人工复核");
-        shared_apply_terminal_quality_runtime_patch_contract(
+        let mut payload = build_manual_review_terminal_runtime_patch_contract(7, "等待人工复核");
+        apply_terminal_quality_runtime_patch_contract(
             &mut payload,
             Some(&runtime_state),
             runtime_state.get("active_story_repair_payload"),
@@ -8106,7 +4944,7 @@ mod tests {
                 "phase": "quality_blocked"
             }
         });
-        let payload = shared_build_retry_quality_runtime_patch_contract_from_workflow_state(
+        let payload = build_retry_quality_runtime_patch_contract_from_workflow_state(
             Some(&runtime_state),
             7,
             "自动修复后重试",
@@ -8185,7 +5023,7 @@ mod tests {
             }
         });
 
-        let payload = shared_build_retry_quality_runtime_patch_contract_from_workflow_state(
+        let payload = build_retry_quality_runtime_patch_contract_from_workflow_state(
             Some(&runtime_state),
             7,
             "自动修复后重试",
@@ -8443,6 +5281,7 @@ mod tests {
                     ..Default::default()
                 },
                 ai_config: AIConfig::default(),
+                candidate_gateway_config: test_candidate_gateway_config(),
             });
 
         let _ =
@@ -8473,6 +5312,7 @@ mod tests {
                 target_word_count: 2500,
                 compat_options: SingleChapterGenerationCompatOptions::default(),
                 ai_config: AIConfig::default(),
+                candidate_gateway_config: test_candidate_gateway_config(),
             },
         );
     }

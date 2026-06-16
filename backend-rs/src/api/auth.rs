@@ -13,18 +13,332 @@ use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 
+use crate::api::user_admin_shared_owner::{
+    api_error, default_password_for_username, find_user, hash_password, UserAdminApiError,
+};
 use crate::config::AppConfig;
 use crate::models::{user, user_password};
 use crate::services::auth::{AuthService, Claims};
-use crate::services::auth_password_workflow_service::{
-    initialize_password_workflow, load_password_status_workflow, set_password_workflow,
-};
 
 const OAUTH_STATE_TTL: Duration = Duration::from_secs(300);
 const OAUTH_STATE_COOKIE: &str = "oauth_states";
 const DEFAULT_COOKIE_MAX_AGE: i64 = 604800;
 const COOKIE_PATH: &str = "/";
 const COOKIE_SAME_SITE: &str = "Lax";
+const AUTH_LOGIN_ROUTE: &str = "/auth/login";
+const AUTH_LOCAL_LOGIN_ROUTE: &str = "/auth/local/login";
+const AUTH_BIND_LOGIN_ROUTE: &str = "/auth/bind/login";
+const AUTH_REFRESH_ROUTE: &str = "/auth/refresh";
+const AUTH_LINUXDO_URL_ROUTE: &str = "/auth/linuxdo/url";
+const AUTH_LINUXDO_CALLBACK_ROUTE: &str = "/auth/linuxdo/callback";
+const AUTH_CALLBACK_ROUTE: &str = "/auth/callback";
+const AUTH_REGISTER_ROUTE: &str = "/auth/register";
+const AUTH_LOGOUT_ROUTE: &str = "/auth/logout";
+const AUTH_CONFIG_ROUTE: &str = "/auth/config";
+const AUTH_USER_ROUTE: &str = "/auth/user";
+const AUTH_PASSWORD_STATUS_ROUTE: &str = "/auth/password/status";
+const AUTH_PASSWORD_SET_ROUTE: &str = "/auth/password/set";
+const AUTH_PASSWORD_INITIALIZE_ROUTE: &str = "/auth/password/initialize";
+
+fn password_database_error(error: impl ToString) -> UserAdminApiError {
+    api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
+}
+
+fn build_password_status_payload(
+    has_password: bool,
+    has_custom_password: bool,
+    username: Option<String>,
+) -> Value {
+    let default_password = if has_password && !has_custom_password {
+        username
+            .as_ref()
+            .map(|name| default_password_for_username(name))
+    } else {
+        None
+    };
+
+    json!({
+        "has_password": has_password,
+        "has_custom_password": has_custom_password,
+        "username": username,
+        "default_password": default_password,
+    })
+}
+
+fn build_password_write_success_payload(message: &str) -> Value {
+    json!({
+        "success": true,
+        "message": message,
+    })
+}
+
+async fn load_password_status_workflow(
+    db: &DatabaseConnection,
+    user_id: &str,
+) -> Result<Value, UserAdminApiError> {
+    let password = user_password::Entity::find_by_id(user_id)
+        .one(db)
+        .await
+        .map_err(password_database_error)?;
+
+    match password {
+        Some(password) => {
+            let user = user::Entity::find_by_id(user_id)
+                .one(db)
+                .await
+                .map_err(password_database_error)?;
+
+            Ok(build_password_status_payload(
+                true,
+                password.has_custom_password,
+                user.map(|value| value.username),
+            ))
+        }
+        None => {
+            let user = user::Entity::find_by_id(user_id)
+                .one(db)
+                .await
+                .map_err(password_database_error)?;
+
+            Ok(build_password_status_payload(
+                false,
+                false,
+                user.map(|value| value.username),
+            ))
+        }
+    }
+}
+
+async fn set_password_workflow(
+    db: &DatabaseConnection,
+    user_id: &str,
+    password: &str,
+) -> Result<Value, UserAdminApiError> {
+    let hashed_password = hash_password(password)
+        .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    let now = chrono::Utc::now();
+    let existing = user_password::Entity::find_by_id(user_id)
+        .one(db)
+        .await
+        .map_err(password_database_error)?;
+
+    match existing {
+        Some(password_model) => {
+            let mut active: user_password::ActiveModel = password_model.into();
+            active.password_hash = Set(hashed_password);
+            active.has_custom_password = Set(true);
+            active.updated_at = Set(now);
+            active.update(db).await.map_err(password_database_error)?;
+        }
+        None => {
+            let user = find_user(db, user_id).await?;
+            let password = user_password::ActiveModel {
+                user_id: Set(user_id.to_string()),
+                username: Set(user.username.clone()),
+                password_hash: Set(hashed_password),
+                has_custom_password: Set(true),
+                created_at: Set(now),
+                updated_at: Set(now),
+            };
+            password.insert(db).await.map_err(password_database_error)?;
+        }
+    }
+
+    Ok(build_password_write_success_payload("密码设置成功"))
+}
+
+async fn initialize_password_workflow(
+    db: &DatabaseConnection,
+    user_id: &str,
+    password: &str,
+) -> Result<Value, UserAdminApiError> {
+    let existing = user_password::Entity::find_by_id(user_id)
+        .one(db)
+        .await
+        .map_err(password_database_error)?;
+
+    if existing.is_some() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "密码已存在，请使用密码设置接口",
+        ));
+    }
+
+    let hashed_password = hash_password(password)
+        .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+    let user = find_user(db, user_id).await?;
+    let now = chrono::Utc::now();
+    let password = user_password::ActiveModel {
+        user_id: Set(user_id.to_string()),
+        username: Set(user.username.clone()),
+        password_hash: Set(hashed_password),
+        has_custom_password: Set(true),
+        created_at: Set(now),
+        updated_at: Set(now),
+    };
+    password.insert(db).await.map_err(password_database_error)?;
+
+    Ok(build_password_write_success_payload("密码初始化成功"))
+}
+
+#[cfg(test)]
+fn build_auth_route_owner_contract() -> Value {
+    json!({
+        "owner": "auth",
+        "scope": "auth_login_oauth_session_password_route_group",
+        "python_source_map": [
+            "backend/app/api/auth.py",
+            "backend/app/middleware/auth_middleware.py",
+            "backend/app/user_manager.py",
+            "backend/app/user_password.py",
+            "backend/app/services/oauth_service.py",
+            "backend/app/services/integrations/oauth_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/api/auth.rs",
+            "backend-rs/src/middleware/auth.rs",
+            "backend-rs/src/services/auth.rs",
+            "backend-rs/src/api/user_admin_shared_owner.rs",
+            "backend-rs/src/models/user.rs",
+            "backend-rs/src/models/user_password.rs",
+            "deploy/strangler-gateway-probes.json"
+        ],
+        "route_contract": {
+            "login": AUTH_LOGIN_ROUTE,
+            "local_login": AUTH_LOCAL_LOGIN_ROUTE,
+            "bind_login": AUTH_BIND_LOGIN_ROUTE,
+            "refresh": AUTH_REFRESH_ROUTE,
+            "linuxdo_url": AUTH_LINUXDO_URL_ROUTE,
+            "linuxdo_callback": AUTH_LINUXDO_CALLBACK_ROUTE,
+            "callback": AUTH_CALLBACK_ROUTE,
+            "register": AUTH_REGISTER_ROUTE,
+            "logout": AUTH_LOGOUT_ROUTE,
+            "config": AUTH_CONFIG_ROUTE,
+            "user": AUTH_USER_ROUTE,
+            "password_status": AUTH_PASSWORD_STATUS_ROUTE,
+            "password_set": AUTH_PASSWORD_SET_ROUTE,
+            "password_initialize": AUTH_PASSWORD_INITIALIZE_ROUTE
+        },
+        "behavior_contract": {
+            "route_entrypoints": [
+                "login",
+                "local_login",
+                "bind_login",
+                "refresh_session",
+                "get_linuxdo_auth_url",
+                "get_linuxdo_callback",
+                "register",
+                "logout",
+                "get_auth_config",
+                "get_current_user",
+                "get_password_status",
+                "set_password",
+                "initialize_password"
+            ],
+            "session_cookie_contract": [
+                "token",
+                "user_id",
+                "session_expire_at",
+                "oauth_states",
+                "first_login"
+            ],
+            "service_consumers": [
+                "AuthService::login_local",
+                "AuthService::register_local",
+                "AuthService::create_token",
+                "load_password_status_workflow",
+                "set_password_workflow",
+                "initialize_password_workflow"
+            ],
+            "oauth_state_contract": {
+                "cookie": OAUTH_STATE_COOKIE,
+                "ttl_seconds": OAUTH_STATE_TTL.as_secs(),
+                "max_retained_states": 8,
+                "signature_shape": "sha256(jwt_secret:nonce:issued_at)"
+            }
+        },
+        "readiness_evidence": [
+            "auth-config-public-rust",
+            "auth-logout-public-rust",
+            "auth-linuxdo-url-misconfig-rust",
+            "auth-user-auth-guard-rust",
+            "auth-password-status-auth-guard-rust",
+            "auth-password-set-auth-guard-rust",
+            "auth-password-initialize-auth-guard-rust",
+            "auth-refresh-auth-guard-rust",
+            "auth-callback-missing-code-rust",
+            "auth-local-login-invalid-credentials-rust",
+            "auth-bind-login-invalid-credentials-rust",
+            "auth-register-business-rust",
+            "auth-local-login-business-rust",
+            "auth-bind-login-business-rust",
+            "auth-current-user-business-rust",
+            "auth-password-status-business-rust",
+            "auth-password-set-business-rust",
+            "auth-password-status-after-set-business-rust",
+            "auth-password-initialize-existing-business-rust",
+            "auth-refresh-business-rust",
+            "auth-logout-business-rust"
+        ],
+        "owner_profile": {
+            "name": "phase5-auth-business-owner",
+            "business_probes": [
+                "auth-config-public-rust",
+                "auth-logout-public-rust",
+                "auth-linuxdo-url-misconfig-rust",
+                "auth-callback-missing-code-rust",
+                "auth-local-login-invalid-credentials-rust",
+                "auth-bind-login-invalid-credentials-rust",
+                "auth-register-business-rust",
+                "auth-local-login-business-rust",
+                "auth-bind-login-business-rust",
+                "auth-current-user-business-rust",
+                "auth-password-status-business-rust",
+                "auth-password-set-business-rust",
+                "auth-password-status-after-set-business-rust",
+                "auth-password-initialize-existing-business-rust",
+                "auth-refresh-business-rust",
+                "auth-logout-business-rust"
+            ],
+            "python_fallback_probe_count": 0
+        },
+        "validation_boundary": [
+            "cargo test api::auth",
+            "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only --profile phase5-auth-business-owner",
+            "cargo check"
+        ],
+        "rollback_boundary": {
+            "source_map_policy": "keep_python_auth_route_middleware_user_password_oauth_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_freeze_candidate_ready": true,
+            "full_module_freeze_ready": false,
+            "python_route_files_status": "source_map_only_for_auth_route_group",
+            "python_fallback_removal_ready": false,
+            "remaining_blockers": [
+                "explicit source-map freeze/delete/repoint approval"
+            ],
+            "retired_manifest_fallbacks": [
+                "auth-logout-public-python-fallback",
+                "auth-user-auth-guard-python-fallback",
+                "auth-password-status-auth-guard-python-fallback",
+                "auth-password-set-auth-guard-python-fallback",
+                "auth-password-initialize-auth-guard-python-fallback",
+                "auth-refresh-auth-guard-python-fallback",
+                "auth-callback-missing-code-python-fallback",
+                "auth-local-login-invalid-credentials-python-fallback",
+                "auth-bind-login-invalid-credentials-python-fallback"
+            ]
+        },
+        "business_smoke_status": {
+            "owner_profile": "phase5-auth-business-owner",
+            "readiness_probe_count": 21,
+            "business_probe_count": 16,
+            "python_fallback_probe_count": 0,
+            "status": "covered_by_dedicated_rust_owner_profile"
+        },
+        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+        "migration_policy": "Auth route business smoke is covered by phase5-auth-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+    })
+}
 
 #[derive(Deserialize)]
 struct LoginRequest {
@@ -715,25 +1029,33 @@ async fn initialize_password(
 
 pub fn routes() -> Router {
     Router::new()
-        .route("/auth/login", post(login))
-        .route("/auth/local/login", post(local_login))
-        .route("/auth/bind/login", post(bind_login))
-        .route("/auth/refresh", post(refresh_session))
-        .route("/auth/linuxdo/url", get(get_linuxdo_auth_url))
-        .route("/auth/linuxdo/callback", get(get_linuxdo_callback))
-        .route("/auth/callback", get(get_linuxdo_callback))
-        .route("/auth/register", post(register))
-        .route("/auth/logout", post(logout))
-        .route("/auth/config", get(get_auth_config))
-        .route("/auth/user", get(get_current_user))
-        .route("/auth/password/status", get(get_password_status))
-        .route("/auth/password/set", post(set_password))
-        .route("/auth/password/initialize", post(initialize_password))
+        .route(AUTH_LOGIN_ROUTE, post(login))
+        .route(AUTH_LOCAL_LOGIN_ROUTE, post(local_login))
+        .route(AUTH_BIND_LOGIN_ROUTE, post(bind_login))
+        .route(AUTH_REFRESH_ROUTE, post(refresh_session))
+        .route(AUTH_LINUXDO_URL_ROUTE, get(get_linuxdo_auth_url))
+        .route(AUTH_LINUXDO_CALLBACK_ROUTE, get(get_linuxdo_callback))
+        .route(AUTH_CALLBACK_ROUTE, get(get_linuxdo_callback))
+        .route(AUTH_REGISTER_ROUTE, post(register))
+        .route(AUTH_LOGOUT_ROUTE, post(logout))
+        .route(AUTH_CONFIG_ROUTE, get(get_auth_config))
+        .route(AUTH_USER_ROUTE, get(get_current_user))
+        .route(AUTH_PASSWORD_STATUS_ROUTE, get(get_password_status))
+        .route(AUTH_PASSWORD_SET_ROUTE, post(set_password))
+        .route(AUTH_PASSWORD_INITIALIZE_ROUTE, post(initialize_password))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{render_cookie, CookieSpec, COOKIE_PATH, COOKIE_SAME_SITE};
+    use super::{
+        build_auth_route_owner_contract, build_password_status_payload,
+        build_password_write_success_payload, render_cookie, CookieSpec, AUTH_BIND_LOGIN_ROUTE,
+        AUTH_CALLBACK_ROUTE, AUTH_CONFIG_ROUTE, AUTH_LINUXDO_CALLBACK_ROUTE,
+        AUTH_LINUXDO_URL_ROUTE, AUTH_LOCAL_LOGIN_ROUTE, AUTH_LOGIN_ROUTE, AUTH_LOGOUT_ROUTE,
+        AUTH_PASSWORD_INITIALIZE_ROUTE, AUTH_PASSWORD_SET_ROUTE, AUTH_PASSWORD_STATUS_ROUTE,
+        AUTH_REFRESH_ROUTE, AUTH_REGISTER_ROUTE, AUTH_USER_ROUTE, COOKIE_PATH, COOKIE_SAME_SITE,
+    };
+    use serde_json::json;
 
     #[test]
     fn render_cookie_includes_shared_attributes_for_http_only_cookie() {
@@ -787,5 +1109,152 @@ mod tests {
                 COOKIE_PATH, COOKIE_SAME_SITE
             )
         );
+    }
+
+    #[test]
+    fn should_publish_auth_route_owner_contract() {
+        let contract = build_auth_route_owner_contract();
+
+        assert_eq!(contract["owner"], "auth");
+        assert_eq!(
+            contract["scope"],
+            "auth_login_oauth_session_password_route_group"
+        );
+        assert_eq!(contract["python_source_map"][0], "backend/app/api/auth.py");
+        assert_eq!(contract["rust_owner_map"][0], "backend-rs/src/api/auth.rs");
+        assert_eq!(contract["route_contract"]["login"], AUTH_LOGIN_ROUTE);
+        assert_eq!(
+            contract["route_contract"]["local_login"],
+            AUTH_LOCAL_LOGIN_ROUTE
+        );
+        assert_eq!(
+            contract["route_contract"]["linuxdo_callback"],
+            AUTH_LINUXDO_CALLBACK_ROUTE
+        );
+        assert_eq!(
+            contract["route_contract"]["password_initialize"],
+            AUTH_PASSWORD_INITIALIZE_ROUTE
+        );
+        assert_eq!(
+            contract["behavior_contract"]["route_entrypoints"][12],
+            "initialize_password"
+        );
+        assert_eq!(
+            contract["readiness_evidence"][10],
+            "auth-bind-login-invalid-credentials-rust"
+        );
+        assert_eq!(contract["readiness_evidence"].as_array().unwrap().len(), 21);
+        assert_eq!(
+            contract["readiness_evidence"][20],
+            "auth-logout-business-rust"
+        );
+        assert_eq!(
+            contract["owner_profile"]["name"],
+            "phase5-auth-business-owner"
+        );
+        let business_probes = contract["owner_profile"]["business_probes"]
+            .as_array()
+            .expect("auth business probes should be present");
+        assert_eq!(business_probes.len(), 16);
+        assert_eq!(
+            contract["owner_profile"]["business_probes"][13],
+            "auth-password-initialize-existing-business-rust"
+        );
+        assert_eq!(
+            contract["owner_profile"]["python_fallback_probe_count"],
+            json!(0)
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
+            json!(true)
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["full_module_freeze_ready"],
+            json!(false)
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            false
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["status"],
+            "covered_by_dedicated_rust_owner_profile"
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["readiness_probe_count"],
+            json!(21)
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["business_probe_count"],
+            json!(16)
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["python_fallback_probe_count"],
+            json!(0)
+        );
+        assert_eq!(
+            contract["next_cutover_gate"],
+            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+        );
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("auth migration policy should be present")
+            .contains("phase5-auth-business-owner"));
+    }
+
+    #[test]
+    fn should_keep_auth_route_group_paths_stable() {
+        assert_eq!(AUTH_LOGIN_ROUTE, "/auth/login");
+        assert_eq!(AUTH_LOCAL_LOGIN_ROUTE, "/auth/local/login");
+        assert_eq!(AUTH_BIND_LOGIN_ROUTE, "/auth/bind/login");
+        assert_eq!(AUTH_REFRESH_ROUTE, "/auth/refresh");
+        assert_eq!(AUTH_LINUXDO_URL_ROUTE, "/auth/linuxdo/url");
+        assert_eq!(AUTH_LINUXDO_CALLBACK_ROUTE, "/auth/linuxdo/callback");
+        assert_eq!(AUTH_CALLBACK_ROUTE, "/auth/callback");
+        assert_eq!(AUTH_REGISTER_ROUTE, "/auth/register");
+        assert_eq!(AUTH_LOGOUT_ROUTE, "/auth/logout");
+        assert_eq!(AUTH_CONFIG_ROUTE, "/auth/config");
+        assert_eq!(AUTH_USER_ROUTE, "/auth/user");
+        assert_eq!(AUTH_PASSWORD_STATUS_ROUTE, "/auth/password/status");
+        assert_eq!(AUTH_PASSWORD_SET_ROUTE, "/auth/password/set");
+        assert_eq!(AUTH_PASSWORD_INITIALIZE_ROUTE, "/auth/password/initialize");
+    }
+
+    #[test]
+    fn password_status_payload_keeps_default_password_for_non_custom_password() {
+        let payload = build_password_status_payload(true, false, Some("alice".to_string()));
+
+        assert_eq!(payload["has_password"], true);
+        assert_eq!(payload["has_custom_password"], false);
+        assert_eq!(payload["username"], "alice");
+        assert_eq!(payload["default_password"], "alice@666");
+    }
+
+    #[test]
+    fn password_status_payload_keeps_null_default_when_password_missing() {
+        let payload = build_password_status_payload(false, false, Some("alice".to_string()));
+
+        assert_eq!(payload["has_password"], false);
+        assert_eq!(payload["has_custom_password"], false);
+        assert_eq!(payload["username"], "alice");
+        assert!(payload["default_password"].is_null());
+    }
+
+    #[test]
+    fn password_status_payload_keeps_null_default_when_username_missing() {
+        let payload = build_password_status_payload(true, false, None);
+
+        assert_eq!(payload["has_password"], true);
+        assert_eq!(payload["has_custom_password"], false);
+        assert!(payload["username"].is_null());
+        assert!(payload["default_password"].is_null());
+    }
+
+    #[test]
+    fn password_write_success_payload_keeps_existing_shape() {
+        let payload = build_password_write_success_payload("密码设置成功");
+
+        assert_eq!(payload["success"], true);
+        assert_eq!(payload["message"], "密码设置成功");
     }
 }

@@ -3,53 +3,163 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active batch retry/runtime orchestration chain; this "
+    "Python helper is kept only as frozen rollback/source-map material for "
+    "legacy batch retry fallback."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs; "
+    "backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_batch_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from app.logger import get_logger
-from app.models.batch_generation_task import BatchGenerationTask
-from app.models.chapter import Chapter
-from app.models.project import Project
-from app.services.ai_service import AIService
-from app.services.batch_generation_chapter_execution_service import (
-    clear_batch_generation_execution_caches,
-    prepare_batch_generation_chapter_attempt,
-    prepare_batch_generation_chapter_result,
-)
-from app.services.batch_generation_chapter_failure_state_service import (
-    fail_batch_generation_after_analysis,
-    fail_batch_generation_after_max_retries,
-)
-from app.services.batch_generation_chapter_success_state_service import (
-    apply_successful_batch_generation_chapter,
-    finalize_successful_batch_generation_chapter,
-    handle_batch_generation_quality_gate_retry,
-)
-from app.services.chapter_generation.prerequisite_service import check_chapter_generation_prerequisites
-from app.services.chapter_quality_context_service import StoryPacket, clone_chapter_quality_profile
-from app.services.story_repair_payload_service import (
-    StoryRepairPayload,
-    resolve_generation_story_repair_state_for_batch,
-    resolve_quality_gate_execution_plan,
-)
-from app.services.story_runtime_serialization_service import attach_story_runtime_contract
-from app.services.task_quality_snapshot_service import record_task_quality_metrics
-from app.services.task_workflow_runtime_service import batch_task_exists, sync_task_story_repair_state
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.batch_generation_task import BatchGenerationTask
+    from app.models.chapter import Chapter
+    from app.models.project import Project
+    from app.services.ai_service import AIService
+    from app.services.chapter_quality_context_service import StoryPacket
+    from app.services.story_repair_payload_service import StoryRepairPayload
 
 
 logger = get_logger(__name__)
+
+
+def _batch_generation_chapter_execution_service():
+    from app.services import batch_generation_chapter_execution_service
+
+    return batch_generation_chapter_execution_service
+
+
+def _batch_generation_chapter_failure_state_service():
+    from app.services import batch_generation_chapter_failure_state_service
+
+    return batch_generation_chapter_failure_state_service
+
+
+def _batch_generation_chapter_success_state_service():
+    from app.services import batch_generation_chapter_success_state_service
+
+    return batch_generation_chapter_success_state_service
+
+
+def _chapter_generation_prerequisite_service():
+    from app.services.chapter_generation import prerequisite_service
+
+    return prerequisite_service
+
+
+def _chapter_quality_context_service():
+    from app.services import chapter_quality_context_service
+
+    return chapter_quality_context_service
+
+
+def _story_repair_payload_service():
+    from app.services import story_repair_payload_service
+
+    return story_repair_payload_service
+
+
+def _story_runtime_serialization_service():
+    from app.services import story_runtime_serialization_service
+
+    return story_runtime_serialization_service
+
+
+def _task_quality_snapshot_service():
+    from app.services import task_quality_snapshot_service
+
+    return task_quality_snapshot_service
+
+
+def _task_workflow_runtime_service():
+    from app.services import task_workflow_runtime_service
+
+    return task_workflow_runtime_service
+
+
+def clear_batch_generation_execution_caches(*args, **kwargs):
+    return _batch_generation_chapter_execution_service().clear_batch_generation_execution_caches(*args, **kwargs)
+
+
+async def prepare_batch_generation_chapter_attempt(*args, **kwargs):
+    return await _batch_generation_chapter_execution_service().prepare_batch_generation_chapter_attempt(*args, **kwargs)
+
+
+def prepare_batch_generation_chapter_result(*args, **kwargs):
+    return _batch_generation_chapter_execution_service().prepare_batch_generation_chapter_result(*args, **kwargs)
+
+
+async def fail_batch_generation_after_analysis(*args, **kwargs):
+    return await _batch_generation_chapter_failure_state_service().fail_batch_generation_after_analysis(*args, **kwargs)
+
+
+async def fail_batch_generation_after_max_retries(*args, **kwargs):
+    return await _batch_generation_chapter_failure_state_service().fail_batch_generation_after_max_retries(*args, **kwargs)
+
+
+async def apply_successful_batch_generation_chapter(*args, **kwargs):
+    return await _batch_generation_chapter_success_state_service().apply_successful_batch_generation_chapter(*args, **kwargs)
+
+
+async def finalize_successful_batch_generation_chapter(*args, **kwargs):
+    return await _batch_generation_chapter_success_state_service().finalize_successful_batch_generation_chapter(*args, **kwargs)
+
+
+async def handle_batch_generation_quality_gate_retry(*args, **kwargs):
+    return await _batch_generation_chapter_success_state_service().handle_batch_generation_quality_gate_retry(*args, **kwargs)
+
+
+async def check_chapter_generation_prerequisites(*args, **kwargs):
+    return await _chapter_generation_prerequisite_service().check_chapter_generation_prerequisites(*args, **kwargs)
+
+
+def clone_chapter_quality_profile(*args, **kwargs):
+    return _chapter_quality_context_service().clone_chapter_quality_profile(*args, **kwargs)
+
+
+async def resolve_generation_story_repair_state_for_batch(*args, **kwargs):
+    return await _story_repair_payload_service().resolve_generation_story_repair_state_for_batch(*args, **kwargs)
+
+
+def resolve_quality_gate_execution_plan(*args, **kwargs):
+    return _story_repair_payload_service().resolve_quality_gate_execution_plan(*args, **kwargs)
+
+
+def attach_story_runtime_contract(*args, **kwargs):
+    return _story_runtime_serialization_service().attach_story_runtime_contract(*args, **kwargs)
+
+
+async def record_task_quality_metrics(*args, **kwargs):
+    return await _task_quality_snapshot_service().record_task_quality_metrics(*args, **kwargs)
+
+
+async def batch_task_exists(*args, **kwargs):
+    return await _task_workflow_runtime_service().batch_task_exists(*args, **kwargs)
+
+
+async def sync_task_story_repair_state(*args, **kwargs):
+    return await _task_workflow_runtime_service().sync_task_story_repair_state(*args, **kwargs)
 
 
 @dataclass(frozen=True)
 class BatchGenerationExecutionEnvironment:
     batch_id: str
     user_id: str
-    ai_service: AIService
+    ai_service: "AIService"
     write_lock: Any
     emit_event: Callable[..., Any]
-    batch_story_packet: StoryPacket
+    batch_story_packet: "StoryPacket"
     task_base_quality_profile: Dict[str, Any]
     cached_analysis_quality_profile: Dict[str, Any]
     custom_model: Optional[str]
@@ -77,7 +187,7 @@ class BatchGenerationChapterRuntimeState:
     chapter_index: int
     last_generated_summary: Optional[str]
     active_story_repair_state: Dict[str, Any]
-    active_story_repair_payload: Optional[StoryRepairPayload]
+    active_story_repair_payload: Optional["StoryRepairPayload"]
 
 
 @dataclass(frozen=True)
@@ -88,13 +198,16 @@ class BatchGenerationChapterExecutionOutcome:
 
 
 async def execute_batch_generation_chapter_with_retries(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
-    task: BatchGenerationTask,
-    project: Project,
+    task: "BatchGenerationTask",
+    project: "Project",
     execution_context: BatchGenerationExecutionEnvironment,
     runtime_state: BatchGenerationChapterRuntimeState,
 ) -> Optional[BatchGenerationChapterExecutionOutcome]:
+    from sqlalchemy import select
+    from app.models.chapter import Chapter
+
     retry_count = 0
     chapter_success = False
     chapter = None

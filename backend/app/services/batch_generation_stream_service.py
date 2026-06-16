@@ -1,26 +1,42 @@
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncGenerator, Optional
+from typing import TYPE_CHECKING, AsyncGenerator, Optional
 
-from fastapi import HTTPException
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active batch-generation status stream route and stream "
+    "state contract; this Python stream module is kept only as frozen "
+    "rollback/source-map material after its remaining callers were reduced to "
+    "frozen shells."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/api/chapter_batch_generation.rs; "
+    "backend-rs/src/services/chapter_batch_generation_read_context_service.rs; "
+    "backend-rs/src/api/health.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_batch_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
-from app.models.batch_generation_task import BatchGenerationTask
-from app.services.task_workflow_runtime_service import subscribe_task_stream, unsubscribe_task_stream
-from app.utils.sse_response import SSEResponse
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.batch_generation_task import BatchGenerationTask
 
 
 STREAM_IDLE_TIMEOUT_SECONDS = 15
 
 
 async def validate_batch_generation_stream_access(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
     batch_id: str,
     user_id: Optional[str],
-) -> BatchGenerationTask:
+) -> "BatchGenerationTask":
+    from fastapi import HTTPException
+    from sqlalchemy import select
+    from app.models.batch_generation_task import BatchGenerationTask
+
     if not user_id:
         raise HTTPException(status_code=401, detail='未登录')
 
@@ -36,11 +52,19 @@ async def validate_batch_generation_stream_access(
 
 
 async def build_batch_generation_event_stream(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
     batch_id: str,
     idle_timeout_seconds: int = STREAM_IDLE_TIMEOUT_SECONDS,
 ) -> AsyncGenerator[str, None]:
+    from sqlalchemy import select
+    from app.models.batch_generation_task import BatchGenerationTask
+    from app.services.task_workflow_runtime_service import (
+        subscribe_task_stream,
+        unsubscribe_task_stream,
+    )
+    from app.utils.sse_response import SSEResponse
+
     queue = await subscribe_task_stream(batch_id)
     try:
         yield await SSEResponse.send_progress('正在连接批量生成任务流', 0, 'processing')

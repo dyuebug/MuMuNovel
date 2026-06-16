@@ -71,15 +71,6 @@ impl PromptTemplateService {
         hex::encode(&hash[..8])
     }
 
-    pub fn content_matches_system(template_key: &str, user_content: &str) -> bool {
-        if let Some(info) = Self::system_template_info(template_key) {
-            let user_hash = Self::calculate_content_hash(user_content);
-            user_hash == info.content_hash
-        } else {
-            false
-        }
-    }
-
     pub fn is_legacy_hash(template_key: &str, content_hash: &str) -> bool {
         if let Some(rule) = Self::sync_rule(template_key) {
             if !content_hash.is_empty()

@@ -2,19 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Mapping, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.models.chapter import Chapter
-from app.models.generation_history import GenerationHistory
 from app.services.story_quality_feedback_service import (
     build_quality_gate_decision,
     build_quality_metrics_summary,
     build_story_repair_guidance,
     extract_quality_metrics_from_history_payload,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter import Chapter
 
 
 @dataclass(frozen=True)
@@ -342,6 +342,10 @@ async def load_latest_quality_metric_records_for_chapter_ids(
     db_session: AsyncSession,
     chapter_ids: list[str],
 ) -> dict[str, dict[str, Any]]:
+    from sqlalchemy import select
+
+    from app.models.generation_history import GenerationHistory
+
     normalized_ids = [chapter_id for chapter_id in chapter_ids if chapter_id]
     if not normalized_ids:
         return {}
@@ -393,6 +397,10 @@ async def load_recent_previous_chapter_ids(
     before_chapter_number: int,
     limit: int = 3,
 ) -> list[str]:
+    from sqlalchemy import select
+
+    from app.models.chapter import Chapter
+
     result = await db_session.execute(
         select(Chapter.id)
         .where(Chapter.project_id == project_id)

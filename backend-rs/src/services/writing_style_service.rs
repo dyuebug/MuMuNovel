@@ -6,9 +6,101 @@ use sea_orm::{
 use serde_json::{json, Value};
 
 use crate::models::{project, project_default_style, writing_style};
-use crate::services::writing_style_request_service::{
-    CreateWritingStyleRequest, UpdateWritingStyleRequest,
-};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateWritingStyleRequest {
+    preset_id: Option<String>,
+    name: Option<String>,
+    description: Option<String>,
+    prompt_content: Option<String>,
+    style_type: Option<String>,
+}
+
+impl CreateWritingStyleRequest {
+    pub fn preset_id(&self) -> Option<&str> {
+        self.preset_id.as_deref()
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    pub fn prompt_content(&self) -> Option<&str> {
+        self.prompt_content.as_deref()
+    }
+
+    pub fn style_type(&self) -> Option<&str> {
+        self.style_type.as_deref()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UpdateWritingStyleRequest {
+    name: Option<String>,
+    description: Option<String>,
+    prompt_content: Option<String>,
+    order_index: Option<i32>,
+}
+
+impl UpdateWritingStyleRequest {
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    pub fn prompt_content(&self) -> Option<&str> {
+        self.prompt_content.as_deref()
+    }
+
+    pub fn order_index(&self) -> Option<i32> {
+        self.order_index
+    }
+}
+
+fn optional_non_empty_string(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn optional_string(value: Option<&Value>) -> Option<String> {
+    value.and_then(Value::as_str).map(ToString::to_string)
+}
+
+pub fn build_create_writing_style_request_from_route_payload(
+    body: &Value,
+) -> CreateWritingStyleRequest {
+    CreateWritingStyleRequest {
+        preset_id: optional_string(body.get("preset_id")),
+        name: optional_string(body.get("name")),
+        description: optional_string(body.get("description")),
+        prompt_content: optional_string(body.get("prompt_content")),
+        style_type: optional_non_empty_string(body.get("style_type")),
+    }
+}
+
+pub fn build_update_writing_style_request_from_route_payload(
+    body: &Value,
+) -> UpdateWritingStyleRequest {
+    UpdateWritingStyleRequest {
+        name: optional_string(body.get("name")),
+        description: optional_string(body.get("description")),
+        prompt_content: optional_string(body.get("prompt_content")),
+        order_index: body
+            .get("order_index")
+            .and_then(Value::as_i64)
+            .map(|value| value as i32),
+    }
+}
 
 struct PresetDefinition {
     preset_id: &'static str,
@@ -629,5 +721,57 @@ impl WritingStyleService {
     ) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
         ensure_project_access(db, user_id, project_id).await?;
         self::WritingStyleService::list_project_styles(db, user_id, project_id).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_create_writing_style_request_from_route_payload,
+        build_update_writing_style_request_from_route_payload,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn build_create_writing_style_request_from_route_payload_keeps_optional_fields() {
+        let request = build_create_writing_style_request_from_route_payload(&json!({
+            "preset_id": "preset-1",
+            "name": " 风格A ",
+            "description": "描述",
+            "prompt_content": "正文",
+            "style_type": " custom "
+        }));
+
+        assert_eq!(request.preset_id(), Some("preset-1"));
+        assert_eq!(request.name(), Some(" 风格A "));
+        assert_eq!(request.description(), Some("描述"));
+        assert_eq!(request.prompt_content(), Some("正文"));
+        assert_eq!(request.style_type(), Some("custom"));
+    }
+
+    #[test]
+    fn build_create_writing_style_request_from_route_payload_treats_blank_style_type_as_missing() {
+        let request = build_create_writing_style_request_from_route_payload(&json!({
+            "name": "风格B",
+            "style_type": "   "
+        }));
+
+        assert_eq!(request.name(), Some("风格B"));
+        assert_eq!(request.style_type(), None);
+    }
+
+    #[test]
+    fn build_update_writing_style_request_from_route_payload_keeps_partial_updates() {
+        let request = build_update_writing_style_request_from_route_payload(&json!({
+            "name": "新标题",
+            "description": "新描述",
+            "prompt_content": "新内容",
+            "order_index": 7
+        }));
+
+        assert_eq!(request.name(), Some("新标题"));
+        assert_eq!(request.description(), Some("新描述"));
+        assert_eq!(request.prompt_content(), Some("新内容"));
+        assert_eq!(request.order_index(), Some(7));
     }
 }

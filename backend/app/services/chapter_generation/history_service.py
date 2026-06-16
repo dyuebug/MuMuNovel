@@ -3,16 +3,36 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active draft/history payload, query, and apply contract; "
+    "this Python module is kept only as frozen rollback/source-map material "
+    "after its remaining callers were reduced to repointed or frozen shells."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/services/chapter_draft_history_service.rs; "
+    "backend-rs/src/services/chapter_draft_view_payload_service.rs; "
+    "backend-rs/src/services/chapter_draft_source_service.rs; "
+    "backend-rs/src/services/chapter_analysis_runtime_service/query_owner.rs; "
+    "backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = (
+    "legacy_chapter_draft_python_routes_enabled; "
+    "legacy_chapter_analysis_python_routes_enabled; "
+    "legacy_single_generation_python_routes_enabled; "
+    "aggregate_chapters_python_source_map"
+)
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from fastapi import HTTPException
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.chapter_draft_attempt import ChapterDraftAttempt
-from app.models.generation_history import GenerationHistory
-from app.schemas.generation_payload import build_chapter_generation_quality_history_payload
-from app.services.story_quality_feedback_service import build_story_continuity_preflight
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter_draft_attempt import ChapterDraftAttempt
+    from app.models.generation_history import GenerationHistory
 
 
 def parse_reviser_result_from_history(generated_content: Optional[str]) -> Optional[dict[str, Any]]:
@@ -135,6 +155,8 @@ def build_generation_history_payload(
     attempt_state: Optional[str] = None,
     story_runtime_contract: Optional[Dict[str, Any]] = None,
 ) -> str:
+    from app.schemas.generation_payload import build_chapter_generation_quality_history_payload
+
     payload = build_chapter_generation_quality_history_payload(
         content,
         metrics,
@@ -168,6 +190,10 @@ async def load_latest_reviser_history(
     history_id: Optional[str] = None,
     scan_limit: int = 60,
 ) -> Optional[tuple[GenerationHistory, dict[str, Any]]]:
+    from sqlalchemy import select
+
+    from app.models.generation_history import GenerationHistory
+
     if history_id:
         result = await db.execute(
             select(GenerationHistory).where(
@@ -573,6 +599,10 @@ def _build_candidate_draft_quality_highlights(
         else {}
     )
     if not continuity_preflight and runtime_context:
+        from app.services.story_quality_feedback_service import (
+            build_story_continuity_preflight,
+        )
+
         continuity_preflight = build_story_continuity_preflight(normalized_content, runtime_context)
 
     continuity_items = _collect_candidate_runtime_items(
@@ -799,6 +829,10 @@ async def _load_latest_candidate_draft_attempt(
     chapter_id: str,
     attempt_id: Optional[str] = None,
 ) -> Optional[ChapterDraftAttempt]:
+    from sqlalchemy import select
+
+    from app.models.chapter_draft_attempt import ChapterDraftAttempt
+
     query = select(ChapterDraftAttempt).where(ChapterDraftAttempt.chapter_id == chapter_id)
     if attempt_id:
         query = query.where(ChapterDraftAttempt.id == attempt_id)

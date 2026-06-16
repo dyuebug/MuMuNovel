@@ -12,15 +12,220 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
+mod service_owner;
+
 use crate::mcp::McpClientManager;
 use crate::services::auth::Claims;
-use crate::services::mcp_plugin_request_service::{
-    build_mcp_plugin_update_request_from_typed_route_payload, McpPluginUpdateRouteRequest,
+use service_owner::{
+    build_mcp_plugin_update_request, CallToolError, GetToolsError, McpPluginService,
+    McpPluginUpdateRequest, TestPluginError,
 };
-use crate::services::mcp_plugin_service::{
-    CallToolError, GetToolsError, McpPluginService, TestPluginError,
-};
-use crate::services::route_request_deserialize_service::deserialize_optional_non_null;
+
+const MCP_PLUGINS_LIST_CREATE_ROUTE: &str = "/mcp/plugins";
+const MCP_PLUGINS_SIMPLE_CREATE_ROUTE: &str = "/mcp/plugins/simple";
+const MCP_PLUGINS_CALL_ROUTE: &str = "/mcp/plugins/call";
+const MCP_CALL_ALIAS_ROUTE: &str = "/mcp/call";
+const MCP_PLUGINS_METRICS_ROUTE: &str = "/mcp/plugins/metrics";
+const MCP_PLUGINS_CACHE_STATS_ROUTE: &str = "/mcp/plugins/cache/stats";
+const MCP_PLUGINS_CACHE_CLEAR_ROUTE: &str = "/mcp/plugins/cache/clear";
+const MCP_PLUGINS_SESSIONS_STATS_ROUTE: &str = "/mcp/plugins/sessions/stats";
+const MCP_PLUGINS_DETAIL_ROUTE: &str = "/mcp/plugins/{plugin_id}";
+const MCP_PLUGINS_TOGGLE_ROUTE: &str = "/mcp/plugins/{plugin_id}/toggle";
+const MCP_PLUGINS_STATUS_ROUTE: &str = "/mcp/plugins/{plugin_id}/status";
+const MCP_PLUGINS_TOOLS_ROUTE: &str = "/mcp/plugins/{plugin_id}/tools";
+const MCP_PLUGINS_TEST_ROUTE: &str = "/mcp/plugins/{plugin_id}/test";
+
+#[cfg(test)]
+fn build_mcp_plugins_route_owner_contract() -> Value {
+    json!({
+        "owner": "mcp_plugins",
+        "rust_owner": "backend-rs/src/api/mcp_plugins.rs",
+        "routes": {
+            "list": MCP_PLUGINS_LIST_CREATE_ROUTE,
+            "create": MCP_PLUGINS_LIST_CREATE_ROUTE,
+            "simple_create": MCP_PLUGINS_SIMPLE_CREATE_ROUTE,
+            "call": MCP_PLUGINS_CALL_ROUTE,
+            "call_alias": MCP_CALL_ALIAS_ROUTE,
+            "metrics": MCP_PLUGINS_METRICS_ROUTE,
+            "cache_stats": MCP_PLUGINS_CACHE_STATS_ROUTE,
+            "cache_clear": MCP_PLUGINS_CACHE_CLEAR_ROUTE,
+            "sessions_stats": MCP_PLUGINS_SESSIONS_STATS_ROUTE,
+            "detail": MCP_PLUGINS_DETAIL_ROUTE,
+            "update": MCP_PLUGINS_DETAIL_ROUTE,
+            "delete": MCP_PLUGINS_DETAIL_ROUTE,
+            "toggle": MCP_PLUGINS_TOGGLE_ROUTE,
+            "status": MCP_PLUGINS_STATUS_ROUTE,
+            "tools": MCP_PLUGINS_TOOLS_ROUTE,
+            "test": MCP_PLUGINS_TEST_ROUTE
+        },
+        "methods": {
+            "list": ["GET"],
+            "create": ["POST"],
+            "simple_create": ["POST"],
+            "call": ["POST"],
+            "call_alias": ["POST"],
+            "metrics": ["GET"],
+            "cache_stats": ["GET"],
+            "cache_clear": ["POST"],
+            "sessions_stats": ["GET"],
+            "detail": ["GET", "PUT", "DELETE"],
+            "toggle": ["POST"],
+            "status": ["GET"],
+            "tools": ["GET"],
+            "test": ["POST"]
+        },
+        "service_owners": [
+            "backend-rs/src/api/mcp_plugins/service_owner.rs",
+            "backend-rs/src/mcp/mod.rs",
+            "backend-rs/src/models/mcp_plugin.rs"
+        ],
+        "readiness_probes": [
+            "mcp-plugins-list-auth-guard-rust",
+            "mcp-plugins-simple-create-auth-guard-rust",
+            "mcp-plugins-simple-create-business-rust",
+            "mcp-plugins-list-business-rust",
+            "mcp-plugins-detail-business-rust",
+            "mcp-plugins-status-business-rust",
+            "mcp-plugins-delete-business-rust",
+            "mcp-plugins-missing-detail-business-rust"
+        ],
+        "owner_profile": {
+            "name": "phase5-mcp-plugins-business-owner",
+            "business_probes": [
+                "mcp-plugins-simple-create-business-rust",
+                "mcp-plugins-list-business-rust",
+                "mcp-plugins-detail-business-rust",
+                "mcp-plugins-status-business-rust",
+                "mcp-plugins-delete-business-rust",
+                "mcp-plugins-missing-detail-business-rust"
+            ],
+            "python_fallback_probe_count": 0
+        },
+        "business_smoke_status": {
+            "owner_profile": "phase5-mcp-plugins-business-owner",
+            "readiness_probe_count": 8,
+            "business_probe_count": 6,
+            "auth_guard_probe_count": 2,
+            "fixture_probe_count": 0,
+            "python_fallback_probe_count": 0,
+            "status": "covered_by_dedicated_rust_owner_profile"
+        },
+        "source_map_files": [
+            "backend/app/api/mcp_plugins.py",
+            "backend/app/models/mcp_plugin.py",
+            "backend/app/schemas/mcp_plugin.py",
+            "backend/app/services/mcp_test_service.py",
+            "backend/app/mcp/__init__.py"
+        ],
+        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+        "migration_policy": "MCP plugins route business smoke is covered by phase5-mcp-plugins-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy.",
+        "rollback_boundary": {
+            "source_map_policy": "keep_python_mcp_plugin_route_model_schema_test_service_facade_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_freeze_candidate_ready": true,
+            "full_module_freeze_ready": false,
+            "python_fallback_removal_ready": false,
+            "remaining_blockers": [
+                "explicit source-map freeze/delete/repoint approval"
+            ],
+            "freeze_reason": "phase5-mcp-plugins-business-owner covers simple create, list, detail, status, delete, and missing-detail probes with zero Python fallback probes."
+        }
+    })
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum RouteValueField {
+    Missing,
+    Present(Value),
+}
+
+impl Default for RouteValueField {
+    fn default() -> Self {
+        Self::Missing
+    }
+}
+
+impl<'de> Deserialize<'de> for RouteValueField {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Value::deserialize(deserializer).map(Self::Present)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+struct McpPluginUpdateRouteRequest {
+    #[serde(default)]
+    display_name: Option<Value>,
+    #[serde(default)]
+    description: RouteValueField,
+    #[serde(default)]
+    server_url: RouteValueField,
+    #[serde(default)]
+    command: RouteValueField,
+    #[serde(default)]
+    enabled: Option<Value>,
+    #[serde(default)]
+    category: Option<Value>,
+    #[serde(default)]
+    sort_order: Option<Value>,
+    #[serde(default)]
+    headers: Option<Value>,
+    #[serde(default)]
+    config: Option<Value>,
+    #[serde(default)]
+    args: Option<Value>,
+    #[serde(default)]
+    env: Option<Value>,
+}
+
+impl McpPluginUpdateRouteRequest {
+    fn into_body(self) -> Value {
+        let mut body = serde_json::Map::new();
+
+        if let Some(value) = self.display_name {
+            body.insert("display_name".to_string(), value);
+        }
+        if let RouteValueField::Present(value) = self.description {
+            body.insert("description".to_string(), value);
+        }
+        if let RouteValueField::Present(value) = self.server_url {
+            body.insert("server_url".to_string(), value);
+        }
+        if let RouteValueField::Present(value) = self.command {
+            body.insert("command".to_string(), value);
+        }
+        if let Some(value) = self.enabled {
+            body.insert("enabled".to_string(), value);
+        }
+        if let Some(value) = self.category {
+            body.insert("category".to_string(), value);
+        }
+        if let Some(value) = self.sort_order {
+            body.insert("sort_order".to_string(), value);
+        }
+        if let Some(value) = self.headers {
+            body.insert("headers".to_string(), value);
+        }
+        if let Some(value) = self.config {
+            body.insert("config".to_string(), value);
+        }
+        if let Some(value) = self.args {
+            body.insert("args".to_string(), value);
+        }
+        if let Some(value) = self.env {
+            body.insert("env".to_string(), value);
+        }
+
+        Value::Object(body)
+    }
+}
+
+fn build_mcp_plugin_update_request_from_typed_route_payload(
+    route_request: McpPluginUpdateRouteRequest,
+) -> McpPluginUpdateRequest {
+    build_mcp_plugin_update_request(&route_request.into_body())
+}
 
 #[derive(Deserialize)]
 struct ListQuery {
@@ -61,6 +266,14 @@ fn default_type() -> String {
 }
 fn default_true() -> bool {
     true
+}
+
+fn deserialize_optional_non_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Deserialize)]
@@ -570,40 +783,270 @@ async fn test_plugin(
 
 pub fn routes() -> Router {
     Router::new()
-        .route("/mcp/plugins", get(list_plugins).post(create_plugin))
-        .route("/mcp/plugins/simple", post(create_plugin_simple))
-        .route("/mcp/plugins/call", post(call_mcp_tool))
-        .route("/mcp/call", post(call_mcp_tool))
-        .route("/mcp/plugins/metrics", get(get_metrics))
-        .route("/mcp/plugins/cache/stats", get(get_cache_stats))
-        .route("/mcp/plugins/cache/clear", post(clear_cache))
-        .route("/mcp/plugins/sessions/stats", get(get_session_stats))
         .route(
-            "/mcp/plugins/{plugin_id}",
+            MCP_PLUGINS_LIST_CREATE_ROUTE,
+            get(list_plugins).post(create_plugin),
+        )
+        .route(MCP_PLUGINS_SIMPLE_CREATE_ROUTE, post(create_plugin_simple))
+        .route(MCP_PLUGINS_CALL_ROUTE, post(call_mcp_tool))
+        .route(MCP_CALL_ALIAS_ROUTE, post(call_mcp_tool))
+        .route(MCP_PLUGINS_METRICS_ROUTE, get(get_metrics))
+        .route(MCP_PLUGINS_CACHE_STATS_ROUTE, get(get_cache_stats))
+        .route(MCP_PLUGINS_CACHE_CLEAR_ROUTE, post(clear_cache))
+        .route(MCP_PLUGINS_SESSIONS_STATS_ROUTE, get(get_session_stats))
+        .route(
+            MCP_PLUGINS_DETAIL_ROUTE,
             get(get_plugin).put(update_plugin).delete(delete_plugin),
         )
-        .route("/mcp/plugins/{plugin_id}/toggle", post(toggle_plugin))
-        .route("/mcp/plugins/{plugin_id}/status", get(get_plugin_status))
-        .route("/mcp/plugins/{plugin_id}/tools", get(get_plugin_tools))
-        .route("/mcp/plugins/{plugin_id}/test", post(test_plugin))
+        .route(MCP_PLUGINS_TOGGLE_ROUTE, post(toggle_plugin))
+        .route(MCP_PLUGINS_STATUS_ROUTE, get(get_plugin_status))
+        .route(MCP_PLUGINS_TOOLS_ROUTE, get(get_plugin_tools))
+        .route(MCP_PLUGINS_TEST_ROUTE, post(test_plugin))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_python_session_status_to_plugin_status, build_clear_cache_payload, get_cache_stats,
-        get_metrics, get_session_stats, map_call_tool_error, map_get_tools_error,
-        map_test_plugin_error, resolve_cache_clear_target_user_id, CacheClearQuery, CreateRequest,
-        MetricsQuery, SimpleCreateRequest,
+        apply_python_session_status_to_plugin_status, build_clear_cache_payload,
+        build_mcp_plugin_update_request_from_typed_route_payload,
+        build_mcp_plugins_route_owner_contract, get_cache_stats, get_metrics, get_session_stats,
+        map_call_tool_error, map_get_tools_error, map_test_plugin_error,
+        resolve_cache_clear_target_user_id, CacheClearQuery, CreateRequest,
+        McpPluginUpdateRouteRequest, MetricsQuery, RouteValueField, SimpleCreateRequest,
+        MCP_CALL_ALIAS_ROUTE, MCP_PLUGINS_CACHE_CLEAR_ROUTE, MCP_PLUGINS_CACHE_STATS_ROUTE,
+        MCP_PLUGINS_CALL_ROUTE, MCP_PLUGINS_DETAIL_ROUTE, MCP_PLUGINS_LIST_CREATE_ROUTE,
+        MCP_PLUGINS_METRICS_ROUTE, MCP_PLUGINS_SESSIONS_STATS_ROUTE,
+        MCP_PLUGINS_SIMPLE_CREATE_ROUTE, MCP_PLUGINS_STATUS_ROUTE, MCP_PLUGINS_TEST_ROUTE,
+        MCP_PLUGINS_TOGGLE_ROUTE, MCP_PLUGINS_TOOLS_ROUTE,
     };
     use crate::mcp::McpClientManager;
-    use crate::services::mcp_plugin_service::{CallToolError, GetToolsError, TestPluginError};
     use axum::extract::Query;
     use axum::http::StatusCode;
     use axum::Extension;
     use chrono::{Duration, Utc};
     use serde_json::{json, Value};
     use std::sync::Arc;
+
+    use super::service_owner::{CallToolError, GetToolsError, TestPluginError};
+
+    #[test]
+    fn build_mcp_plugin_update_request_from_typed_route_payload_keeps_existing_contract() {
+        let request =
+            build_mcp_plugin_update_request_from_typed_route_payload(McpPluginUpdateRouteRequest {
+                display_name: Some(json!("Weather Plugin")),
+                description: RouteValueField::Present(json!("Fetch weather")),
+                server_url: RouteValueField::Present(json!("https://example.com/mcp")),
+                command: RouteValueField::Present(json!("node server.js")),
+                enabled: Some(json!(true)),
+                category: Some(json!("tools")),
+                sort_order: Some(json!(12)),
+                headers: Some(json!({"Authorization": "Bearer token"})),
+                config: Some(json!({"timeout": 30})),
+                args: Some(json!(["--stdio"])),
+                env: Some(json!({"NODE_ENV": "production"})),
+            });
+
+        assert_eq!(request.display_name.as_deref(), Some("Weather Plugin"));
+        assert_eq!(request.description, Some(json!("Fetch weather")));
+        assert_eq!(request.server_url, Some(json!("https://example.com/mcp")));
+        assert_eq!(request.command, Some(json!("node server.js")));
+        assert_eq!(request.enabled, Some(true));
+        assert_eq!(request.category.as_deref(), Some("tools"));
+        assert_eq!(request.sort_order, Some(12));
+        assert_eq!(
+            request.headers,
+            Some(json!({"Authorization": "Bearer token"}))
+        );
+        assert_eq!(request.config, Some(json!({"timeout": 30})));
+        assert_eq!(request.args, Some(json!(["--stdio"])));
+        assert_eq!(request.env, Some(json!({"NODE_ENV": "production"})));
+    }
+
+    #[test]
+    fn build_mcp_plugin_update_request_preserves_explicit_null_for_nullable_string_fields() {
+        let request =
+            build_mcp_plugin_update_request_from_typed_route_payload(McpPluginUpdateRouteRequest {
+                description: RouteValueField::Present(Value::Null),
+                server_url: RouteValueField::Present(Value::Null),
+                command: RouteValueField::Present(Value::Null),
+                ..McpPluginUpdateRouteRequest::default()
+            });
+
+        assert_eq!(request.description, Some(Value::Null));
+        assert_eq!(request.server_url, Some(Value::Null));
+        assert_eq!(request.command, Some(Value::Null));
+    }
+
+    #[test]
+    fn should_publish_mcp_plugins_route_owner_contract() {
+        let contract = build_mcp_plugins_route_owner_contract();
+
+        assert_eq!(contract["owner"], "mcp_plugins");
+        assert_eq!(contract["rust_owner"], "backend-rs/src/api/mcp_plugins.rs");
+        assert_eq!(contract["routes"]["list"], MCP_PLUGINS_LIST_CREATE_ROUTE);
+        assert_eq!(contract["routes"]["create"], MCP_PLUGINS_LIST_CREATE_ROUTE);
+        assert_eq!(
+            contract["routes"]["simple_create"],
+            MCP_PLUGINS_SIMPLE_CREATE_ROUTE
+        );
+        assert_eq!(contract["routes"]["call"], MCP_PLUGINS_CALL_ROUTE);
+        assert_eq!(contract["routes"]["call_alias"], MCP_CALL_ALIAS_ROUTE);
+        assert_eq!(contract["routes"]["metrics"], MCP_PLUGINS_METRICS_ROUTE);
+        assert_eq!(
+            contract["routes"]["cache_stats"],
+            MCP_PLUGINS_CACHE_STATS_ROUTE
+        );
+        assert_eq!(
+            contract["routes"]["cache_clear"],
+            MCP_PLUGINS_CACHE_CLEAR_ROUTE
+        );
+        assert_eq!(
+            contract["routes"]["sessions_stats"],
+            MCP_PLUGINS_SESSIONS_STATS_ROUTE
+        );
+        assert_eq!(contract["routes"]["detail"], MCP_PLUGINS_DETAIL_ROUTE);
+        assert_eq!(contract["routes"]["update"], MCP_PLUGINS_DETAIL_ROUTE);
+        assert_eq!(contract["routes"]["delete"], MCP_PLUGINS_DETAIL_ROUTE);
+        assert_eq!(contract["routes"]["toggle"], MCP_PLUGINS_TOGGLE_ROUTE);
+        assert_eq!(contract["routes"]["status"], MCP_PLUGINS_STATUS_ROUTE);
+        assert_eq!(contract["routes"]["tools"], MCP_PLUGINS_TOOLS_ROUTE);
+        assert_eq!(contract["routes"]["test"], MCP_PLUGINS_TEST_ROUTE);
+
+        assert_eq!(
+            contract["methods"]["detail"],
+            json!(["GET", "PUT", "DELETE"])
+        );
+        assert_eq!(contract["methods"]["call_alias"], json!(["POST"]));
+        assert_eq!(
+            contract["service_owners"]
+                .as_array()
+                .expect("service owner list should be present")
+                .len(),
+            3
+        );
+        assert_eq!(
+            contract["readiness_probes"]
+                .as_array()
+                .expect("readiness probes should be present")
+                .len(),
+            8
+        );
+        assert_eq!(
+            contract["readiness_probes"]
+                .as_array()
+                .expect("readiness probes should be present")
+                .last()
+                .expect("readiness probes should not be empty"),
+            "mcp-plugins-missing-detail-business-rust"
+        );
+        assert_eq!(
+            contract["source_map_files"]
+                .as_array()
+                .expect("source map files should be present")
+                .len(),
+            5
+        );
+        assert_eq!(
+            contract["owner_profile"]["name"],
+            "phase5-mcp-plugins-business-owner"
+        );
+        let business_probes = contract["owner_profile"]["business_probes"]
+            .as_array()
+            .expect("business probes should be present");
+        assert_eq!(business_probes.len(), 6);
+        assert!(business_probes
+            .iter()
+            .any(|probe| probe == "mcp-plugins-status-business-rust"));
+        assert_eq!(contract["owner_profile"]["python_fallback_probe_count"], 0);
+        assert_eq!(
+            contract["business_smoke_status"]["status"],
+            "covered_by_dedicated_rust_owner_profile"
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["readiness_probe_count"],
+            json!(8)
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["business_probe_count"],
+            json!(6)
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["auth_guard_probe_count"],
+            json!(2)
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["fixture_probe_count"],
+            json!(0)
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["python_fallback_probe_count"],
+            json!(0)
+        );
+        assert_eq!(
+            contract["next_cutover_gate"],
+            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+        );
+        assert!(contract["migration_policy"]
+            .as_str()
+            .unwrap()
+            .contains("phase5-mcp-plugins-business-owner"));
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["full_module_freeze_ready"],
+            false
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            false
+        );
+    }
+
+    #[test]
+    fn should_keep_mcp_plugins_route_group_paths_stable() {
+        assert_eq!(MCP_PLUGINS_LIST_CREATE_ROUTE, "/mcp/plugins");
+        assert_eq!(MCP_PLUGINS_SIMPLE_CREATE_ROUTE, "/mcp/plugins/simple");
+        assert_eq!(MCP_PLUGINS_CALL_ROUTE, "/mcp/plugins/call");
+        assert_eq!(MCP_CALL_ALIAS_ROUTE, "/mcp/call");
+        assert_eq!(MCP_PLUGINS_METRICS_ROUTE, "/mcp/plugins/metrics");
+        assert_eq!(MCP_PLUGINS_CACHE_STATS_ROUTE, "/mcp/plugins/cache/stats");
+        assert_eq!(MCP_PLUGINS_CACHE_CLEAR_ROUTE, "/mcp/plugins/cache/clear");
+        assert_eq!(
+            MCP_PLUGINS_SESSIONS_STATS_ROUTE,
+            "/mcp/plugins/sessions/stats"
+        );
+        assert_eq!(MCP_PLUGINS_DETAIL_ROUTE, "/mcp/plugins/{plugin_id}");
+        assert_eq!(MCP_PLUGINS_TOGGLE_ROUTE, "/mcp/plugins/{plugin_id}/toggle");
+        assert_eq!(MCP_PLUGINS_STATUS_ROUTE, "/mcp/plugins/{plugin_id}/status");
+        assert_eq!(MCP_PLUGINS_TOOLS_ROUTE, "/mcp/plugins/{plugin_id}/tools");
+        assert_eq!(MCP_PLUGINS_TEST_ROUTE, "/mcp/plugins/{plugin_id}/test");
+    }
+
+    #[test]
+    fn mcp_plugin_update_route_request_into_body_keeps_missing_vs_present_contract() {
+        let body = McpPluginUpdateRouteRequest {
+            display_name: Some(json!("Weather Plugin")),
+            description: RouteValueField::Present(json!(null)),
+            server_url: RouteValueField::Missing,
+            command: RouteValueField::Present(json!("node server.js")),
+            enabled: Some(json!(true)),
+            ..McpPluginUpdateRouteRequest::default()
+        }
+        .into_body();
+
+        assert_eq!(
+            body,
+            json!({
+                "display_name": "Weather Plugin",
+                "description": null,
+                "command": "node server.js",
+                "enabled": true
+            })
+        );
+        assert!(body.get("server_url").is_none());
+    }
 
     #[tokio::test]
     async fn clear_cache_defaults_to_current_user_like_python_route() {

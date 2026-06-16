@@ -9,6 +9,7 @@ use sea_orm::{
     Set,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::config::AppConfig;
@@ -68,6 +69,49 @@ impl AuthService {
             .hash_password(password.as_bytes(), &salt)
             .map(|h| h.to_string())
             .map_err(|e| format!("password hash failed: {}", e).into())
+    }
+
+    fn hash_password_legacy_sha256(password: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(password.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
+    fn is_legacy_sha256_hash(password_hash: &str) -> bool {
+        password_hash.len() == 64 && password_hash.chars().all(|ch| ch.is_ascii_hexdigit())
+    }
+
+    fn verify_password_hash(password: &str, password_hash: &str) -> Result<bool, String> {
+        match PasswordHash::new(password_hash) {
+            Ok(parsed) => match Argon2::default().verify_password(password.as_bytes(), &parsed) {
+                Ok(_) => Ok(true),
+                Err(_) => Ok(false),
+            },
+            Err(parse_error) => {
+                if Self::is_legacy_sha256_hash(password_hash) {
+                    Ok(Self::hash_password_legacy_sha256(password)
+                        == password_hash.to_ascii_lowercase())
+                } else {
+                    Err(format!("invalid password hash: {}", parse_error))
+                }
+            }
+        }
+    }
+
+    async fn upgrade_legacy_password_hash(
+        db: &DatabaseConnection,
+        pwd: &user_password::Model,
+        password: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if !Self::is_legacy_sha256_hash(&pwd.password_hash) {
+            return Ok(());
+        }
+
+        let mut active: user_password::ActiveModel = pwd.clone().into();
+        active.password_hash = Set(Self::hash_password(password)?);
+        active.updated_at = Set(Utc::now());
+        active.update(db).await?;
+        Ok(())
     }
 
     /// Auto-create local admin from .env config (mirrors Python backend logic)
@@ -197,12 +241,9 @@ impl AuthService {
             }
         };
 
-        let parsed = PasswordHash::new(&pwd.password_hash)
-            .map_err(|e| format!("invalid password hash: {}", e))?;
-        let valid = Argon2::default().verify_password(password.as_bytes(), &parsed);
-
-        match valid {
-            Ok(_) => {
+        match Self::verify_password_hash(password, &pwd.password_hash) {
+            Ok(true) => {
+                Self::upgrade_legacy_password_hash(db, &pwd, password).await?;
                 let user = user_entity::Entity::find_by_id(&pwd.user_id)
                     .one(db)
                     .await?
@@ -210,7 +251,8 @@ impl AuthService {
                 let token = self.create_token(&user)?;
                 Ok(Some((user, token)))
             }
-            Err(_) => Ok(None),
+            Ok(false) => Ok(None),
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -263,5 +305,26 @@ impl AuthService {
             .ok_or("inserted user not found")?;
 
         Ok(user)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AuthService;
+
+    #[test]
+    fn verify_password_hash_accepts_legacy_sha256_shape() {
+        let legacy_hash = AuthService::hash_password_legacy_sha256("admin123");
+        let valid = AuthService::verify_password_hash("admin123", &legacy_hash)
+            .expect("legacy sha256 hash should verify");
+        assert!(valid);
+    }
+
+    #[test]
+    fn verify_password_hash_rejects_wrong_password_for_legacy_sha256_shape() {
+        let legacy_hash = AuthService::hash_password_legacy_sha256("admin123");
+        let valid = AuthService::verify_password_hash("wrong-password", &legacy_hash)
+            .expect("legacy sha256 hash should return boolean result");
+        assert!(!valid);
     }
 }

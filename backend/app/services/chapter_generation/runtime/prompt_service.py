@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from app.models.project import Project
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the shared chapter-generation runtime prompt contract; this "
+    "Python module is kept only as frozen rollback/source-map material after "
+    "explicit support-shell freeze approval."
+)
+SOURCE_MAP_RUST_OWNER = "backend-rs/src/services/chapter_generation_prompt_service.rs"
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_single_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
+
 from app.services.outline_requirement_service import extract_outline_anchor_lines
+
+if TYPE_CHECKING:
+    from app.models.project import Project
 
 
 def detect_style_profile(

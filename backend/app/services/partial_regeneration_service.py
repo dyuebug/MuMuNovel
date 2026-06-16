@@ -1,22 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.logger import get_logger
-from app.models.chapter import Chapter
-from app.models.outline import Outline
-from app.models.project import Project
-from app.models.project_default_style import ProjectDefaultStyle
-from app.models.writing_style import WritingStyle
 from app.schemas.chapter import PartialRegenerateRequest
 from app.services.prompt_service import PromptService
 from app.services.chapter_web_research_service import chapter_web_research_service
-from app.services.writing_style_sync_service import sync_low_ai_presets
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter import Chapter
+    from app.models.outline import Outline
+    from app.models.project import Project
 
 logger = get_logger(__name__)
 
@@ -70,6 +69,11 @@ async def _load_partial_regeneration_project_bundle(
     *,
     chapter: Chapter,
 ) -> tuple[Project, Optional[Outline]]:
+    from sqlalchemy import select
+
+    from app.models.outline import Outline
+    from app.models.project import Project
+
     project_result = await db_session.execute(
         select(Project).where(Project.id == chapter.project_id)
     )
@@ -137,6 +141,12 @@ async def _resolve_style_content(
     requested_style_id: Optional[int],
     user_id: str,
 ) -> tuple[Optional[int], str]:
+    from sqlalchemy import select
+
+    from app.models.project_default_style import ProjectDefaultStyle
+    from app.models.writing_style import WritingStyle
+    from app.services.writing_style_sync_service import sync_low_ai_presets
+
     await sync_low_ai_presets(db_session)
 
     style_id = requested_style_id

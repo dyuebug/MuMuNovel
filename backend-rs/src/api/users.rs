@@ -6,21 +6,183 @@ use axum::{
     Router,
 };
 use sea_orm::{DatabaseConnection, EntityTrait};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::api::user_admin_shared_owner::{
+    api_error, build_user_reset_password_payload,
+    build_user_reset_password_request_from_route_payload, check_admin,
+    delete_standard_user_payload, find_user, reset_user_password_workflow, set_admin_payload,
+    user_to_value, PasswordResetMode, UserAdminApiError, UserResetPasswordRouteRequest,
+};
 use crate::models::user;
 use crate::services::auth::Claims;
-use crate::services::user_admin_delete_user_route_service::delete_standard_user_payload;
-use crate::services::user_admin_password_reset_workflow_service::{
-    build_user_reset_password_payload, reset_user_password_workflow, PasswordResetMode,
-};
-use crate::services::user_admin_route_service::{api_error, check_admin, find_user, user_to_value};
-use crate::services::user_admin_set_admin_route_service::{
-    build_set_admin_request_from_route_payload, set_admin_payload, SetAdminRouteRequest,
-};
-use crate::services::user_password_reset_request_service::{
-    build_user_reset_password_request_from_route_payload, UserResetPasswordRouteRequest,
-};
+
+const USERS_LIST_ROUTE: &str = "/users";
+const USERS_CURRENT_ROUTE: &str = "/users/current";
+const USERS_SET_ADMIN_ROUTE: &str = "/users/set-admin";
+const USERS_RESET_PASSWORD_ROUTE: &str = "/users/reset-password";
+const USERS_DETAIL_ROUTE: &str = "/users/{user_id}";
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct SetAdminRouteRequest {
+    user_id: Option<String>,
+    is_admin: Option<bool>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SetAdminRequest {
+    user_id: String,
+    is_admin: bool,
+}
+
+fn build_set_admin_request(body: &Value) -> Result<SetAdminRequest, UserAdminApiError> {
+    let user_id = body
+        .get("user_id")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "缺少 user_id"))?;
+    let is_admin = body
+        .get("is_admin")
+        .and_then(|value| value.as_bool())
+        .ok_or_else(|| api_error(StatusCode::BAD_REQUEST, "缺少 is_admin"))?;
+
+    Ok(SetAdminRequest {
+        user_id: user_id.to_string(),
+        is_admin,
+    })
+}
+
+fn build_set_admin_request_from_route_payload(
+    body: SetAdminRouteRequest,
+) -> Result<SetAdminRequest, UserAdminApiError> {
+    let mut payload = serde_json::Map::new();
+
+    if let Some(user_id) = body.user_id {
+        payload.insert("user_id".to_string(), Value::String(user_id));
+    }
+    if let Some(is_admin) = body.is_admin {
+        payload.insert("is_admin".to_string(), Value::Bool(is_admin));
+    }
+
+    build_set_admin_request(&Value::Object(payload))
+}
+
+#[cfg(test)]
+fn build_users_route_owner_contract() -> Value {
+    json!({
+        "owner": "users",
+        "scope": "users_current_list_detail_set_admin_delete_reset_password_route_group",
+        "python_source_map": [
+            "backend/app/api/users.py",
+            "backend/app/models/user.py",
+            "backend/app/api/admin.py",
+            "backend/app/services/oauth_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/api/users.rs",
+            "backend-rs/src/api/user_admin_shared_owner.rs",
+            "deploy/strangler-gateway-probes.json"
+        ],
+        "route_contract": {
+            "list": USERS_LIST_ROUTE,
+            "current": USERS_CURRENT_ROUTE,
+            "detail": USERS_DETAIL_ROUTE,
+            "delete": USERS_DETAIL_ROUTE,
+            "set_admin": USERS_SET_ADMIN_ROUTE,
+            "reset_password": USERS_RESET_PASSWORD_ROUTE
+        },
+        "behavior_contract": {
+            "route_entrypoints": [
+                "list_users",
+                "get_current_user",
+                "get_user",
+                "set_admin",
+                "delete_user",
+                "reset_user_password"
+            ],
+            "admin_guarded_entrypoints": [
+                "list_users",
+                "get_user",
+                "set_admin",
+                "delete_user",
+                "reset_user_password"
+            ],
+            "service_consumers": [
+                "check_admin",
+                "find_user",
+                "user_to_value",
+                "set_admin_payload",
+                "delete_standard_user_payload",
+                "reset_user_password_workflow",
+                "build_user_reset_password_payload"
+            ],
+            "request_contracts": [
+                "SetAdminRouteRequest",
+                "UserResetPasswordRouteRequest"
+            ],
+            "protected_self_reset_policy": "reset_user_password rejects resetting the caller's own password"
+        },
+        "readiness_evidence": [
+            "users-current-auth-guard-rust",
+            "users-list-auth-guard-rust",
+            "users-set-admin-auth-guard-rust",
+            "users-reset-password-auth-guard-rust",
+            "users-current-business-rust",
+            "users-list-business-rust",
+            "users-detail-business-rust",
+            "users-set-admin-grant-business-rust",
+            "users-set-admin-revoke-business-rust",
+            "users-reset-password-business-rust",
+            "users-delete-business-rust"
+        ],
+        "owner_profile": {
+            "name": "phase5-users-business-owner",
+            "business_probes": [
+                "users-current-business-rust",
+                "users-list-business-rust",
+                "users-detail-business-rust",
+                "users-set-admin-grant-business-rust",
+                "users-set-admin-revoke-business-rust",
+                "users-reset-password-business-rust",
+                "users-delete-business-rust"
+            ],
+            "python_fallback_probe_count": 0
+        },
+        "business_smoke_status": {
+            "owner_profile": "phase5-users-business-owner",
+            "owner_profile_probe_count": 8,
+            "business_probe_count": 7,
+            "fixture_probe_count": 1,
+            "python_fallback_probe_count": 0,
+            "status": "covered_by_dedicated_rust_owner_profile"
+        },
+        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+        "migration_policy": "Users route business smoke is covered by phase5-users-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy.",
+        "validation_boundary": [
+            "cargo test api::users",
+            "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only --profile phase5-users-business-owner",
+            "cargo check"
+        ],
+        "rollback_boundary": {
+            "source_map_policy": "keep_python_users_route_and_user_password_files_as_source_map_until_explicit_freeze_delete_round",
+            "python_route_files_status": "source_map_only_for_users_route_group",
+            "source_map_freeze_candidate_ready": true,
+            "full_module_freeze_ready": false,
+            "python_fallback_removal_ready": false,
+            "remaining_blockers": [
+                "explicit source-map freeze/delete/repoint approval"
+            ],
+            "freeze_reason": "Rust users route group has dedicated phase5-users-business-owner probes for current/list/detail/admin grant/revoke/reset-password/delete; final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy.",
+            "rollback_files": [
+                "backend/app/api/users.py",
+                "backend/app/models/user.py",
+                "backend/app/api/admin.py",
+                "backend/app/services/oauth_service.py"
+            ]
+        }
+    })
+}
 
 async fn list_users(
     Extension(claims): Extension<Claims>,
@@ -64,7 +226,7 @@ async fn set_admin(
     check_admin(&claims)?;
 
     let request = build_set_admin_request_from_route_payload(body)?;
-    let payload = set_admin_payload(&db, &claims.sub, &request).await?;
+    let payload = set_admin_payload(&db, &claims.sub, &request.user_id, request.is_admin).await?;
     Ok(Json(payload))
 }
 
@@ -107,10 +269,175 @@ async fn reset_user_password(
 
 pub fn routes() -> Router {
     Router::new()
-        .route("/users", get(list_users))
-        .route("/users/current", get(get_current_user))
-        .route("/users/set-admin", post(set_admin))
-        .route("/users/reset-password", post(reset_user_password))
-        .route("/users/{user_id}", get(get_user))
-        .route("/users/{user_id}", delete(delete_user))
+        .route(USERS_LIST_ROUTE, get(list_users))
+        .route(USERS_CURRENT_ROUTE, get(get_current_user))
+        .route(USERS_SET_ADMIN_ROUTE, post(set_admin))
+        .route(USERS_RESET_PASSWORD_ROUTE, post(reset_user_password))
+        .route(USERS_DETAIL_ROUTE, get(get_user))
+        .route(USERS_DETAIL_ROUTE, delete(delete_user))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_set_admin_request, build_set_admin_request_from_route_payload,
+        build_users_route_owner_contract, SetAdminRouteRequest, USERS_CURRENT_ROUTE,
+        USERS_DETAIL_ROUTE, USERS_LIST_ROUTE, USERS_RESET_PASSWORD_ROUTE, USERS_SET_ADMIN_ROUTE,
+    };
+    use axum::http::StatusCode;
+    use serde_json::json;
+
+    #[test]
+    fn should_publish_users_route_owner_contract() {
+        let contract = build_users_route_owner_contract();
+
+        assert_eq!(contract["owner"], "users");
+        assert_eq!(
+            contract["scope"],
+            "users_current_list_detail_set_admin_delete_reset_password_route_group"
+        );
+        assert_eq!(contract["python_source_map"][0], "backend/app/api/users.py");
+        assert_eq!(contract["rust_owner_map"][0], "backend-rs/src/api/users.rs");
+        assert_eq!(contract["route_contract"]["list"], USERS_LIST_ROUTE);
+        assert_eq!(contract["route_contract"]["current"], USERS_CURRENT_ROUTE);
+        assert_eq!(contract["route_contract"]["detail"], USERS_DETAIL_ROUTE);
+        assert_eq!(
+            contract["route_contract"]["set_admin"],
+            USERS_SET_ADMIN_ROUTE
+        );
+        assert_eq!(
+            contract["route_contract"]["reset_password"],
+            USERS_RESET_PASSWORD_ROUTE
+        );
+        assert_eq!(
+            contract["behavior_contract"]["route_entrypoints"][5],
+            "reset_user_password"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["admin_guarded_entrypoints"][4],
+            "reset_user_password"
+        );
+        assert_eq!(
+            contract["readiness_evidence"][10],
+            "users-delete-business-rust"
+        );
+        assert_eq!(
+            contract["owner_profile"]["name"],
+            "phase5-users-business-owner"
+        );
+        assert_eq!(
+            contract["owner_profile"]["business_probes"][3],
+            "users-set-admin-grant-business-rust"
+        );
+        assert_eq!(contract["owner_profile"]["python_fallback_probe_count"], 0);
+        assert_eq!(
+            contract["business_smoke_status"]["status"],
+            "covered_by_dedicated_rust_owner_profile"
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["owner_profile_probe_count"],
+            json!(8)
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["business_probe_count"],
+            json!(7)
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["fixture_probe_count"],
+            json!(1)
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["python_fallback_probe_count"],
+            json!(0)
+        );
+        assert_eq!(
+            contract["next_cutover_gate"],
+            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+        );
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("migration policy should be a string")
+            .contains("phase5-users-business-owner"));
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["full_module_freeze_ready"],
+            false
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            false
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"][0],
+            "explicit source-map freeze/delete/repoint approval"
+        );
+    }
+
+    #[test]
+    fn should_keep_users_route_group_paths_stable() {
+        assert_eq!(USERS_LIST_ROUTE, "/users");
+        assert_eq!(USERS_CURRENT_ROUTE, "/users/current");
+        assert_eq!(USERS_SET_ADMIN_ROUTE, "/users/set-admin");
+        assert_eq!(USERS_RESET_PASSWORD_ROUTE, "/users/reset-password");
+        assert_eq!(USERS_DETAIL_ROUTE, "/users/{user_id}");
+    }
+
+    #[test]
+    fn build_set_admin_request_keeps_existing_required_fields_contract() {
+        let request = build_set_admin_request(&json!({
+            "user_id": "user-1",
+            "is_admin": true
+        }))
+        .expect("request should build");
+
+        assert_eq!(request.user_id, "user-1");
+        assert!(request.is_admin);
+    }
+
+    #[test]
+    fn build_set_admin_request_rejects_missing_fields() {
+        let missing_user = build_set_admin_request(&json!({"is_admin": true}))
+            .expect_err("missing user_id should fail");
+        assert_eq!(missing_user.0, StatusCode::BAD_REQUEST);
+        assert_eq!(missing_user.1 .0["detail"], "缺少 user_id");
+
+        let missing_flag = build_set_admin_request(&json!({"user_id": "user-1"}))
+            .expect_err("missing is_admin should fail");
+        assert_eq!(missing_flag.0, StatusCode::BAD_REQUEST);
+        assert_eq!(missing_flag.1 .0["detail"], "缺少 is_admin");
+    }
+
+    #[test]
+    fn build_set_admin_request_from_route_payload_keeps_existing_contract() {
+        let request = build_set_admin_request_from_route_payload(SetAdminRouteRequest {
+            user_id: Some("user-1".to_string()),
+            is_admin: Some(true),
+        })
+        .expect("request should build");
+
+        assert_eq!(request.user_id, "user-1");
+        assert!(request.is_admin);
+    }
+
+    #[test]
+    fn build_set_admin_request_from_route_payload_rejects_missing_fields() {
+        let missing_user = build_set_admin_request_from_route_payload(SetAdminRouteRequest {
+            user_id: None,
+            is_admin: Some(true),
+        })
+        .expect_err("missing user_id should fail");
+        assert_eq!(missing_user.0, StatusCode::BAD_REQUEST);
+        assert_eq!(missing_user.1 .0["detail"], "缺少 user_id");
+
+        let missing_flag = build_set_admin_request_from_route_payload(SetAdminRouteRequest {
+            user_id: Some("user-1".to_string()),
+            is_admin: None,
+        })
+        .expect_err("missing is_admin should fail");
+        assert_eq!(missing_flag.0, StatusCode::BAD_REQUEST);
+        assert_eq!(missing_flag.1 .0["detail"], "缺少 is_admin");
+    }
 }

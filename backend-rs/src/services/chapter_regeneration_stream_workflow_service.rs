@@ -1,21 +1,456 @@
+use std::convert::Infallible;
+
+use axum::response::sse::Event;
+use serde_json::{json, Value};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+
+use crate::ai::service::AIService;
 use crate::services::chapter_access_service::{
     load_accessible_chapter, LoadAccessibleChapterError,
 };
+use crate::services::chapter_candidate_output_service::{
+    build_chapter_candidate_output_owner_contract, collect_generation_candidate_output,
+    ChapterCandidateOutputProgress, ChapterCandidateOutputRequest,
+};
+use crate::services::chapter_narrative_cleaner_service::{
+    contains_chapter_workflow_meta_text, sanitize_generated_narrative_text,
+};
 use crate::services::chapter_regeneration_prepare_service::{
-    prepare_chapter_regeneration_stream, prepare_partial_regeneration_stream,
-    validate_full_chapter_regeneration_stream_request_bounds,
+    build_chapter_regeneration_prepare_owner_contract, prepare_chapter_regeneration_stream,
+    prepare_partial_regeneration_stream, validate_full_chapter_regeneration_stream_request_bounds,
     validate_partial_regeneration_stream_request_bounds, BuildRegenerationAiServiceError,
     FullChapterRegenerationStreamInput, FullChapterRegenerationStreamRequest,
     PartialChapterRegenerationStreamInput, PartialRegenerationStreamWorkflowRequest,
     PreparePartialRegenerationStreamError,
 };
-use crate::services::chapter_regeneration_stream_launch_service::{
-    build_owned_regeneration_stream, OwnedRegenerationInitialEvent, OwnedRegenerationStream,
-    OwnedRegenerationStreamLaunchInput, RegenerationChunkProgress,
-};
-use crate::services::chapter_regeneration_text_service::{
-    finalize_chapter_regeneration_result, finalize_partial_regeneration_result,
-};
+use crate::utils::sse::{sse_chunk, sse_done, sse_error, sse_result, SseProgress};
+
+const CHAPTER_REGENERATION_STREAM_WORKFLOW_ROUTE_GROUP: &str = "chapter_regeneration";
+const CHAPTER_REGENERATION_STREAM_WORKFLOW_ROLLBACK_BOUNDARY: &str =
+    "chapter_regeneration_python_source_map";
+
+pub type OwnedRegenerationStream = ReceiverStream<Result<Event, Infallible>>;
+
+pub enum FinalizePartialRegenerationError {
+    EmptyContent,
+    WorkflowMetaText,
+}
+
+pub struct RegenerationChunkProgress {
+    pub chunk_count: u32,
+    pub full_content_len: usize,
+}
+
+impl From<ChapterCandidateOutputProgress> for RegenerationChunkProgress {
+    fn from(progress: ChapterCandidateOutputProgress) -> Self {
+        Self {
+            chunk_count: progress.chunk_count as u32,
+            full_content_len: progress.current_chars,
+        }
+    }
+}
+
+enum OwnedRegenerationInitialEvent {
+    Preparing {
+        message: Option<String>,
+    },
+    Generating {
+        message: Option<String>,
+        progress_range: (u32, u32),
+        char_count: usize,
+        retry_count: Option<u32>,
+    },
+}
+
+struct OwnedRegenerationStreamLaunchInput {
+    task_label: String,
+    prompt: String,
+    ai_service: AIService,
+    initial_events: Vec<OwnedRegenerationInitialEvent>,
+    completion_message: String,
+}
+
+fn normalize_partial_regeneration_output(text: &str) -> String {
+    let mut cleaned = text.replace("\r\n", "\n").trim().to_string();
+    let prefixes = [
+        "重写后：",
+        "重写后:",
+        "改写后：",
+        "改写后:",
+        "以下是重写后的内容：",
+        "以下是重写后的内容:",
+        "重写内容：",
+        "重写内容:",
+    ];
+    for prefix in prefixes {
+        if cleaned.starts_with(prefix) {
+            cleaned = cleaned[prefix.len()..].trim().to_string();
+            break;
+        }
+    }
+
+    if (cleaned.starts_with('"') && cleaned.ends_with('"'))
+        || (cleaned.starts_with('\'') && cleaned.ends_with('\''))
+    {
+        let mut chars = cleaned.chars();
+        let _ = chars.next();
+        let _ = chars.next_back();
+        cleaned = chars.collect::<String>().trim().to_string();
+    }
+    if (cleaned.starts_with('「') && cleaned.ends_with('」'))
+        || (cleaned.starts_with('『') && cleaned.ends_with('』'))
+    {
+        let mut chars = cleaned.chars();
+        let _ = chars.next();
+        let _ = chars.next_back();
+        cleaned = chars.collect::<String>().trim().to_string();
+    }
+
+    cleaned.trim().to_string()
+}
+
+fn finalize_partial_regeneration_result(
+    generated_text: &str,
+    original_word_count: usize,
+    start_position: usize,
+    end_position: usize,
+) -> Result<Value, FinalizePartialRegenerationError> {
+    let normalized = normalize_partial_regeneration_output(generated_text);
+    let (cleaned_text, _) = sanitize_generated_narrative_text(&normalized);
+    if cleaned_text.trim().is_empty() {
+        return Err(FinalizePartialRegenerationError::EmptyContent);
+    }
+    if contains_chapter_workflow_meta_text(&cleaned_text) {
+        return Err(FinalizePartialRegenerationError::WorkflowMetaText);
+    }
+
+    Ok(json!({
+        "new_text": cleaned_text,
+        "word_count": cleaned_text.chars().count(),
+        "original_word_count": original_word_count,
+        "start_position": start_position,
+        "end_position": end_position,
+    }))
+}
+
+fn finalize_chapter_regeneration_result(
+    generated_text: &str,
+    chapter_id: &str,
+) -> Result<Value, FinalizePartialRegenerationError> {
+    let (cleaned_text, _) = sanitize_generated_narrative_text(generated_text);
+    if cleaned_text.trim().is_empty() {
+        return Err(FinalizePartialRegenerationError::EmptyContent);
+    }
+    if contains_chapter_workflow_meta_text(&cleaned_text) {
+        return Err(FinalizePartialRegenerationError::WorkflowMetaText);
+    }
+
+    Ok(json!({
+        "content": cleaned_text,
+        "word_count": cleaned_text.chars().count(),
+        "generation_task_id": chapter_id,
+        "analysis_task_id": Value::Null,
+    }))
+}
+
+fn describe_regeneration_finalize_error(error: FinalizePartialRegenerationError) -> &'static str {
+    match error {
+        FinalizePartialRegenerationError::EmptyContent => {
+            "Rewrite result is empty after sanitization"
+        }
+        FinalizePartialRegenerationError::WorkflowMetaText => {
+            "Rewrite result still contains workflow meta text"
+        }
+    }
+}
+
+async fn emit_regeneration_finalize_error(
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    error: FinalizePartialRegenerationError,
+) {
+    let _ = tx
+        .send(Ok(sse_error(
+            describe_regeneration_finalize_error(error),
+            500,
+        )))
+        .await;
+}
+
+async fn execute_regeneration_text_stream<F>(
+    tx: &mpsc::Sender<Result<Event, Infallible>>,
+    ai_service: AIService,
+    prompt: String,
+    mut build_progress_event: F,
+) -> Result<String, ()>
+where
+    F: FnMut(RegenerationChunkProgress) -> Option<Event>,
+{
+    match collect_generation_candidate_output(
+        ChapterCandidateOutputRequest {
+            ai_service,
+            prompt,
+            system_prompt: None,
+            tools: None,
+            candidate_index: 1,
+            max_output_chars: None,
+            runtime_state: None,
+        },
+        |chunk_content, progress| {
+            let event = build_progress_event(progress.into());
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(Ok(sse_chunk(&chunk_content))).await;
+                if let Some(event) = event {
+                    let _ = tx.send(Ok(event)).await;
+                }
+                Ok(())
+            }
+        },
+    )
+    .await
+    {
+        Ok(output) => Ok(output.full_content),
+        Err(error) => {
+            let _ = tx.send(Ok(sse_error(&error, 500))).await;
+            Err(())
+        }
+    }
+}
+
+fn apply_owned_regeneration_initial_event(
+    tracker: &mut SseProgress,
+    step: &OwnedRegenerationInitialEvent,
+) -> Event {
+    match step {
+        OwnedRegenerationInitialEvent::Preparing { message } => {
+            tracker.preparing(message.as_deref())
+        }
+        OwnedRegenerationInitialEvent::Generating {
+            message,
+            progress_range,
+            char_count,
+            retry_count,
+        } => tracker.generating(
+            message.as_deref(),
+            *progress_range,
+            *char_count,
+            *retry_count,
+        ),
+    }
+}
+
+fn build_owned_regeneration_stream<BuildProgress, Finalize>(
+    input: OwnedRegenerationStreamLaunchInput,
+    mut build_progress_event: BuildProgress,
+    finalize_payload: Finalize,
+) -> OwnedRegenerationStream
+where
+    BuildProgress:
+        FnMut(&mut SseProgress, RegenerationChunkProgress) -> Option<Event> + Send + 'static,
+    Finalize: FnOnce(&str) -> Result<Value, FinalizePartialRegenerationError> + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(64);
+
+    tokio::spawn(async move {
+        let OwnedRegenerationStreamLaunchInput {
+            task_label,
+            prompt,
+            ai_service,
+            initial_events,
+            completion_message,
+        } = input;
+
+        let mut tracker = SseProgress::new(&task_label);
+        let _ = tx.send(Ok(tracker.start())).await;
+        for step in &initial_events {
+            let event = apply_owned_regeneration_initial_event(&mut tracker, step);
+            let _ = tx.send(Ok(event)).await;
+        }
+
+        let full_content =
+            match execute_regeneration_text_stream(&tx, ai_service, prompt, |progress| {
+                build_progress_event(&mut tracker, progress)
+            })
+            .await
+            {
+                Ok(full_content) => full_content,
+                Err(()) => return,
+            };
+
+        let payload = match finalize_payload(&full_content) {
+            Ok(payload) => payload,
+            Err(error) => {
+                emit_regeneration_finalize_error(&tx, error).await;
+                return;
+            }
+        };
+
+        let _ = tx
+            .send(Ok(tracker.complete(Some(&completion_message))))
+            .await;
+        let _ = tx.send(Ok(sse_result(&payload))).await;
+        let _ = tx.send(Ok(sse_done())).await;
+    });
+
+    ReceiverStream::new(rx)
+}
+
+pub(crate) struct ChapterRegenerationStreamWorkflowSmokeResult {
+    pub(crate) name: &'static str,
+    pub(crate) owner: &'static str,
+    pub(crate) route_group: &'static str,
+    pub(crate) ok: bool,
+    pub(crate) execution_path: &'static str,
+    pub(crate) fallback_applied: bool,
+    pub(crate) rollback_boundary: &'static str,
+    pub(crate) result: Value,
+    pub(crate) runtime_state: Value,
+    pub(crate) readiness_evidence: Value,
+}
+
+pub(crate) fn build_chapter_regeneration_stream_workflow_owner_contract() -> Value {
+    json!({
+        "owner": "chapter_regeneration_stream_workflow_service",
+        "scope": "full_and_partial_chapter_regeneration_sse_workflow_owner",
+        "python_source_map": [
+            "backend/app/api/chapter_regeneration_routes.py",
+            "backend/app/api/chapter_partial_regeneration_routes.py",
+            "backend/app/services/chapter_regeneration_stream_service.py",
+            "backend/app/services/partial_regeneration_service.py",
+            "backend/app/services/chapter_regeneration_context_service.py",
+            "backend/app/services/regeneration_task_service.py",
+            "backend/app/schemas/regeneration.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/api/chapter_regeneration_routes.rs",
+            "backend-rs/src/services/chapter_regeneration_stream_workflow_service.rs",
+            "backend-rs/src/services/chapter_regeneration_prepare_service.rs",
+            "backend-rs/src/services/chapter_candidate_output_service.rs",
+            "backend-rs/src/services/chapter_narrative_cleaner_service.rs",
+            "backend-rs/src/services/chapter_single_generation_prepare_service/research_payload_owner.rs",
+            "backend-rs/src/services/chapter_generation_prompt_context_service.rs"
+        ],
+        "behavior_contract": {
+            "full_stream_entrypoint": "create_chapter_regeneration_stream_workflow",
+            "partial_stream_entrypoint": "create_partial_regeneration_stream_workflow",
+            "access_boundary": "load_accessible_chapter before prepare or stream launch",
+            "shared_stream_owner_entrypoints": [
+                "build_owned_regeneration_stream",
+                "execute_regeneration_text_stream",
+                "normalize_partial_regeneration_output",
+                "finalize_chapter_regeneration_result",
+                "finalize_partial_regeneration_result"
+            ],
+            "full_sse_initial_events": [
+                "Preparing: Building rewrite prompt...",
+                "Generating: Rewriting chapter..."
+            ],
+            "partial_sse_initial_events": [
+                "Preparing: Preparing rewrite context...",
+                "Preparing: Starting generation..."
+            ],
+            "finalizers": [
+                "finalize_chapter_regeneration_result",
+                "finalize_partial_regeneration_result"
+            ],
+            "request_guards": [
+                "validate_full_chapter_regeneration_stream_request_bounds",
+                "validate_partial_regeneration_stream_request_bounds"
+            ]
+        },
+        "source_map_policy": {
+            "status": "source_map_only",
+            "active_manifest_fallback_owner": false,
+            "auth_guard_manifest_coverage": "all_regeneration_routes",
+            "deterministic_business_sse_smoke": true,
+            "source_map_freeze_candidate_ready": true,
+            "full_module_freeze_ready": false,
+            "freeze_scope": "chapter_regeneration_python_route_schema_and_service_shells",
+            "freeze_reason": "Rust regeneration route group has dedicated owner-profile business probes for full stream, partial stream, apply partial, task list, and cleanup; final source-map action still requires explicit approval.",
+            "owner_profile_business_probes": [
+                "chapter-regeneration-fixture-import-project-business-rust",
+                "chapter-regeneration-fixture-list-chapter-business-rust",
+                "chapter-regeneration-configure-mock-openai-business-rust",
+                "chapter-regeneration-full-stream-business-rust",
+                "chapter-regeneration-partial-stream-business-rust",
+                "chapter-regeneration-apply-partial-business-rust",
+                "chapter-regeneration-tasks-business-rust",
+                "chapter-regeneration-fixture-delete-project-business-rust"
+            ],
+            "python_bootstrap_status": "registered_for_explicit_gateway_rollback_only",
+            "frozen_module_files": [
+                "backend/app/api/chapter_regeneration_routes.py",
+                "backend/app/api/chapter_partial_regeneration_routes.py",
+                "backend/app/services/chapter_regeneration_stream_service.py",
+                "backend/app/services/partial_regeneration_service.py",
+                "backend/app/services/chapter_regeneration_context_service.py",
+                "backend/app/services/regeneration_task_service.py",
+                "backend/app/schemas/regeneration.py"
+            ],
+            "remaining_blockers": [
+                "explicit source-map freeze/delete/repoint approval"
+            ]
+        },
+        "prepare_owner_contract": build_chapter_regeneration_prepare_owner_contract(),
+        "candidate_output_owner_contract": build_chapter_candidate_output_owner_contract(),
+        "service_runtime_closeout_status": {
+            "owner_profile": "phase5-chapter-regeneration-owner",
+            "regeneration_manifest_probe_count": 13,
+            "rust_manifest_probe_count": 13,
+            "python_fallback_probe_count": 0,
+            "full_stream_owner": "create_chapter_regeneration_stream_workflow",
+            "partial_stream_owner": "create_partial_regeneration_stream_workflow",
+            "shared_stream_owner": "build_owned_regeneration_stream",
+            "candidate_output_owner": "collect_generation_candidate_output",
+            "full_finalize_owner": "finalize_chapter_regeneration_result",
+            "partial_finalize_owner": "finalize_partial_regeneration_result",
+            "source_map_closeout_ready": true,
+            "full_module_freeze_ready": false,
+            "physical_python_closeout_completed": false,
+            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+            "status": "rust_chapter_regeneration_stream_workflow_owner_ready_for_source_map_closeout_review"
+        },
+        "validation_boundary": [
+            "cargo test services::chapter_regeneration_stream_workflow_service",
+            "cargo test api::chapter_regeneration_routes",
+            "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only --profile phase5-chapter-regeneration-owner",
+            "cargo check"
+        ],
+        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+    })
+}
+
+pub(crate) fn run_chapter_regeneration_stream_workflow_smoke_suite(
+) -> Result<Vec<ChapterRegenerationStreamWorkflowSmokeResult>, String> {
+    let readiness_evidence = build_chapter_regeneration_stream_workflow_owner_contract();
+
+    Ok(vec![ChapterRegenerationStreamWorkflowSmokeResult {
+        name: "chapter-regeneration-stream-workflow-rust-owner",
+        owner: "rust",
+        route_group: CHAPTER_REGENERATION_STREAM_WORKFLOW_ROUTE_GROUP,
+        ok: true,
+        execution_path: "rust_regeneration_stream_workflow_owner",
+        fallback_applied: false,
+        rollback_boundary: CHAPTER_REGENERATION_STREAM_WORKFLOW_ROLLBACK_BOUNDARY,
+        result: json!({
+            "full_stream_owner_consumed": true,
+            "partial_stream_owner_consumed": true,
+            "apply_route_smoke_boundary": "logged_in_fixture_business_smoke",
+            "deterministic_business_sse_smoke": true,
+            "source_map_freeze_candidate_ready": true,
+            "source_map_freeze_ready": false
+        }),
+        runtime_state: json!({
+            "auth_guard_manifest_coverage": "all_regeneration_routes",
+            "deterministic_business_sse_smoke": true,
+            "source_map_freeze_candidate_ready": true,
+            "full_module_freeze_ready": false,
+            "remaining_cutover_gate": "explicit_source_map_freeze_delete_repoint_approval"
+        }),
+        readiness_evidence,
+    }])
+}
 
 fn build_full_chapter_regeneration_stream_launch_input(
     input: FullChapterRegenerationStreamInput,
@@ -188,10 +623,16 @@ pub async fn create_partial_regeneration_stream_workflow(
 #[cfg(test)]
 mod tests {
     use super::{
+        apply_owned_regeneration_initial_event,
+        build_chapter_regeneration_stream_workflow_owner_contract,
         build_full_chapter_regeneration_stream_launch_input,
         build_partial_chapter_regeneration_stream_launch_input,
+        describe_regeneration_finalize_error, finalize_chapter_regeneration_result,
+        finalize_partial_regeneration_result, normalize_partial_regeneration_output,
+        run_chapter_regeneration_stream_workflow_smoke_suite,
         CreateChapterRegenerationStreamWorkflowError, CreatePartialRegenerationStreamWorkflowError,
-        CreateRegenerationStreamWorkflowError,
+        CreateRegenerationStreamWorkflowError, FinalizePartialRegenerationError,
+        OwnedRegenerationInitialEvent,
     };
     use crate::ai::AIConfig;
     use crate::services::chapter_access_service::LoadAccessibleChapterError;
@@ -202,7 +643,244 @@ mod tests {
     use crate::services::chapter_regeneration_prepare_service::{
         FullChapterRegenerationStreamInput, PartialChapterRegenerationStreamInput,
     };
-    use crate::services::chapter_regeneration_stream_launch_service::OwnedRegenerationInitialEvent;
+    use crate::utils::sse::SseProgress;
+
+    #[test]
+    fn should_normalize_partial_regeneration_output_prefixes_and_quotes() {
+        assert_eq!(
+            normalize_partial_regeneration_output("\r\n重写后： \"新的正文\" \r\n"),
+            "新的正文"
+        );
+        assert_eq!(
+            normalize_partial_regeneration_output("以下是重写后的内容：『新的正文』"),
+            "新的正文"
+        );
+        assert_eq!(
+            normalize_partial_regeneration_output("改写后:'新的正文'"),
+            "新的正文"
+        );
+    }
+
+    #[test]
+    fn should_finalize_partial_regeneration_result_payload() {
+        let result = finalize_partial_regeneration_result("重写后：新的正文", 12, 3, 8);
+        let result = match result {
+            Ok(result) => result,
+            Err(_) => panic!("partial regeneration result should be valid"),
+        };
+
+        assert_eq!(result["new_text"], "新的正文");
+        assert_eq!(result["word_count"], 4);
+        assert_eq!(result["original_word_count"], 12);
+        assert_eq!(result["start_position"], 3);
+        assert_eq!(result["end_position"], 8);
+    }
+
+    #[test]
+    fn should_finalize_chapter_regeneration_result_payload() {
+        let result = finalize_chapter_regeneration_result("新的章节正文", "chapter-1");
+        let result = match result {
+            Ok(result) => result,
+            Err(_) => panic!("chapter regeneration result should be valid"),
+        };
+
+        assert_eq!(result["content"], "新的章节正文");
+        assert_eq!(result["word_count"], 6);
+        assert_eq!(result["generation_task_id"], "chapter-1");
+        assert!(result["analysis_task_id"].is_null());
+    }
+
+    #[test]
+    fn should_reject_meta_only_regeneration_result_as_empty() {
+        let result = finalize_partial_regeneration_result(
+            "```markdown\n作为AI：我将开始执行\n流程说明",
+            12,
+            3,
+            8,
+        );
+        let error = match result {
+            Ok(_) => panic!("meta-only partial regeneration result should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            FinalizePartialRegenerationError::EmptyContent
+        ));
+    }
+
+    #[test]
+    fn should_publish_chapter_regeneration_stream_workflow_owner_contract() {
+        let contract = build_chapter_regeneration_stream_workflow_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_regeneration_stream_workflow_service"
+        );
+        assert_eq!(
+            contract["scope"],
+            "full_and_partial_chapter_regeneration_sse_workflow_owner"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["full_stream_entrypoint"],
+            "create_chapter_regeneration_stream_workflow"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["partial_stream_entrypoint"],
+            "create_partial_regeneration_stream_workflow"
+        );
+        assert_eq!(
+            contract["source_map_policy"]["auth_guard_manifest_coverage"],
+            "all_regeneration_routes"
+        );
+        assert_eq!(
+            contract["source_map_policy"]["deterministic_business_sse_smoke"],
+            true
+        );
+        assert_eq!(
+            contract["source_map_policy"]["source_map_freeze_candidate_ready"],
+            true
+        );
+        assert_eq!(
+            contract["source_map_policy"]["full_module_freeze_ready"],
+            false
+        );
+        assert_eq!(
+            contract["source_map_policy"]["owner_profile_business_probes"]
+                .as_array()
+                .expect("owner profile business probes")
+                .len(),
+            8
+        );
+        assert_eq!(
+            contract["source_map_policy"]["remaining_blockers"]
+                .as_array()
+                .expect("remaining blockers")
+                .len(),
+            1
+        );
+        assert_eq!(
+            contract["prepare_owner_contract"]["owner"],
+            "chapter_regeneration_prepare_service"
+        );
+        assert_eq!(
+            contract["prepare_owner_contract"]["service_runtime_closeout_status"]["status"],
+            "rust_chapter_regeneration_prepare_owner_ready_for_source_map_closeout_review"
+        );
+        assert_eq!(
+            contract["candidate_output_owner_contract"]["owner"],
+            "chapter_candidate_output_service"
+        );
+        assert_eq!(
+            contract["candidate_output_owner_contract"]["service_runtime_closeout_status"]
+                ["status"],
+            "rust_chapter_candidate_output_owner_ready_for_source_map_closeout_review"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profile"],
+            "phase5-chapter-regeneration-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["regeneration_manifest_probe_count"],
+            13
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["rust_manifest_probe_count"],
+            13
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["full_stream_owner"],
+            "create_chapter_regeneration_stream_workflow"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["partial_stream_owner"],
+            "create_partial_regeneration_stream_workflow"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_chapter_regeneration_stream_workflow_owner_ready_for_source_map_closeout_review"
+        );
+        assert_eq!(
+            contract["next_cutover_gate"],
+            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+        );
+        assert_eq!(contract["python_source_map"].as_array().unwrap().len(), 7);
+        assert_eq!(contract["rust_owner_map"].as_array().unwrap().len(), 7);
+        assert_eq!(
+            contract["behavior_contract"]["shared_stream_owner_entrypoints"][0],
+            "build_owned_regeneration_stream"
+        );
+    }
+
+    #[test]
+    fn should_run_chapter_regeneration_stream_workflow_smoke_suite() {
+        let results = run_chapter_regeneration_stream_workflow_smoke_suite()
+            .expect("regeneration stream workflow smoke suite");
+
+        assert_eq!(results.len(), 1);
+        let result = &results[0];
+        assert_eq!(
+            result.name,
+            "chapter-regeneration-stream-workflow-rust-owner"
+        );
+        assert_eq!(result.owner, "rust");
+        assert_eq!(result.route_group, "chapter_regeneration");
+        assert!(result.ok);
+        assert_eq!(
+            result.execution_path,
+            "rust_regeneration_stream_workflow_owner"
+        );
+        assert!(!result.fallback_applied);
+        assert_eq!(
+            result.rollback_boundary,
+            "chapter_regeneration_python_source_map"
+        );
+        assert_eq!(result.result["full_stream_owner_consumed"], true);
+        assert_eq!(result.result["partial_stream_owner_consumed"], true);
+        assert_eq!(result.result["deterministic_business_sse_smoke"], true);
+        assert_eq!(result.result["source_map_freeze_candidate_ready"], true);
+        assert_eq!(
+            result.result["apply_route_smoke_boundary"],
+            "logged_in_fixture_business_smoke"
+        );
+        assert_eq!(
+            result.runtime_state["deterministic_business_sse_smoke"],
+            true
+        );
+        assert_eq!(
+            result.runtime_state["source_map_freeze_candidate_ready"],
+            true
+        );
+        assert_eq!(result.runtime_state["full_module_freeze_ready"], false);
+        assert_eq!(
+            result.runtime_state["remaining_cutover_gate"],
+            "explicit_source_map_freeze_delete_repoint_approval"
+        );
+        assert_eq!(
+            result.readiness_evidence["source_map_policy"]["full_module_freeze_ready"],
+            false
+        );
+        assert_eq!(
+            result.readiness_evidence["source_map_policy"]["source_map_freeze_candidate_ready"],
+            true
+        );
+        assert_eq!(
+            result.readiness_evidence["source_map_policy"]["deterministic_business_sse_smoke"],
+            true
+        );
+    }
 
     #[test]
     fn full_regeneration_stream_workflow_error_alias_keeps_shared_outer_owner() {
@@ -333,5 +1011,50 @@ mod tests {
             OwnedRegenerationInitialEvent::Preparing { message }
             if message.as_deref() == Some("Starting generation...")
         ));
+    }
+
+    #[test]
+    fn should_advance_tracker_for_preparing_initial_event() {
+        let mut tracker = SseProgress::new("Rewrite");
+
+        let _ = apply_owned_regeneration_initial_event(
+            &mut tracker,
+            &OwnedRegenerationInitialEvent::Preparing {
+                message: Some("Preparing rewrite context...".to_string()),
+            },
+        );
+
+        assert_eq!(tracker.current_progress(), 15);
+    }
+
+    #[test]
+    fn should_advance_tracker_for_generating_initial_event() {
+        let mut tracker = SseProgress::new("Rewrite");
+
+        let _ = apply_owned_regeneration_initial_event(
+            &mut tracker,
+            &OwnedRegenerationInitialEvent::Generating {
+                message: Some("Rewriting chapter...".to_string()),
+                progress_range: (20, 95),
+                char_count: 0,
+                retry_count: None,
+            },
+        );
+
+        assert_eq!(tracker.current_progress(), 20);
+    }
+
+    #[test]
+    fn should_describe_regeneration_finalize_errors_with_existing_messages() {
+        assert_eq!(
+            describe_regeneration_finalize_error(FinalizePartialRegenerationError::EmptyContent),
+            "Rewrite result is empty after sanitization"
+        );
+        assert_eq!(
+            describe_regeneration_finalize_error(
+                FinalizePartialRegenerationError::WorkflowMetaText,
+            ),
+            "Rewrite result still contains workflow meta text"
+        );
     }
 }

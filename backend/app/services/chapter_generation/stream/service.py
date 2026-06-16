@@ -2,64 +2,98 @@ from __future__ import annotations
 
 from typing import Any, AsyncIterator, Callable, Optional
 
-from sqlalchemy.ext.asyncio import AsyncSession
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active single-generation stream service chain; this Python "
+    "module is kept only as frozen rollback/source-map material after explicit "
+    "stream shell freeze approval."
+)
+SOURCE_MAP_RUST_OWNER = "backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs"
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_single_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from app.logger import get_logger
-from app.services.chapter_quality_context_service import (
-    build_story_generation_packet_with_project_continuity,
-    resolve_chapter_quality_profile,
-)
 from app.services.chapter_generation.stream.request_policy_service import (
     _build_chapter_generation_request_options,
     _calculate_chapter_generation_max_tokens,
 )
-from app.utils.sse_response import SSEResponse, WizardProgressTracker
-from app.services.chapter_generation.stream.models import (
-    ChapterGenerationAnalysisFollowupPlan,
-    ChapterGenerationAnalysisScheduling,
-    ChapterGenerationEmissionStep,
-    ChapterGenerationPostPersistEffects,
-    ChapterGenerationStreamBuiltContext,
-    ChapterGenerationStreamCandidateStageResult,
-    ChapterGenerationStreamDependencies,
-    ChapterGenerationStreamExecutionSetup,
-    ChapterGenerationStreamPreparation,
-    ChapterGenerationStreamPrompt,
-    ChapterGenerationStreamRequestPayload,
-    ChapterGenerationStreamResponseArtifacts,
-    ChapterGenerationStreamRuntimeContext,
-)
-from app.services.chapter_generation.stream.candidate_service import (
-    ChapterGenerationCandidateExecution,
-    ChapterGenerationCandidateQualityHooks,
-    ChapterGenerationPersistencePreparation,
-    ChapterGenerationSelectedCandidateOutcome,
-    apply_chapter_generation_outcome_and_build_history,
-    build_chapter_generation_candidate_quality_hooks,
-    build_chapter_generation_selected_candidate_outcome,
-    create_chapter_generation_candidate_execution,
-    execute_chapter_generation_candidate_stage,
-    wait_for_chapter_generation_candidate,
-)
-from app.services.chapter_generation.stream.execution_service import (
-    build_chapter_generation_stream_context as _build_chapter_generation_stream_context,
-    build_chapter_generation_stream_prompt as _build_chapter_generation_stream_prompt,
-    build_chapter_generation_stream_request_payload as _build_chapter_generation_stream_request_payload,
-    load_chapter_generation_stream_runtime_context as _load_chapter_generation_stream_runtime_context,
-    prepare_chapter_generation_stream_execution as _prepare_chapter_generation_stream_execution,
-    prepare_chapter_generation_stream_request as _prepare_chapter_generation_stream_request,
-)
-from app.services.chapter_generation.stream.finalize_service import (
-    build_chapter_generation_analysis_followup_plan,
-    build_chapter_generation_stream_emission_plan,
-    build_chapter_generation_stream_response_artifacts,
-    emit_chapter_generation_stream_plan,
-    finalize_chapter_generation_stream_result as _finalize_chapter_generation_stream_result,
-    prepare_chapter_generation_analysis_scheduling,
-    run_chapter_generation_post_persist_effects,
-)
 
 logger = get_logger(__name__)
+
+
+class _LazyStreamModel:
+    def __init__(self, attr_name: str):
+        self._attr_name = attr_name
+
+    def _resolve(self):
+        from app.services.chapter_generation.stream import models
+
+        return getattr(models, self._attr_name)
+
+    def __call__(self, *args, **kwargs):
+        return self._resolve()(*args, **kwargs)
+
+    def __getattr__(self, name: str):
+        return getattr(self._resolve(), name)
+
+
+class _LazyCandidateAttr:
+    def __init__(self, attr_name: str):
+        self._attr_name = attr_name
+
+    def _resolve(self):
+        return _candidate_service_attr(self._attr_name)
+
+    def __call__(self, *args, **kwargs):
+        return self._resolve()(*args, **kwargs)
+
+    def __getattr__(self, name: str):
+        return getattr(self._resolve(), name)
+
+
+def _candidate_service_attr(attr_name: str):
+    from app.services.chapter_generation.stream import candidate_service
+
+    return getattr(candidate_service, attr_name)
+
+
+def _execution_service_attr(attr_name: str):
+    from app.services.chapter_generation.stream import execution_service
+
+    return getattr(execution_service, attr_name)
+
+
+def _finalize_service_attr(attr_name: str):
+    from app.services.chapter_generation.stream import finalize_service
+
+    return getattr(finalize_service, attr_name)
+
+
+ChapterGenerationAnalysisFollowupPlan = _LazyStreamModel("ChapterGenerationAnalysisFollowupPlan")
+ChapterGenerationAnalysisScheduling = _LazyStreamModel("ChapterGenerationAnalysisScheduling")
+ChapterGenerationEmissionStep = _LazyStreamModel("ChapterGenerationEmissionStep")
+ChapterGenerationPostPersistEffects = _LazyStreamModel("ChapterGenerationPostPersistEffects")
+ChapterGenerationStreamBuiltContext = _LazyStreamModel("ChapterGenerationStreamBuiltContext")
+ChapterGenerationStreamCandidateStageResult = _LazyStreamModel(
+    "ChapterGenerationStreamCandidateStageResult"
+)
+ChapterGenerationStreamDependencies = _LazyStreamModel("ChapterGenerationStreamDependencies")
+ChapterGenerationStreamExecutionSetup = _LazyStreamModel("ChapterGenerationStreamExecutionSetup")
+ChapterGenerationStreamPreparation = _LazyStreamModel("ChapterGenerationStreamPreparation")
+ChapterGenerationStreamPrompt = _LazyStreamModel("ChapterGenerationStreamPrompt")
+ChapterGenerationStreamRequestPayload = _LazyStreamModel("ChapterGenerationStreamRequestPayload")
+ChapterGenerationStreamResponseArtifacts = _LazyStreamModel("ChapterGenerationStreamResponseArtifacts")
+ChapterGenerationStreamRuntimeContext = _LazyStreamModel("ChapterGenerationStreamRuntimeContext")
+ChapterGenerationCandidateExecution = _LazyCandidateAttr("ChapterGenerationCandidateExecution")
+ChapterGenerationCandidateQualityHooks = _LazyCandidateAttr(
+    "ChapterGenerationCandidateQualityHooks"
+)
+ChapterGenerationPersistencePreparation = _LazyCandidateAttr(
+    "ChapterGenerationPersistencePreparation"
+)
+ChapterGenerationSelectedCandidateOutcome = _LazyCandidateAttr(
+    "ChapterGenerationSelectedCandidateOutcome"
+)
 
 __all__ = (
     "ChapterGenerationAnalysisFollowupPlan",
@@ -100,22 +134,137 @@ __all__ = (
 )
 
 
-prepare_chapter_generation_stream_request = _prepare_chapter_generation_stream_request
-build_chapter_generation_stream_context = _build_chapter_generation_stream_context
-build_chapter_generation_stream_prompt = _build_chapter_generation_stream_prompt
-build_chapter_generation_stream_request_payload = _build_chapter_generation_stream_request_payload
+async def prepare_chapter_generation_stream_request(*args, **kwargs):
+    return await _execution_service_attr("prepare_chapter_generation_stream_request")(
+        *args, **kwargs
+    )
+
+
+async def build_chapter_generation_stream_context(*args, **kwargs):
+    return await _execution_service_attr("build_chapter_generation_stream_context")(
+        *args, **kwargs
+    )
+
+
+async def build_chapter_generation_stream_prompt(*args, **kwargs):
+    return await _execution_service_attr("build_chapter_generation_stream_prompt")(
+        *args, **kwargs
+    )
+
+
+def build_chapter_generation_stream_request_payload(*args, **kwargs):
+    return _execution_service_attr("build_chapter_generation_stream_request_payload")(
+        *args, **kwargs
+    )
+
+
+def apply_chapter_generation_outcome_and_build_history(*args, **kwargs):
+    return _candidate_service_attr("apply_chapter_generation_outcome_and_build_history")(
+        *args, **kwargs
+    )
+
+
+def build_chapter_generation_candidate_quality_hooks(*args, **kwargs):
+    return _candidate_service_attr("build_chapter_generation_candidate_quality_hooks")(
+        *args, **kwargs
+    )
+
+
+def build_chapter_generation_selected_candidate_outcome(*args, **kwargs):
+    return _candidate_service_attr("build_chapter_generation_selected_candidate_outcome")(
+        *args, **kwargs
+    )
+
+
+def create_chapter_generation_candidate_execution(*args, **kwargs):
+    return _candidate_service_attr("create_chapter_generation_candidate_execution")(
+        *args, **kwargs
+    )
+
+
+async def execute_chapter_generation_candidate_stage(*args, **kwargs):
+    return await _candidate_service_attr("execute_chapter_generation_candidate_stage")(
+        *args, **kwargs
+    )
+
+
+async def wait_for_chapter_generation_candidate(*args, **kwargs):
+    return await _candidate_service_attr("wait_for_chapter_generation_candidate")(
+        *args, **kwargs
+    )
+
+
+def build_chapter_generation_analysis_followup_plan(*args, **kwargs):
+    return _finalize_service_attr("build_chapter_generation_analysis_followup_plan")(
+        *args, **kwargs
+    )
+
+
+async def prepare_chapter_generation_analysis_scheduling(*args, **kwargs):
+    return await _finalize_service_attr("prepare_chapter_generation_analysis_scheduling")(
+        *args, **kwargs
+    )
+
+
+async def run_chapter_generation_post_persist_effects(*args, **kwargs):
+    return await _finalize_service_attr("run_chapter_generation_post_persist_effects")(
+        *args, **kwargs
+    )
+
+
+def build_chapter_generation_stream_response_artifacts(*args, **kwargs):
+    return _finalize_service_attr("build_chapter_generation_stream_response_artifacts")(
+        *args, **kwargs
+    )
+
+
+def build_chapter_generation_stream_emission_plan(*args, **kwargs):
+    return _finalize_service_attr("build_chapter_generation_stream_emission_plan")(
+        *args, **kwargs
+    )
+
+
+async def emit_chapter_generation_stream_plan(*args, **kwargs):
+    async for item in _finalize_service_attr("emit_chapter_generation_stream_plan")(
+        *args, **kwargs
+    ):
+        yield item
+
+
+def resolve_chapter_quality_profile(*args, **kwargs):
+    from app.services.chapter_quality_context_service import resolve_chapter_quality_profile
+
+    return resolve_chapter_quality_profile(*args, **kwargs)
+
+
+def build_story_generation_packet_with_project_continuity(*args, **kwargs):
+    from app.services.chapter_quality_context_service import (
+        build_story_generation_packet_with_project_continuity,
+    )
+
+    return build_story_generation_packet_with_project_continuity(*args, **kwargs)
 
 
 async def load_chapter_generation_stream_runtime_context(*args, **kwargs):
     kwargs.setdefault("resolve_quality_profile_fn", resolve_chapter_quality_profile)
-    kwargs.setdefault("build_story_packet_fn", build_story_generation_packet_with_project_continuity)
-    return await _load_chapter_generation_stream_runtime_context(*args, **kwargs)
+    kwargs.setdefault(
+        "build_story_packet_fn",
+        build_story_generation_packet_with_project_continuity,
+    )
+    return await _execution_service_attr("load_chapter_generation_stream_runtime_context")(
+        *args, **kwargs
+    )
 
 
 async def prepare_chapter_generation_stream_execution(*args, **kwargs):
     kwargs.setdefault("resolve_quality_profile_fn", resolve_chapter_quality_profile)
-    kwargs.setdefault("build_story_packet_fn", build_story_generation_packet_with_project_continuity)
-    return await _prepare_chapter_generation_stream_execution(*args, **kwargs)
+    kwargs.setdefault(
+        "build_story_packet_fn",
+        build_story_generation_packet_with_project_continuity,
+    )
+    return await _execution_service_attr("prepare_chapter_generation_stream_execution")(
+        *args, **kwargs
+    )
 
 
 async def finalize_chapter_generation_stream_result(*args, **kwargs):
@@ -123,12 +272,14 @@ async def finalize_chapter_generation_stream_result(*args, **kwargs):
         "apply_outcome_and_build_history_fn",
         apply_chapter_generation_outcome_and_build_history,
     )
-    return await _finalize_chapter_generation_stream_result(*args, **kwargs)
+    return await _finalize_service_attr("finalize_chapter_generation_stream_result")(
+        *args, **kwargs
+    )
 
 
 async def build_chapter_generation_event_stream(
     *,
-    db_session_source: Callable[[], AsyncIterator[AsyncSession]],
+    db_session_source: Callable[[], AsyncIterator[Any]],
     chapter_id: str,
     current_user_id: str,
     generate_request: Any,
@@ -140,8 +291,10 @@ async def build_chapter_generation_event_stream(
     custom_model: Optional[str],
     temp_narrative_perspective: Optional[str],
     style_id: Optional[int],
-    dependencies: ChapterGenerationStreamDependencies,
+    dependencies: Any,
 ) -> AsyncIterator[Any]:
+    from app.utils.sse_response import SSEResponse, WizardProgressTracker
+
     db_session = None
     db_committed = False
     tracker = WizardProgressTracker("章节生成")
@@ -236,4 +389,3 @@ async def build_chapter_generation_event_stream(
             # db_session is owned by db_session_source() context; do not manage lifecycle here.
             # Rely on the upstream context manager to handle rollback/close.
             db_session = None
-

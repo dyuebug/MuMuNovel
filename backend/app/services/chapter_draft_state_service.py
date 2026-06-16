@@ -1,14 +1,32 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active chapter-draft state loading and error contract; "
+    "this Python service is kept only as frozen rollback/source-map material "
+    "behind repointed draft route shells."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/api/chapter_draft_routes.rs; "
+    "backend-rs/src/services/chapter_draft_source_service.rs; "
+    "backend-rs/src/services/chapter_draft_history_service.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_chapter_draft_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
+
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.chapter_draft_apply_service import require_draft_loaded_or_raise
-from app.services.chapter_generation_history_service import (
+from app.services.chapter_generation.history_service import (
     _extract_candidate_draft_full_content,
     _load_latest_candidate_draft_attempt,
     load_latest_reviser_history,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 PREVIEW_ONLY_DETAIL = "\u8be5\u5019\u9009\u8349\u7a3f\u4ec5\u4fdd\u5b58\u4e86\u9884\u89c8\uff0c\u65e0\u6cd5\u76f4\u63a5\u6062\u590d\u6b63\u6587"
 AUTO_REVISION_MISSING_DETAIL = "\u8be5\u7ae0\u8282\u6682\u65e0\u81ea\u52a8\u4fee\u8ba2\u8349\u7a3f"

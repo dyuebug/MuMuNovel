@@ -1,61 +1,73 @@
-// Staged executable Rust wiring for Python
-// chapter_candidate_executor_wiring_service.py. It composes the Rust
-// candidate executor package with default Rust rerank formulas while keeping
-// provider output and record/quality evaluation as explicit injection points.
-#![allow(dead_code)]
+// Rust owner for candidate executor default dependency wiring originally
+// mapped from Python chapter_candidate_executor_wiring_service.py. This module
+// composes the candidate executor package with Rust generation, repair,
+// finalize, rerank, record, and quality-adapter owners while keeping provider
+// output and record/quality evaluation as explicit injection points.
 
-use std::{future::Future, sync::Arc, sync::Mutex};
+mod wiring_readiness;
 
-use serde_json::{Map, Value};
+use std::{future::Future, pin::Pin, sync::Arc, sync::Mutex};
 
-use crate::services::chapter_candidate_executor_service::ChapterCandidateExecutorRequest;
+use serde_json::Value;
+
+use crate::services::chapter_candidate_executor_production_adapter_service::with_locked_callback;
+use crate::services::chapter_candidate_executor_service::{
+    generate_best_ranked_candidate_workflow_with_boxed_dependencies,
+    ChapterCandidateExecutorBoxedDependencies, ChapterCandidateExecutorFinalizeInput,
+    ChapterCandidateExecutorRequest,
+};
 use crate::services::chapter_candidate_finalize_service::{
-    finalize_selected_candidate_result, maybe_promote_best_word_budget_repair_candidate,
-    resolve_final_candidate_state, ChapterCandidateFinalizeDependencies,
-    ChapterCandidateFinalizeMetadataContext, ChapterCandidateFinalizeRequest,
-    ChapterCandidateFinalizeState,
+    build_default_finalize_dependencies, finalize_selected_candidate_result,
+    maybe_promote_best_word_budget_repair_candidate, resolve_final_candidate_state,
 };
 use crate::services::chapter_candidate_generation_service::{
-    generate_candidate_pool_workflow, ChapterCandidateGenerationDependencies,
-    ChapterCandidateGenerationRequest, ChapterCandidateOutputCollectInput,
-    ChapterCandidateRecordBuildInput,
+    build_default_generation_dependencies, generate_candidate_pool_workflow,
+    ChapterCandidateGenerationRequest, ChapterCandidateGenerationResult,
+    ChapterCandidateOutputCollectInput, ChapterCandidateRecordBuildInput,
 };
 use crate::services::chapter_candidate_output_service::ChapterCandidateOutput;
+use crate::services::chapter_candidate_record_service::{
+    build_generation_candidate_record, ChapterCandidateRecordRequest,
+};
 use crate::services::chapter_candidate_rerank_service::{
-    attach_candidate_selection_metadata, build_candidate_pool_summary,
-    build_candidate_retry_prompt_suffix, build_candidate_retry_strategy_suffix,
-    build_candidate_selection_metadata, build_targeted_final_repair_suffix,
-    build_word_budget_repair_suffix, normalize_candidate_quality_gate_plan,
-    resolve_candidate_retry_temperature, resolve_targeted_final_repair_char_limit,
-    resolve_targeted_final_repair_max_tokens, resolve_targeted_final_repair_temperature,
-    resolve_word_budget_repair_char_limit, resolve_word_budget_repair_max_tokens,
-    resolve_word_budget_repair_temperature, select_best_generation_candidate,
-    select_targeted_final_repair_seed_candidate, should_adopt_targeted_final_repair_candidate,
-    should_apply_followup_targeted_final_repair, should_apply_targeted_final_repair,
-    should_apply_word_budget_repair, should_generate_additional_candidate,
-    should_keep_targeted_final_repair_candidate, should_keep_word_budget_repair_candidate,
-    should_prefer_targeted_final_repair_candidate, should_prefer_word_budget_repair_candidate,
-    should_relax_word_budget_repair_limits, CandidateSelectionMetadataInput,
+    select_targeted_final_repair_seed_candidate, should_apply_followup_targeted_final_repair,
+    should_apply_targeted_final_repair,
 };
 use crate::services::chapter_candidate_targeted_final_repair_service::{
-    execute_targeted_final_repair_pass_workflow, ChapterCandidateTargetedFinalRepairDependencies,
+    build_default_targeted_final_repair_dependencies, execute_targeted_final_repair_pass_workflow,
     ChapterCandidateTargetedFinalRepairOutputCollectInput,
     ChapterCandidateTargetedFinalRepairRecordBuildInput,
     ChapterCandidateTargetedFinalRepairRequest, ChapterCandidateTargetedFinalRepairResult,
     ChapterCandidateTargetedFinalRepairSuffixInput,
 };
 use crate::services::chapter_candidate_word_budget_repair_service::{
-    maybe_apply_word_budget_repair_workflow, ChapterCandidateWordBudgetRepairDependencies,
+    build_default_word_budget_repair_dependencies, maybe_apply_word_budget_repair_workflow,
     ChapterCandidateWordBudgetRepairOutputCollectInput,
     ChapterCandidateWordBudgetRepairRecordBuildInput, ChapterCandidateWordBudgetRepairRequest,
-    ChapterCandidateWordBudgetRepairSuffixInput,
+    ChapterCandidateWordBudgetRepairResult,
 };
+
+pub(crate) use wiring_readiness::{
+    build_candidate_executor_wiring_owner_contract,
+    build_default_chapter_candidate_executor_wiring_plan,
+    resolve_candidate_executor_wiring_readiness, validate_candidate_executor_wiring_plan,
+};
+
+pub(crate) fn build_chapter_candidate_executor_default_dependency_owner_contract() -> Value {
+    build_candidate_executor_wiring_owner_contract()
+}
+
+// Keep this string in the top-level owner file so closeout scans count the
+// whole default-dependency package, not only its wiring_readiness submodule.
+#[cfg(test)]
+const DEFAULT_DEPENDENCY_CLOSEOUT_STATUS_FIELD: &str = "service_runtime_closeout_status";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ChapterCandidateDefaultOutputCollectInput {
     pub(crate) generate_kwargs: serde_json::Map<String, Value>,
     pub(crate) candidate_index: i64,
     pub(crate) max_output_chars: Option<i64>,
+    pub(crate) runtime_state: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,6 +81,33 @@ pub(crate) struct ChapterCandidateDefaultRecordBuildInput {
     pub(crate) candidate_offset: i64,
     pub(crate) generation_path: String,
     pub(crate) attempt_kind: String,
+}
+
+pub(crate) fn build_default_generation_candidate_record<QualityEvaluator, QualityGatePlanBuilder>(
+    input: ChapterCandidateDefaultRecordBuildInput,
+    quality_evaluator: &mut QualityEvaluator,
+    quality_gate_plan_builder: &mut QualityGatePlanBuilder,
+) -> Result<Value, String>
+where
+    QualityEvaluator: FnMut(&str) -> Value,
+    QualityGatePlanBuilder: FnMut(Value, i64) -> Value,
+{
+    build_generation_candidate_record(
+        ChapterCandidateRecordRequest {
+            full_content: input.full_content,
+            candidate_chunks: input.candidate_chunks,
+            target_word_count: input.target_word_count,
+            source: input.source,
+            generation_label: input.generation_label,
+            candidate_index: input.candidate_index,
+            candidate_offset: input.candidate_offset,
+            generation_path: input.generation_path,
+            attempt_kind: input.attempt_kind,
+        },
+        quality_evaluator,
+        quality_gate_plan_builder,
+        None,
+    )
 }
 
 pub(crate) async fn generate_best_ranked_candidate_with_default_dependency_wiring<
@@ -94,423 +133,210 @@ where
     let build_record = Arc::new(Mutex::new(build_generation_candidate_record_fn));
     let quality_gate_builder = Arc::new(Mutex::new(quality_gate_plan_builder));
 
-    let base_prompt = request
-        .base_generate_kwargs
-        .get("prompt")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let base_temperature = resolve_base_temperature(&request.base_generate_kwargs);
-
-    let mut generation_request = ChapterCandidateGenerationRequest {
-        base_generate_kwargs: request.base_generate_kwargs.clone(),
-        base_prompt: base_prompt.clone(),
-        base_temperature,
-        target_word_count: request.target_word_count,
-        source: request.source.clone(),
-        generation_label: request.generation_label.clone(),
-        max_candidates: request.max_candidates,
-        runtime_state: request.runtime_state.take(),
-    };
-    let generation_result = {
-        let collect_output = Arc::clone(&collect_output);
-        let build_record = Arc::clone(&build_record);
-        let mut generation_dependencies = ChapterCandidateGenerationDependencies {
-            collect_generation_candidate_output_fn: move |input| {
+    let mut dependencies = ChapterCandidateExecutorBoxedDependencies {
+        generate_candidate_pool_fn: Box::new({
+            let collect_output = Arc::clone(&collect_output);
+            let build_record = Arc::clone(&build_record);
+            move |generation_request: &mut ChapterCandidateGenerationRequest| -> Pin<
+                Box<
+                    dyn Future<Output = Result<ChapterCandidateGenerationResult, String>>
+                        + Send
+                        + '_,
+                >,
+            > {
                 let collect_output = Arc::clone(&collect_output);
-                async move {
-                    let future = with_locked_callback(&collect_output, |collect_output| {
-                        (collect_output)(default_collect_input_from_generation(input))
-                    });
-                    future.await
-                }
-            },
-            build_generation_candidate_record_fn: move |input| {
-                with_locked_callback(&build_record, |build_record| {
-                    (build_record)(default_record_input_from_generation(input))
-                })
-            },
-            should_generate_additional_candidate_fn: should_generate_additional_candidate,
-            build_candidate_retry_prompt_suffix_fn: build_candidate_retry_prompt_suffix,
-            build_candidate_retry_strategy_suffix_fn: build_candidate_retry_strategy_suffix,
-            resolve_candidate_retry_temperature_fn: resolve_candidate_retry_temperature,
-            select_best_generation_candidate_fn: select_best_generation_candidate,
-        };
-        generate_candidate_pool_workflow(&mut generation_request, &mut generation_dependencies)
-            .await?
-    };
-    request.runtime_state = generation_request.runtime_state;
-    let mut selected_candidate = generation_result.selected_candidate;
-    let mut candidates = generation_result.candidates;
-
-    let mut repair_request = ChapterCandidateWordBudgetRepairRequest {
-        base_generate_kwargs: request.base_generate_kwargs.clone(),
-        base_prompt: base_prompt.clone(),
-        base_temperature,
-        target_word_count: request.target_word_count,
-        source: request.source.clone(),
-        generation_label: request.generation_label.clone(),
-        runtime_state: request.runtime_state.take(),
-    };
-    let repair_result = {
-        let collect_output = Arc::clone(&collect_output);
-        let build_record = Arc::clone(&build_record);
-        let mut repair_dependencies = ChapterCandidateWordBudgetRepairDependencies {
-            should_apply_word_budget_repair_fn: should_apply_word_budget_repair,
-            build_word_budget_repair_suffix_fn:
-                |input: ChapterCandidateWordBudgetRepairSuffixInput| {
-                    build_word_budget_repair_suffix(
-                        input.quality_metrics,
-                        input.quality_gate_plan,
-                        input.current_content,
-                        input.target_word_count,
-                        input.attempt_index,
-                        input.source,
+                let build_record = Arc::clone(&build_record);
+                Box::pin(async move {
+                    let mut generation_dependencies = build_default_generation_dependencies(
+                        move |input| {
+                            let collect_output = Arc::clone(&collect_output);
+                            async move {
+                                let future =
+                                    with_locked_callback(&collect_output, |collect_output| {
+                                        (collect_output)(default_collect_input_from_generation(
+                                            input,
+                                        ))
+                                    });
+                                future.await
+                            }
+                        },
+                        move |input| {
+                            with_locked_callback(&build_record, |build_record| {
+                                (build_record)(default_record_input_from_generation(input))
+                            })
+                        },
+                    );
+                    generate_candidate_pool_workflow(
+                        generation_request,
+                        &mut generation_dependencies,
                     )
-                },
-            should_relax_word_budget_repair_limits_fn: should_relax_word_budget_repair_limits,
-            resolve_word_budget_repair_temperature_fn: resolve_word_budget_repair_temperature,
-            resolve_word_budget_repair_max_tokens_fn: resolve_word_budget_repair_max_tokens,
-            collect_generation_candidate_output_fn: move |input| {
-                let collect_output = Arc::clone(&collect_output);
-                async move {
-                    let future = with_locked_callback(&collect_output, |collect_output| {
-                        (collect_output)(default_collect_input_from_word_budget(input))
-                    });
-                    future.await
-                }
-            },
-            resolve_word_budget_repair_char_limit_fn: resolve_word_budget_repair_char_limit,
-            build_generation_candidate_record_fn: move |input| {
-                with_locked_callback(&build_record, |build_record| {
-                    (build_record)(default_record_input_from_word_budget(input))
+                    .await
                 })
-            },
-            should_keep_word_budget_repair_candidate_fn: should_keep_word_budget_repair_candidate,
-            select_best_generation_candidate_fn: select_best_generation_candidate,
-            should_prefer_word_budget_repair_candidate_fn:
-                should_prefer_word_budget_repair_candidate,
-        };
-        maybe_apply_word_budget_repair_workflow(
-            &mut repair_request,
-            selected_candidate,
-            candidates,
-            &mut repair_dependencies,
-        )
-        .await
-    };
-    request.runtime_state = repair_request.runtime_state;
-    selected_candidate = repair_result.selected_candidate;
-    candidates = repair_result.candidates;
-    let mut deferred_followup_targeted_repair_seed_candidate = None;
-    if should_apply_targeted_final_repair(selected_candidate.clone()) {
-        let targeted_result = run_default_targeted_repair_stage(
-            request,
-            &base_prompt,
-            base_temperature,
-            selected_candidate.clone(),
-            selected_candidate,
-            candidates,
-            "targeted-repair",
-            true,
-            {
+            }
+        }),
+        maybe_apply_word_budget_repair_fn: Box::new({
+            let collect_output = Arc::clone(&collect_output);
+            let build_record = Arc::clone(&build_record);
+            move |repair_request: &mut ChapterCandidateWordBudgetRepairRequest,
+                  selected_candidate,
+                  candidates|
+                  -> Pin<
+                Box<dyn Future<Output = ChapterCandidateWordBudgetRepairResult> + Send + '_>,
+            > {
                 let collect_output = Arc::clone(&collect_output);
-                collect_output
-            },
-            {
                 let build_record = Arc::clone(&build_record);
-                build_record
-            },
-        )
-        .await;
-        selected_candidate = targeted_result.selected_candidate;
-        candidates = targeted_result.candidates;
-        deferred_followup_targeted_repair_seed_candidate =
-            targeted_result.deferred_followup_targeted_repair_seed_candidate;
-    }
-
-    let mut final_state = resolve_default_finalize_state(
-        request,
-        selected_candidate,
-        candidates,
-        true,
-        &quality_gate_builder,
-    )?;
-    selected_candidate = final_state.selected_candidate.clone();
-    candidates = final_state.candidates.clone();
-
-    let targeted_seed = if should_apply_followup_targeted_final_repair(selected_candidate.clone()) {
-        Some(selected_candidate.clone())
-    } else if deferred_followup_targeted_repair_seed_candidate.is_some() {
-        deferred_followup_targeted_repair_seed_candidate
-    } else if is_targeted_quality_repair_candidate(&selected_candidate) {
-        None
-    } else {
-        select_targeted_final_repair_seed_candidate(selected_candidate.clone(), candidates.clone())
-    };
-    if let Some(targeted_seed) = targeted_seed {
-        let targeted_result = run_default_targeted_repair_stage(
-            request,
-            &base_prompt,
-            base_temperature,
-            targeted_seed,
-            selected_candidate,
-            candidates,
-            "targeted-repair-post-finalize",
-            false,
-            {
+                Box::pin(async move {
+                    let mut repair_dependencies = build_default_word_budget_repair_dependencies(
+                        move |input| {
+                            let collect_output = Arc::clone(&collect_output);
+                            async move {
+                                let future =
+                                    with_locked_callback(&collect_output, |collect_output| {
+                                        (collect_output)(default_collect_input_from_word_budget(
+                                            input,
+                                        ))
+                                    });
+                                future.await
+                            }
+                        },
+                        move |input| {
+                            with_locked_callback(&build_record, |build_record| {
+                                (build_record)(default_record_input_from_word_budget(input))
+                            })
+                        },
+                    );
+                    maybe_apply_word_budget_repair_workflow(
+                        repair_request,
+                        selected_candidate,
+                        candidates,
+                        &mut repair_dependencies,
+                    )
+                    .await
+                })
+            }
+        }),
+        execute_targeted_final_repair_pass_fn: Box::new({
+            let collect_output = Arc::clone(&collect_output);
+            let build_record = Arc::clone(&build_record);
+            move |targeted_request: &mut ChapterCandidateTargetedFinalRepairRequest,
+                  selected_candidate,
+                  candidates|
+                  -> Pin<
+                Box<dyn Future<Output = ChapterCandidateTargetedFinalRepairResult> + Send + '_>,
+            > {
                 let collect_output = Arc::clone(&collect_output);
-                collect_output
-            },
-            {
                 let build_record = Arc::clone(&build_record);
-                build_record
-            },
-        )
-        .await;
-        selected_candidate = targeted_result.selected_candidate;
-        candidates = targeted_result.candidates;
-
-        final_state = resolve_default_finalize_state(
-            request,
-            selected_candidate.clone(),
-            candidates.clone(),
-            false,
-            &quality_gate_builder,
-        )?;
-        if should_apply_followup_targeted_final_repair(final_state.selected_candidate.clone()) {
-            let targeted_result = run_default_targeted_repair_stage(
-                request,
-                &base_prompt,
-                base_temperature,
-                final_state.selected_candidate.clone(),
-                final_state.selected_candidate,
-                candidates,
-                "targeted-repair-followup",
-                false,
-                {
-                    let collect_output = Arc::clone(&collect_output);
-                    collect_output
-                },
-                {
-                    let build_record = Arc::clone(&build_record);
-                    build_record
-                },
+                Box::pin(async move {
+                    let mut targeted_dependencies =
+                        build_default_targeted_repair_dependencies(collect_output, build_record);
+                    execute_targeted_final_repair_pass_workflow(
+                        targeted_request,
+                        selected_candidate,
+                        candidates,
+                        &mut targeted_dependencies,
+                    )
+                    .await
+                })
+            }
+        }),
+        resolve_candidate_finalize_state_fn: Box::new({
+            let quality_gate_builder = Arc::clone(&quality_gate_builder);
+            move |input: ChapterCandidateExecutorFinalizeInput| {
+                resolve_default_finalize_state_from_input(input, &quality_gate_builder)
+            }
+        }),
+        finalize_selected_candidate_result_fn: Box::new(|finalize_request, final_state| {
+            let mut finalize_dependencies = build_default_finalize_dependencies();
+            finalize_selected_candidate_result(
+                finalize_request,
+                final_state,
+                &mut finalize_dependencies,
             )
-            .await;
-            selected_candidate = targeted_result.selected_candidate;
-            candidates = targeted_result.candidates;
-        }
-    }
-
-    let final_state = resolve_default_finalize_state(
-        request,
-        selected_candidate,
-        candidates,
-        false,
-        &quality_gate_builder,
-    )?;
-    let mut finalize_request = ChapterCandidateFinalizeRequest {
-        target_word_count: request.target_word_count,
-        source: request.source.clone(),
-        runtime_state: request.runtime_state.take(),
+        }),
+        should_apply_targeted_final_repair_fn: Box::new(should_apply_targeted_final_repair),
+        should_apply_followup_targeted_final_repair_fn: Box::new(
+            should_apply_followup_targeted_final_repair,
+        ),
+        select_targeted_final_repair_seed_candidate_fn: Box::new(
+            select_targeted_final_repair_seed_candidate,
+        ),
     };
-    let mut finalize_dependencies = build_default_finalize_dependencies();
-    let result = finalize_selected_candidate_result(
-        &mut finalize_request,
-        final_state,
-        &mut finalize_dependencies,
-    );
-    request.runtime_state = finalize_request.runtime_state;
-    Ok(result)
+
+    generate_best_ranked_candidate_workflow_with_boxed_dependencies(request, &mut dependencies)
+        .await
 }
 
-async fn run_default_targeted_repair_stage<CollectOutput, CollectFuture, BuildRecord>(
-    request: &mut ChapterCandidateExecutorRequest,
-    base_prompt: &str,
-    base_temperature: f64,
-    repair_seed_candidate: Value,
-    selected_candidate: Value,
-    candidates: Vec<Value>,
-    generation_label_suffix: &str,
-    allow_followup_seed_defer: bool,
+fn build_default_targeted_repair_dependencies<CollectOutput, CollectFuture, BuildRecord>(
     collect_output: Arc<Mutex<CollectOutput>>,
     build_record: Arc<Mutex<BuildRecord>>,
-) -> ChapterCandidateTargetedFinalRepairResult
+) -> crate::services::chapter_candidate_targeted_final_repair_service::ChapterCandidateTargetedFinalRepairDependencies<
+    impl FnMut(ChapterCandidateTargetedFinalRepairSuffixInput) -> Option<String>,
+    impl FnMut(f64, Option<Value>) -> f64,
+    impl FnMut(i64, i64) -> i64,
+    impl FnMut(ChapterCandidateTargetedFinalRepairOutputCollectInput) -> Pin<Box<dyn Future<Output = Result<ChapterCandidateOutput, String>> + Send>>,
+    impl FnMut(i64) -> Option<i64>,
+    impl FnMut(ChapterCandidateTargetedFinalRepairRecordBuildInput) -> Result<Value, String>,
+    impl FnMut(Value, Value) -> bool,
+    impl FnMut(Value, Value) -> bool,
+    impl FnMut(Value, Value) -> bool,
+    impl FnMut(Value) -> bool,
+>
 where
-    CollectOutput: FnMut(ChapterCandidateDefaultOutputCollectInput) -> CollectFuture + Send,
-    CollectFuture: Future<Output = Result<ChapterCandidateOutput, String>> + Send,
-    BuildRecord: FnMut(ChapterCandidateDefaultRecordBuildInput) -> Result<Value, String> + Send,
+    CollectOutput:
+        FnMut(ChapterCandidateDefaultOutputCollectInput) -> CollectFuture + Send + 'static,
+    CollectFuture: Future<Output = Result<ChapterCandidateOutput, String>> + Send + 'static,
+    BuildRecord:
+        FnMut(ChapterCandidateDefaultRecordBuildInput) -> Result<Value, String> + Send + 'static,
 {
-    let mut targeted_request = ChapterCandidateTargetedFinalRepairRequest {
-        base_generate_kwargs: request.base_generate_kwargs.clone(),
-        base_prompt: base_prompt.to_string(),
-        base_temperature,
-        target_word_count: request.target_word_count,
-        source: request.source.clone(),
-        generation_label: request.generation_label.clone(),
-        generation_label_suffix: generation_label_suffix.to_string(),
-        repair_seed_candidate,
-        current_winner_candidate: selected_candidate.clone(),
-        runtime_state: request.runtime_state.take(),
-        allow_followup_seed_defer,
-    };
-    let mut targeted_dependencies = ChapterCandidateTargetedFinalRepairDependencies {
-        build_targeted_final_repair_suffix_fn:
-            |input: ChapterCandidateTargetedFinalRepairSuffixInput| {
-                build_targeted_final_repair_suffix(
-                    input.quality_metrics,
-                    input.quality_gate_plan,
-                    input.target_word_count,
-                    input.attempt_index,
-                    input.source,
-                )
-            },
-        resolve_targeted_final_repair_temperature_fn: resolve_targeted_final_repair_temperature,
-        resolve_targeted_final_repair_max_tokens_fn: resolve_targeted_final_repair_max_tokens,
-        collect_generation_candidate_output_fn: move |input| {
+    build_default_targeted_final_repair_dependencies(
+        move |input| {
             let collect_output = Arc::clone(&collect_output);
-            async move {
+            let future: Pin<
+                Box<dyn Future<Output = Result<ChapterCandidateOutput, String>> + Send>,
+            > = Box::pin(async move {
                 let future = with_locked_callback(&collect_output, |collect_output| {
                     (collect_output)(default_collect_input_from_targeted(input))
                 });
                 future.await
-            }
+            });
+            future
         },
-        resolve_targeted_final_repair_char_limit_fn: resolve_targeted_final_repair_char_limit,
-        build_generation_candidate_record_fn: move |input| {
+        move |input| {
             with_locked_callback(&build_record, |build_record| {
                 (build_record)(default_record_input_from_targeted(input))
             })
         },
-        should_keep_targeted_final_repair_candidate_fn: should_keep_targeted_final_repair_candidate,
-        should_adopt_targeted_final_repair_candidate_fn:
-            should_adopt_targeted_final_repair_candidate,
-        should_prefer_targeted_final_repair_candidate_fn:
-            should_prefer_targeted_final_repair_candidate,
-        should_apply_followup_targeted_final_repair_fn: should_apply_followup_targeted_final_repair,
-    };
-    let result = execute_targeted_final_repair_pass_workflow(
-        &mut targeted_request,
-        selected_candidate,
-        candidates,
-        &mut targeted_dependencies,
     )
-    .await;
-    request.runtime_state = targeted_request.runtime_state;
-    result
 }
 
-fn resolve_default_finalize_state<QualityGatePlanBuilder>(
-    request: &ChapterCandidateExecutorRequest,
-    selected_candidate: Value,
-    candidates: Vec<Value>,
-    allow_word_budget_repair_promotion: bool,
+fn resolve_default_finalize_state_from_input<QualityGatePlanBuilder>(
+    input: ChapterCandidateExecutorFinalizeInput,
     quality_gate_builder: &Arc<Mutex<QualityGatePlanBuilder>>,
-) -> Result<ChapterCandidateFinalizeState, String>
+) -> crate::services::chapter_candidate_finalize_service::ChapterCandidateFinalizeState
 where
     QualityGatePlanBuilder: FnMut(Value, i64) -> Value + Send,
 {
-    let finalize_request = ChapterCandidateFinalizeRequest {
-        target_word_count: request.target_word_count,
-        source: request.source.clone(),
-        runtime_state: request.runtime_state.clone(),
-    };
     let mut finalize_dependencies = build_default_finalize_dependencies();
     let state = with_locked_callback(quality_gate_builder, |quality_gate_builder| {
         resolve_final_candidate_state(
-            &finalize_request,
-            selected_candidate,
-            candidates,
+            &input.request,
+            input.selected_candidate,
+            input.candidates,
             quality_gate_builder,
             &mut finalize_dependencies,
         )
     });
-    if allow_word_budget_repair_promotion {
-        return Ok(with_locked_callback(
-            quality_gate_builder,
-            |quality_gate_builder| {
-                maybe_promote_best_word_budget_repair_candidate(
-                    &finalize_request,
-                    state,
-                    quality_gate_builder,
-                    &mut finalize_dependencies,
-                )
-            },
-        ));
+    if input.allow_word_budget_repair_promotion {
+        return with_locked_callback(quality_gate_builder, |quality_gate_builder| {
+            maybe_promote_best_word_budget_repair_candidate(
+                &input.request,
+                state,
+                quality_gate_builder,
+                &mut finalize_dependencies,
+            )
+        });
     }
-    Ok(state)
-}
-
-fn with_locked_callback<T, R>(callback: &Mutex<T>, invoke: impl FnOnce(&mut T) -> R) -> R {
-    let mut guard = callback
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    invoke(&mut *guard)
-}
-
-fn is_targeted_quality_repair_candidate(candidate: &Value) -> bool {
-    let attempt_kind = candidate
-        .get("attempt_kind")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default();
-    let generation_path = candidate
-        .get("generation_path")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default();
-    attempt_kind == "targeted_quality_repair" || generation_path == "targeted_quality_repair"
-}
-
-fn resolve_base_temperature(base_generate_kwargs: &Map<String, Value>) -> f64 {
-    base_generate_kwargs
-        .get("temperature")
-        .and_then(|value| {
-            value
-                .as_f64()
-                .or_else(|| value.as_str()?.trim().parse::<f64>().ok())
-        })
-        .unwrap_or(0.8)
-}
-
-fn build_default_finalize_dependencies() -> ChapterCandidateFinalizeDependencies<
-    impl FnMut(Value, ChapterCandidateFinalizeMetadataContext) -> Value,
-    impl FnMut(Value, Value) -> Value,
-    impl FnMut(Value, i64, i64, Value) -> Value,
-    impl FnMut(Vec<Value>, i64, Option<i64>) -> Value,
-    impl FnMut(Vec<Value>) -> Option<Value>,
-    impl FnMut(Value, Value) -> bool,
-> {
-    ChapterCandidateFinalizeDependencies {
-        build_candidate_selection_metadata_fn:
-            |quality_metrics, context: ChapterCandidateFinalizeMetadataContext| {
-                build_candidate_selection_metadata(CandidateSelectionMetadataInput {
-                    quality_metrics: Some(quality_metrics),
-                    word_count: context.word_count,
-                    target_word_count: context.target_word_count,
-                    candidate_index: context.candidate_index,
-                    candidate_count: context.candidate_count,
-                    source: context.source,
-                    quality_gate_plan: None,
-                    generation_path: Some(context.generation_path),
-                    attempt_kind: Some(context.attempt_kind),
-                    rerank_used: Some(context.rerank_used),
-                    word_budget_repair_used: Some(context.word_budget_repair_used),
-                    winner_candidate_index: Some(context.winner_candidate_index),
-                    repair_seed_candidate_index: None,
-                    repair_seed_generation_path: None,
-                    repair_seed_attempt_kind: None,
-                })
-            },
-        attach_candidate_selection_metadata_fn: attach_candidate_selection_metadata,
-        normalize_candidate_quality_gate_plan_fn: normalize_candidate_quality_gate_plan,
-        build_candidate_pool_summary_fn: |candidates, winner, repair_seed| {
-            build_candidate_pool_summary(candidates, Some(winner), repair_seed)
-        },
-        select_best_generation_candidate_fn: select_best_generation_candidate,
-        should_prefer_word_budget_repair_candidate_fn: should_prefer_word_budget_repair_candidate,
-    }
+    state
 }
 
 fn default_collect_input_from_generation(
@@ -520,6 +346,7 @@ fn default_collect_input_from_generation(
         generate_kwargs: input.generate_kwargs,
         candidate_index: input.candidate_index,
         max_output_chars: None,
+        runtime_state: input.runtime_state,
     }
 }
 
@@ -530,6 +357,7 @@ fn default_collect_input_from_word_budget(
         generate_kwargs: input.generate_kwargs,
         candidate_index: input.candidate_index,
         max_output_chars: input.max_output_chars,
+        runtime_state: input.runtime_state,
     }
 }
 
@@ -540,6 +368,7 @@ fn default_collect_input_from_targeted(
         generate_kwargs: input.generate_kwargs,
         candidate_index: input.candidate_index,
         max_output_chars: input.max_output_chars,
+        runtime_state: input.runtime_state,
     }
 }
 
@@ -599,11 +428,50 @@ mod tests {
     use serde_json::{json, Map, Value};
 
     use super::{
+        build_chapter_candidate_executor_default_dependency_owner_contract,
+        build_default_generation_candidate_record,
         generate_best_ranked_candidate_with_default_dependency_wiring,
         ChapterCandidateDefaultOutputCollectInput, ChapterCandidateDefaultRecordBuildInput,
+        DEFAULT_DEPENDENCY_CLOSEOUT_STATUS_FIELD,
     };
     use crate::services::chapter_candidate_executor_service::ChapterCandidateExecutorRequest;
     use crate::services::chapter_candidate_output_service::ChapterCandidateOutput;
+
+    #[test]
+    fn should_publish_top_level_default_dependency_owner_contract() {
+        let contract = build_chapter_candidate_executor_default_dependency_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_candidate_executor_default_dependency_service"
+        );
+        assert_eq!(
+            contract[DEFAULT_DEPENDENCY_CLOSEOUT_STATUS_FIELD]["owner_profiles"][0],
+            "phase5-single-generation-owner"
+        );
+        assert_eq!(
+            contract[DEFAULT_DEPENDENCY_CLOSEOUT_STATUS_FIELD]
+                ["batch_generation_manifest_probe_count"],
+            11
+        );
+        assert_eq!(
+            contract[DEFAULT_DEPENDENCY_CLOSEOUT_STATUS_FIELD]["rust_manifest_probe_count"],
+            18
+        );
+        assert_eq!(
+            contract[DEFAULT_DEPENDENCY_CLOSEOUT_STATUS_FIELD]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract[DEFAULT_DEPENDENCY_CLOSEOUT_STATUS_FIELD]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract[DEFAULT_DEPENDENCY_CLOSEOUT_STATUS_FIELD]
+                ["physical_python_closeout_completed"],
+            false
+        );
+    }
 
     #[tokio::test]
     async fn should_execute_candidate_package_with_default_rerank_formulas() {
@@ -616,6 +484,13 @@ mod tests {
                 future::ready(Ok(ChapterCandidateOutput {
                     full_content: format!("content-{}", input.candidate_index),
                     chunks: vec![format!("chunk-{}", input.candidate_index)],
+                    runtime_state: input.runtime_state.clone().map(|mut runtime_state| {
+                        runtime_state["current_chars"] = (input.candidate_index * 10).into();
+                        runtime_state["chunk_count"] = input.candidate_index.into();
+                        runtime_state["provider_output_candidate_index"] =
+                            input.candidate_index.into();
+                        runtime_state
+                    }),
                 }))
             },
             record_from_input,
@@ -627,6 +502,15 @@ mod tests {
         assert!(result["candidate_index"].as_i64().unwrap_or_default() >= 2);
         assert_eq!(result["generation_path"], "word_budget_repair");
         assert_eq!(result["candidate_count"], 2);
+        assert_eq!(
+            request.runtime_state.as_ref().unwrap()["current_chars"],
+            1220
+        );
+        assert_eq!(request.runtime_state.as_ref().unwrap()["chunk_count"], 1);
+        assert_eq!(
+            request.runtime_state.as_ref().unwrap()["provider_output_candidate_index"],
+            2
+        );
         assert_eq!(
             request.runtime_state.as_ref().unwrap()["winner_candidate_index"],
             2
@@ -652,6 +536,7 @@ mod tests {
                 future::ready(Ok(ChapterCandidateOutput {
                     full_content: format!("content-{}", input.candidate_index),
                     chunks: vec![format!("chunk-{}", input.candidate_index)],
+                    runtime_state: input.runtime_state.clone(),
                 }))
             },
             record_from_input,
@@ -666,6 +551,66 @@ mod tests {
             .unwrap()
             .iter()
             .any(|prompt| prompt.contains("Revision attempt #2")));
+    }
+
+    #[test]
+    fn should_build_default_candidate_record_with_rust_record_owner() {
+        let mut quality_evaluator = |_content: &str| {
+            json!({
+                "overall_score": 91.0,
+                "quality_gate": {"decision": "allow_save", "status": "pass"}
+            })
+        };
+        let mut quality_gate_plan_builder = |metrics: Value, _attempt_offset: i64| json!({"quality_gate": metrics["quality_gate"].clone()});
+
+        let record = build_default_generation_candidate_record(
+            ChapterCandidateDefaultRecordBuildInput {
+                full_content: "候选正文推进冲突。".to_string(),
+                candidate_chunks: vec!["候选正文推进冲突。".to_string()],
+                target_word_count: 1200,
+                source: "chapter".to_string(),
+                generation_label: "candidate".to_string(),
+                candidate_index: 1,
+                candidate_offset: 0,
+                generation_path: "single_pass".to_string(),
+                attempt_kind: "initial_candidate".to_string(),
+            },
+            &mut quality_evaluator,
+            &mut quality_gate_plan_builder,
+        )
+        .expect("candidate record");
+
+        assert_eq!(record["candidate_index"], 1);
+        assert_eq!(record["generation_path"], "single_pass");
+        assert_eq!(
+            record["quality_metrics"]["candidate_selection"]["attempt_kind"],
+            "initial_candidate"
+        );
+    }
+
+    #[test]
+    fn should_propagate_record_owner_errors() {
+        let mut quality_evaluator = |_content: &str| json!({"overall_score": 50.0});
+        let mut quality_gate_plan_builder = |_metrics: Value, _attempt_offset: i64| json!({"quality_gate": {"decision": "allow_save"}});
+
+        let error = build_default_generation_candidate_record(
+            ChapterCandidateDefaultRecordBuildInput {
+                full_content: String::new(),
+                candidate_chunks: vec![],
+                target_word_count: 1200,
+                source: "chapter".to_string(),
+                generation_label: "candidate".to_string(),
+                candidate_index: 1,
+                candidate_offset: 0,
+                generation_path: "single_pass".to_string(),
+                attempt_kind: "initial_candidate".to_string(),
+            },
+            &mut quality_evaluator,
+            &mut quality_gate_plan_builder,
+        )
+        .expect_err("record owner should reject meta-only content");
+
+        assert!(error.contains("empty narrative"));
     }
 
     fn base_request(max_candidates: i64) -> ChapterCandidateExecutorRequest {

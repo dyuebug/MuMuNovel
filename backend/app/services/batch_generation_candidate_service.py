@@ -2,32 +2,110 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional
 
-from sqlalchemy.ext.asyncio import AsyncSession
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active batch candidate runtime and event projection chain; "
+    "this Python module is kept only as frozen rollback/source-map material "
+    "for legacy batch fallback execution."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/services/chapter_candidate_event_service.rs; "
+    "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs; "
+    "backend-rs/src/services/chapter_batch_generation_read_context_service.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_batch_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from app.logger import get_logger
-from app.models.chapter import Chapter
-from app.models.project import Project
-from app.services.chapter_quality_context_service import StoryPacket
-from app.services.story_repair_payload_service import StoryRepairPayload
-from app.services.story_runtime_serialization_service import attach_story_runtime_contract
-from app.services.chapter_candidate_runtime_state_service import (
-    build_chapter_candidate_runtime_state,
-    snapshot_chapter_candidate_runtime_state,
-)
-from app.services.chapter_candidate_event_service import (
-    build_batch_generation_candidate_progress_event,
-    build_batch_generation_chunk_event,
-    build_batch_generation_selected_candidate_progress_event,
-    build_batch_generation_start_progress_event,
-)
-from app.services.chapter_candidate_result_service import normalize_selected_candidate_result
-from app.services.chapter_candidate_view_service import snapshot_chapter_candidate
-from app.services.task_workflow_runtime_service import publish_task_stream_event
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter import Chapter
+    from app.models.project import Project
+    from app.services.chapter_quality_context_service import StoryPacket
+    from app.services.story_repair_payload_service import StoryRepairPayload
 
 
 logger = get_logger(__name__)
+
+
+def _chapter_candidate_runtime_state_service():
+    from app.services import chapter_candidate_runtime_state_service
+
+    return chapter_candidate_runtime_state_service
+
+
+def _chapter_candidate_event_service():
+    from app.services import chapter_candidate_event_service
+
+    return chapter_candidate_event_service
+
+
+def _chapter_candidate_result_service():
+    from app.services import chapter_candidate_result_service
+
+    return chapter_candidate_result_service
+
+
+def _chapter_candidate_view_service():
+    from app.services import chapter_candidate_view_service
+
+    return chapter_candidate_view_service
+
+
+def _story_runtime_serialization_service():
+    from app.services import story_runtime_serialization_service
+
+    return story_runtime_serialization_service
+
+
+def _task_workflow_runtime_service():
+    from app.services import task_workflow_runtime_service
+
+    return task_workflow_runtime_service
+
+
+def build_chapter_candidate_runtime_state(*args, **kwargs):
+    return _chapter_candidate_runtime_state_service().build_chapter_candidate_runtime_state(*args, **kwargs)
+
+
+def snapshot_chapter_candidate_runtime_state(*args, **kwargs):
+    return _chapter_candidate_runtime_state_service().snapshot_chapter_candidate_runtime_state(*args, **kwargs)
+
+
+def build_batch_generation_candidate_progress_event(*args, **kwargs):
+    return _chapter_candidate_event_service().build_batch_generation_candidate_progress_event(*args, **kwargs)
+
+
+def build_batch_generation_chunk_event(*args, **kwargs):
+    return _chapter_candidate_event_service().build_batch_generation_chunk_event(*args, **kwargs)
+
+
+def build_batch_generation_selected_candidate_progress_event(*args, **kwargs):
+    return _chapter_candidate_event_service().build_batch_generation_selected_candidate_progress_event(*args, **kwargs)
+
+
+def build_batch_generation_start_progress_event(*args, **kwargs):
+    return _chapter_candidate_event_service().build_batch_generation_start_progress_event(*args, **kwargs)
+
+
+def normalize_selected_candidate_result(*args, **kwargs):
+    return _chapter_candidate_result_service().normalize_selected_candidate_result(*args, **kwargs)
+
+
+def snapshot_chapter_candidate(*args, **kwargs):
+    return _chapter_candidate_view_service().snapshot_chapter_candidate(*args, **kwargs)
+
+
+def attach_story_runtime_contract(*args, **kwargs):
+    return _story_runtime_serialization_service().attach_story_runtime_contract(*args, **kwargs)
+
+
+async def publish_task_stream_event(*args, **kwargs):
+    return await _task_workflow_runtime_service().publish_task_stream_event(*args, **kwargs)
 
 
 @dataclass(frozen=True)
@@ -50,15 +128,15 @@ class BatchGenerationCandidateFlowResult:
 
 def build_batch_generation_candidate_quality_hooks(
     *,
-    story_packet: StoryPacket,
-    project: Project,
-    chapter: Chapter,
+    story_packet: "StoryPacket",
+    project: "Project",
+    chapter: "Chapter",
     chapter_context: Any,
     target_word_count: int,
     generation_intent: Any,
     retry_count: int,
     max_retries: int,
-    current_story_repair_payload: Optional[StoryRepairPayload],
+    current_story_repair_payload: Optional["StoryRepairPayload"],
     build_quality_runtime_context_fn: Callable[..., Dict[str, Any]],
     compute_story_quality_metrics_fn: Callable[..., Dict[str, Any]],
     resolve_quality_gate_execution_plan_fn: Callable[..., Dict[str, Any]],
@@ -144,10 +222,10 @@ async def wait_for_batch_generation_candidate(
     selected_candidate_task: asyncio.Task,
     runtime_state: Dict[str, Any],
     stream_task_id: Optional[str],
-    chapter: Chapter,
+    chapter: "Chapter",
     target_word_count: int,
     heartbeat_interval_seconds: float,
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     publish_stream_event_fn: Callable[..., Awaitable[None]] = publish_task_stream_event,
 ) -> Dict[str, Any]:
     try:
@@ -178,12 +256,12 @@ async def emit_batch_generation_selected_candidate_events(
     *,
     stream_task_id: Optional[str],
     stream_chunks: bool,
-    chapter: Chapter,
+    chapter: "Chapter",
     selected_candidate: Dict[str, Any],
     candidate_word_count: int,
     quality_gate_plan: Dict[str, Any],
     chapter_context_stats: Dict[str, Any],
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     publish_stream_event_fn: Callable[..., Awaitable[None]] = publish_task_stream_event,
 ) -> None:
     selected_candidate_view = snapshot_chapter_candidate(selected_candidate)
@@ -209,7 +287,7 @@ async def emit_batch_generation_selected_candidate_events(
 
 def build_batch_generation_selected_candidate_result(
     *,
-    chapter: Chapter,
+    chapter: "Chapter",
     selected_candidate: Dict[str, Any],
     story_runtime_contract: Optional[Dict[str, Any]],
     attach_story_runtime_contract_fn: Callable[[Any, Optional[Dict[str, Any]]], Any] = attach_story_runtime_contract,
@@ -249,20 +327,20 @@ async def execute_batch_generation_candidate_flow(
     *,
     stream_task_id: Optional[str],
     stream_chunks: bool,
-    chapter: Chapter,
-    effective_story_packet: StoryPacket,
-    project: Project,
+    chapter: "Chapter",
+    effective_story_packet: "StoryPacket",
+    project: "Project",
     chapter_context: Any,
     target_word_count: int,
     generation_intent: Any,
-    current_story_repair_payload: Optional[StoryRepairPayload],
+    current_story_repair_payload: Optional["StoryRepairPayload"],
     retry_count: int,
     max_retries: int,
     default_candidate_limit: int,
     ai_service: Any,
     generate_kwargs: Dict[str, Any],
     story_runtime_contract: Optional[Dict[str, Any]],
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     heartbeat_interval_seconds: float,
     build_quality_runtime_context_fn: Callable[..., Dict[str, Any]],
     compute_story_quality_metrics_fn: Callable[..., Dict[str, Any]],
@@ -357,20 +435,20 @@ async def execute_batch_generation_generation_stage(
     *,
     stream_task_id: Optional[str],
     stream_chunks: bool,
-    chapter: Chapter,
-    effective_story_packet: StoryPacket,
-    project: Project,
+    chapter: "Chapter",
+    effective_story_packet: "StoryPacket",
+    project: "Project",
     chapter_context: Any,
     target_word_count: int,
     generation_intent: Any,
-    current_story_repair_payload: Optional[StoryRepairPayload],
+    current_story_repair_payload: Optional["StoryRepairPayload"],
     retry_count: int,
     max_retries: int,
     default_candidate_limit: int,
     ai_service: Any,
     generate_kwargs: Dict[str, Any],
     story_runtime_contract: Optional[Dict[str, Any]],
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     heartbeat_interval_seconds: float,
     build_quality_runtime_context_fn: Callable[..., Dict[str, Any]],
     compute_story_quality_metrics_fn: Callable[..., Dict[str, Any]],

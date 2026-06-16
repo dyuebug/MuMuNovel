@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 mod ai;
 mod api;
 mod config;
@@ -30,6 +32,7 @@ async fn main() {
             exit(1);
         }
     };
+    cfg.log_startup_contract();
     let db = db::init_pool(&cfg).await;
 
     // Initialize background task system

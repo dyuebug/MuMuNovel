@@ -25,6 +25,172 @@ use crate::services::prompt_template_service::PromptTemplateService;
 use crate::services::settings_service::SettingsService;
 use crate::services::wizard_service::clean_json_response;
 
+const CHARACTERS_PROJECT_LIST_ROUTE: &str = "/characters/project/{project_id}";
+const CHARACTERS_LIST_CREATE_ROUTE: &str = "/characters";
+const CHARACTERS_GENERATE_ROUTE: &str = "/characters/generate";
+const CHARACTERS_GENERATE_STREAM_ROUTE: &str = "/characters/generate-stream";
+const CHARACTERS_DETAIL_ROUTE: &str = "/characters/{character_id}";
+const CHARACTERS_VALIDATE_IMPORT_ROUTE: &str = "/characters/validate-import";
+const CHARACTERS_EXPORT_ROUTE: &str = "/characters/export";
+const CHARACTERS_IMPORT_ROUTE: &str = "/characters/import";
+
+#[cfg(test)]
+fn build_characters_route_owner_contract() -> Value {
+    json!({
+        "owner": "characters",
+        "scope": "characters_crud_generation_import_export_validate_route_group",
+        "python_source_map": [
+            "backend/app/api/characters.py",
+            "backend/app/models/character.py",
+            "backend/app/schemas/character.py",
+            "backend/app/services/auto_character_service.py",
+            "backend/app/services/character_context_service.py",
+            "backend/app/services/character_state_update_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/api/characters.rs",
+            "backend-rs/src/services/character_service.rs",
+            "backend-rs/src/services/prompt_template_service.rs",
+            "backend-rs/src/services/settings_service.rs",
+            "backend-rs/src/models/character.rs",
+            "backend-rs/src/models/organization.rs",
+            "backend-rs/src/models/organization_member.rs",
+            "backend-rs/src/models/character_career.rs",
+            "deploy/strangler-gateway-probes.json"
+        ],
+        "route_contract": {
+            "project_list": CHARACTERS_PROJECT_LIST_ROUTE,
+            "list": CHARACTERS_LIST_CREATE_ROUTE,
+            "create": CHARACTERS_LIST_CREATE_ROUTE,
+            "generate": CHARACTERS_GENERATE_ROUTE,
+            "generate_stream": CHARACTERS_GENERATE_STREAM_ROUTE,
+            "detail": CHARACTERS_DETAIL_ROUTE,
+            "update": CHARACTERS_DETAIL_ROUTE,
+            "delete": CHARACTERS_DETAIL_ROUTE,
+            "validate_import": CHARACTERS_VALIDATE_IMPORT_ROUTE,
+            "export": CHARACTERS_EXPORT_ROUTE,
+            "import": CHARACTERS_IMPORT_ROUTE
+        },
+        "behavior_contract": {
+            "route_entrypoints": [
+                "list_characters_by_project",
+                "list_characters",
+                "create_character",
+                "generate_character",
+                "get_character",
+                "update_character",
+                "delete_character",
+                "validate_characters_import",
+                "export_characters",
+                "import_characters"
+            ],
+            "service_consumers": [
+                "CharacterService::create",
+                "CharacterService::list",
+                "CharacterService::get",
+                "CharacterService::update",
+                "CharacterService::delete",
+                "PromptTemplateService::sync_managed_templates_for_user",
+                "SettingsService::build_ai_config",
+                "AIService::generate"
+            ],
+            "regular_readiness_scope": [
+                "project_list",
+                "list",
+                "generate_stream",
+                "export",
+                "import"
+            ],
+            "public_asymmetric_scope": [
+                "validate_import"
+            ],
+            "import_export_contract": {
+                "export_type": "characters",
+                "export_version": "rust-strangler-1",
+                "import_requires_data_array": true,
+                "validate_import_is_public_policy": true
+            },
+            "generation_contract": {
+                "prompt_template_key": "SINGLE_CHARACTER_GENERATION",
+                "cleans_ai_json_response": true,
+                "syncs_main_and_sub_careers": true,
+                "supports_organization_extra_fields": true
+            }
+        },
+        "readiness_evidence": [
+            "characters-validate-import-public-rust",
+            "characters-project-list-auth-guard-rust",
+            "characters-list-auth-guard-rust",
+            "characters-generate-stream-auth-guard-rust",
+            "characters-export-auth-guard-rust",
+            "characters-import-auth-guard-rust",
+            "characters-setup-project-business-rust",
+            "characters-create-business-rust",
+            "characters-list-business-rust",
+            "characters-project-list-business-rust",
+            "characters-detail-business-rust",
+            "characters-update-business-rust",
+            "characters-export-business-rust",
+            "characters-validate-import-business-rust",
+            "characters-import-business-rust",
+            "characters-delete-business-rust",
+            "characters-missing-detail-business-rust",
+            "characters-missing-import-project-business-rust"
+        ],
+        "owner_profile": {
+            "name": "phase5-characters-business-owner",
+            "business_probes": [
+                "characters-setup-project-business-rust",
+                "characters-create-business-rust",
+                "characters-list-business-rust",
+                "characters-project-list-business-rust",
+                "characters-detail-business-rust",
+                "characters-update-business-rust",
+                "characters-export-business-rust",
+                "characters-validate-import-business-rust",
+                "characters-import-business-rust",
+                "characters-delete-business-rust",
+                "characters-missing-detail-business-rust",
+                "characters-missing-import-project-business-rust"
+            ],
+            "python_fallback_probe_count": 0
+        },
+        "validation_boundary": [
+            "cargo test api::characters",
+            "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only --profile phase5-characters-business-owner",
+            "cargo check"
+        ],
+        "rollback_boundary": {
+            "source_map_policy": "keep_python_characters_route_model_schema_service_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_freeze_candidate_ready": true,
+            "full_module_freeze_ready": false,
+            "python_route_files_status": "source_map_only_for_characters_route_group",
+            "python_fallback_removal_ready": false,
+            "remaining_blockers": [
+                "explicit source-map freeze/delete/repoint approval"
+            ],
+            "retired_manifest_fallbacks": [
+                "characters-project-list-auth-guard-python-fallback",
+                "characters-list-auth-guard-python-fallback",
+                "characters-generate-stream-auth-guard-python-fallback",
+                "characters-export-auth-guard-python-fallback",
+                "characters-import-auth-guard-python-fallback",
+                "characters-validate-import-auth-guard-python-fallback"
+            ],
+            "validate_import_policy": "public Rust validation route; do not restore auth-guard Python fallback unless this policy is rolled back"
+        },
+        "business_smoke_status": {
+            "owner_profile": "phase5-characters-business-owner",
+            "readiness_probe_count": 18,
+            "business_probe_count": 12,
+            "python_fallback_probe_count": 0,
+            "status": "covered_by_dedicated_rust_owner_profile"
+        },
+        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+        "migration_policy": "Characters route business smoke is covered by phase5-characters-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+    })
+}
+
 #[derive(Deserialize)]
 struct CreateRequest {
     project_id: String,
@@ -1805,22 +1971,153 @@ async fn list_characters_by_project(
 pub fn routes() -> Router {
     Router::new()
         .route(
-            "/characters/project/{project_id}",
+            CHARACTERS_PROJECT_LIST_ROUTE,
             get(list_characters_by_project),
         )
-        .route("/characters", post(create_character).get(list_characters))
-        .route("/characters/generate", post(generate_character))
-        .route("/characters/generate-stream", post(generate_character))
         .route(
-            "/characters/{character_id}",
+            CHARACTERS_LIST_CREATE_ROUTE,
+            post(create_character).get(list_characters),
+        )
+        .route(CHARACTERS_GENERATE_ROUTE, post(generate_character))
+        .route(CHARACTERS_GENERATE_STREAM_ROUTE, post(generate_character))
+        .route(
+            CHARACTERS_DETAIL_ROUTE,
             get(get_character)
                 .put(update_character)
                 .delete(delete_character),
         )
         .route(
-            "/characters/validate-import",
+            CHARACTERS_VALIDATE_IMPORT_ROUTE,
             post(validate_characters_import),
         )
-        .route("/characters/export", post(export_characters))
-        .route("/characters/import", post(import_characters))
+        .route(CHARACTERS_EXPORT_ROUTE, post(export_characters))
+        .route(CHARACTERS_IMPORT_ROUTE, post(import_characters))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_characters_route_owner_contract, CHARACTERS_DETAIL_ROUTE, CHARACTERS_EXPORT_ROUTE,
+        CHARACTERS_GENERATE_ROUTE, CHARACTERS_GENERATE_STREAM_ROUTE, CHARACTERS_IMPORT_ROUTE,
+        CHARACTERS_LIST_CREATE_ROUTE, CHARACTERS_PROJECT_LIST_ROUTE,
+        CHARACTERS_VALIDATE_IMPORT_ROUTE,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn should_publish_characters_route_owner_contract() {
+        let contract = build_characters_route_owner_contract();
+
+        assert_eq!(contract["owner"], "characters");
+        assert_eq!(
+            contract["scope"],
+            "characters_crud_generation_import_export_validate_route_group"
+        );
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/app/api/characters.py"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][0],
+            "backend-rs/src/api/characters.rs"
+        );
+        assert_eq!(
+            contract["route_contract"]["project_list"],
+            CHARACTERS_PROJECT_LIST_ROUTE
+        );
+        assert_eq!(
+            contract["route_contract"]["generate_stream"],
+            CHARACTERS_GENERATE_STREAM_ROUTE
+        );
+        assert_eq!(
+            contract["route_contract"]["validate_import"],
+            CHARACTERS_VALIDATE_IMPORT_ROUTE
+        );
+        assert_eq!(
+            contract["behavior_contract"]["route_entrypoints"][9],
+            "import_characters"
+        );
+        assert_eq!(
+            contract["readiness_evidence"][5],
+            "characters-import-auth-guard-rust"
+        );
+        assert_eq!(contract["readiness_evidence"].as_array().unwrap().len(), 18);
+        assert_eq!(
+            contract["readiness_evidence"][17],
+            "characters-missing-import-project-business-rust"
+        );
+        assert_eq!(
+            contract["owner_profile"]["name"],
+            "phase5-characters-business-owner"
+        );
+        let business_probes = contract["owner_profile"]["business_probes"]
+            .as_array()
+            .expect("characters business probes should be present");
+        assert_eq!(business_probes.len(), 12);
+        assert_eq!(
+            contract["owner_profile"]["business_probes"][7],
+            "characters-validate-import-business-rust"
+        );
+        assert_eq!(
+            contract["owner_profile"]["python_fallback_probe_count"],
+            json!(0)
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
+            json!(true)
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["full_module_freeze_ready"],
+            json!(false)
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            false
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["status"],
+            "covered_by_dedicated_rust_owner_profile"
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["readiness_probe_count"],
+            json!(18)
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["business_probe_count"],
+            json!(12)
+        );
+        assert_eq!(
+            contract["business_smoke_status"]["python_fallback_probe_count"],
+            json!(0)
+        );
+        assert_eq!(
+            contract["next_cutover_gate"],
+            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+        );
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("characters migration policy should be present")
+            .contains("phase5-characters-business-owner"));
+    }
+
+    #[test]
+    fn should_keep_characters_route_group_paths_stable() {
+        assert_eq!(
+            CHARACTERS_PROJECT_LIST_ROUTE,
+            "/characters/project/{project_id}"
+        );
+        assert_eq!(CHARACTERS_LIST_CREATE_ROUTE, "/characters");
+        assert_eq!(CHARACTERS_GENERATE_ROUTE, "/characters/generate");
+        assert_eq!(
+            CHARACTERS_GENERATE_STREAM_ROUTE,
+            "/characters/generate-stream"
+        );
+        assert_eq!(CHARACTERS_DETAIL_ROUTE, "/characters/{character_id}");
+        assert_eq!(
+            CHARACTERS_VALIDATE_IMPORT_ROUTE,
+            "/characters/validate-import"
+        );
+        assert_eq!(CHARACTERS_EXPORT_ROUTE, "/characters/export");
+        assert_eq!(CHARACTERS_IMPORT_ROUTE, "/characters/import");
+    }
 }

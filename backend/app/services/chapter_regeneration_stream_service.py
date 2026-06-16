@@ -3,13 +3,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, AsyncGenerator, AsyncIterator, Callable, Dict, List, Optional, Sequence
-
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import TYPE_CHECKING, Any, AsyncGenerator, AsyncIterator, Callable, Dict, List, Optional, Sequence
 
 from app.logger import get_logger
-from app.models.chapter import Chapter
-from app.models.memory import PlotAnalysis
 from app.schemas.generation_payload import build_chapter_regeneration_stream_result_payload
 from app.schemas.regeneration import ChapterRegenerateRequest
 from app.services.ai_service import AIService
@@ -18,6 +14,12 @@ from app.services.regeneration_task_service import (
     mark_latest_regeneration_task_failed,
 )
 from app.utils.sse_response import SSEResponse, WizardProgressTracker
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter import Chapter
+    from app.models.memory import PlotAnalysis
 
 logger = get_logger(__name__)
 

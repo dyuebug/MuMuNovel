@@ -1,11 +1,22 @@
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Mapping, Optional
 
-from sqlalchemy.ext.asyncio import AsyncSession
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active chapter-draft apply workflow and history-persist "
+    "contract; this Python service is kept only as frozen rollback/source-map "
+    "material behind repointed draft route shells."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/api/chapter_draft_routes.rs; "
+    "backend-rs/src/services/chapter_draft_history_service.rs; "
+    "backend-rs/src/services/chapter_draft_source_service.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_chapter_draft_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from app.logger import get_logger
-from app.models.chapter import Chapter
 from app.services.chapter_draft_apply_service import (
     apply_draft_content_with_history,
     build_draft_apply_response_payload,
@@ -36,7 +47,12 @@ from app.services.chapter_generated_text_service import (
     contains_chapter_workflow_meta_text,
     sanitize_generated_narrative_text,
 )
-from app.services.chapter_generation_history_service import is_reviser_draft_stale
+from app.services.chapter_generation.history_service import is_reviser_draft_stale
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.chapter import Chapter
 
 logger = get_logger(__name__)
 

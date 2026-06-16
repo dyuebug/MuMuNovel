@@ -1,11 +1,22 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from sqlalchemy.ext.asyncio import AsyncSession
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active chapter-draft detail query projection; this Python "
+    "service is kept only as frozen rollback/source-map material behind the "
+    "repointed chapter-draft route shell."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/api/chapter_draft_routes.rs; "
+    "backend-rs/src/services/chapter_draft_view_payload_service.rs; "
+    "backend-rs/src/services/chapter_draft_source_service.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_chapter_draft_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
-from app.services.chapter_draft_apply_service import build_draft_detail_response_payload
 from app.services.chapter_draft_state_service import (
     AUTO_REVISION_MISSING_DETAIL,
     AUTO_REVISION_NOT_FOUND_DETAIL,
@@ -14,10 +25,13 @@ from app.services.chapter_draft_state_service import (
     load_candidate_draft_attempt_or_raise,
     load_reviser_history_or_raise,
 )
-from app.services.chapter_generation_history_service import (
+from app.services.chapter_generation.history_service import (
     _build_candidate_draft_payload,
     build_auto_revision_draft_payload,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def load_auto_revision_draft_detail_payload(
@@ -27,6 +41,10 @@ async def load_auto_revision_draft_detail_payload(
     chapter_updated_at: Optional[datetime],
     history_id: Optional[str] = None,
 ) -> dict[str, Any]:
+    from app.services.chapter_draft_apply_service import (
+        build_draft_detail_response_payload,
+    )
+
     reviser_history, reviser_result = await load_reviser_history_or_raise(
         db=db,
         chapter_id=chapter_id,
@@ -55,6 +73,10 @@ async def load_candidate_draft_detail_payload(
     chapter_updated_at: Optional[datetime],
     attempt_id: Optional[str] = None,
 ) -> dict[str, Any]:
+    from app.services.chapter_draft_apply_service import (
+        build_draft_detail_response_payload,
+    )
+
     draft_attempt = await load_candidate_draft_attempt_or_raise(
         db=db,
         chapter_id=chapter_id,

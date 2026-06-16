@@ -4,6 +4,16 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active chapter draft route group; this Python module is "
+    "kept only as repointed rollback/source-map material after explicit "
+    "repoint approval."
+)
+SOURCE_MAP_RUST_OWNER = "backend-rs/src/api/chapter_draft_routes.rs"
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_chapter_draft_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "repoint"
+
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 

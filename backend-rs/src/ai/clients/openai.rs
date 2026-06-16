@@ -489,7 +489,13 @@ impl OpenAIClient {
         candidates
             .iter()
             .filter(|(_, keyword_matches, likely_chat)| *likely_chat && *keyword_matches > 0)
-            .max_by_key(|(_, keyword_matches, _)| *keyword_matches)
+            .fold(
+                None,
+                |best: Option<&(String, usize, bool)>, candidate| match best {
+                    Some((_, best_matches, _)) if *best_matches >= candidate.1 => best,
+                    _ => Some(candidate),
+                },
+            )
             .map(|(model, _, _)| model.clone())
             .or_else(|| {
                 candidates

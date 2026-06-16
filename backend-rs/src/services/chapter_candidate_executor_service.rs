@@ -1,9 +1,10 @@
-// Staged Rust owner for Python chapter_candidate_executor_service.py.
-// This ports the candidate executor orchestration as one function group while
-// keeping formula-heavy rerank decisions injectable until production cutover.
-#![allow(dead_code)]
+// Rust owner for candidate executor orchestration originally mapped from
+// Python chapter_candidate_executor_service.py. This module owns the
+// generation -> word-budget repair -> targeted repair -> finalize sequence and
+// keeps stage dependencies injectable for tests, default wiring, and route
+// gateway rollback boundaries.
 
-use std::future::Future;
+use std::{future::Future, pin::Pin};
 
 use serde_json::{Map, Value};
 
@@ -30,6 +31,7 @@ pub(crate) struct ChapterCandidateExecutorRequest {
     pub(crate) runtime_state: Option<Value>,
 }
 
+#[cfg(test)]
 pub(crate) struct ChapterCandidateExecutorDependencies<
     Generate,
     WordBudgetRepair,
@@ -50,6 +52,60 @@ pub(crate) struct ChapterCandidateExecutorDependencies<
     pub(crate) select_targeted_final_repair_seed_candidate_fn: SelectTargetedSeed,
 }
 
+pub(crate) type ChapterCandidateGenerationStageFuture<'request> = Pin<
+    Box<dyn Future<Output = Result<ChapterCandidateGenerationResult, String>> + Send + 'request>,
+>;
+pub(crate) type ChapterCandidateWordBudgetStageFuture<'request> =
+    Pin<Box<dyn Future<Output = ChapterCandidateWordBudgetRepairResult> + Send + 'request>>;
+pub(crate) type ChapterCandidateTargetedRepairStageFuture<'request> =
+    Pin<Box<dyn Future<Output = ChapterCandidateTargetedFinalRepairResult> + Send + 'request>>;
+
+pub(crate) struct ChapterCandidateExecutorBoxedDependencies<'deps> {
+    pub(crate) generate_candidate_pool_fn: Box<
+        dyn for<'request> FnMut(
+                &'request mut ChapterCandidateGenerationRequest,
+            ) -> ChapterCandidateGenerationStageFuture<'request>
+            + Send
+            + 'deps,
+    >,
+    pub(crate) maybe_apply_word_budget_repair_fn: Box<
+        dyn for<'request> FnMut(
+                &'request mut ChapterCandidateWordBudgetRepairRequest,
+                Value,
+                Vec<Value>,
+            ) -> ChapterCandidateWordBudgetStageFuture<'request>
+            + Send
+            + 'deps,
+    >,
+    pub(crate) execute_targeted_final_repair_pass_fn: Box<
+        dyn for<'request> FnMut(
+                &'request mut ChapterCandidateTargetedFinalRepairRequest,
+                Value,
+                Vec<Value>,
+            ) -> ChapterCandidateTargetedRepairStageFuture<'request>
+            + Send
+            + 'deps,
+    >,
+    pub(crate) resolve_candidate_finalize_state_fn: Box<
+        dyn FnMut(ChapterCandidateExecutorFinalizeInput) -> ChapterCandidateFinalizeState
+            + Send
+            + 'deps,
+    >,
+    pub(crate) finalize_selected_candidate_result_fn: Box<
+        dyn for<'request> FnMut(
+                &'request mut ChapterCandidateFinalizeRequest,
+                ChapterCandidateFinalizeState,
+            ) -> Value
+            + Send
+            + 'deps,
+    >,
+    pub(crate) should_apply_targeted_final_repair_fn: Box<dyn FnMut(Value) -> bool + Send + 'deps>,
+    pub(crate) should_apply_followup_targeted_final_repair_fn:
+        Box<dyn FnMut(Value) -> bool + Send + 'deps>,
+    pub(crate) select_targeted_final_repair_seed_candidate_fn:
+        Box<dyn FnMut(Value, Vec<Value>) -> Option<Value> + Send + 'deps>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ChapterCandidateExecutorFinalizeInput {
     pub(crate) request: ChapterCandidateFinalizeRequest,
@@ -58,6 +114,7 @@ pub(crate) struct ChapterCandidateExecutorFinalizeInput {
     pub(crate) allow_word_budget_repair_promotion: bool,
 }
 
+#[cfg(test)]
 pub(crate) async fn generate_best_ranked_candidate_workflow<
     Generate,
     GenerateFuture,
@@ -211,6 +268,123 @@ where
     Ok(result)
 }
 
+pub(crate) async fn generate_best_ranked_candidate_workflow_with_boxed_dependencies(
+    request: &mut ChapterCandidateExecutorRequest,
+    dependencies: &mut ChapterCandidateExecutorBoxedDependencies<'_>,
+) -> Result<Value, String> {
+    let base_prompt = request
+        .base_generate_kwargs
+        .get("prompt")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let base_temperature = resolve_base_temperature(&request.base_generate_kwargs);
+
+    let generation_result =
+        run_generation_stage_boxed(request, dependencies, &base_prompt, base_temperature).await?;
+    let mut candidates = generation_result.candidates;
+    let mut selected_candidate = generation_result.selected_candidate;
+
+    let word_budget_result = run_word_budget_repair_stage_boxed(
+        request,
+        dependencies,
+        &base_prompt,
+        base_temperature,
+        selected_candidate,
+        candidates,
+    )
+    .await;
+    selected_candidate = word_budget_result.selected_candidate;
+    candidates = word_budget_result.candidates;
+
+    let mut deferred_followup_targeted_repair_seed_candidate = None;
+    if (dependencies.should_apply_targeted_final_repair_fn)(selected_candidate.clone()) {
+        let targeted_result = run_targeted_repair_stage_boxed(
+            request,
+            dependencies,
+            &base_prompt,
+            base_temperature,
+            selected_candidate.clone(),
+            selected_candidate,
+            candidates,
+            "targeted-repair",
+            true,
+        )
+        .await;
+        selected_candidate = targeted_result.selected_candidate;
+        candidates = targeted_result.candidates;
+        deferred_followup_targeted_repair_seed_candidate =
+            targeted_result.deferred_followup_targeted_repair_seed_candidate;
+    }
+
+    let mut final_state =
+        resolve_finalize_state_boxed(request, dependencies, selected_candidate, candidates, true);
+    selected_candidate = final_state.selected_candidate.clone();
+    candidates = final_state.candidates.clone();
+
+    let targeted_seed = select_post_finalize_targeted_repair_seed_candidate_boxed(
+        selected_candidate.clone(),
+        candidates.clone(),
+        deferred_followup_targeted_repair_seed_candidate,
+        dependencies,
+    );
+    if let Some(targeted_seed) = targeted_seed {
+        let targeted_result = run_targeted_repair_stage_boxed(
+            request,
+            dependencies,
+            &base_prompt,
+            base_temperature,
+            targeted_seed,
+            selected_candidate,
+            candidates,
+            "targeted-repair-post-finalize",
+            false,
+        )
+        .await;
+        selected_candidate = targeted_result.selected_candidate;
+        candidates = targeted_result.candidates;
+
+        final_state = resolve_finalize_state_boxed(
+            request,
+            dependencies,
+            selected_candidate.clone(),
+            candidates.clone(),
+            false,
+        );
+        if (dependencies.should_apply_followup_targeted_final_repair_fn)(
+            final_state.selected_candidate.clone(),
+        ) {
+            let targeted_result = run_targeted_repair_stage_boxed(
+                request,
+                dependencies,
+                &base_prompt,
+                base_temperature,
+                final_state.selected_candidate.clone(),
+                final_state.selected_candidate,
+                candidates,
+                "targeted-repair-followup",
+                false,
+            )
+            .await;
+            selected_candidate = targeted_result.selected_candidate;
+            candidates = targeted_result.candidates;
+        }
+    }
+
+    let final_state =
+        resolve_finalize_state_boxed(request, dependencies, selected_candidate, candidates, false);
+    let mut finalize_request = ChapterCandidateFinalizeRequest {
+        target_word_count: request.target_word_count,
+        source: request.source.clone(),
+        runtime_state: request.runtime_state.take(),
+    };
+    let result =
+        (dependencies.finalize_selected_candidate_result_fn)(&mut finalize_request, final_state);
+    request.runtime_state = finalize_request.runtime_state;
+    Ok(result)
+}
+
+#[cfg(test)]
 async fn run_generation_stage<
     Generate,
     GenerateFuture,
@@ -255,6 +429,7 @@ where
     result
 }
 
+#[cfg(test)]
 async fn run_word_budget_repair_stage<
     Generate,
     WordBudgetRepair,
@@ -306,6 +481,7 @@ where
     result
 }
 
+#[cfg(test)]
 async fn run_targeted_repair_stage<
     Generate,
     WordBudgetRepair,
@@ -364,6 +540,127 @@ where
     result
 }
 
+async fn run_generation_stage_boxed(
+    request: &mut ChapterCandidateExecutorRequest,
+    dependencies: &mut ChapterCandidateExecutorBoxedDependencies<'_>,
+    base_prompt: &str,
+    base_temperature: f64,
+) -> Result<ChapterCandidateGenerationResult, String> {
+    let mut generation_request = ChapterCandidateGenerationRequest {
+        base_generate_kwargs: request.base_generate_kwargs.clone(),
+        base_prompt: base_prompt.to_string(),
+        base_temperature,
+        target_word_count: request.target_word_count,
+        source: request.source.clone(),
+        generation_label: request.generation_label.clone(),
+        max_candidates: request.max_candidates,
+        runtime_state: request.runtime_state.take(),
+    };
+    let result = (dependencies.generate_candidate_pool_fn)(&mut generation_request).await;
+    request.runtime_state = generation_request.runtime_state;
+    result
+}
+
+async fn run_word_budget_repair_stage_boxed(
+    request: &mut ChapterCandidateExecutorRequest,
+    dependencies: &mut ChapterCandidateExecutorBoxedDependencies<'_>,
+    base_prompt: &str,
+    base_temperature: f64,
+    selected_candidate: Value,
+    candidates: Vec<Value>,
+) -> ChapterCandidateWordBudgetRepairResult {
+    let mut repair_request = ChapterCandidateWordBudgetRepairRequest {
+        base_generate_kwargs: request.base_generate_kwargs.clone(),
+        base_prompt: base_prompt.to_string(),
+        base_temperature,
+        target_word_count: request.target_word_count,
+        source: request.source.clone(),
+        generation_label: request.generation_label.clone(),
+        runtime_state: request.runtime_state.take(),
+    };
+    let result = (dependencies.maybe_apply_word_budget_repair_fn)(
+        &mut repair_request,
+        selected_candidate,
+        candidates,
+    )
+    .await;
+    request.runtime_state = repair_request.runtime_state;
+    result
+}
+
+async fn run_targeted_repair_stage_boxed(
+    request: &mut ChapterCandidateExecutorRequest,
+    dependencies: &mut ChapterCandidateExecutorBoxedDependencies<'_>,
+    base_prompt: &str,
+    base_temperature: f64,
+    repair_seed_candidate: Value,
+    selected_candidate: Value,
+    candidates: Vec<Value>,
+    generation_label_suffix: &str,
+    allow_followup_seed_defer: bool,
+) -> ChapterCandidateTargetedFinalRepairResult {
+    let mut targeted_request = ChapterCandidateTargetedFinalRepairRequest {
+        base_generate_kwargs: request.base_generate_kwargs.clone(),
+        base_prompt: base_prompt.to_string(),
+        base_temperature,
+        target_word_count: request.target_word_count,
+        source: request.source.clone(),
+        generation_label: request.generation_label.clone(),
+        generation_label_suffix: generation_label_suffix.to_string(),
+        repair_seed_candidate,
+        current_winner_candidate: selected_candidate.clone(),
+        runtime_state: request.runtime_state.take(),
+        allow_followup_seed_defer,
+    };
+    let result = (dependencies.execute_targeted_final_repair_pass_fn)(
+        &mut targeted_request,
+        selected_candidate,
+        candidates,
+    )
+    .await;
+    request.runtime_state = targeted_request.runtime_state;
+    result
+}
+
+fn resolve_finalize_state_boxed(
+    request: &mut ChapterCandidateExecutorRequest,
+    dependencies: &mut ChapterCandidateExecutorBoxedDependencies<'_>,
+    selected_candidate: Value,
+    candidates: Vec<Value>,
+    allow_word_budget_repair_promotion: bool,
+) -> ChapterCandidateFinalizeState {
+    let finalize_request = ChapterCandidateFinalizeRequest {
+        target_word_count: request.target_word_count,
+        source: request.source.clone(),
+        runtime_state: request.runtime_state.clone(),
+    };
+    (dependencies.resolve_candidate_finalize_state_fn)(ChapterCandidateExecutorFinalizeInput {
+        request: finalize_request,
+        selected_candidate,
+        candidates,
+        allow_word_budget_repair_promotion,
+    })
+}
+
+fn select_post_finalize_targeted_repair_seed_candidate_boxed(
+    selected_candidate: Value,
+    candidates: Vec<Value>,
+    deferred_followup_targeted_repair_seed_candidate: Option<Value>,
+    dependencies: &mut ChapterCandidateExecutorBoxedDependencies<'_>,
+) -> Option<Value> {
+    if (dependencies.should_apply_followup_targeted_final_repair_fn)(selected_candidate.clone()) {
+        return Some(selected_candidate);
+    }
+    if deferred_followup_targeted_repair_seed_candidate.is_some() {
+        return deferred_followup_targeted_repair_seed_candidate;
+    }
+    if is_targeted_quality_repair_candidate(&selected_candidate) {
+        return None;
+    }
+    (dependencies.select_targeted_final_repair_seed_candidate_fn)(selected_candidate, candidates)
+}
+
+#[cfg(test)]
 fn resolve_finalize_state<
     Generate,
     WordBudgetRepair,
@@ -405,6 +702,7 @@ where
     })
 }
 
+#[cfg(test)]
 fn select_post_finalize_targeted_repair_seed_candidate<
     Generate,
     WordBudgetRepair,
@@ -471,14 +769,134 @@ fn resolve_base_temperature(base_generate_kwargs: &Map<String, Value>) -> f64 {
 }
 
 #[cfg(test)]
+fn build_chapter_candidate_executor_owner_contract() -> Value {
+    serde_json::json!({
+        "owner": "chapter_candidate_executor_service",
+        "scope": "candidate_generation_repair_finalize_and_post_finalize_orchestration_owner",
+        "python_source_map": [
+            "backend/app/services/chapter_candidate_executor_service.py",
+            "backend/app/services/chapter_candidate_executor_wiring_service.py",
+            "backend/app/services/chapter_candidate_generation_service.py",
+            "backend/app/services/chapter_candidate_word_budget_repair_service.py",
+            "backend/app/services/chapter_candidate_targeted_final_repair_service.py",
+            "backend/app/services/chapter_candidate_finalize_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/services/chapter_candidate_executor_service.rs",
+            "backend-rs/src/services/chapter_candidate_generation_service.rs",
+            "backend-rs/src/services/chapter_candidate_word_budget_repair_service.rs",
+            "backend-rs/src/services/chapter_candidate_targeted_final_repair_service.rs",
+            "backend-rs/src/services/chapter_candidate_finalize_service.rs",
+            "backend-rs/src/services/chapter_candidate_output_service.rs",
+            "backend-rs/src/services/chapter_candidate_record_service.rs",
+            "backend-rs/src/services/chapter_candidate_rerank_service.rs",
+            "backend-rs/src/services/chapter_candidate_runtime_state_service.rs",
+            "backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs",
+            "backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs",
+            "backend-rs/src/services/chapter_candidate_route_gateway_service.rs"
+        ],
+        "behavior_contract": {
+            "entrypoints": [
+                "generate_best_ranked_candidate_workflow",
+                "generate_best_ranked_candidate_workflow_with_boxed_dependencies"
+            ],
+            "stage_order": [
+                "generation candidate pool",
+                "word-budget repair",
+                "optional pre-finalize targeted final repair",
+                "finalize with word-budget repair promotion enabled",
+                "optional post-finalize targeted final repair",
+                "optional follow-up targeted final repair",
+                "finalize with word-budget repair promotion disabled",
+                "final result projection"
+            ],
+            "request_fields": [
+                "base_generate_kwargs",
+                "target_word_count",
+                "source",
+                "generation_label",
+                "max_candidates",
+                "runtime_state"
+            ],
+            "runtime_state_policy": [
+                "runtime_state is moved through each stage request and restored to the executor request",
+                "finalize receives the latest runtime_state and writes the final runtime_state back",
+                "missing runtime_state is allowed by every stage owner"
+            ],
+            "targeted_repair_policy": [
+                "pre-finalize targeted repair runs only when should_apply_targeted_final_repair accepts the selected candidate",
+                "deferred targeted repair seed is preferred after finalize before selecting a new seed",
+                "winner already marked targeted_quality_repair blocks selecting another post-finalize seed",
+                "follow-up targeted repair runs only after post-finalize repair when follow-up policy accepts the finalized candidate"
+            ],
+            "finalize_policy": [
+                "first finalize allows word-budget repair promotion",
+                "post-targeted and final finalize disable word-budget repair promotion",
+                "final result projection is delegated to the finalize owner"
+            ],
+            "dependency_policy": [
+                "generic test dependencies and boxed production dependencies share the same orchestration order",
+                "stage owners remain injectable for default wiring, production adapter, route gateway, and focused tests"
+            ]
+        },
+        "validation_boundary": [
+            "cargo test services::chapter_candidate_executor_service",
+            "cargo check --manifest-path backend-rs/Cargo.toml",
+            "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only"
+        ],
+        "active_consumers": [
+            "chapter_candidate_executor_default_dependency_service",
+            "chapter_candidate_executor_production_adapter_service",
+            "chapter_candidate_route_gateway_service",
+            "chapter_batch_generation_active_gateway_smoke_service",
+            "chapter_single_generation_active_gateway_smoke_service"
+        ],
+        "service_runtime_closeout_status": {
+            "owner_profiles": [
+                "phase5-single-generation-owner",
+                "phase5-batch-generation-owner",
+                "phase5-chapters-candidate-gateway-owner"
+            ],
+            "single_generation_manifest_probe_count": 6,
+            "batch_generation_manifest_probe_count": 11,
+            "candidate_gateway_manifest_probe_count": 1,
+            "rust_manifest_probe_count": 18,
+            "python_fallback_probe_count": 0,
+            "executor_stage_owner": "generate_best_ranked_candidate_workflow_with_boxed_dependencies",
+            "generation_owner": "chapter_candidate_generation_service",
+            "word_budget_repair_owner": "chapter_candidate_word_budget_repair_service",
+            "targeted_final_repair_owner": "chapter_candidate_targeted_final_repair_service",
+            "finalize_owner": "chapter_candidate_finalize_service",
+            "production_adapter_owner": "chapter_candidate_executor_production_adapter_service",
+            "route_gateway_owner": "chapter_candidate_route_gateway_service",
+            "active_route_gateway_consumers": [
+                "chapter-candidate-route-gateway-smoke-rust",
+                "chapter-single-generation-active-gateway-smoke-rust",
+                "chapter-batch-generation-active-gateway-smoke-rust"
+            ],
+            "source_map_closeout_ready": true,
+            "physical_python_closeout_completed": false,
+            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+            "status": "rust_candidate_executor_owner_ready_for_source_map_closeout_review"
+        },
+        "rollback_boundary": {
+            "python_source_map": "chapter_candidate_executor_python_source_map",
+            "python_fallback_removal_ready": false,
+            "approval_required": "explicit source-map freeze/delete/repoint approval"
+        }
+    })
+}
+
+#[cfg(test)]
 mod tests {
     use std::future;
 
     use serde_json::{json, Map, Value};
 
     use super::{
-        generate_best_ranked_candidate_workflow, ChapterCandidateExecutorDependencies,
-        ChapterCandidateExecutorFinalizeInput, ChapterCandidateExecutorRequest,
+        build_chapter_candidate_executor_owner_contract, generate_best_ranked_candidate_workflow,
+        ChapterCandidateExecutorDependencies, ChapterCandidateExecutorFinalizeInput,
+        ChapterCandidateExecutorRequest,
     };
     use crate::services::chapter_candidate_finalize_service::{
         ChapterCandidateFinalizeRequest, ChapterCandidateFinalizeState,
@@ -506,6 +924,87 @@ mod tests {
             max_candidates: 2,
             runtime_state: Some(json!({"seed": true})),
         }
+    }
+
+    #[test]
+    fn should_publish_chapter_candidate_executor_owner_contract() {
+        let contract = build_chapter_candidate_executor_owner_contract();
+
+        assert_eq!(contract["owner"], "chapter_candidate_executor_service");
+        assert_eq!(
+            contract["scope"],
+            "candidate_generation_repair_finalize_and_post_finalize_orchestration_owner"
+        );
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/app/services/chapter_candidate_executor_service.py"
+        );
+        assert!(contract["rust_owner_map"]
+            .as_array()
+            .expect("rust owner map")
+            .contains(&json!(
+                "backend-rs/src/services/chapter_candidate_executor_service.rs"
+            )));
+        assert!(contract["behavior_contract"]["stage_order"]
+            .as_array()
+            .expect("stage order")
+            .contains(&json!("optional follow-up targeted final repair")));
+        assert!(contract["behavior_contract"]["entrypoints"]
+            .as_array()
+            .expect("entrypoints")
+            .contains(&json!(
+                "generate_best_ranked_candidate_workflow_with_boxed_dependencies"
+            )));
+        assert!(contract["validation_boundary"]
+            .as_array()
+            .expect("validation boundary")
+            .contains(&json!(
+                "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only"
+            )));
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profiles"][0],
+            "phase5-single-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profiles"][1],
+            "phase5-batch-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profiles"][2],
+            "phase5-chapters-candidate-gateway-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["rust_manifest_probe_count"],
+            18
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["executor_stage_owner"],
+            "generate_best_ranked_candidate_workflow_with_boxed_dependencies"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_candidate_executor_owner_ready_for_source_map_closeout_review"
+        );
     }
 
     #[tokio::test]

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import TYPE_CHECKING
 
-from app.models.regeneration_task import RegenerationTask
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 async def load_regeneration_tasks_payload(
@@ -12,6 +12,10 @@ async def load_regeneration_tasks_payload(
     chapter_id: str,
     limit: int,
 ) -> dict[str, object]:
+    from sqlalchemy import select
+
+    from app.models.regeneration_task import RegenerationTask
+
     result = await db_session.execute(
         select(RegenerationTask)
         .where(RegenerationTask.chapter_id == chapter_id)

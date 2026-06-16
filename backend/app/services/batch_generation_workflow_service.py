@@ -3,42 +3,80 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Sequence
 
-from fastapi import BackgroundTasks
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+SOURCE_MAP_FREEZE_STATUS = "frozen_source_map_rollback_only"
+SOURCE_MAP_FREEZE_REASON = (
+    "Rust owns the active batch create/resume persistence and dispatch chain; "
+    "this Python workflow helper is kept only as frozen rollback/source-map "
+    "material for legacy batch task creation fallback."
+)
+SOURCE_MAP_RUST_OWNER = (
+    "backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs; "
+    "backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs"
+)
+SOURCE_MAP_ROLLBACK_FLAG = "legacy_batch_generation_python_routes_enabled"
+SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION = "freeze"
 
 from app.logger import get_logger
-from app.models.batch_generation_task import BatchGenerationTask
-from app.models.project import Project
-from app.services.ai_service import AIService
-from app.services.chapter_quality_context_service import (
-    StoryPacket,
-    build_story_generation_packet_with_project_continuity,
-    resolve_chapter_quality_profile,
-)
-from app.services.story_repair_payload_service import (
-    StoryRepairPayload,
-    resolve_story_repair_prompt_kwargs,
-)
+
+if TYPE_CHECKING:
+    from fastapi import BackgroundTasks
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.batch_generation_task import BatchGenerationTask
+    from app.models.project import Project
+    from app.services.ai_service import AIService
+    from app.services.chapter_quality_context_service import StoryPacket
+    from app.services.story_repair_payload_service import StoryRepairPayload
 
 
 logger = get_logger(__name__)
+
+
+def _chapter_quality_context_service():
+    from app.services import chapter_quality_context_service
+
+    return chapter_quality_context_service
+
+
+def _story_repair_payload_service():
+    from app.services import story_repair_payload_service
+
+    return story_repair_payload_service
+
+
+def _story_repair_payload_type():
+    return _story_repair_payload_service().StoryRepairPayload
+
+
+def build_story_generation_packet_with_project_continuity(*args, **kwargs):
+    return _chapter_quality_context_service().build_story_generation_packet_with_project_continuity(
+        *args,
+        **kwargs,
+    )
+
+
+async def resolve_chapter_quality_profile(*args, **kwargs):
+    return await _chapter_quality_context_service().resolve_chapter_quality_profile(*args, **kwargs)
+
+
+def resolve_story_repair_prompt_kwargs(*args, **kwargs):
+    return _story_repair_payload_service().resolve_story_repair_prompt_kwargs(*args, **kwargs)
 
 
 def _build_batch_generation_execution_kwargs(
     *,
     batch_id: str,
     user_id: str,
-    ai_service: AIService,
+    ai_service: "AIService",
     custom_model: Optional[str] = None,
     temp_narrative_perspective: Optional[str] = None,
-    story_packet: Optional[StoryPacket] = None,
+    story_packet: Optional["StoryPacket"] = None,
     base_quality_profile: Optional[Dict[str, Any]] = None,
     enable_web_research: Optional[bool] = None,
     web_research_query: Optional[str] = None,
-    story_repair_payload: Optional[StoryRepairPayload] = None,
+    story_repair_payload: Optional["StoryRepairPayload"] = None,
 ) -> Dict[str, Any]:
     kwargs: Dict[str, Any] = {
         "batch_id": batch_id,
@@ -57,7 +95,7 @@ def _build_batch_generation_execution_kwargs(
 
 
 async def create_batch_generation_task_record(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
     project_id: str,
     user_id: str,
@@ -67,7 +105,9 @@ async def create_batch_generation_task_record(
     target_word_count: int,
     enable_analysis: bool,
     max_retries: int,
-) -> BatchGenerationTask:
+) -> "BatchGenerationTask":
+    from app.models.batch_generation_task import BatchGenerationTask
+
     normalized_chapter_ids = list(chapter_ids)
     chapter_count = len(normalized_chapter_ids)
     task = BatchGenerationTask(
@@ -105,7 +145,7 @@ def calculate_estimated_time(
 
 
 def enqueue_batch_generation_execution(
-    background_tasks: BackgroundTasks,
+    background_tasks: "BackgroundTasks",
     execution_callable: Callable[..., Any],
     **kwargs: Any,
 ) -> None:
@@ -114,9 +154,9 @@ def enqueue_batch_generation_execution(
 
 
 async def mark_batch_generation_current_chapter(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
-    task: BatchGenerationTask,
+    task: "BatchGenerationTask",
     chapter_id: str,
     write_lock,
 ) -> None:
@@ -127,9 +167,9 @@ async def mark_batch_generation_current_chapter(
 
 
 async def handle_cancelled_batch_generation_execution(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
-    task: BatchGenerationTask,
+    task: "BatchGenerationTask",
     batch_id: str,
     write_lock,
     emit_event,
@@ -159,9 +199,9 @@ async def handle_cancelled_batch_generation_execution(
 
 
 async def complete_batch_generation_execution(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
-    task: BatchGenerationTask,
+    task: "BatchGenerationTask",
     batch_id: str,
     write_lock,
     emit_event,
@@ -187,9 +227,9 @@ async def complete_batch_generation_execution(
 
 
 async def fail_batch_generation_on_unhandled_exception(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
-    task: BatchGenerationTask,
+    task: "BatchGenerationTask",
     error: Exception,
     write_lock,
     emit_event,
@@ -213,24 +253,24 @@ async def fail_batch_generation_on_unhandled_exception(
 
 @dataclass(frozen=True)
 class BatchGenerationExecutionInitialization:
-    task: BatchGenerationTask
-    project: Project
-    batch_story_packet: StoryPacket
+    task: "BatchGenerationTask"
+    project: "Project"
+    batch_story_packet: "StoryPacket"
     task_base_quality_profile: Dict[str, Any]
     cached_analysis_quality_profile: Dict[str, Any]
     active_story_repair_state: Dict[str, Any]
-    active_story_repair_payload: Optional[StoryRepairPayload]
+    active_story_repair_payload: Optional["StoryRepairPayload"]
     stream_chunks: bool
 
 
 async def initialize_batch_generation_execution(
-    db_session: AsyncSession,
+    db_session: "AsyncSession",
     *,
     batch_id: str,
     user_id: str,
     write_lock,
     emit_event,
-    story_packet: Optional[StoryPacket],
+    story_packet: Optional["StoryPacket"],
     creative_mode: Optional[str],
     story_focus: Optional[str],
     plot_stage: Optional[str],
@@ -245,6 +285,10 @@ async def initialize_batch_generation_execution(
     resolve_story_repair_state_fn,
     sync_task_story_repair_state_fn,
 ) -> Optional[BatchGenerationExecutionInitialization]:
+    from sqlalchemy import select
+    from app.models.batch_generation_task import BatchGenerationTask
+    from app.models.project import Project
+
     task_result = await db_session.execute(
         select(BatchGenerationTask).where(BatchGenerationTask.id == batch_id)
     )
@@ -347,7 +391,9 @@ async def initialize_batch_generation_execution(
             dict(active_story_repair_state) if isinstance(active_story_repair_state, dict) else {}
         ),
         active_story_repair_payload=(
-            active_story_repair_payload if isinstance(active_story_repair_payload, StoryRepairPayload) else None
+            active_story_repair_payload
+            if isinstance(active_story_repair_payload, _story_repair_payload_type())
+            else None
         ),
         stream_chunks=bool(task.total_chapters == 1),
     )

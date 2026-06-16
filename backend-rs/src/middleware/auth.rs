@@ -50,6 +50,8 @@ const EXACT_PUBLIC_PATHS: &[&str] = &[
     "/health/db-sessions",
     "/health/chapter-candidate-route-gateway-smoke",
     "/health/chapter-single-generation-active-gateway-smoke",
+    "/health/chapter-batch-generation-active-gateway-smoke",
+    "/health/chapter-regeneration-stream-workflow-smoke",
     "/docs",
     "/redoc",
     "/openapi.json",
@@ -64,6 +66,8 @@ const EXACT_PUBLIC_PATHS: &[&str] = &[
     "/api/auth/config",
     "/api/changelog",
     "/api/changelog/refresh",
+    "/api/characters/validate-import",
+    "/api/projects/validate-import",
 ];
 
 const PUBLIC_PATH_PREFIXES: &[&str] = &["/assets"];
@@ -159,9 +163,13 @@ mod tests {
             "/readyz",
             "/health/chapter-candidate-route-gateway-smoke",
             "/health/chapter-single-generation-active-gateway-smoke",
+            "/health/chapter-batch-generation-active-gateway-smoke",
+            "/health/chapter-regeneration-stream-workflow-smoke",
             "/api/auth/login",
             "/api/auth/callback",
             "/api/changelog/refresh",
+            "/api/characters/validate-import",
+            "/api/projects/validate-import",
         ] {
             assert!(is_public(path), "expected public path: {}", path);
         }

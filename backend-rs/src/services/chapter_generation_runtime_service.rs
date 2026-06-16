@@ -1,59 +1,72 @@
-use chrono::Utc;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
-    TransactionTrait,
-};
-use serde_json::{json, Map, Value};
-use uuid::Uuid;
-
+use self::context_compaction_owner::build_generation_context_compaction_owner_contract;
+use self::context_compaction_owner::compact_generation_context;
+use self::quality_runtime_context_owner::build_generation_quality_runtime_owner_contract;
+pub(crate) use self::single_generation_candidate_quality_owner::build_chapter_single_generation_candidate_quality_owner_contract;
+use self::snapshot_persistence_owner::build_chapter_generation_snapshot_owner_contract;
+use self::story_repair_quality_context_owner::build_story_repair_quality_context_owner_contract;
 use crate::ai::config::AIConfig;
 use crate::ai::service::AIService;
-use crate::ai::types::AIResponse;
-use crate::models::{chapter, chapter_draft_attempt, generation_history, project};
-use crate::services::chapter_candidate_executor_production_adapter_service::{
-    chapter_candidate_production_execution_path_name, ChapterCandidateProductionAdapterOutput,
-    ChapterCandidateProductionFallbackContext,
-};
-use crate::services::chapter_candidate_executor_service::ChapterCandidateExecutorRequest;
-use crate::services::chapter_candidate_quality_adapter_service::{
-    build_chapter_candidate_quality_adapter, ChapterCandidateQualityAdapterContext,
-};
-use crate::services::chapter_candidate_route_gateway_service::{
-    execute_chapter_candidate_route_gateway, ChapterCandidateRouteGatewayConfig,
-};
-use crate::services::chapter_draft_view_payload_service::build_candidate_draft_payload;
-use crate::services::chapter_generation_access_service::{
+use crate::models::{chapter, project};
+use crate::services::chapter_access_service::{
     load_accessible_chapter_for_generation, LoadAccessibleChapterForGenerationError,
 };
-use crate::services::chapter_generation_context_compaction_service::compact_generation_context;
-use crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload;
+use crate::services::chapter_candidate_executor_default_dependency_service::{
+    build_chapter_candidate_executor_default_dependency_owner_contract,
+    build_default_chapter_candidate_executor_wiring_plan,
+    resolve_candidate_executor_wiring_readiness, validate_candidate_executor_wiring_plan,
+};
+use crate::services::chapter_candidate_executor_production_adapter_service::{
+    build_chapter_candidate_production_adapter_owner_contract,
+    build_chapter_candidate_quality_adapter, chapter_candidate_production_execution_path_name,
+    ChapterCandidateProductionAdapterOutput, ChapterCandidateProductionFallbackContext,
+    ChapterCandidateQualityAdapter, ChapterCandidateQualityAdapterContext,
+};
+use crate::services::chapter_candidate_executor_service::ChapterCandidateExecutorRequest;
+use crate::services::chapter_candidate_finalize_service::build_chapter_candidate_finalize_owner_contract;
+use crate::services::chapter_candidate_generation_service::build_chapter_candidate_generation_owner_contract;
+use crate::services::chapter_candidate_output_service::build_chapter_candidate_output_owner_contract;
+use crate::services::chapter_candidate_record_service::build_chapter_candidate_record_owner_contract;
+use crate::services::chapter_candidate_rerank_service::build_chapter_candidate_rerank_owner_contract;
+use crate::services::chapter_candidate_route_gateway_service::{
+    build_chapter_candidate_route_gateway_owner_contract, execute_chapter_candidate_route_gateway,
+    ChapterCandidateRouteGatewayConfig,
+};
+use crate::services::chapter_candidate_runtime_state_service::build_chapter_candidate_runtime_state_owner_contract;
+use crate::services::chapter_candidate_targeted_final_repair_service::build_chapter_candidate_targeted_final_repair_owner_contract;
+use crate::services::chapter_candidate_word_budget_repair_service::build_chapter_candidate_word_budget_repair_owner_contract;
+use crate::services::chapter_generation_history_payload_service::build_chapter_generation_history_payload_owner_contract;
+use crate::services::chapter_generation_history_persistence_service::build_chapter_generation_history_persistence_owner_contract;
+use crate::services::chapter_generation_history_persistence_service::persist_single_generation_generated_result;
 use crate::services::chapter_generation_prompt_service::{
     build_previous_chapter_prompt_context, build_prompt_with_provider_payload,
-    ChapterGenerationPromptOverrides, PreviousChapterPromptContext,
+    ChapterGenerationPromptOverrides, PreviousChapterPromptContext, PromptContextProviderPayload,
 };
 use crate::services::chapter_narrative_cleaner_service::{
     contains_chapter_workflow_meta_text, sanitize_generated_narrative_text,
 };
-use crate::services::chapter_single_generation_candidate_quality_service::{
-    build_single_generation_quality_runtime_context,
-    compute_single_generation_story_quality_metrics, resolve_single_generation_quality_gate_plan,
+use crate::services::chapter_single_generation_result_lifecycle_service::{
+    apply_generated_result_lifecycle_view, apply_generated_result_quality_view,
+    generated_result_lifecycle_view, generated_result_quality_view,
+    single_generation_candidate_draft_lifecycle_view,
 };
-use crate::services::chapter_story_repair_quality_context_service::resolve_active_story_repair_payload_with_quality_fallback;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use serde_json::{json, Value};
+pub(crate) mod context_compaction_owner;
+pub(crate) mod quality_runtime_context_owner;
+pub(crate) mod snapshot_persistence_owner;
+pub(crate) mod story_repair_quality_context_owner;
 
-const CHAPTER_GENERATION_HISTORY_MODEL: &str = "chapter_generation_v1";
-const CHAPTER_GENERATION_HISTORY_LOG_TYPE: &str = "chapter_generation_quality_v1";
-const CHAPTER_GENERATION_HISTORY_PREVIEW_LENGTH: usize = 500;
 const SINGLE_GENERATION_CANDIDATE_MAX_CANDIDATES: i64 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum LoadGenerationContextError {
+pub(crate) enum LoadGenerationContextError {
     Chapter(LoadAccessibleChapterForGenerationError),
     ProjectNotFound,
     Internal(String),
 }
 
 impl LoadGenerationContextError {
-    fn into_runtime_message(self) -> String {
+    pub(crate) fn into_runtime_message(self) -> String {
         match self {
             LoadGenerationContextError::Chapter(
                 LoadAccessibleChapterForGenerationError::ChapterNotFound,
@@ -67,6 +80,71 @@ impl LoadGenerationContextError {
             | LoadGenerationContextError::Internal(error) => error,
             LoadGenerationContextError::ProjectNotFound => "Project not found".to_string(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ChapterGenerationRuntimeContext {
+    pub(crate) chapter_model: chapter::Model,
+    pub(crate) project_model: project::Model,
+    pub(crate) previous_chapter: Option<chapter::Model>,
+    pub(crate) previous_chapter_prompt_context: PreviousChapterPromptContext,
+}
+
+impl ChapterGenerationRuntimeContext {
+    async fn persist_generated_result(
+        self,
+        db: &DatabaseConnection,
+        prompt: String,
+        result: GeneratedChapterResult,
+    ) -> Result<GeneratedChapterResult, String> {
+        persist_single_generation_generated_result(db, &self.chapter_model, prompt, result).await
+    }
+
+    #[cfg(test)]
+    pub(crate) fn build_generated_result_from_content(
+        &self,
+        content: String,
+    ) -> Result<GeneratedChapterResult, String> {
+        build_single_generation_runtime_generated_result_from_content(&self.chapter_model, content)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn build_generated_result_from_candidate(
+        &self,
+        candidate: &serde_json::Value,
+    ) -> Result<GeneratedChapterResult, String> {
+        build_single_generation_runtime_generated_result_from_candidate(
+            &self.chapter_model,
+            candidate,
+        )
+    }
+
+    pub(crate) async fn generate_and_persist_with_candidate_route_gateway(
+        self,
+        db: &DatabaseConnection,
+        ai_config: AIConfig,
+        target_word_count: i32,
+        provider_payload: PromptContextProviderPayload,
+        overrides: &ChapterGenerationPromptOverrides,
+        gateway_config: ChapterCandidateRouteGatewayConfig,
+    ) -> Result<GeneratedChapterResult, String> {
+        let execution_context = SingleGenerationCandidateRuntimeExecutionContext {
+            project_model: self.project_model.clone(),
+            chapter_model: self.chapter_model.clone(),
+            previous_chapter_exists: self.previous_chapter.is_some(),
+            previous_chapter_prompt_context: self.previous_chapter_prompt_context.clone(),
+        };
+        let (prompt, result) = execute_single_generation_candidate_runtime(
+            &execution_context,
+            ai_config,
+            target_word_count,
+            provider_payload,
+            overrides,
+            gateway_config,
+        )
+        .await?;
+        self.persist_generated_result(db, prompt, result).await
     }
 }
 
@@ -87,6 +165,7 @@ pub(crate) struct GeneratedChapterResult {
     pub(crate) quality_gate_message: Option<String>,
     pub(crate) candidate_draft: Option<Value>,
     pub(crate) candidate_gateway_metadata: Option<Value>,
+    pub(crate) selected_candidate_event_source: Option<Value>,
 }
 
 impl Default for GeneratedChapterResult {
@@ -107,508 +186,24 @@ impl Default for GeneratedChapterResult {
             quality_gate_message: None,
             candidate_draft: None,
             candidate_gateway_metadata: None,
+            selected_candidate_event_source: None,
         }
     }
 }
 
-fn build_generated_history_preview(content: &str) -> String {
-    content
-        .chars()
-        .take(CHAPTER_GENERATION_HISTORY_PREVIEW_LENGTH)
-        .collect()
+#[derive(Debug, Clone)]
+pub(crate) struct SingleGenerationCandidateRuntimeExecutionContext {
+    pub(crate) project_model: project::Model,
+    pub(crate) chapter_model: chapter::Model,
+    pub(crate) previous_chapter_exists: bool,
+    pub(crate) previous_chapter_prompt_context: PreviousChapterPromptContext,
 }
 
-fn build_generated_history_story_runtime_snapshot_from_contract(
-    story_runtime_contract: &Value,
-) -> Option<Value> {
-    let guidance = story_runtime_contract
-        .get("guidance")
-        .and_then(Value::as_object);
-    let blueprint = story_runtime_contract
-        .get("blueprint")
-        .and_then(Value::as_object);
-    if guidance.is_none() && blueprint.is_none() {
-        return None;
-    }
-
-    let mut snapshot = serde_json::Map::new();
-    if let Some(guidance) = guidance {
-        for field_name in [
-            "creative_mode",
-            "story_focus",
-            "plot_stage",
-            "story_creation_brief",
-            "quality_preset",
-            "quality_notes",
-        ] {
-            if let Some(value) = guidance
-                .get(field_name)
-                .cloned()
-                .filter(|value| !value.is_null())
-            {
-                snapshot.insert(field_name.to_string(), value);
-            }
-        }
-    }
-
-    if let Some(blueprint) = blueprint {
-        snapshot.insert(
-            "story_long_term_goal".to_string(),
-            blueprint
-                .get("long_term_goal")
-                .cloned()
-                .unwrap_or_else(|| json!("")),
-        );
-        snapshot.insert(
-            "chapter_count".to_string(),
-            blueprint
-                .get("chapter_count")
-                .cloned()
-                .unwrap_or(Value::Null),
-        );
-        snapshot.insert(
-            "current_chapter_number".to_string(),
-            blueprint
-                .get("current_chapter_number")
-                .cloned()
-                .unwrap_or(Value::Null),
-        );
-        snapshot.insert(
-            "target_word_count".to_string(),
-            blueprint
-                .get("target_word_count")
-                .cloned()
-                .unwrap_or(Value::Null),
-        );
-        snapshot.insert(
-            "character_focus".to_string(),
-            blueprint
-                .get("character_focus_names")
-                .cloned()
-                .filter(Value::is_array)
-                .unwrap_or_else(|| json!([])),
-        );
-        snapshot.insert(
-            "foreshadow_payoff_plan".to_string(),
-            blueprint
-                .get("foreshadow_payoff_plan")
-                .cloned()
-                .filter(Value::is_array)
-                .unwrap_or_else(|| json!([])),
-        );
-        snapshot.insert(
-            "character_state_ledger".to_string(),
-            blueprint
-                .get("character_state_ledger")
-                .cloned()
-                .filter(Value::is_array)
-                .unwrap_or_else(|| json!([])),
-        );
-        snapshot.insert(
-            "relationship_state_ledger".to_string(),
-            blueprint
-                .get("relationship_state_ledger")
-                .cloned()
-                .filter(Value::is_array)
-                .unwrap_or_else(|| json!([])),
-        );
-        snapshot.insert(
-            "foreshadow_state_ledger".to_string(),
-            blueprint
-                .get("foreshadow_state_ledger")
-                .cloned()
-                .filter(Value::is_array)
-                .unwrap_or_else(|| json!([])),
-        );
-        snapshot.insert(
-            "organization_state_ledger".to_string(),
-            blueprint
-                .get("organization_state_ledger")
-                .cloned()
-                .filter(Value::is_array)
-                .unwrap_or_else(|| json!([])),
-        );
-        snapshot.insert(
-            "career_state_ledger".to_string(),
-            blueprint
-                .get("career_state_ledger")
-                .cloned()
-                .filter(Value::is_array)
-                .unwrap_or_else(|| json!([])),
-        );
-    }
-
-    (!snapshot.is_empty()).then_some(Value::Object(snapshot))
-}
-
-fn generated_history_story_runtime_contract(quality_metrics: Option<&Value>) -> Option<Value> {
-    quality_metrics
-        .and_then(|metrics| metrics.get("story_runtime_contract"))
-        .filter(|payload| payload.is_object())
-        .cloned()
-}
-
-fn generated_history_story_runtime_snapshot(
-    quality_metrics: Option<&Value>,
-    story_runtime_contract: Option<&Value>,
-) -> Option<Value> {
-    quality_metrics
-        .and_then(|metrics| metrics.get("quality_runtime_context"))
-        .and_then(|payload| payload.as_object().filter(|payload| !payload.is_empty()))
-        .map(|payload| Value::Object(payload.clone()))
-        .or_else(|| {
-            story_runtime_contract
-                .and_then(build_generated_history_story_runtime_snapshot_from_contract)
-        })
-}
-
-fn build_generated_chapter_quality_history_payload(
-    content: &str,
-    quality_metrics: Option<&Value>,
-    candidate_gateway_metadata: Option<&Value>,
-    content_applied: bool,
-    attempt_state: Option<&str>,
-    created_at: chrono::NaiveDateTime,
-) -> Value {
-    let story_runtime_contract = generated_history_story_runtime_contract(quality_metrics);
-    let story_runtime_snapshot =
-        generated_history_story_runtime_snapshot(quality_metrics, story_runtime_contract.as_ref());
-
-    let mut payload = serde_json::Map::from_iter([
-        (
-            "log_type".to_string(),
-            json!(CHAPTER_GENERATION_HISTORY_LOG_TYPE),
-        ),
-        ("content".to_string(), json!(content)),
-        (
-            "preview".to_string(),
-            json!(build_generated_history_preview(content)),
-        ),
-        (
-            "quality_metrics".to_string(),
-            quality_metrics.cloned().unwrap_or(Value::Null),
-        ),
-        (
-            "generated_at".to_string(),
-            json!(created_at.format("%Y-%m-%dT%H:%M:%S").to_string()),
-        ),
-        ("content_applied".to_string(), json!(content_applied)),
-        (
-            "attempt_state".to_string(),
-            json!(resolve_generated_history_attempt_state(
-                content_applied,
-                attempt_state,
-            )),
-        ),
-    ]);
-
-    if let Some(story_runtime_snapshot) = story_runtime_snapshot {
-        payload.insert("story_runtime_snapshot".to_string(), story_runtime_snapshot);
-    }
-    if let Some(story_runtime_contract) = story_runtime_contract {
-        payload.insert("story_runtime_contract".to_string(), story_runtime_contract);
-    }
-    if let Some(candidate_gateway_metadata) = candidate_gateway_metadata {
-        payload.insert(
-            "candidate_gateway".to_string(),
-            candidate_gateway_metadata.clone(),
-        );
-    }
-
-    Value::Object(payload)
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct ChapterGenerationRuntimeContext {
-    chapter_model: chapter::Model,
+#[derive(Debug, Clone)]
+struct SingleGenerationCandidateGatewayQualityContext {
     project_model: project::Model,
-    previous_chapter: Option<chapter::Model>,
+    chapter_model: chapter::Model,
     previous_chapter_prompt_context: PreviousChapterPromptContext,
-}
-
-impl ChapterGenerationRuntimeContext {
-    fn build_generated_history_payload(
-        result: &GeneratedChapterResult,
-        created_at: chrono::NaiveDateTime,
-    ) -> Value {
-        build_generated_chapter_quality_history_payload(
-            &result.content,
-            result.quality_metrics.as_ref(),
-            result.candidate_gateway_metadata.as_ref(),
-            result.content_applied,
-            Some(&result.attempt_state),
-            created_at,
-        )
-    }
-
-    fn build_generated_history_model(
-        &self,
-        prompt: String,
-        result: &GeneratedChapterResult,
-        created_at: chrono::NaiveDateTime,
-    ) -> generation_history::ActiveModel {
-        generation_history::ActiveModel {
-            id: Set(Uuid::new_v4().to_string()),
-            project_id: Set(self.chapter_model.project_id.clone()),
-            chapter_id: Set(Some(self.chapter_model.id.clone())),
-            prompt: Set(Some(prompt)),
-            generated_content: Set(Some(
-                Self::build_generated_history_payload(result, created_at).to_string(),
-            )),
-            model: Set(Some(CHAPTER_GENERATION_HISTORY_MODEL.to_string())),
-            tokens_used: Set(None),
-            generation_time: Set(None),
-            created_at: Set(Some(created_at)),
-        }
-    }
-
-    fn build_generated_result(
-        &self,
-        response: AIResponse,
-    ) -> Result<GeneratedChapterResult, String> {
-        self.build_generated_result_from_content(response.content)
-    }
-
-    fn build_generated_result_from_content(
-        &self,
-        content: String,
-    ) -> Result<GeneratedChapterResult, String> {
-        let (cleaned_content, _) = sanitize_generated_narrative_text(&content);
-        if cleaned_content.trim().is_empty() {
-            return Err(
-                "chapter generation produced empty narrative after sanitization".to_string(),
-            );
-        }
-        if contains_chapter_workflow_meta_text(&cleaned_content) {
-            return Err("chapter generation produced workflow/meta text".to_string());
-        }
-        let word_count = cleaned_content.chars().count() as i32;
-
-        Ok(GeneratedChapterResult {
-            chapter_id: self.chapter_model.id.clone(),
-            chapter_number: self.chapter_model.chapter_number,
-            title: self.chapter_model.title.clone(),
-            content: cleaned_content,
-            word_count,
-            saved_word_count: word_count,
-            chapter_status: "completed".to_string(),
-            content_applied: true,
-            provisional_draft_saved: false,
-            attempt_state: "applied".to_string(),
-            quality_metrics: None,
-            quality_gate_action: Some("continue".to_string()),
-            quality_gate_message: None,
-            candidate_draft: None,
-            candidate_gateway_metadata: None,
-        })
-    }
-
-    fn build_generated_result_from_candidate(
-        &self,
-        candidate: &Value,
-    ) -> Result<GeneratedChapterResult, String> {
-        let content = single_generation_candidate_gateway_content(candidate)?;
-        let mut result = self.build_generated_result_from_content(content)?;
-        let quality_metrics = candidate
-            .get("quality_metrics")
-            .filter(|payload| payload.is_object())
-            .cloned();
-        let quality_gate_action =
-            generated_result_quality_gate_action(candidate, quality_metrics.as_ref());
-        let quality_gate_message =
-            generated_result_quality_gate_message(candidate, quality_metrics.as_ref());
-        let quality_gate_requires_followup =
-            !matches!(quality_gate_action.as_deref(), None | Some("continue"));
-        let provisional_draft_saved = matches!(quality_gate_action.as_deref(), Some("retry"));
-
-        result.quality_metrics = quality_metrics.clone();
-        result.quality_gate_action = quality_gate_action.clone();
-        result.quality_gate_message = quality_gate_message;
-        result.content_applied = !quality_gate_requires_followup;
-        result.provisional_draft_saved = provisional_draft_saved;
-        result.attempt_state = if result.content_applied {
-            "applied".to_string()
-        } else {
-            quality_gate_action
-                .clone()
-                .unwrap_or_else(|| "candidate".to_string())
-        };
-        result.chapter_status = if result.content_applied {
-            "completed".to_string()
-        } else if provisional_draft_saved {
-            "draft".to_string()
-        } else {
-            self.chapter_model.status.clone()
-        };
-
-        if quality_gate_requires_followup {
-            let draft_attempt = build_single_generation_candidate_draft_attempt(
-                &self.chapter_model,
-                &result,
-                self.chapter_model.content.as_deref().unwrap_or_default(),
-                self.chapter_model.word_count,
-            );
-            result.candidate_draft = Some(build_candidate_draft_payload(
-                &draft_attempt,
-                self.chapter_model.updated_at,
-                false,
-            ));
-        }
-
-        Ok(result)
-    }
-
-    async fn persist_generated_result(
-        self,
-        db: &DatabaseConnection,
-        prompt: String,
-        mut result: GeneratedChapterResult,
-    ) -> Result<GeneratedChapterResult, String> {
-        let now = Utc::now().naive_utc();
-        let txn = db.begin().await.map_err(|error| error.to_string())?;
-        let previous_word_count = self.chapter_model.word_count.max(0);
-        let should_persist_content = result.content_applied || result.provisional_draft_saved;
-
-        let history = self.build_generated_history_model(prompt, &result, now);
-        if should_persist_content {
-            let mut active: chapter::ActiveModel = self.chapter_model.clone().into();
-            active.content = Set(Some(result.content.clone()));
-            active.word_count = Set(result.word_count);
-            active.status = Set(result.chapter_status.clone());
-            active.updated_at = Set(Some(now));
-            active
-                .update(&txn)
-                .await
-                .map_err(|error| error.to_string())?;
-            result.saved_word_count = result.word_count;
-        } else {
-            result.saved_word_count = previous_word_count;
-        }
-
-        if !result.content_applied {
-            let draft_attempt = build_single_generation_candidate_draft_attempt(
-                &self.chapter_model,
-                &result,
-                self.chapter_model.content.as_deref().unwrap_or_default(),
-                previous_word_count,
-            );
-            let draft_summary =
-                build_candidate_draft_payload(&draft_attempt, self.chapter_model.updated_at, false);
-            chapter_draft_attempt::ActiveModel {
-                id: Set(draft_attempt.id.clone()),
-                project_id: Set(draft_attempt.project_id.clone()),
-                chapter_id: Set(draft_attempt.chapter_id.clone()),
-                batch_task_id: Set(draft_attempt.batch_task_id.clone()),
-                source: Set(draft_attempt.source.clone()),
-                attempt_state: Set(draft_attempt.attempt_state.clone()),
-                quality_gate_action: Set(draft_attempt.quality_gate_action.clone()),
-                quality_gate_decision: Set(draft_attempt.quality_gate_decision.clone()),
-                word_count: Set(draft_attempt.word_count),
-                summary_preview: Set(draft_attempt.summary_preview.clone()),
-                content_preview: Set(draft_attempt.content_preview.clone()),
-                quality_metrics: Set(draft_attempt.quality_metrics.clone()),
-                repair_payload: Set(draft_attempt.repair_payload.clone()),
-                created_at: Set(draft_attempt.created_at),
-            }
-            .insert(&txn)
-            .await
-            .map_err(|error| error.to_string())?;
-            result.candidate_draft = Some(draft_summary);
-        }
-
-        history
-            .insert(&txn)
-            .await
-            .map_err(|error| error.to_string())?;
-
-        txn.commit().await.map_err(|error| error.to_string())?;
-
-        Ok(result)
-    }
-
-    fn build_prompt(
-        &self,
-        target_word_count: i32,
-        provider_payload: PromptContextProviderPayload,
-        overrides: &ChapterGenerationPromptOverrides,
-    ) -> Result<String, String> {
-        let (provider_payload, previous_chapter_prompt_context) = compact_generation_context(
-            &self.project_model.outline_mode,
-            target_word_count,
-            provider_payload,
-            self.previous_chapter_prompt_context.clone(),
-        );
-        build_prompt_with_provider_payload(
-            &self.chapter_model,
-            &self.project_model,
-            previous_chapter_prompt_context,
-            self.previous_chapter.is_some(),
-            target_word_count,
-            provider_payload,
-            overrides,
-        )
-    }
-
-    async fn generate_and_persist(
-        self,
-        db: &DatabaseConnection,
-        user_ai_service: &AIService,
-        target_word_count: i32,
-        provider_payload: PromptContextProviderPayload,
-        overrides: &ChapterGenerationPromptOverrides,
-    ) -> Result<GeneratedChapterResult, String> {
-        let prompt = self.build_prompt(target_word_count, provider_payload, overrides)?;
-        let response = user_ai_service
-            .generate_text(&prompt, None, None)
-            .await
-            .map_err(|error| error.to_string())?;
-
-        let generated_result = self.build_generated_result(response)?;
-        self.persist_generated_result(db, prompt, generated_result)
-            .await
-    }
-
-    async fn generate_and_persist_with_candidate_route_gateway(
-        self,
-        db: &DatabaseConnection,
-        ai_config: AIConfig,
-        target_word_count: i32,
-        provider_payload: PromptContextProviderPayload,
-        overrides: &ChapterGenerationPromptOverrides,
-        gateway_config: ChapterCandidateRouteGatewayConfig,
-    ) -> Result<GeneratedChapterResult, String> {
-        let prompt = self.build_prompt(target_word_count, provider_payload, overrides)?;
-        let mut request = build_single_generation_candidate_executor_request(
-            &prompt,
-            target_word_count,
-            &ai_config,
-        );
-        let fallback_prompt = prompt.clone();
-        let fallback_ai_config = ai_config.clone();
-
-        let output = execute_chapter_candidate_route_gateway(
-            &mut request,
-            ai_config,
-            build_single_generation_candidate_quality_adapter(&self, target_word_count),
-            gateway_config,
-            move |_request, context| {
-                Box::pin(async move {
-                    generate_single_generation_direct_fallback_candidate(
-                        fallback_ai_config,
-                        fallback_prompt,
-                        context,
-                    )
-                    .await
-                })
-            },
-        )
-        .await?;
-
-        let mut result = self.build_generated_result_from_candidate(&output.result)?;
-        result.candidate_gateway_metadata =
-            Some(build_single_generation_candidate_gateway_metadata(&output));
-        self.persist_generated_result(db, prompt, result).await
-    }
 }
 
 pub(crate) fn build_single_generation_candidate_executor_request(
@@ -617,7 +212,7 @@ pub(crate) fn build_single_generation_candidate_executor_request(
     ai_config: &AIConfig,
 ) -> ChapterCandidateExecutorRequest {
     ChapterCandidateExecutorRequest {
-        base_generate_kwargs: Map::from_iter([
+        base_generate_kwargs: serde_json::Map::from_iter([
             ("prompt".to_string(), json!(prompt)),
             ("temperature".to_string(), json!(ai_config.temperature)),
             ("max_tokens".to_string(), json!(ai_config.max_tokens)),
@@ -630,88 +225,20 @@ pub(crate) fn build_single_generation_candidate_executor_request(
     }
 }
 
-fn build_single_generation_candidate_quality_adapter(
-    context: &ChapterGenerationRuntimeContext,
-    target_word_count: i32,
-) -> crate::services::chapter_candidate_quality_adapter_service::ChapterCandidateQualityAdapter<
-    impl FnMut(
-        crate::services::chapter_candidate_quality_adapter_service::CandidateQualityRuntimeContextBuildInput,
-    ) -> Value,
-    impl FnMut(
-        crate::services::chapter_candidate_quality_adapter_service::CandidateStoryQualityMetricsInput,
-    ) -> Value,
-    impl FnMut(
-        crate::services::chapter_candidate_quality_adapter_service::CandidateQualityGatePlanInput,
-    ) -> Value,
->{
-    let project_payload = json!({
-        "id": context.project_model.id.clone(),
-        "title": context.project_model.title.clone(),
-        "world_rules": context.project_model.world_rules.clone(),
-        "outline_mode": context.project_model.outline_mode.clone(),
-    });
-    let chapter_payload = json!({
-        "id": context.chapter_model.id.clone(),
-        "title": context.chapter_model.title.clone(),
-        "chapter_number": context.chapter_model.chapter_number,
-        "summary": context.chapter_model.summary.clone(),
-        "expansion_plan": context.chapter_model.expansion_plan.clone(),
-    });
-    let chapter_context = json!({
-        "chapter_outline": context.chapter_model.expansion_plan
-            .as_deref()
-            .or(context.chapter_model.summary.as_deref())
-            .unwrap_or(""),
-        "previous_chapter_continuation_point": context
-            .previous_chapter_prompt_context
-            .continuation_point
-            .clone(),
-        "previous_chapter_content": context
-            .previous_chapter_prompt_context
-            .previous_chapter_content
-            .clone(),
-    });
-
-    build_chapter_candidate_quality_adapter(
-        ChapterCandidateQualityAdapterContext {
-            story_packet: Value::Null,
-            project: project_payload,
-            chapter: chapter_payload,
-            chapter_context,
-            target_word_count: i64::from(target_word_count),
-            generation_intent: json!({"mode": "single_generation_active_route"}),
-            retry_count: 0,
-            max_retries: 1,
-            current_story_repair_payload: None,
-            scope: "chapter".to_string(),
-            log_prefix: "SingleGeneration".to_string(),
-        },
-        build_single_generation_quality_runtime_context,
-        compute_single_generation_story_quality_metrics,
-        resolve_single_generation_quality_gate_plan,
-    )
-}
-
-async fn generate_single_generation_direct_fallback_candidate(
-    ai_config: AIConfig,
-    prompt: String,
+pub(crate) fn build_single_generation_direct_fallback_candidate_payload(
+    content: String,
     context: ChapterCandidateProductionFallbackContext,
-) -> Result<Value, String> {
-    let response = AIService::new(ai_config)
-        .generate_text(&prompt, None, None)
-        .await
-        .map_err(|error| error.to_string())?;
-
-    Ok(json!({
-        "full_content": response.content,
+) -> Value {
+    json!({
+        "full_content": content,
         "generation_path": "direct_generation_fallback",
         "fallback_reason": context.reason,
         "rollback_boundary": context.rollback_boundary,
         "rust_error": context.rust_error,
-    }))
+    })
 }
 
-fn build_single_generation_candidate_gateway_metadata(
+pub(crate) fn build_single_generation_candidate_gateway_metadata(
     output: &ChapterCandidateProductionAdapterOutput,
 ) -> Value {
     json!({
@@ -735,238 +262,355 @@ pub(crate) fn single_generation_candidate_gateway_content(
         .ok_or_else(|| "candidate route gateway returned empty generated content".to_string())
 }
 
-pub(crate) fn build_generated_chapter_history_payload_with_quality_metrics(
-    content: &str,
-    quality_metrics: Option<&Value>,
-    candidate_gateway_metadata: Option<&Value>,
-    content_applied: bool,
-    attempt_state: Option<&str>,
-    created_at: chrono::NaiveDateTime,
-) -> Value {
-    build_generated_chapter_quality_history_payload(
-        content,
-        quality_metrics,
-        candidate_gateway_metadata,
-        content_applied,
-        attempt_state,
-        created_at,
+fn build_single_generation_candidate_quality_adapter(
+    context: SingleGenerationCandidateGatewayQualityContext,
+    target_word_count: i32,
+) -> ChapterCandidateQualityAdapter<
+    impl FnMut(
+        crate::services::chapter_candidate_executor_production_adapter_service::CandidateQualityRuntimeContextBuildInput,
+    ) -> Value,
+    impl FnMut(
+        crate::services::chapter_candidate_executor_production_adapter_service::CandidateStoryQualityMetricsInput,
+    ) -> Value,
+    impl FnMut(
+        crate::services::chapter_candidate_executor_production_adapter_service::CandidateQualityGatePlanInput,
+    ) -> Value,
+>{
+    let project_payload = json!({
+        "id": context.project_model.id,
+        "title": context.project_model.title,
+        "world_rules": context.project_model.world_rules,
+        "outline_mode": context.project_model.outline_mode,
+    });
+    let chapter_payload = json!({
+        "id": context.chapter_model.id,
+        "title": context.chapter_model.title,
+        "chapter_number": context.chapter_model.chapter_number,
+        "summary": context.chapter_model.summary,
+        "expansion_plan": context.chapter_model.expansion_plan,
+    });
+    let chapter_context = json!({
+        "chapter_outline": context.chapter_model.expansion_plan
+            .as_deref()
+            .or(context.chapter_model.summary.as_deref())
+            .unwrap_or(""),
+        "previous_chapter_continuation_point": context
+            .previous_chapter_prompt_context
+            .continuation_point,
+        "previous_chapter_content": context
+            .previous_chapter_prompt_context
+            .previous_chapter_content,
+    });
+
+    build_chapter_candidate_quality_adapter(
+        ChapterCandidateQualityAdapterContext {
+            story_packet: Value::Null,
+            project: project_payload,
+            chapter: chapter_payload,
+            chapter_context,
+            target_word_count: i64::from(target_word_count),
+            generation_intent: json!({"mode": "single_generation_active_route"}),
+            retry_count: 0,
+            max_retries: 1,
+            current_story_repair_payload: None,
+            scope: "chapter".to_string(),
+            log_prefix: "SingleGeneration".to_string(),
+        },
+        single_generation_candidate_quality_owner::build_single_generation_quality_runtime_context,
+        single_generation_candidate_quality_owner::compute_single_generation_story_quality_metrics,
+        single_generation_candidate_quality_owner::resolve_single_generation_quality_gate_plan,
     )
 }
 
-pub(crate) async fn update_latest_generated_chapter_history_quality_metrics(
-    db: &DatabaseConnection,
-    chapter_id: &str,
-    content: &str,
-    quality_metrics: &Value,
-) -> Result<(), String> {
-    let Some(history_model) = generation_history::Entity::find()
-        .filter(generation_history::Column::ChapterId.eq(Some(chapter_id.to_string())))
-        .filter(
-            generation_history::Column::Model
-                .eq(Some(CHAPTER_GENERATION_HISTORY_MODEL.to_string())),
-        )
-        .order_by_desc(generation_history::Column::CreatedAt)
-        .one(db)
+async fn generate_single_generation_direct_fallback_candidate(
+    ai_config: AIConfig,
+    prompt: String,
+    context: ChapterCandidateProductionFallbackContext,
+) -> Result<Value, String> {
+    let response = AIService::new(ai_config)
+        .generate_text(&prompt, None, None)
         .await
-        .map_err(|error| error.to_string())?
-    else {
-        return Ok(());
-    };
+        .map_err(|error| error.to_string())?;
 
-    let (content_applied, attempt_state) =
-        history_payload_persistence_flags(history_model.generated_content.as_deref());
-    let candidate_gateway_metadata =
-        history_payload_candidate_gateway_metadata(history_model.generated_content.as_deref());
-    let mut active: generation_history::ActiveModel = history_model.into();
-    let created_at = active
-        .created_at
-        .clone()
-        .take()
-        .flatten()
-        .unwrap_or_else(|| Utc::now().naive_utc());
-    active.generated_content = Set(Some(
-        build_generated_chapter_history_payload_with_quality_metrics(
-            content,
-            Some(quality_metrics),
-            candidate_gateway_metadata.as_ref(),
-            content_applied,
-            attempt_state.as_deref(),
-            created_at,
-        )
-        .to_string(),
-    ));
-    active.update(db).await.map_err(|error| error.to_string())?;
-    Ok(())
+    Ok(build_single_generation_direct_fallback_candidate_payload(
+        response.content,
+        context,
+    ))
 }
 
-fn resolve_generated_history_attempt_state(
-    content_applied: bool,
-    attempt_state: Option<&str>,
-) -> String {
-    let trimmed = attempt_state.unwrap_or_default().trim();
-    if !trimmed.is_empty() {
-        return trimmed.to_string();
-    }
-
-    if content_applied {
-        "applied".to_string()
-    } else {
-        "candidate".to_string()
-    }
-}
-
-fn generated_result_quality_gate_action(
-    candidate: &Value,
-    quality_metrics: Option<&Value>,
-) -> Option<String> {
-    let action = candidate
-        .get("quality_gate_action")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            candidate
-                .get("quality_gate_plan")
-                .and_then(|payload| payload.get("action"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        });
-    if action.is_some() {
-        return action;
-    }
-
-    match quality_metrics
-        .and_then(|metrics| metrics.get("quality_gate"))
-        .and_then(|payload| payload.get("decision"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-    {
-        Some("passed") | Some("continue") | Some("allow_save") => Some("continue".to_string()),
-        Some("auto_repair") | Some("repair") | Some("retry") => Some("retry".to_string()),
-        Some("manual_review") => Some("manual_review".to_string()),
-        Some(other) if !other.is_empty() => Some(other.to_string()),
-        _ => Some("continue".to_string()),
-    }
-}
-
-fn generated_result_quality_gate_message(
-    candidate: &Value,
-    quality_metrics: Option<&Value>,
-) -> Option<String> {
-    candidate
-        .get("quality_gate_message")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            quality_metrics
-                .and_then(|metrics| metrics.get("quality_gate"))
-                .and_then(|payload| {
-                    payload
-                        .get("summary")
-                        .or_else(|| payload.get("label"))
-                        .and_then(Value::as_str)
-                })
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        })
-}
-
-fn generated_result_quality_gate_decision(quality_metrics: Option<&Value>) -> Option<String> {
-    quality_metrics
-        .and_then(|metrics| metrics.get("quality_gate"))
-        .and_then(|payload| payload.get("decision"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn build_single_generation_candidate_draft_attempt(
-    chapter_model: &chapter::Model,
-    result: &GeneratedChapterResult,
-    previous_content: &str,
-    previous_word_count: i32,
-) -> chapter_draft_attempt::Model {
-    let mut repair_payload = resolve_active_story_repair_payload_with_quality_fallback(
-        None,
-        result.quality_metrics.as_ref(),
-        result.quality_metrics.as_ref(),
-        "chapter",
-        "plot_analysis",
-        "Plot analysis",
+pub(crate) fn build_single_generation_runtime_prompt(
+    context: &SingleGenerationCandidateRuntimeExecutionContext,
+    target_word_count: i32,
+    provider_payload: PromptContextProviderPayload,
+    overrides: &ChapterGenerationPromptOverrides,
+) -> Result<String, String> {
+    let (provider_payload, previous_chapter_prompt_context) = compact_generation_context(
+        &context.project_model.outline_mode,
+        target_word_count,
+        provider_payload,
+        context.previous_chapter_prompt_context.clone(),
+    );
+    build_prompt_with_provider_payload(
+        &context.chapter_model,
+        &context.project_model,
+        previous_chapter_prompt_context,
+        context.previous_chapter_exists,
+        target_word_count,
+        provider_payload,
+        overrides,
     )
-    .and_then(|payload| payload.as_object().cloned())
-    .unwrap_or_default();
-    repair_payload.insert(
-        "previous_content".to_string(),
-        json!(previous_content.trim()),
-    );
-    repair_payload.insert(
-        "previous_word_count".to_string(),
-        json!(previous_word_count.max(0)),
-    );
-    repair_payload.insert(
-        "candidate_full_content".to_string(),
-        json!(result.content.clone()),
-    );
-    repair_payload.insert("content_complete".to_string(), json!(true));
+}
 
-    chapter_draft_attempt::Model {
-        id: Uuid::new_v4().to_string(),
-        project_id: chapter_model.project_id.clone(),
-        chapter_id: Some(chapter_model.id.clone()),
-        batch_task_id: None,
-        source: "chapter".to_string(),
-        attempt_state: result.attempt_state.clone(),
-        quality_gate_action: result.quality_gate_action.clone(),
-        quality_gate_decision: generated_result_quality_gate_decision(
-            result.quality_metrics.as_ref(),
-        ),
-        word_count: result.word_count.max(0),
-        summary_preview: Some(result.content.chars().take(220).collect::<String>()),
-        content_preview: Some(result.content.chars().take(4000).collect::<String>()),
-        quality_metrics: result.quality_metrics.clone(),
-        repair_payload: Some(Value::Object(repair_payload)),
-        created_at: Some(Utc::now().naive_utc()),
+pub(crate) fn build_single_generation_runtime_generated_result_from_content(
+    chapter_model: &chapter::Model,
+    content: String,
+) -> Result<GeneratedChapterResult, String> {
+    let (cleaned_content, _) = sanitize_generated_narrative_text(&content);
+    if cleaned_content.trim().is_empty() {
+        return Err("chapter generation produced empty narrative after sanitization".to_string());
     }
+    if contains_chapter_workflow_meta_text(&cleaned_content) {
+        return Err("chapter generation produced workflow/meta text".to_string());
+    }
+    let word_count = cleaned_content.chars().count() as i32;
+
+    Ok(GeneratedChapterResult {
+        chapter_id: chapter_model.id.clone(),
+        chapter_number: chapter_model.chapter_number,
+        title: chapter_model.title.clone(),
+        content: cleaned_content,
+        word_count,
+        saved_word_count: word_count,
+        chapter_status: "completed".to_string(),
+        content_applied: true,
+        provisional_draft_saved: false,
+        attempt_state: "applied".to_string(),
+        quality_metrics: None,
+        quality_gate_action: Some("continue".to_string()),
+        quality_gate_message: None,
+        candidate_draft: None,
+        candidate_gateway_metadata: None,
+        selected_candidate_event_source: None,
+    })
 }
 
-fn history_payload_persistence_flags(generated_content: Option<&str>) -> (bool, Option<String>) {
-    let Some(generated_content) = generated_content else {
-        return (true, Some("generated_from_runtime".to_string()));
-    };
-    let Ok(payload) = serde_json::from_str::<Value>(generated_content) else {
-        return (true, Some("generated_from_runtime".to_string()));
-    };
-    let content_applied = payload
-        .get("content_applied")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    let attempt_state = payload
-        .get("attempt_state")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string);
-    (content_applied, attempt_state)
+pub(crate) fn build_single_generation_runtime_generated_result_from_candidate(
+    chapter_model: &chapter::Model,
+    candidate: &Value,
+) -> Result<GeneratedChapterResult, String> {
+    let content = single_generation_candidate_gateway_content(candidate)?;
+    let mut result =
+        build_single_generation_runtime_generated_result_from_content(chapter_model, content)?;
+    result.selected_candidate_event_source = Some(candidate.clone());
+    let quality_view = generated_result_quality_view(candidate);
+    let lifecycle_view = generated_result_lifecycle_view(
+        &chapter_model.status,
+        quality_view.quality_gate_action.as_deref(),
+        "candidate",
+    );
+
+    apply_generated_result_quality_view(&mut result, &quality_view);
+    apply_generated_result_lifecycle_view(&mut result, &lifecycle_view);
+
+    if !lifecycle_view.content_applied {
+        let draft_lifecycle_view = single_generation_candidate_draft_lifecycle_view(
+            chapter_model,
+            &result,
+            chapter_model.content.as_deref().unwrap_or_default(),
+            chapter_model.word_count,
+        );
+        result.candidate_draft = Some(draft_lifecycle_view.candidate_draft_payload);
+    }
+
+    Ok(result)
 }
 
-fn history_payload_candidate_gateway_metadata(generated_content: Option<&str>) -> Option<Value> {
-    let generated_content = generated_content?;
-    let payload = serde_json::from_str::<Value>(generated_content).ok()?;
-    payload
-        .get("candidate_gateway")
-        .filter(|metadata| metadata.is_object())
-        .cloned()
+pub(crate) async fn execute_single_generation_candidate_runtime(
+    context: &SingleGenerationCandidateRuntimeExecutionContext,
+    ai_config: AIConfig,
+    target_word_count: i32,
+    provider_payload: PromptContextProviderPayload,
+    overrides: &ChapterGenerationPromptOverrides,
+    gateway_config: ChapterCandidateRouteGatewayConfig,
+) -> Result<(String, GeneratedChapterResult), String> {
+    let prompt = build_single_generation_runtime_prompt(
+        context,
+        target_word_count,
+        provider_payload,
+        overrides,
+    )?;
+    let mut request =
+        build_single_generation_candidate_executor_request(&prompt, target_word_count, &ai_config);
+    let fallback_prompt = prompt.clone();
+    let fallback_ai_config = ai_config.clone();
+
+    let output = execute_chapter_candidate_route_gateway(
+        &mut request,
+        ai_config,
+        build_single_generation_candidate_quality_adapter(
+            SingleGenerationCandidateGatewayQualityContext {
+                project_model: context.project_model.clone(),
+                chapter_model: context.chapter_model.clone(),
+                previous_chapter_prompt_context: context.previous_chapter_prompt_context.clone(),
+            },
+            target_word_count,
+        ),
+        gateway_config,
+        move |_request, fallback_context| {
+            Box::pin(async move {
+                generate_single_generation_direct_fallback_candidate(
+                    fallback_ai_config,
+                    fallback_prompt,
+                    fallback_context,
+                )
+                .await
+            })
+        },
+    )
+    .await?;
+
+    let mut result = build_single_generation_runtime_generated_result_from_candidate(
+        &context.chapter_model,
+        &output.result,
+    )?;
+    result.candidate_gateway_metadata =
+        Some(build_single_generation_candidate_gateway_metadata(&output));
+
+    Ok((prompt, result))
 }
 
-async fn load_generation_context(
+pub(crate) fn build_single_generation_runtime_execution_owner_contract() -> Value {
+    json!({
+        "owner": "chapter_generation_runtime_service::single_generation_runtime_execution",
+        "scope": "single_generation_runtime_context_loading_and_persistence_orchestration",
+        "python_source_map": [
+            "backend/app/services/chapter_generation/runtime/service.py",
+            "backend/app/services/chapter_generation/route_wiring_service.py",
+            "backend/app/services/compat/chapter_generation_route_compat_service.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/services/chapter_generation_runtime_service.rs"
+        ],
+        "behavior_contract": {
+            "loads": [
+                "accessible_chapter",
+                "owning_project",
+                "previous_chapter_prompt_context"
+            ],
+            "delegates_candidate_runtime_owner": "chapter_generation_runtime_service",
+            "delegates_history_persistence_owner": "chapter_generation_history_persistence_service",
+            "error_mapping": [
+                "Chapter not found",
+                "Chapter not found or access denied",
+                "Project not found"
+            ]
+        },
+        "active_consumers": [
+            "chapter_generation_runtime_service",
+            "chapter_single_generation_runtime_state_service",
+            "chapter_batch_generation_runtime_state_service"
+        ]
+    })
+}
+
+pub(crate) fn build_single_generation_candidate_runtime_owner_contract() -> Value {
+    let wiring_plan = build_default_chapter_candidate_executor_wiring_plan();
+    validate_candidate_executor_wiring_plan(&wiring_plan)
+        .expect("default candidate executor wiring plan must stay valid for runtime cutover");
+    let wiring_readiness = resolve_candidate_executor_wiring_readiness(&wiring_plan);
+
+    json!({
+        "owner": "chapter_generation_runtime_service",
+        "scope": "shared_single_generation_candidate_runtime",
+        "python_source_map": [
+            "backend/app/services/compat/chapter_generation_route_compat_service.py",
+            "backend/app/services/chapter_generation/stream/candidate_service.py",
+            "backend/app/services/batch_generation_candidate_service.py",
+            "backend/app/services/batch_generation_execution_service.py"
+        ],
+        "rust_owner_map": [
+            "build_single_generation_candidate_executor_request",
+            "single_generation_candidate_gateway_content",
+            "build_single_generation_candidate_gateway_metadata",
+            "build_single_generation_direct_fallback_candidate_payload",
+            "build_generated_chapter_history_payload_with_quality_metrics"
+        ],
+        "candidate_executor_wiring_readiness": {
+            "owner": "chapter_candidate_executor_default_dependency_service",
+            "stage_count": wiring_readiness.stage_count,
+            "rust_owned_dependency_count": wiring_readiness.rust_owned_dependency_count,
+            "external_formula_dependency_count": wiring_readiness.external_formula_dependency_count,
+            "cutover_blockers": wiring_readiness.cutover_blockers,
+            "rust_target_files": wiring_plan.rust_target_files,
+            "python_source_files": wiring_plan.python_source_files,
+        },
+        "candidate_executor_default_dependency_owner_contract": build_chapter_candidate_executor_default_dependency_owner_contract(),
+        "candidate_executor_production_adapter_owner_contract": build_chapter_candidate_production_adapter_owner_contract(),
+        "candidate_generation_owner_contract": build_chapter_candidate_generation_owner_contract(),
+        "candidate_finalize_owner_contract": build_chapter_candidate_finalize_owner_contract(),
+        "candidate_output_owner_contract": build_chapter_candidate_output_owner_contract(),
+        "candidate_runtime_state_owner_contract": build_chapter_candidate_runtime_state_owner_contract(),
+        "candidate_rerank_owner_contract": build_chapter_candidate_rerank_owner_contract(),
+        "candidate_route_gateway_owner_contract": build_chapter_candidate_route_gateway_owner_contract(),
+        "candidate_record_owner_contract": build_chapter_candidate_record_owner_contract(),
+        "candidate_targeted_final_repair_owner_contract": build_chapter_candidate_targeted_final_repair_owner_contract(),
+        "candidate_word_budget_repair_owner_contract": build_chapter_candidate_word_budget_repair_owner_contract(),
+        "context_compaction_owner_contract": build_generation_context_compaction_owner_contract(),
+        "quality_runtime_owner_contract": build_generation_quality_runtime_owner_contract(),
+        "single_generation_candidate_quality_owner_contract": build_chapter_single_generation_candidate_quality_owner_contract(),
+        "draft_persistence_owner_contract": build_chapter_generation_history_persistence_owner_contract(),
+        "history_persistence_owner_contract": build_chapter_generation_history_persistence_owner_contract(),
+        "runtime_execution_owner_contract": build_single_generation_runtime_execution_owner_contract(),
+        "snapshot_persistence_owner_contract": build_chapter_generation_snapshot_owner_contract(),
+        "story_repair_quality_context_owner_contract": build_story_repair_quality_context_owner_contract(),
+        "history_payload_owner_contract": build_chapter_generation_history_payload_owner_contract(),
+        "behavior_contract": {
+            "accepted_content_fields": ["full_content", "content"],
+            "empty_content_error": "candidate route gateway returned empty generated content",
+            "direct_fallback_generation_path": "direct_generation_fallback",
+            "metadata_fields": [
+                "execution_path",
+                "fallback_applied",
+                "fallback_reason",
+                "rollback_boundary",
+                "rust_error"
+            ],
+            "history_candidate_gateway_metadata_attached": true
+        },
+        "validation_boundary": {
+            "focused_test": "chapter_generation_runtime_service",
+            "active_gateway_smoke": "chapter_single_generation_active_gateway_smoke_service",
+            "manifest_probe": "chapter-single-generation-active-gateway-smoke-rust"
+        },
+        "service_runtime_closeout_status": {
+            "owner_profiles": [
+                "phase5-single-generation-owner",
+                "phase5-batch-generation-owner"
+            ],
+            "single_generation_manifest_probe_count": 6,
+            "batch_generation_manifest_probe_count": 11,
+            "rust_manifest_probe_count": 17,
+            "python_fallback_probe_count": 0,
+            "candidate_executor_wiring_cutover_blockers": wiring_readiness.cutover_blockers,
+            "context_compaction_owner": "chapter_generation_runtime_service",
+            "candidate_runtime_owner": "single_generation_candidate_gateway_content",
+            "direct_fallback_payload_owner": "build_single_generation_direct_fallback_candidate_payload",
+            "history_metadata_owner": "build_generated_chapter_history_payload_with_quality_metrics",
+            "source_map_closeout_ready": true,
+            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+            "status": "rust_shared_candidate_runtime_owner_ready_for_source_map_closeout_review"
+        },
+        "rollback_boundary": {
+            "source_map_policy": "keep_python_candidate_shells_as_source_map_until_explicit_freeze_delete_round",
+            "runtime_knob": "ChapterCandidateRouteGatewayConfig",
+            "rollback_owner": "legacy_single_generation_direct_ai"
+        }
+    })
+}
+
+pub(crate) mod single_generation_candidate_quality_owner;
+
+pub(crate) async fn load_generation_context(
     db: &DatabaseConnection,
     user_id: &str,
     chapter_id: &str,
@@ -999,28 +643,6 @@ async fn load_generation_context(
     })
 }
 
-pub async fn generate_and_persist_chapter_content_with_provider_payload(
-    db: &DatabaseConnection,
-    user_ai_service: &AIService,
-    user_id: &str,
-    chapter_id: &str,
-    target_word_count: i32,
-    provider_payload: PromptContextProviderPayload,
-    overrides: &ChapterGenerationPromptOverrides,
-) -> Result<GeneratedChapterResult, String> {
-    load_generation_context(db, user_id, chapter_id)
-        .await
-        .map_err(LoadGenerationContextError::into_runtime_message)?
-        .generate_and_persist(
-            db,
-            user_ai_service,
-            target_word_count,
-            provider_payload,
-            overrides,
-        )
-        .await
-}
-
 pub(crate) async fn generate_and_persist_chapter_content_with_candidate_route_gateway(
     db: &DatabaseConnection,
     user_id: &str,
@@ -1048,15 +670,32 @@ pub(crate) async fn generate_and_persist_chapter_content_with_candidate_route_ga
 #[cfg(test)]
 mod tests {
     use super::{
-        build_generated_chapter_history_payload_with_quality_metrics,
-        build_previous_chapter_prompt_context, build_single_generation_candidate_executor_request,
-        history_payload_candidate_gateway_metadata, single_generation_candidate_gateway_content,
-        ChapterGenerationRuntimeContext, GeneratedChapterResult, LoadGenerationContextError,
-        CHAPTER_GENERATION_HISTORY_MODEL, CHAPTER_GENERATION_HISTORY_PREVIEW_LENGTH,
+        build_single_generation_candidate_executor_request,
+        build_single_generation_candidate_gateway_metadata,
+        build_single_generation_candidate_runtime_owner_contract,
+        build_single_generation_direct_fallback_candidate_payload,
+        single_generation_candidate_gateway_content, ChapterGenerationRuntimeContext,
+        GeneratedChapterResult, LoadGenerationContextError,
     };
     use crate::ai::types::AIResponse;
     use crate::models::{chapter, project};
-    use crate::services::chapter_generation_access_service::LoadAccessibleChapterForGenerationError;
+    use crate::services::chapter_access_service::LoadAccessibleChapterForGenerationError;
+    use crate::services::chapter_candidate_executor_production_adapter_service::{
+        ChapterCandidateProductionAdapterDecision, ChapterCandidateProductionAdapterOutput,
+        ChapterCandidateProductionExecutionPath, ChapterCandidateProductionFallbackContext,
+    };
+    use crate::services::chapter_generation_history_payload_service::{
+        build_generated_chapter_history_payload_with_quality_metrics,
+        generated_history_payload_view, CHAPTER_GENERATION_HISTORY_PREVIEW_LENGTH,
+    };
+    use crate::services::chapter_generation_history_persistence_service::build_generated_history_payload;
+    use crate::services::chapter_generation_prompt_service::build_previous_chapter_prompt_context;
+    use crate::services::chapter_single_generation_result_lifecycle_service::{
+        build_single_generation_followup_draft_result, generated_result_lifecycle_view,
+        generated_result_quality_view, persisted_history_payload_view,
+        single_generation_candidate_draft_attempt_view,
+        single_generation_candidate_draft_lifecycle_view,
+    };
     use chrono::Utc;
     use serde_json::json;
 
@@ -1130,7 +769,7 @@ mod tests {
         let context = build_runtime_context();
 
         let result = context
-            .build_generated_result(response)
+            .build_generated_result_from_content(response.content)
             .expect("generated result");
 
         assert_eq!(result.content, "你好\n世界");
@@ -1148,7 +787,7 @@ mod tests {
             transport_diagnostics: None,
         };
         let result = build_runtime_context()
-            .build_generated_result(response)
+            .build_generated_result_from_content(response.content)
             .expect("generated result");
 
         assert_eq!(result.content, "正常正文第一段。\n\n正常正文第二段。");
@@ -1164,7 +803,7 @@ mod tests {
             transport_diagnostics: None,
         };
         let error = build_runtime_context()
-            .build_generated_result(response)
+            .build_generated_result_from_content(response.content)
             .expect_err("meta-only output should be rejected");
 
         assert_eq!(
@@ -1192,6 +831,771 @@ mod tests {
     }
 
     #[test]
+    fn should_build_single_generation_candidate_executor_request_for_active_route_gateway() {
+        let mut ai_config = crate::ai::AIConfig::default();
+        ai_config.temperature = 0.72;
+        ai_config.max_tokens = 4096;
+
+        let request =
+            build_single_generation_candidate_executor_request("请生成章节正文", 2400, &ai_config);
+
+        assert_eq!(request.base_generate_kwargs["prompt"], "请生成章节正文");
+        assert_eq!(request.base_generate_kwargs["temperature"], 0.72);
+        assert_eq!(request.base_generate_kwargs["max_tokens"], 4096);
+        assert_eq!(request.target_word_count, 2400);
+        assert_eq!(request.source, "chapter");
+        assert_eq!(request.generation_label, "single_generation_candidate");
+        assert_eq!(request.max_candidates, 1);
+        assert!(request.runtime_state.is_none());
+    }
+
+    #[test]
+    fn should_extract_candidate_gateway_content_from_candidate_or_fallback_payload() {
+        let candidate = json!({
+            "full_content": "候选章节正文",
+            "generation_path": "single_pass"
+        });
+        let fallback = json!({
+            "content": "直接生成正文",
+            "generation_path": "direct_generation_fallback"
+        });
+
+        assert_eq!(
+            single_generation_candidate_gateway_content(&candidate).expect("candidate content"),
+            "候选章节正文"
+        );
+        assert_eq!(
+            single_generation_candidate_gateway_content(&fallback).expect("fallback content"),
+            "直接生成正文"
+        );
+    }
+
+    #[test]
+    fn should_prefer_full_content_when_candidate_payload_contains_both_content_fields() {
+        let candidate = json!({
+            "full_content": "候选章节正文",
+            "content": "兼容字段正文"
+        });
+
+        assert_eq!(
+            single_generation_candidate_gateway_content(&candidate).expect("candidate content"),
+            "候选章节正文"
+        );
+    }
+
+    #[test]
+    fn should_preserve_candidate_event_source_on_generated_result_from_candidate() {
+        let candidate = json!({
+            "full_content": "候选章节正文",
+            "candidate_chunks": ["候选", "章节", "正文"],
+            "candidate_index": 2,
+            "candidate_count": 3,
+            "winner_candidate_index": 2,
+            "generation_path": "rust_candidate_executor",
+            "quality_gate_plan": {"action": "continue"}
+        });
+
+        let result = build_runtime_context()
+            .build_generated_result_from_candidate(&candidate)
+            .expect("generated candidate result");
+
+        assert_eq!(result.content, "候选章节正文");
+        assert_eq!(result.word_count, 6);
+        assert_eq!(
+            result.selected_candidate_event_source.as_ref(),
+            Some(&candidate)
+        );
+    }
+
+    #[test]
+    fn should_build_generated_result_quality_view_from_candidate_payload() {
+        let candidate = json!({
+            "full_content": "候选章节正文",
+            "quality_gate_plan": {
+                "quality_gate": {
+                    "decision": "manual_review"
+                }
+            },
+            "quality_metrics": {
+                "quality_gate": {
+                    "decision": "manual_review",
+                    "summary": "需要人工复核"
+                }
+            }
+        });
+
+        let view = generated_result_quality_view(&candidate);
+
+        assert_eq!(
+            view.quality_metrics.as_ref().expect("quality metrics")["quality_gate"]["decision"],
+            "manual_review"
+        );
+        assert_eq!(view.quality_gate_action.as_deref(), Some("manual_review"));
+        assert_eq!(view.quality_gate_decision.as_deref(), Some("manual_review"));
+        assert_eq!(view.quality_gate_message.as_deref(), Some("需要人工复核"));
+    }
+
+    #[test]
+    fn should_build_generated_result_lifecycle_view_for_quality_gate_actions() {
+        let retry = generated_result_lifecycle_view("writing", Some("retry"), "candidate");
+        assert_eq!(retry.content_applied, false);
+        assert_eq!(retry.provisional_draft_saved, true);
+        assert_eq!(retry.attempt_state, "retry");
+        assert_eq!(retry.chapter_status, "draft");
+
+        let manual_review =
+            generated_result_lifecycle_view("writing", Some("manual_review"), "candidate");
+        assert_eq!(manual_review.content_applied, false);
+        assert_eq!(manual_review.provisional_draft_saved, false);
+        assert_eq!(manual_review.attempt_state, "manual_review");
+        assert_eq!(manual_review.chapter_status, "writing");
+
+        let applied = generated_result_lifecycle_view("writing", Some("continue"), "candidate");
+        assert_eq!(applied.content_applied, true);
+        assert_eq!(applied.provisional_draft_saved, false);
+        assert_eq!(applied.attempt_state, "applied");
+        assert_eq!(applied.chapter_status, "completed");
+    }
+
+    #[test]
+    fn should_build_single_generation_followup_draft_result_from_shared_lifecycle_owner() {
+        let result = GeneratedChapterResult {
+            chapter_id: "chapter-2".to_string(),
+            content: "候选正文".to_string(),
+            word_count: 18,
+            chapter_status: "completed".to_string(),
+            content_applied: true,
+            quality_metrics: Some(json!({
+                "quality_gate": {
+                    "decision": "manual_review",
+                    "summary": "需要人工复核"
+                }
+            })),
+            quality_gate_action: Some("continue".to_string()),
+            quality_gate_message: Some("已完成".to_string()),
+            ..Default::default()
+        };
+
+        let followup = build_single_generation_followup_draft_result(
+            &result,
+            "draft",
+            "manual_review",
+            Some("retry"),
+            None,
+            None,
+        );
+
+        assert_eq!(followup.content_applied, false);
+        assert_eq!(followup.provisional_draft_saved, true);
+        assert_eq!(followup.attempt_state, "retry");
+        assert_eq!(followup.chapter_status, "draft");
+        assert_eq!(followup.quality_gate_action.as_deref(), Some("retry"));
+        assert_eq!(followup.quality_gate_message.as_deref(), Some("已完成"));
+        assert_eq!(
+            followup.quality_metrics.as_ref().expect("quality metrics")["quality_gate"]["decision"],
+            "manual_review"
+        );
+    }
+
+    #[test]
+    fn should_build_single_generation_candidate_draft_attempt_view() {
+        let result = GeneratedChapterResult {
+            content: "烟测改写成功。第二段继续推进。".to_string(),
+            word_count: 15,
+            attempt_state: "retry".to_string(),
+            quality_metrics: Some(json!({
+                "quality_gate": {
+                    "decision": "auto_repair",
+                    "summary": "需要继续修复"
+                }
+            })),
+            quality_gate_action: Some("retry".to_string()),
+            quality_gate_message: Some("需要继续修复".to_string()),
+            ..Default::default()
+        };
+
+        let view = single_generation_candidate_draft_attempt_view(&result, "上一版正文", 12);
+
+        assert_eq!(view.quality_gate_action.as_deref(), Some("retry"));
+        assert_eq!(view.quality_gate_decision.as_deref(), Some("auto_repair"));
+        assert_eq!(view.word_count, 15);
+        assert_eq!(
+            view.summary_preview.as_deref(),
+            Some("烟测改写成功。第二段继续推进。")
+        );
+        assert_eq!(
+            view.content_preview.as_deref(),
+            Some("烟测改写成功。第二段继续推进。")
+        );
+        assert_eq!(view.repair_payload["previous_content"], "上一版正文");
+        assert_eq!(view.repair_payload["previous_word_count"], 12);
+        assert_eq!(
+            view.repair_payload["candidate_full_content"],
+            "烟测改写成功。第二段继续推进。"
+        );
+        assert_eq!(view.repair_payload["content_complete"], true);
+    }
+
+    #[test]
+    fn should_build_single_generation_candidate_draft_lifecycle_view() {
+        let chapter = build_chapter();
+        let result = GeneratedChapterResult {
+            content: "烟测改写成功。第二段继续推进。".to_string(),
+            word_count: 15,
+            attempt_state: "retry".to_string(),
+            quality_metrics: Some(json!({
+                "quality_gate": {
+                    "decision": "auto_repair",
+                    "summary": "需要继续修复"
+                }
+            })),
+            quality_gate_action: Some("retry".to_string()),
+            quality_gate_message: Some("需要继续修复".to_string()),
+            ..Default::default()
+        };
+
+        let view =
+            single_generation_candidate_draft_lifecycle_view(&chapter, &result, "上一版正文", 12);
+
+        assert_eq!(
+            view.draft_attempt.quality_gate_action.as_deref(),
+            Some("retry")
+        );
+        assert_eq!(
+            view.draft_attempt.quality_gate_decision.as_deref(),
+            Some("auto_repair")
+        );
+        assert_eq!(
+            view.draft_attempt.summary_preview.as_deref(),
+            Some("烟测改写成功。第二段继续推进。")
+        );
+        assert_eq!(
+            view.draft_attempt
+                .repair_payload
+                .as_ref()
+                .expect("repair payload")["previous_word_count"],
+            12
+        );
+        assert_eq!(view.candidate_draft_payload["quality_gate_action"], "retry");
+    }
+
+    #[test]
+    fn should_save_candidate_draft_when_quality_gate_plan_decision_requires_retry() {
+        let candidate = json!({
+            "full_content": "烟测改写成功。第二段继续推进。",
+            "candidate_chunks": ["烟测改写成功。", "第二段继续推进。"],
+            "quality_gate_plan": {
+                "quality_gate": {
+                    "decision": "auto_repair",
+                    "status": "repairable",
+                    "summary": "The draft still needs a targeted revision before it should be saved."
+                }
+            },
+            "quality_metrics": {
+                "quality_gate": {
+                    "decision": "auto_repair",
+                    "status": "repairable",
+                    "summary": "The draft still needs a targeted revision before it should be saved."
+                }
+            }
+        });
+
+        let result = build_runtime_context()
+            .build_generated_result_from_candidate(&candidate)
+            .expect("generated retry candidate result");
+
+        assert_eq!(result.quality_gate_action.as_deref(), Some("retry"));
+        assert_eq!(result.content_applied, false);
+        assert_eq!(result.provisional_draft_saved, true);
+        assert_eq!(result.attempt_state, "retry");
+        assert_eq!(result.chapter_status, "draft");
+        assert_eq!(
+            result.candidate_draft.as_ref().expect("candidate draft")["quality_gate_action"],
+            "retry"
+        );
+    }
+
+    #[test]
+    fn should_block_candidate_draft_when_quality_gate_plan_decision_requires_manual_review() {
+        let candidate = json!({
+            "full_content": "烟测改写成功。第二段继续推进。",
+            "quality_gate_plan": {
+                "quality_gate": {
+                    "decision": "manual_review",
+                    "status": "blocked",
+                    "summary": "The draft is too short and requires manual review."
+                }
+            },
+            "quality_metrics": {
+                "quality_gate": {
+                    "decision": "manual_review",
+                    "status": "blocked",
+                    "summary": "The draft is too short and requires manual review."
+                }
+            }
+        });
+
+        let result = build_runtime_context()
+            .build_generated_result_from_candidate(&candidate)
+            .expect("generated manual-review candidate result");
+
+        assert_eq!(result.quality_gate_action.as_deref(), Some("manual_review"));
+        assert_eq!(result.content_applied, false);
+        assert_eq!(result.provisional_draft_saved, false);
+        assert_eq!(result.attempt_state, "manual_review");
+        assert_eq!(
+            result.candidate_draft.as_ref().expect("candidate draft")["quality_gate_action"],
+            "manual_review"
+        );
+    }
+
+    #[test]
+    fn should_reject_empty_or_missing_candidate_gateway_content() {
+        for candidate in [json!({"full_content": " "}), json!({})] {
+            let error = single_generation_candidate_gateway_content(&candidate)
+                .expect_err("empty content should fail");
+
+            assert_eq!(
+                error,
+                "candidate route gateway returned empty generated content"
+            );
+        }
+    }
+
+    #[test]
+    fn should_build_candidate_gateway_metadata_from_production_adapter_output() {
+        let output = ChapterCandidateProductionAdapterOutput {
+            result: json!({
+                "full_content": "Rust 候选章节正文。"
+            }),
+            decision: ChapterCandidateProductionAdapterDecision {
+                path: ChapterCandidateProductionExecutionPath::RustCandidateExecutor,
+                reason: "rust candidate executor enabled by production adapter".to_string(),
+                rollback_boundary: "legacy_single_generation_direct_ai".to_string(),
+            },
+            fallback_applied: false,
+            rust_error: None,
+        };
+
+        let metadata = build_single_generation_candidate_gateway_metadata(&output);
+
+        assert_eq!(metadata["execution_path"], "rust_candidate_executor");
+        assert_eq!(metadata["fallback_applied"], false);
+        assert_eq!(
+            metadata["fallback_reason"],
+            "rust candidate executor enabled by production adapter"
+        );
+        assert_eq!(
+            metadata["rollback_boundary"],
+            "legacy_single_generation_direct_ai"
+        );
+        assert!(metadata["rust_error"].is_null());
+    }
+
+    #[test]
+    fn should_build_direct_fallback_candidate_payload_from_runtime_owner() {
+        let payload = build_single_generation_direct_fallback_candidate_payload(
+            "直接生成正文".to_string(),
+            ChapterCandidateProductionFallbackContext {
+                reason: "rust candidate executor failed; python fallback selected: timeout"
+                    .to_string(),
+                rollback_boundary: "legacy_single_generation_direct_ai".to_string(),
+                rust_error: Some("timeout".to_string()),
+            },
+        );
+
+        assert_eq!(payload["full_content"], "直接生成正文");
+        assert_eq!(payload["generation_path"], "direct_generation_fallback");
+        assert_eq!(
+            payload["fallback_reason"],
+            "rust candidate executor failed; python fallback selected: timeout"
+        );
+        assert_eq!(
+            payload["rollback_boundary"],
+            "legacy_single_generation_direct_ai"
+        );
+        assert_eq!(payload["rust_error"], "timeout");
+    }
+
+    #[test]
+    fn should_publish_shared_candidate_runtime_owner_contract_for_freezing_python_source_map() {
+        let contract = build_single_generation_candidate_runtime_owner_contract();
+
+        assert_eq!(contract["owner"], "chapter_generation_runtime_service");
+        assert_eq!(
+            contract["scope"],
+            "shared_single_generation_candidate_runtime"
+        );
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/app/services/compat/chapter_generation_route_compat_service.py"
+        );
+        assert_eq!(
+            contract["python_source_map"][1],
+            "backend/app/services/chapter_generation/stream/candidate_service.py"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][0],
+            "build_single_generation_candidate_executor_request"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][1],
+            "single_generation_candidate_gateway_content"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["accepted_content_fields"],
+            json!(["full_content", "content"])
+        );
+        assert_eq!(
+            contract["behavior_contract"]["empty_content_error"],
+            "candidate route gateway returned empty generated content"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["direct_fallback_generation_path"],
+            "direct_generation_fallback"
+        );
+        assert_eq!(
+            contract["candidate_executor_wiring_readiness"]["owner"],
+            "chapter_candidate_executor_default_dependency_service"
+        );
+        assert_eq!(
+            contract["candidate_executor_wiring_readiness"]["stage_count"],
+            9
+        );
+        assert!(
+            contract["candidate_executor_wiring_readiness"]["rust_owned_dependency_count"]
+                .as_u64()
+                .unwrap()
+                >= 56
+        );
+        assert_eq!(
+            contract["candidate_executor_wiring_readiness"]["external_formula_dependency_count"],
+            0
+        );
+        assert_eq!(
+            contract["candidate_executor_wiring_readiness"]["cutover_blockers"],
+            json!([])
+        );
+        assert_eq!(
+            contract["candidate_executor_default_dependency_owner_contract"]["owner"],
+            "chapter_candidate_executor_default_dependency_service"
+        );
+        assert_eq!(
+            contract["candidate_executor_default_dependency_owner_contract"]
+                ["service_runtime_closeout_status"]["status"],
+            "rust_chapter_candidate_executor_default_dependency_owner_ready_for_source_map_closeout_review"
+        );
+        assert_eq!(
+            contract["candidate_executor_default_dependency_owner_contract"]
+                ["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["candidate_executor_default_dependency_owner_contract"]
+                ["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["candidate_executor_default_dependency_owner_contract"]
+                ["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
+        assert_eq!(
+            contract["candidate_executor_production_adapter_owner_contract"]["owner"],
+            "chapter_candidate_executor_production_adapter_service"
+        );
+        assert_eq!(
+            contract["candidate_executor_production_adapter_owner_contract"]
+                ["service_runtime_closeout_status"]["status"],
+            "rust_chapter_candidate_executor_production_adapter_owner_ready_for_source_map_closeout_review"
+        );
+        assert_eq!(
+            contract["candidate_executor_production_adapter_owner_contract"]
+                ["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["candidate_executor_production_adapter_owner_contract"]
+                ["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["candidate_executor_production_adapter_owner_contract"]
+                ["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
+        assert_eq!(
+            contract["candidate_record_owner_contract"]["owner"],
+            "chapter_candidate_record_service"
+        );
+        assert_eq!(
+            contract["candidate_record_owner_contract"]["service_runtime_closeout_status"]
+                ["status"],
+            "rust_chapter_candidate_record_owner_ready_for_source_map_closeout_review"
+        );
+        assert_eq!(
+            contract["candidate_finalize_owner_contract"]["owner"],
+            "chapter_candidate_finalize_service"
+        );
+        assert_eq!(
+            contract["candidate_finalize_owner_contract"]["service_runtime_closeout_status"]
+                ["status"],
+            "rust_chapter_candidate_finalize_owner_ready_for_source_map_closeout_review"
+        );
+        assert_eq!(
+            contract["candidate_output_owner_contract"]["owner"],
+            "chapter_candidate_output_service"
+        );
+        assert_eq!(
+            contract["candidate_output_owner_contract"]["behavior_contract"]["entrypoints"][0],
+            "collect_generation_candidate_output"
+        );
+        assert_eq!(
+            contract["candidate_output_owner_contract"]["candidate_runtime_state_owner_contract"]
+                ["owner"],
+            "chapter_candidate_runtime_state_service"
+        );
+        assert_eq!(
+            contract["candidate_runtime_state_owner_contract"]["owner"],
+            "chapter_candidate_runtime_state_service"
+        );
+        assert_eq!(
+            contract["candidate_runtime_state_owner_contract"]["behavior_contract"]["entrypoints"]
+                [2],
+            "snapshot_chapter_candidate_runtime_state"
+        );
+        assert_eq!(
+            contract["candidate_runtime_state_owner_contract"]["service_runtime_closeout_status"]
+                ["owner_profiles"][1],
+            "phase5-batch-generation-owner"
+        );
+        assert_eq!(
+            contract["candidate_route_gateway_owner_contract"]["owner"],
+            "chapter_candidate_route_gateway_service"
+        );
+        assert_eq!(
+            contract["candidate_route_gateway_owner_contract"]["behavior_contract"]
+                ["gateway_entrypoints"][1],
+            "execute_chapter_candidate_route_gateway_with_executor"
+        );
+        assert_eq!(
+            contract["candidate_route_gateway_owner_contract"]["active_consumers"][4],
+            "chapter_generation_runtime_service"
+        );
+        assert_eq!(
+            contract["candidate_generation_owner_contract"]["owner"],
+            "chapter_candidate_generation_service"
+        );
+        assert_eq!(
+            contract["candidate_generation_owner_contract"]["service_runtime_closeout_status"]
+                ["status"],
+            "rust_chapter_candidate_generation_owner_ready_for_source_map_closeout_review"
+        );
+        assert_eq!(
+            contract["candidate_rerank_owner_contract"]["owner"],
+            "chapter_candidate_rerank_service"
+        );
+        assert_eq!(
+            contract["candidate_rerank_owner_contract"]["service_runtime_closeout_status"]
+                ["status"],
+            "rust_chapter_candidate_rerank_owner_ready_for_source_map_closeout_review"
+        );
+        assert_eq!(
+            contract["candidate_rerank_owner_contract"]["service_runtime_closeout_status"]
+                ["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["candidate_rerank_owner_contract"]["service_runtime_closeout_status"]
+                ["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["candidate_rerank_owner_contract"]["service_runtime_closeout_status"]
+                ["physical_python_closeout_completed"],
+            false
+        );
+        assert_eq!(
+            contract["candidate_word_budget_repair_owner_contract"]["owner"],
+            "chapter_candidate_word_budget_repair_service"
+        );
+        assert_eq!(
+            contract["candidate_word_budget_repair_owner_contract"]
+                ["service_runtime_closeout_status"]["status"],
+            "rust_chapter_candidate_word_budget_repair_owner_ready_for_source_map_closeout_review"
+        );
+        assert_eq!(
+            contract["candidate_word_budget_repair_owner_contract"]
+                ["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["candidate_word_budget_repair_owner_contract"]
+                ["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["candidate_word_budget_repair_owner_contract"]
+                ["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
+        assert_eq!(
+            contract["candidate_targeted_final_repair_owner_contract"]["owner"],
+            "chapter_candidate_targeted_final_repair_service"
+        );
+        assert_eq!(
+            contract["candidate_targeted_final_repair_owner_contract"]
+                ["service_runtime_closeout_status"]["status"],
+            "rust_chapter_candidate_targeted_final_repair_owner_ready_for_source_map_closeout_review"
+        );
+        assert_eq!(
+            contract["candidate_targeted_final_repair_owner_contract"]
+                ["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["candidate_targeted_final_repair_owner_contract"]
+                ["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["candidate_targeted_final_repair_owner_contract"]
+                ["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
+        let rust_target_files = contract["candidate_executor_wiring_readiness"]
+            ["rust_target_files"]
+            .as_array()
+            .unwrap();
+        assert!(rust_target_files.contains(&json!(
+            "backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs"
+        )));
+        assert!(rust_target_files.contains(&json!(
+            "backend-rs/src/services/chapter_candidate_generation_service.rs"
+        )));
+        assert!(rust_target_files.contains(&json!(
+            "backend-rs/src/services/chapter_candidate_finalize_service.rs"
+        )));
+        assert!(!rust_target_files.contains(&json!(
+            "backend-rs/src/services/chapter_candidate_executor_runtime_adapter_service.rs"
+        )));
+        assert_eq!(
+            contract["candidate_executor_wiring_readiness"]["python_source_files"][4],
+            "backend/app/services/chapter_candidate_executor_wiring_service.py"
+        );
+        assert_eq!(
+            contract["context_compaction_owner_contract"]["owner"],
+            "chapter_generation_runtime_service"
+        );
+        assert_eq!(
+            contract["context_compaction_owner_contract"]["python_source_map"][0],
+            "backend/app/services/chapter_context_service.py"
+        );
+        assert_eq!(
+            contract["context_compaction_owner_contract"]["behavior_contract"]
+                ["one_to_one_skips_recent_chapters_context"],
+            true
+        );
+        assert_eq!(
+            contract["context_compaction_owner_contract"]["active_consumers"][0],
+            "chapter_generation_runtime_service"
+        );
+        assert_eq!(
+            contract["quality_runtime_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::quality_runtime_context_owner"
+        );
+        assert_eq!(
+            contract["quality_runtime_owner_contract"]["behavior_contract"]
+                ["terminal_quality_gate_decision"],
+            "manual_review"
+        );
+        assert_eq!(
+            contract["quality_runtime_owner_contract"]["active_consumers"][0],
+            "chapter_single_generation_runtime_state_service"
+        );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::snapshot_persistence_owner"
+        );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["behavior_contract"]["write_functions"]
+                [0],
+            "persist_chapter_generation_runtime_snapshot"
+        );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["behavior_contract"]
+                ["runtime_state_policy"][0],
+            "object_payloads_merge_keywise"
+        );
+        assert_eq!(
+            contract["story_repair_quality_context_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::story_repair_quality_context_owner"
+        );
+        assert_eq!(
+            contract["story_repair_quality_context_owner_contract"]["behavior_contract"]
+                ["resume_precedence"][0],
+            "runtime_active_story_repair_payload"
+        );
+        assert_eq!(
+            contract["story_repair_quality_context_owner_contract"]["active_consumers"][7],
+            "chapter_single_generation_active_gateway_smoke_service"
+        );
+        assert_eq!(
+            contract["validation_boundary"]["active_gateway_smoke"],
+            "chapter_single_generation_active_gateway_smoke_service"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profiles"][0],
+            "phase5-single-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profiles"][1],
+            "phase5-batch-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["single_generation_manifest_probe_count"],
+            json!(6)
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["batch_generation_manifest_probe_count"],
+            json!(11)
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["rust_manifest_probe_count"],
+            json!(17)
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            json!(0)
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]
+                ["candidate_executor_wiring_cutover_blockers"],
+            json!([])
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["context_compaction_owner"],
+            "chapter_generation_runtime_service"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["candidate_runtime_owner"],
+            "single_generation_candidate_gateway_content"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_shared_candidate_runtime_owner_ready_for_source_map_closeout_review"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["runtime_knob"],
+            "ChapterCandidateRouteGatewayConfig"
+        );
+    }
+
+    #[test]
     fn should_build_generated_history_payload_with_quality_metrics_placeholder() {
         let result = GeneratedChapterResult {
             chapter_id: "chapter-1".to_string(),
@@ -1203,8 +1607,7 @@ mod tests {
         };
 
         let created_at = Utc::now().naive_utc();
-        let payload =
-            ChapterGenerationRuntimeContext::build_generated_history_payload(&result, created_at);
+        let payload = build_generated_history_payload(&result, created_at);
 
         assert_eq!(
             payload,
@@ -1222,7 +1625,10 @@ mod tests {
 
     #[test]
     fn should_keep_chapter_generation_history_model_owner_constant() {
-        assert_eq!(CHAPTER_GENERATION_HISTORY_MODEL, "chapter_generation_v1");
+        assert_eq!(
+            crate::services::chapter_single_generation_result_lifecycle_service::CHAPTER_GENERATION_HISTORY_MODEL,
+            "chapter_generation_v1"
+        );
     }
 
     #[test]
@@ -1271,11 +1677,81 @@ mod tests {
         );
         assert_eq!(payload["candidate_gateway"]["fallback_applied"], false);
         assert_eq!(
-            history_payload_candidate_gateway_metadata(Some(&payload.to_string()))
+            persisted_history_payload_view(Some(&payload.to_string()))
+                .candidate_gateway_metadata
+                .as_ref()
                 .expect("candidate gateway metadata")["rollback_boundary"],
             "python_candidate_executor_fallback"
         );
         assert_eq!(payload["attempt_state"], "generated_from_runtime");
+    }
+
+    #[test]
+    fn should_build_generated_history_payload_view_from_quality_metrics_and_gateway_metadata() {
+        let view = generated_history_payload_view(
+            Some(&json!({
+                "quality_runtime_context": {
+                    "scope": "chapter",
+                    "source": "plot_analysis"
+                },
+                "story_runtime_contract": {
+                    "guidance": {
+                        "creative_mode": "balanced"
+                    }
+                }
+            })),
+            Some(&json!({
+                "execution_path": "rust_candidate_executor",
+                "fallback_applied": false
+            })),
+        );
+
+        assert_eq!(
+            view.quality_metrics.as_ref().expect("quality metrics")["quality_runtime_context"]
+                ["source"],
+            "plot_analysis"
+        );
+        assert_eq!(
+            view.story_runtime_contract
+                .as_ref()
+                .expect("runtime contract")["guidance"]["creative_mode"],
+            "balanced"
+        );
+        assert_eq!(
+            view.story_runtime_snapshot
+                .as_ref()
+                .expect("runtime snapshot")["source"],
+            "plot_analysis"
+        );
+        assert_eq!(
+            view.candidate_gateway_metadata
+                .as_ref()
+                .expect("gateway metadata")["execution_path"],
+            "rust_candidate_executor"
+        );
+    }
+
+    #[test]
+    fn should_build_persisted_history_payload_view_from_generated_history_payload() {
+        let payload = json!({
+            "content_applied": false,
+            "attempt_state": "manual_review",
+            "candidate_gateway": {
+                "execution_path": "rust_candidate_executor",
+                "rollback_boundary": "python_candidate_executor_fallback"
+            }
+        });
+
+        let view = persisted_history_payload_view(Some(&payload.to_string()));
+
+        assert_eq!(view.content_applied, false);
+        assert_eq!(view.attempt_state.as_deref(), Some("manual_review"));
+        assert_eq!(
+            view.candidate_gateway_metadata
+                .as_ref()
+                .expect("candidate gateway metadata")["rollback_boundary"],
+            "python_candidate_executor_fallback"
+        );
     }
 
     #[test]
@@ -1422,56 +1898,5 @@ mod tests {
         assert_eq!(context.chapter_model.id, "chapter-1");
         assert_eq!(context.project_model.id, "project-1");
         assert_eq!(context.previous_chapter, None);
-    }
-
-    #[test]
-    fn should_build_single_generation_candidate_executor_request_for_active_route_gateway() {
-        let mut ai_config = crate::ai::AIConfig::default();
-        ai_config.temperature = 0.72;
-        ai_config.max_tokens = 4096;
-
-        let request =
-            build_single_generation_candidate_executor_request("请生成章节正文", 2400, &ai_config);
-
-        assert_eq!(request.base_generate_kwargs["prompt"], "请生成章节正文");
-        assert_eq!(request.base_generate_kwargs["temperature"], 0.72);
-        assert_eq!(request.base_generate_kwargs["max_tokens"], 4096);
-        assert_eq!(request.target_word_count, 2400);
-        assert_eq!(request.source, "chapter");
-        assert_eq!(request.generation_label, "single_generation_candidate");
-        assert_eq!(request.max_candidates, 1);
-        assert!(request.runtime_state.is_none());
-    }
-
-    #[test]
-    fn should_extract_candidate_gateway_content_from_candidate_or_fallback_payload() {
-        let candidate = json!({
-            "full_content": "候选章节正文",
-            "generation_path": "single_pass"
-        });
-        let fallback = json!({
-            "content": "直接生成正文",
-            "generation_path": "direct_generation_fallback"
-        });
-
-        assert_eq!(
-            single_generation_candidate_gateway_content(&candidate).expect("candidate content"),
-            "候选章节正文"
-        );
-        assert_eq!(
-            single_generation_candidate_gateway_content(&fallback).expect("fallback content"),
-            "直接生成正文"
-        );
-    }
-
-    #[test]
-    fn should_reject_empty_candidate_gateway_content() {
-        let error = single_generation_candidate_gateway_content(&json!({"full_content": " "}))
-            .expect_err("empty content should fail");
-
-        assert_eq!(
-            error,
-            "candidate route gateway returned empty generated content"
-        );
     }
 }

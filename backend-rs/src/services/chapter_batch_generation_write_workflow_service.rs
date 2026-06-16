@@ -1,1223 +1,42 @@
-use chrono::{NaiveDateTime, Utc};
-use sea_orm::Set;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-    QuerySelect,
-};
-use serde::Deserialize;
-use serde_json::{json, Value};
-use uuid::Uuid;
-
-use crate::models::batch_generation_task;
-use crate::models::chapter;
-use crate::models::generation_history;
-use crate::models::project_default_style;
-use crate::services::chapter_batch_generation_owned_task_query_service::LoadOwnedBatchGenerationTaskError;
-use crate::services::chapter_batch_generation_task_payload_base_service::{
-    build_batch_generation_task_response_payload_from_runtime_parts, estimated_task_minutes,
-    BatchGenerationTaskResponsePayloadOptions, BatchGenerationTaskResponseQualityPayload,
-};
-use crate::services::chapter_generation_execution_config_service::prepare_generation_execution_config;
-use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
-use crate::services::chapter_generation_prerequisite_service::check_chapter_generation_prerequisites;
-use crate::services::chapter_generation_quality_runtime_context_service::{
-    apply_batch_quality_runtime_context_to_payload,
-    resolve_batch_quality_runtime_context_for_startup_seed,
-};
 #[cfg(test)]
-use crate::services::chapter_generation_request_runtime_state_service::parse_batch_generation_request_runtime_state;
-use crate::services::chapter_generation_request_runtime_state_service::{
-    batch_generation_request_runtime_state_payload, BatchGenerationRequestRuntimeState,
-};
-use crate::services::chapter_generation_target_word_count_service::normalize_chapter_generation_target_word_count;
-use crate::services::chapter_generation_task_semantics_service::{
-    batch_generation_task_type, BatchGenerationTaskKind,
-};
-use crate::services::chapter_story_repair_quality_context_service::{
-    aggregate_story_repair_quality_summaries,
-    resolve_active_story_repair_payload_with_quality_fallback,
-};
-use crate::services::project_access_query_service::{
-    ensure_owned_project_access, ProjectAccessQueryError,
-};
-use crate::services::route_request_deserialize_service::deserialize_optional_non_null;
-use crate::services::settings_service::SettingsService;
+use crate::services::chapter_batch_generation_runtime_state_service::BatchGenerationQueuedSnapshotPlan;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BatchGenerationTaskPersistenceSeed {
-    pub(crate) id: String,
-    pub(crate) project_id: String,
-    pub(crate) user_id: String,
-    pub(crate) start_chapter_number: i32,
-    pub(crate) chapter_count: i32,
-    pub(crate) chapter_ids: Value,
-    pub(crate) style_id: Option<i32>,
-    pub(crate) target_word_count: i32,
-    pub(crate) enable_analysis: bool,
-    pub(crate) total_chapters: i32,
-    pub(crate) current_chapter_id: Option<String>,
-    pub(crate) current_chapter_number: Option<i32>,
-    pub(crate) max_retries: i32,
-}
+pub(crate) mod create_launch_owner;
+pub(crate) mod request_prepare_owner;
+pub(crate) mod write_workflow_owner;
 
-impl BatchGenerationTaskPersistenceSeed {
-    pub(crate) fn into_active_model(
-        self,
-        now: NaiveDateTime,
-    ) -> batch_generation_task::ActiveModel {
-        batch_generation_task::ActiveModel {
-            id: Set(self.id),
-            project_id: Set(self.project_id),
-            user_id: Set(self.user_id),
-            start_chapter_number: Set(self.start_chapter_number),
-            chapter_count: Set(self.chapter_count),
-            chapter_ids: Set(self.chapter_ids),
-            style_id: Set(self.style_id),
-            target_word_count: Set(self.target_word_count),
-            enable_analysis: Set(self.enable_analysis),
-            status: Set("pending".to_string()),
-            total_chapters: Set(self.total_chapters),
-            completed_chapters: Set(0),
-            failed_chapters: Set(json!([])),
-            current_chapter_id: Set(self.current_chapter_id),
-            current_chapter_number: Set(self.current_chapter_number),
-            current_retry_count: Set(0),
-            max_retries: Set(self.max_retries),
-            created_at: Set(Some(now)),
-            started_at: Set(None),
-            completed_at: Set(None),
-            error_message: Set(None),
-        }
-    }
-}
+pub(crate) use self::create_launch_owner::{
+    build_batch_generation_create_launch_owner_contract,
+    start_owned_batch_generation_create_launch_from_route_payload,
+};
+pub(crate) use self::request_prepare_owner::{
+    build_batch_generation_create_workflow_request_from_route_payload,
+    build_batch_generation_request_prepare_owner_contract, BatchGenerationCreateChapterTarget,
+    BatchGenerationCreateRouteRequest, BatchGenerationCreateTaskSpec,
+    BatchGenerationCreateWorkflowRequest, PrepareBatchGenerationCreateRequestError,
+};
+pub(crate) use self::write_workflow_owner::{
+    build_batch_generation_write_workflow_owner_contract,
+    start_owned_batch_generation_write_workflow, CreateBatchGenerationWriteWorkflowError,
+};
 
 #[cfg(test)]
-pub(crate) fn build_batch_generation_task_active_model(
-    id: String,
-    project_id: String,
-    user_id: String,
-    start_chapter_number: i32,
-    chapter_count: i32,
-    chapter_ids: Value,
-    style_id: Option<i32>,
-    target_word_count: i32,
-    enable_analysis: bool,
-    total_chapters: i32,
-    current_chapter_id: Option<String>,
-    current_chapter_number: Option<i32>,
-    max_retries: i32,
-    now: NaiveDateTime,
-) -> batch_generation_task::ActiveModel {
-    BatchGenerationTaskPersistenceSeed {
-        id,
-        project_id,
-        user_id,
-        start_chapter_number,
-        chapter_count,
-        chapter_ids,
-        style_id,
-        target_word_count,
-        enable_analysis,
-        total_chapters,
-        current_chapter_id,
-        current_chapter_number,
-        max_retries,
-    }
-    .into_active_model(now)
-}
-
-use super::chapter_batch_generation_owned_task_query_service::{
-    load_owned_batch_generation_task_sources, LoadOwnedBatchGenerationTaskSourcesError,
+pub(crate) use self::create_launch_owner::{
+    build_batch_generation_runtime_state_payload_from_parts,
+    build_batch_generation_runtime_state_payload_from_parts_with_explicit_payload,
+    build_batch_generation_task_active_model, select_batch_generation_create_effective_style_id,
+    BatchGenerationCreateLaunchPersistencePlan, BatchGenerationCreateRuntimeSeed,
+    BatchGenerationCreateStartupRuntimeState, BatchGenerationCreateStartupSeedSource,
+    BatchGenerationTaskPersistenceSeed, PreparedBatchGenerationCreateWorkflowLaunch,
 };
-use super::chapter_batch_generation_resume_task_command_service::{
-    prepare_owned_batch_generation_resume, PrepareOwnedBatchGenerationResumeError,
-    ResumeBatchGenerationDomainError,
-};
-#[cfg(test)]
-use super::chapter_batch_generation_runtime_state_service::restore_batch_generation_runtime_compat_options_from_runtime_state_seed;
-use super::chapter_batch_generation_runtime_state_service::{
-    build_batch_generation_startup_snapshot_and_runtime_launch_input_from_runtime_state_seed,
-    dispatch_batch_generation_runtime, BatchGenerationCancelledPersistencePlan,
-    BatchGenerationExecutionInput, BatchGenerationQueuedSnapshotPlan,
-};
-use super::chapter_quality_metrics_query_service::build_chapter_analysis_quality_fragments;
-const MAX_BATCH_GENERATION_CREATE_COUNT: i32 = 20;
-const MIN_BATCH_GENERATION_CREATE_TARGET_WORD_COUNT: i32 = 500;
-const MAX_BATCH_GENERATION_CREATE_TARGET_WORD_COUNT: i32 = 10_000;
-const MIN_BATCH_GENERATION_CREATE_RETRIES: i32 = 0;
-const MAX_BATCH_GENERATION_CREATE_RETRIES: i32 = 5;
-const MAX_BATCH_GENERATION_CREATE_STORY_CREATION_BRIEF_LENGTH: usize = 1200;
-const MAX_BATCH_GENERATION_CREATE_QUALITY_NOTES_LENGTH: usize = 600;
-const BATCH_GENERATION_CREATE_CREATIVE_MODE_VALUES: &[&str] = &[
-    "balanced",
-    "hook",
-    "emotion",
-    "suspense",
-    "relationship",
-    "payoff",
-];
-const BATCH_GENERATION_CREATE_STORY_FOCUS_VALUES: &[&str] = &[
-    "advance_plot",
-    "deepen_character",
-    "escalate_conflict",
-    "reveal_mystery",
-    "relationship_shift",
-    "foreshadow_payoff",
-];
-const BATCH_GENERATION_CREATE_PLOT_STAGE_VALUES: &[&str] = &["development", "climax", "ending"];
-const BATCH_GENERATION_CREATE_QUALITY_PRESET_VALUES: &[&str] = &[
-    "balanced",
-    "plot_drive",
-    "immersive",
-    "emotion_drama",
-    "clean_prose",
-];
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct BatchGenerationCreateRouteRequest {
-    pub(crate) start_chapter_number: i32,
-    pub(crate) count: i32,
-    pub(crate) style_id: Option<i32>,
-    pub(crate) target_word_count: Option<i32>,
-    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
-    pub(crate) enable_analysis: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
-    pub(crate) enable_mcp: Option<bool>,
-    pub(crate) enable_web_research: Option<bool>,
-    pub(crate) web_research_query: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_non_null")]
-    pub(crate) max_retries: Option<i32>,
-    pub(crate) model: Option<String>,
-    pub(crate) creative_mode: Option<String>,
-    pub(crate) story_focus: Option<String>,
-    pub(crate) plot_stage: Option<String>,
-    pub(crate) story_creation_brief: Option<String>,
-    pub(crate) quality_preset: Option<String>,
-    pub(crate) quality_notes: Option<String>,
-    pub(crate) story_repair_summary: Option<String>,
-    pub(crate) story_repair_targets: Option<Vec<String>>,
-    pub(crate) story_preserve_strengths: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct BatchGenerationCreateWorkflowRequest {
-    pub(crate) start_chapter_number: i32,
-    pub(crate) count: i32,
-    pub(crate) style_id: Option<i32>,
-    pub(crate) target_word_count: Option<i32>,
-    pub(crate) enable_analysis: bool,
-    pub(crate) enable_mcp: Option<bool>,
-    pub(crate) enable_web_research: Option<bool>,
-    pub(crate) web_research_query: Option<String>,
-    pub(crate) max_retries: i32,
-    pub(crate) model_override: Option<String>,
-    pub(crate) creative_mode: Option<String>,
-    pub(crate) story_focus: Option<String>,
-    pub(crate) plot_stage: Option<String>,
-    pub(crate) story_creation_brief: Option<String>,
-    pub(crate) quality_preset: Option<String>,
-    pub(crate) quality_notes: Option<String>,
-    pub(crate) story_repair_summary: Option<String>,
-    pub(crate) story_repair_targets: Vec<String>,
-    pub(crate) story_preserve_strengths: Vec<String>,
-}
-
-impl BatchGenerationCreateWorkflowRequest {
-    fn from_route_request(route_request: BatchGenerationCreateRouteRequest) -> Self {
-        Self {
-            start_chapter_number: route_request.start_chapter_number,
-            count: route_request.count,
-            style_id: route_request.style_id,
-            target_word_count: route_request.target_word_count,
-            enable_analysis: route_request.enable_analysis.unwrap_or(false),
-            enable_mcp: route_request.enable_mcp,
-            enable_web_research: route_request.enable_web_research,
-            web_research_query: route_request.web_research_query,
-            max_retries: route_request.max_retries.unwrap_or(3),
-            model_override: route_request.model,
-            creative_mode: normalize_optional_create_request_string(route_request.creative_mode),
-            story_focus: normalize_optional_create_request_string(route_request.story_focus),
-            plot_stage: normalize_optional_create_request_string(route_request.plot_stage),
-            story_creation_brief: normalize_optional_create_request_string(
-                route_request.story_creation_brief,
-            ),
-            quality_preset: normalize_optional_create_request_string(route_request.quality_preset),
-            quality_notes: normalize_optional_create_request_string(route_request.quality_notes),
-            story_repair_summary: normalize_optional_create_request_string(
-                route_request.story_repair_summary,
-            ),
-            story_repair_targets: route_request.story_repair_targets.unwrap_or_default(),
-            story_preserve_strengths: route_request.story_preserve_strengths.unwrap_or_default(),
-        }
-    }
-
-    fn compat_options_with_web_research_default(
-        &self,
-        web_research_default: bool,
-    ) -> SingleChapterGenerationCompatOptions {
-        SingleChapterGenerationCompatOptions {
-            style_id: self.style_id,
-            enable_analysis: self.enable_analysis,
-            enable_mcp: self.enable_mcp.unwrap_or(true),
-            web_research_enabled: self.enable_web_research.unwrap_or(web_research_default),
-            web_research_query: self.web_research_query.clone(),
-            narrative_perspective: None,
-            creative_mode: self.creative_mode.clone(),
-            story_focus: self.story_focus.clone(),
-            plot_stage: self.plot_stage.clone(),
-            story_creation_brief: self.story_creation_brief.clone(),
-            quality_preset: self.quality_preset.clone(),
-            quality_notes: self.quality_notes.clone(),
-            story_repair_summary: self.story_repair_summary.clone(),
-            story_repair_targets: self.story_repair_targets.clone(),
-            story_preserve_strengths: self.story_preserve_strengths.clone(),
-        }
-    }
-
-    fn into_request_runtime_state(
-        &self,
-        web_research_default: bool,
-    ) -> BatchGenerationRequestRuntimeState {
-        BatchGenerationRequestRuntimeState::new(
-            self.compat_options_with_web_research_default(web_research_default),
-            self.model_override.clone(),
-        )
-    }
-
-    fn task_spec(&self) -> BatchGenerationCreateTaskSpec {
-        BatchGenerationCreateTaskSpec {
-            start_chapter_number: self.start_chapter_number,
-            style_id: self.style_id,
-            enable_analysis: self.enable_analysis,
-            max_retries: self.max_retries,
-        }
-    }
-
-    async fn prepare(
-        &self,
-        db: &DatabaseConnection,
-        project_id: &str,
-    ) -> Result<
-        (i32, Vec<BatchGenerationCreateChapterTarget>),
-        PrepareBatchGenerationCreateRequestError,
-    > {
-        self.validate_request_bounds()?;
-
-        let chapters_to_generate = self
-            .load_chapters_for_generation_range(db, project_id)
-            .await?;
-        if let Some(first_chapter) = chapters_to_generate.first() {
-            let prerequisite = check_chapter_generation_prerequisites(db, first_chapter)
-                .await
-                .map_err(PrepareBatchGenerationCreateRequestError::Internal)?;
-            if !prerequisite.can_generate {
-                return Err(
-                    PrepareBatchGenerationCreateRequestError::PrerequisitesBlocked(
-                        prerequisite.error_message,
-                    ),
-                );
-            }
-        }
-
-        Ok((
-            normalize_chapter_generation_target_word_count(self.target_word_count),
-            chapters_to_generate
-                .iter()
-                .map(BatchGenerationCreateChapterTarget::from_model)
-                .collect(),
-        ))
-    }
-
-    async fn load_chapters_for_generation_range(
-        &self,
-        db: &DatabaseConnection,
-        project_id: &str,
-    ) -> Result<Vec<chapter::Model>, PrepareBatchGenerationCreateRequestError> {
-        if self.count <= 0 {
-            return Err(PrepareBatchGenerationCreateRequestError::InvalidCount);
-        }
-
-        let project_chapters = chapter::Entity::find()
-            .filter(chapter::Column::ProjectId.eq(project_id))
-            .order_by_asc(chapter::Column::ChapterNumber)
-            .all(db)
-            .await
-            .map_err(|error| {
-                PrepareBatchGenerationCreateRequestError::Internal(error.to_string())
-            })?;
-
-        self.select_chapters_for_generation_range(project_chapters)
-    }
-
-    fn validate_request_bounds(&self) -> Result<(), PrepareBatchGenerationCreateRequestError> {
-        if self.count <= 0 {
-            return Err(PrepareBatchGenerationCreateRequestError::InvalidCount);
-        }
-        if self.count > MAX_BATCH_GENERATION_CREATE_COUNT {
-            return Err(PrepareBatchGenerationCreateRequestError::InvalidCountTooLarge);
-        }
-        if let Some(target_word_count) = self.target_word_count {
-            if target_word_count < MIN_BATCH_GENERATION_CREATE_TARGET_WORD_COUNT {
-                return Err(
-                    PrepareBatchGenerationCreateRequestError::InvalidTargetWordCountTooSmall,
-                );
-            }
-            if target_word_count > MAX_BATCH_GENERATION_CREATE_TARGET_WORD_COUNT {
-                return Err(
-                    PrepareBatchGenerationCreateRequestError::InvalidTargetWordCountTooLarge,
-                );
-            }
-        }
-        if self.max_retries < MIN_BATCH_GENERATION_CREATE_RETRIES
-            || self.max_retries > MAX_BATCH_GENERATION_CREATE_RETRIES
-        {
-            return Err(PrepareBatchGenerationCreateRequestError::InvalidMaxRetries);
-        }
-        if !is_valid_optional_choice(
-            self.creative_mode.as_deref(),
-            BATCH_GENERATION_CREATE_CREATIVE_MODE_VALUES,
-        ) {
-            return Err(PrepareBatchGenerationCreateRequestError::InvalidCreativeMode);
-        }
-        if !is_valid_optional_choice(
-            self.story_focus.as_deref(),
-            BATCH_GENERATION_CREATE_STORY_FOCUS_VALUES,
-        ) {
-            return Err(PrepareBatchGenerationCreateRequestError::InvalidStoryFocus);
-        }
-        if !is_valid_optional_choice(
-            self.plot_stage.as_deref(),
-            BATCH_GENERATION_CREATE_PLOT_STAGE_VALUES,
-        ) {
-            return Err(PrepareBatchGenerationCreateRequestError::InvalidPlotStage);
-        }
-        if !is_valid_optional_choice(
-            self.quality_preset.as_deref(),
-            BATCH_GENERATION_CREATE_QUALITY_PRESET_VALUES,
-        ) {
-            return Err(PrepareBatchGenerationCreateRequestError::InvalidQualityPreset);
-        }
-        if !is_valid_optional_text_length(
-            self.story_creation_brief.as_deref(),
-            MAX_BATCH_GENERATION_CREATE_STORY_CREATION_BRIEF_LENGTH,
-        ) {
-            return Err(PrepareBatchGenerationCreateRequestError::StoryCreationBriefTooLong);
-        }
-        if !is_valid_optional_text_length(
-            self.quality_notes.as_deref(),
-            MAX_BATCH_GENERATION_CREATE_QUALITY_NOTES_LENGTH,
-        ) {
-            return Err(PrepareBatchGenerationCreateRequestError::QualityNotesTooLong);
-        }
-
-        Ok(())
-    }
-
-    fn select_chapters_for_generation_range(
-        &self,
-        project_chapters: Vec<chapter::Model>,
-    ) -> Result<Vec<chapter::Model>, PrepareBatchGenerationCreateRequestError> {
-        if project_chapters.is_empty() {
-            return Err(PrepareBatchGenerationCreateRequestError::ProjectHasNoChapters);
-        }
-
-        let end_chapter_number = self.start_chapter_number + self.count - 1;
-        let chapters_to_generate = project_chapters
-            .into_iter()
-            .filter(|chapter| {
-                self.start_chapter_number <= chapter.chapter_number
-                    && chapter.chapter_number <= end_chapter_number
-            })
-            .collect::<Vec<_>>();
-
-        if chapters_to_generate.is_empty() {
-            return Err(PrepareBatchGenerationCreateRequestError::ChaptersNotFound);
-        }
-
-        Ok(chapters_to_generate)
-    }
-}
-
-fn normalize_optional_create_request_string(value: Option<String>) -> Option<String> {
-    value
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn is_valid_optional_choice(value: Option<&str>, allowed_values: &[&str]) -> bool {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| allowed_values.contains(&value))
-        .unwrap_or(true)
-}
-
-fn is_valid_optional_text_length(value: Option<&str>, max_chars: usize) -> bool {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.chars().count() <= max_chars)
-        .unwrap_or(true)
-}
-
-pub(crate) fn build_batch_generation_create_workflow_request_from_route_payload(
-    route_request: BatchGenerationCreateRouteRequest,
-) -> BatchGenerationCreateWorkflowRequest {
-    BatchGenerationCreateWorkflowRequest::from_route_request(route_request)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BatchGenerationCreateTaskSpec {
-    start_chapter_number: i32,
-    style_id: Option<i32>,
-    enable_analysis: bool,
-    max_retries: i32,
-}
-
-impl BatchGenerationCreateTaskSpec {
-    fn with_effective_style_id(self, style_id: Option<i32>) -> Self {
-        Self { style_id, ..self }
-    }
-}
-
-async fn resolve_batch_generation_create_effective_style_id(
-    db: &DatabaseConnection,
-    project_id: &str,
-    requested_style_id: Option<i32>,
-) -> Result<Option<i32>, String> {
-    let default_style_id = match requested_style_id {
-        Some(_) => None,
-        None => load_batch_generation_project_default_style_id(db, project_id).await?,
-    };
-
-    Ok(select_batch_generation_create_effective_style_id(
-        requested_style_id,
-        default_style_id,
-    ))
-}
-
-fn select_batch_generation_create_effective_style_id(
-    requested_style_id: Option<i32>,
-    default_style_id: Option<i32>,
-) -> Option<i32> {
-    requested_style_id.or(default_style_id)
-}
-
-async fn load_batch_generation_project_default_style_id(
-    db: &DatabaseConnection,
-    project_id: &str,
-) -> Result<Option<i32>, String> {
-    project_default_style::Entity::find()
-        .filter(project_default_style::Column::ProjectId.eq(project_id))
-        .one(db)
-        .await
-        .map(|default_style| default_style.map(|model| model.style_id))
-        .map_err(|error| error.to_string())
-}
-
-pub(crate) async fn load_recent_batch_story_repair_quality_summary(
-    db: &DatabaseConnection,
-    project_id: &str,
-    before_chapter_number: i32,
-) -> Result<Option<Value>, String> {
-    if before_chapter_number <= 1 {
-        return Ok(None);
-    }
-
-    let previous_chapters = chapter::Entity::find()
-        .filter(chapter::Column::ProjectId.eq(project_id))
-        .filter(chapter::Column::ChapterNumber.lt(before_chapter_number))
-        .order_by_desc(chapter::Column::ChapterNumber)
-        .limit(3)
-        .all(db)
-        .await
-        .map_err(|error| {
-            format!("load previous chapters for batch story repair failed: {error}")
-        })?;
-
-    if previous_chapters.is_empty() {
-        return Ok(None);
-    }
-
-    let mut summaries = Vec::new();
-    for previous_chapter in previous_chapters {
-        let histories = generation_history::Entity::find()
-            .filter(generation_history::Column::ChapterId.eq(Some(previous_chapter.id.clone())))
-            .order_by_desc(generation_history::Column::CreatedAt)
-            .limit(30)
-            .all(db)
-            .await
-            .map_err(|error| {
-                format!("load generation histories for batch story repair failed: {error}")
-            })?;
-        let quality_fragments = build_chapter_analysis_quality_fragments(&histories, None);
-        if let Some(summary) = quality_fragments.quality_metrics_summary {
-            summaries.push(summary);
-        }
-    }
-
-    Ok(aggregate_story_repair_quality_summaries(
-        &summaries, "batch",
-    ))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BatchGenerationCreateStartupSeedSource {
-    RequestOnly,
-    RecentHistorySummary,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct BatchGenerationCreateStartupRuntimeState {
-    request_runtime_state: BatchGenerationRequestRuntimeState,
-    runtime_state_payload: Value,
-    seed_source: BatchGenerationCreateStartupSeedSource,
-}
-
-impl BatchGenerationCreateStartupRuntimeState {
-    async fn prepare(
-        db: &DatabaseConnection,
-        project_id: &str,
-        start_chapter_number: i32,
-        request_runtime_state: BatchGenerationRequestRuntimeState,
-    ) -> Result<Self, String> {
-        let recent_history_summary =
-            load_recent_batch_story_repair_quality_summary(db, project_id, start_chapter_number)
-                .await?;
-
-        Ok(Self::from_recent_history_summary(
-            request_runtime_state,
-            recent_history_summary,
-        ))
-    }
-
-    fn from_recent_history_summary(
-        request_runtime_state: BatchGenerationRequestRuntimeState,
-        recent_history_summary: Option<Value>,
-    ) -> Self {
-        let (runtime_state_payload, seed_source) = match recent_history_summary {
-            Some(recent_history_summary) => (
-                build_batch_generation_runtime_state_payload_from_parts(
-                    &request_runtime_state,
-                    Some(&recent_history_summary),
-                ),
-                BatchGenerationCreateStartupSeedSource::RecentHistorySummary,
-            ),
-            None => (
-                build_batch_generation_runtime_state_payload_from_parts(
-                    &request_runtime_state,
-                    None,
-                ),
-                BatchGenerationCreateStartupSeedSource::RequestOnly,
-            ),
-        };
-
-        Self {
-            request_runtime_state,
-            runtime_state_payload,
-            seed_source,
-        }
-    }
-
-    fn into_parts(self) -> (BatchGenerationRequestRuntimeState, Value) {
-        (self.request_runtime_state, self.runtime_state_payload)
-    }
-
-    fn into_runtime_seed(self) -> BatchGenerationCreateRuntimeSeed {
-        let (_, runtime_state_payload) = self.into_parts();
-
-        BatchGenerationCreateRuntimeSeed {
-            runtime_state_payload,
-        }
-    }
-
-    #[cfg(test)]
-    fn runtime_state_payload(&self) -> &Value {
-        &self.runtime_state_payload
-    }
-
-    #[cfg(test)]
-    fn request_runtime_state(&self) -> &BatchGenerationRequestRuntimeState {
-        &self.request_runtime_state
-    }
-
-    #[cfg(test)]
-    fn seed_source(&self) -> BatchGenerationCreateStartupSeedSource {
-        self.seed_source
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct BatchGenerationCreateRuntimeSeed {
-    runtime_state_payload: Value,
-}
-
-impl BatchGenerationCreateRuntimeSeed {
-    async fn prepare(
-        db: &DatabaseConnection,
-        project_id: &str,
-        start_chapter_number: i32,
-        request_runtime_state: BatchGenerationRequestRuntimeState,
-    ) -> Result<Self, String> {
-        BatchGenerationCreateStartupRuntimeState::prepare(
-            db,
-            project_id,
-            start_chapter_number,
-            request_runtime_state,
-        )
-        .await
-        .map(BatchGenerationCreateStartupRuntimeState::into_runtime_seed)
-    }
-
-    #[cfg(test)]
-    fn from_runtime_state_payload(runtime_state_payload: Value) -> Self {
-        Self {
-            runtime_state_payload,
-        }
-    }
-
-    #[cfg(test)]
-    fn into_parts(self) -> (Value, SingleChapterGenerationCompatOptions) {
-        let request_runtime_state =
-            parse_batch_generation_request_runtime_state(Some(&self.runtime_state_payload));
-        let resolved_compat_options =
-            restore_batch_generation_runtime_compat_options_from_runtime_state_seed(
-                &request_runtime_state.compat_options,
-                Some(&self.runtime_state_payload),
-            );
-
-        (self.runtime_state_payload, resolved_compat_options)
-    }
-
-    fn into_workflow_launch_parts(
-        self,
-        user_id: String,
-        chapter_ids: Vec<String>,
-        total_chapters: i32,
-        normalized_target_word_count: i32,
-        execution_config:
-            crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig,
-    ) -> (
-        BatchGenerationQueuedSnapshotPlan,
-        BatchGenerationExecutionInput,
-    ) {
-        let runtime_state_payload = self.runtime_state_payload;
-
-        build_batch_generation_startup_snapshot_and_runtime_launch_input_from_runtime_state_seed(
-            user_id,
-            chapter_ids,
-            total_chapters,
-            normalized_target_word_count,
-            runtime_state_payload,
-            execution_config,
-        )
-    }
-
-    #[cfg(test)]
-    fn startup_snapshot_plan(&self, total_chapters: i32) -> BatchGenerationQueuedSnapshotPlan {
-        BatchGenerationQueuedSnapshotPlan::from_runtime_state_seed(
-            total_chapters,
-            Some(self.runtime_state_payload.clone()),
-        )
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PrepareBatchGenerationCreateRequestError {
-    InvalidCount,
-    InvalidCountTooLarge,
-    InvalidTargetWordCountTooSmall,
-    InvalidTargetWordCountTooLarge,
-    InvalidMaxRetries,
-    InvalidCreativeMode,
-    InvalidStoryFocus,
-    InvalidPlotStage,
-    InvalidQualityPreset,
-    StoryCreationBriefTooLong,
-    QualityNotesTooLong,
-    ProjectHasNoChapters,
-    ChaptersNotFound,
-    PrerequisitesBlocked(String),
-    Internal(String),
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct BatchGenerationCreateChapterTarget {
-    pub(crate) id: String,
-    pub(crate) chapter_number: i32,
-    pub(crate) title: String,
-}
-
-impl BatchGenerationCreateChapterTarget {
-    fn from_model(chapter_model: &chapter::Model) -> Self {
-        Self {
-            id: chapter_model.id.clone(),
-            chapter_number: chapter_model.chapter_number,
-            title: chapter_model.title.clone(),
-        }
-    }
-}
-
-pub(crate) fn build_batch_generation_runtime_state_payload_from_parts_with_explicit_payload(
-    request_runtime_state: &BatchGenerationRequestRuntimeState,
-    explicit_story_repair_payload: Option<&Value>,
-    quality_summary: Option<&Value>,
-    latest_quality_metrics: Option<&Value>,
-) -> Value {
-    let mut payload = batch_generation_request_runtime_state_payload(request_runtime_state)
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
-    let resolved_quality_context = resolve_batch_quality_runtime_context_for_startup_seed(
-        quality_summary,
-        latest_quality_metrics,
-    );
-    let resolved_quality_summary = resolved_quality_context
-        .quality_metrics_summary
-        .clone()
-        .unwrap_or(Value::Null);
-    let active_story_repair_payload = resolve_active_story_repair_payload_with_quality_fallback(
-        explicit_story_repair_payload,
-        Some(&resolved_quality_summary),
-        resolved_quality_context.latest_quality_metrics.as_ref(),
-        "batch",
-        "recent_history_summary",
-        "Recent history summary",
-    );
-
-    if let Some(active_story_repair_payload) = active_story_repair_payload {
-        payload.insert(
-            "active_story_repair_payload".to_string(),
-            active_story_repair_payload,
-        );
-    }
-    apply_batch_quality_runtime_context_to_payload(
-        &mut payload,
-        resolved_quality_context,
-        Some(resolved_quality_summary.clone()),
-    );
-
-    Value::Object(payload)
-}
-
-pub(crate) fn build_batch_generation_runtime_state_payload_from_parts(
-    request_runtime_state: &BatchGenerationRequestRuntimeState,
-    quality_summary: Option<&Value>,
-) -> Value {
-    build_batch_generation_runtime_state_payload_from_parts_with_explicit_payload(
-        request_runtime_state,
-        request_runtime_state
-            .active_story_repair_payload_with_scope("batch")
-            .as_ref(),
-        quality_summary,
-        None,
-    )
-}
-fn batch_generation_create_response_payload(
-    batch_id: &str,
-    project_id: &str,
-    chapters_to_generate: &[BatchGenerationCreateChapterTarget],
-    target_word_count: i32,
-    enable_analysis: bool,
-    startup_snapshot_plan: &BatchGenerationQueuedSnapshotPlan,
-) -> Value {
-    let total_chapters = chapters_to_generate.len();
-    let task_kind = if total_chapters == 1 {
-        BatchGenerationTaskKind::SingleChapter
-    } else {
-        BatchGenerationTaskKind::Batch
-    };
-    let payload = build_batch_generation_task_response_payload_from_runtime_parts(
-        batch_id,
-        batch_generation_task_type(task_kind),
-        project_id,
-        "pending",
-        None,
-        None,
-        Some(startup_snapshot_plan.runtime_state()),
-        BatchGenerationTaskResponsePayloadOptions {
-            quality_payload: Some(BatchGenerationTaskResponseQualityPayload::Batch {
-                quality_runtime_context: startup_snapshot_plan.quality_runtime_context(),
-                quality_metrics_summary: startup_snapshot_plan.quality_metrics_summary().cloned(),
-            }),
-            active_story_repair_payload: startup_snapshot_plan.active_story_repair_payload(),
-            quality_history_context: startup_snapshot_plan.quality_history_context(),
-            extra_fields: vec![
-                (
-                    "message".to_string(),
-                    json!(format!("已创建批量生成任务，共 {} 章", total_chapters)),
-                ),
-                (
-                    "chapters_to_generate".to_string(),
-                    Value::Array(
-                        chapters_to_generate
-                            .iter()
-                            .map(|target| {
-                                json!({
-                                    "id": target.id,
-                                    "chapter_number": target.chapter_number,
-                                    "title": target.title,
-                                })
-                            })
-                            .collect::<Vec<_>>(),
-                    ),
-                ),
-                (
-                    "estimated_time_minutes".to_string(),
-                    json!(estimated_task_minutes(
-                        total_chapters,
-                        target_word_count,
-                        enable_analysis,
-                    )),
-                ),
-            ],
-            ..Default::default()
-        },
-    );
-
-    Value::Object(payload)
-}
-
-#[derive(Debug)]
-struct BatchGenerationCreateLaunchPersistencePlan {
-    task_seed: BatchGenerationTaskPersistenceSeed,
-    startup_snapshot_plan: BatchGenerationQueuedSnapshotPlan,
-    response_payload: Value,
-    runtime_input: BatchGenerationExecutionInput,
-}
-
-#[derive(Debug, Clone)]
-struct PreparedBatchGenerationCreateWorkflowLaunch {
-    task_spec: BatchGenerationCreateTaskSpec,
-    chapters_to_generate: Vec<BatchGenerationCreateChapterTarget>,
-    startup_snapshot_plan: BatchGenerationQueuedSnapshotPlan,
-    runtime_input: BatchGenerationExecutionInput,
-}
-
-impl PreparedBatchGenerationCreateWorkflowLaunch {
-    async fn prepare(
-        db: &DatabaseConnection,
-        project_id: &str,
-        user_id: &str,
-        request: BatchGenerationCreateWorkflowRequest,
-    ) -> Result<Self, CreateBatchGenerationWriteWorkflowError> {
-        let (normalized_target_word_count, chapter_targets) = request
-            .prepare(db, project_id)
-            .await
-            .map_err(CreateBatchGenerationWriteWorkflowError::Prepare)?;
-        let task_spec = request.task_spec();
-        let effective_style_id =
-            resolve_batch_generation_create_effective_style_id(db, project_id, task_spec.style_id)
-                .await
-                .map_err(CreateBatchGenerationWriteWorkflowError::Internal)?;
-        let task_spec = task_spec.with_effective_style_id(effective_style_id);
-        let web_research_default = SettingsService::resolve_web_research_enabled(db, user_id)
-            .await
-            .map_err(|error| CreateBatchGenerationWriteWorkflowError::Config(error.to_string()))?;
-        let request_runtime_state = request.into_request_runtime_state(web_research_default);
-        let model_override = request_runtime_state.model_override.clone();
-        let runtime_seed = BatchGenerationCreateRuntimeSeed::prepare(
-            db,
-            project_id,
-            task_spec.start_chapter_number,
-            request_runtime_state,
-        )
-        .await
-        .map_err(CreateBatchGenerationWriteWorkflowError::Internal)?;
-        let execution_config =
-            prepare_generation_execution_config(db, user_id, model_override.as_deref())
-                .await
-                .map_err(CreateBatchGenerationWriteWorkflowError::Config)?;
-        Ok(Self::from_runtime_seed(
-            task_spec,
-            normalized_target_word_count,
-            chapter_targets,
-            user_id,
-            runtime_seed,
-            execution_config,
-        ))
-    }
-
-    fn from_runtime_seed(
-        task_spec: BatchGenerationCreateTaskSpec,
-        normalized_target_word_count: i32,
-        chapters_to_generate: Vec<BatchGenerationCreateChapterTarget>,
-        user_id: &str,
-        runtime_seed: BatchGenerationCreateRuntimeSeed,
-        execution_config:
-            crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig,
-    ) -> Self {
-        let total_chapters = chapters_to_generate.len() as i32;
-        let chapter_ids = chapters_to_generate
-            .iter()
-            .map(|target| target.id.clone())
-            .collect();
-        let (startup_snapshot_plan, runtime_input) = runtime_seed.into_workflow_launch_parts(
-            user_id.to_string(),
-            chapter_ids,
-            total_chapters,
-            normalized_target_word_count,
-            execution_config,
-        );
-
-        Self {
-            task_spec,
-            chapters_to_generate,
-            startup_snapshot_plan,
-            runtime_input,
-        }
-    }
-}
-
-impl BatchGenerationCreateLaunchPersistencePlan {
-    async fn start(
-        db: &DatabaseConnection,
-        project_id: &str,
-        user_id: &str,
-        request: BatchGenerationCreateWorkflowRequest,
-        now: chrono::NaiveDateTime,
-    ) -> Result<Value, CreateBatchGenerationWriteWorkflowError> {
-        Self::prepare(db, project_id, user_id, request)
-            .await?
-            .persist_and_dispatch(db, now)
-            .await
-    }
-
-    async fn prepare(
-        db: &DatabaseConnection,
-        project_id: &str,
-        user_id: &str,
-        request: BatchGenerationCreateWorkflowRequest,
-    ) -> Result<Self, CreateBatchGenerationWriteWorkflowError> {
-        let workflow_launch =
-            PreparedBatchGenerationCreateWorkflowLaunch::prepare(db, project_id, user_id, request)
-                .await?;
-        Ok(Self::from_workflow_launch(
-            Uuid::new_v4().to_string(),
-            project_id.to_string(),
-            workflow_launch,
-        ))
-    }
-
-    fn from_workflow_launch(
-        task_id: String,
-        project_id: String,
-        workflow_launch: PreparedBatchGenerationCreateWorkflowLaunch,
-    ) -> Self {
-        let PreparedBatchGenerationCreateWorkflowLaunch {
-            task_spec,
-            chapters_to_generate,
-            startup_snapshot_plan,
-            runtime_input,
-        } = workflow_launch;
-        let total_chapters = chapters_to_generate.len() as i32;
-        let response_payload = batch_generation_create_response_payload(
-            &task_id,
-            &project_id,
-            &chapters_to_generate,
-            runtime_input.target_word_count,
-            task_spec.enable_analysis,
-            &startup_snapshot_plan,
-        );
-        let task_seed = BatchGenerationTaskPersistenceSeed {
-            id: task_id,
-            project_id,
-            user_id: runtime_input.user_id.clone(),
-            start_chapter_number: task_spec.start_chapter_number,
-            chapter_count: total_chapters,
-            chapter_ids: Value::Array(
-                runtime_input
-                    .chapter_ids
-                    .iter()
-                    .map(|chapter_id| json!(chapter_id))
-                    .collect(),
-            ),
-            style_id: task_spec.style_id,
-            target_word_count: runtime_input.target_word_count,
-            enable_analysis: task_spec.enable_analysis,
-            total_chapters,
-            current_chapter_id: None,
-            current_chapter_number: None,
-            max_retries: task_spec.max_retries,
-        };
-
-        Self {
-            task_seed,
-            startup_snapshot_plan,
-            response_payload,
-            runtime_input,
-        }
-    }
-
-    #[cfg(test)]
-    fn response_payload(&self) -> Value {
-        self.response_payload.clone()
-    }
-
-    #[cfg(test)]
-    fn background_task_active_model(
-        &self,
-        now: chrono::NaiveDateTime,
-    ) -> crate::models::batch_generation_task::ActiveModel {
-        self.task_seed.clone().into_active_model(now)
-    }
-
-    async fn persist_and_dispatch(
-        self,
-        db: &DatabaseConnection,
-        now: chrono::NaiveDateTime,
-    ) -> Result<Value, CreateBatchGenerationWriteWorkflowError> {
-        let BatchGenerationCreateLaunchPersistencePlan {
-            task_seed,
-            startup_snapshot_plan,
-            response_payload,
-            runtime_input,
-        } = self;
-        let task_id = task_seed.id.clone();
-        let task = task_seed.into_active_model(now);
-
-        task.insert(db).await.map_err(|error| {
-            CreateBatchGenerationWriteWorkflowError::Internal(error.to_string())
-        })?;
-        startup_snapshot_plan
-            .persist(db, &task_id)
-            .await
-            .map_err(CreateBatchGenerationWriteWorkflowError::Internal)?;
-        dispatch_batch_generation_runtime(db.clone(), task_id, runtime_input);
-
-        Ok(response_payload)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CreateBatchGenerationWriteWorkflowError {
-    ProjectAccess(ProjectAccessQueryError),
-    Prepare(PrepareBatchGenerationCreateRequestError),
-    Config(String),
-    Internal(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ResumeBatchGenerationWriteWorkflowError {
-    Task(LoadOwnedBatchGenerationTaskError),
-    Domain(ResumeBatchGenerationDomainError),
-    Config(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CancelBatchGenerationWriteWorkflowError {
-    Task(LoadOwnedBatchGenerationTaskError),
-    Domain(String),
-}
-
-impl From<PrepareOwnedBatchGenerationResumeError> for ResumeBatchGenerationWriteWorkflowError {
-    fn from(error: PrepareOwnedBatchGenerationResumeError) -> Self {
-        match error {
-            PrepareOwnedBatchGenerationResumeError::Task(error) => Self::Task(error),
-            PrepareOwnedBatchGenerationResumeError::Domain(error) => Self::Domain(error),
-            PrepareOwnedBatchGenerationResumeError::Config(error) => Self::Config(error),
-        }
-    }
-}
-
-fn validate_cancel_batch_generation_task_status(
-    task: &crate::models::batch_generation_task::Model,
-) -> Result<(), CancelBatchGenerationWriteWorkflowError> {
-    if matches!(task.status.as_str(), "completed" | "failed" | "cancelled") {
-        return Err(CancelBatchGenerationWriteWorkflowError::Domain(format!(
-            "Cannot cancel task in status {}",
-            task.status
-        )));
-    }
-
-    Ok(())
-}
-
-fn map_prepare_owned_batch_generation_cancel_sources_error(
-    error: LoadOwnedBatchGenerationTaskSourcesError,
-) -> CancelBatchGenerationWriteWorkflowError {
-    match error {
-        LoadOwnedBatchGenerationTaskSourcesError::Task(error) => {
-            CancelBatchGenerationWriteWorkflowError::Task(error)
-        }
-        LoadOwnedBatchGenerationTaskSourcesError::Snapshot(error) => {
-            CancelBatchGenerationWriteWorkflowError::Domain(error)
-        }
-    }
-}
-
-fn prepare_cancel_batch_generation_persistence_plan_from_owned_sources(
-    task: crate::models::batch_generation_task::Model,
-    snapshot: Option<crate::models::batch_generation_snapshot::Model>,
-) -> Result<BatchGenerationCancelledPersistencePlan, CancelBatchGenerationWriteWorkflowError> {
-    validate_cancel_batch_generation_task_status(&task)?;
-    Ok(BatchGenerationCancelledPersistencePlan::from_sources(
-        &task,
-        snapshot.as_ref(),
-    ))
-}
-
-async fn prepare_owned_batch_generation_cancel_workflow(
-    db: &DatabaseConnection,
-    batch_id: &str,
-    user_id: &str,
-) -> Result<BatchGenerationCancelledPersistencePlan, CancelBatchGenerationWriteWorkflowError> {
-    let (task, snapshot) = load_owned_batch_generation_task_sources(db, batch_id, user_id)
-        .await
-        .map_err(map_prepare_owned_batch_generation_cancel_sources_error)?
-        .into_parts();
-
-    prepare_cancel_batch_generation_persistence_plan_from_owned_sources(task, snapshot)
-}
-
-pub(crate) async fn start_owned_batch_generation_write_workflow(
-    db: &DatabaseConnection,
-    project_id: &str,
-    user_id: &str,
-    route_request: BatchGenerationCreateRouteRequest,
-) -> Result<Value, CreateBatchGenerationWriteWorkflowError> {
-    ensure_owned_project_access(db, project_id, user_id)
-        .await
-        .map_err(CreateBatchGenerationWriteWorkflowError::ProjectAccess)?;
-    BatchGenerationCreateLaunchPersistencePlan::start(
-        db,
-        project_id,
-        user_id,
-        build_batch_generation_create_workflow_request_from_route_payload(route_request),
-        Utc::now().naive_utc(),
-    )
-    .await
-}
-
-pub(crate) async fn resume_owned_batch_generation_write_workflow(
-    db: &DatabaseConnection,
-    batch_id: &str,
-    user_id: &str,
-) -> Result<Value, ResumeBatchGenerationWriteWorkflowError> {
-    prepare_owned_batch_generation_resume(db, batch_id, user_id)
-        .await
-        .map_err(ResumeBatchGenerationWriteWorkflowError::from)?
-        .persist_and_dispatch(db)
-        .await
-        .map_err(ResumeBatchGenerationWriteWorkflowError::Config)
-}
-
-pub(crate) async fn cancel_owned_batch_generation_write_workflow(
-    db: &DatabaseConnection,
-    batch_id: &str,
-    user_id: &str,
-) -> Result<Value, CancelBatchGenerationWriteWorkflowError> {
-    prepare_owned_batch_generation_cancel_workflow(db, batch_id, user_id)
-        .await?
-        .persist(db)
-        .await
-        .map_err(CancelBatchGenerationWriteWorkflowError::Domain)
-}
 
 #[cfg(test)]
 mod tests {
     use chrono::{NaiveDate, Utc};
+    use sea_orm::{
+        ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, DbBackend,
+        EntityTrait, QueryFilter, Schema, Set,
+    };
     use serde_json::{json, Value};
 
     use super::{
@@ -1228,53 +47,331 @@ mod tests {
         BatchGenerationCreateRouteRequest, BatchGenerationCreateRuntimeSeed,
         BatchGenerationCreateStartupRuntimeState, BatchGenerationCreateStartupSeedSource,
         BatchGenerationCreateTaskSpec, BatchGenerationCreateWorkflowRequest,
-        BatchGenerationTaskPersistenceSeed, CancelBatchGenerationWriteWorkflowError,
-        CreateBatchGenerationWriteWorkflowError, PrepareBatchGenerationCreateRequestError,
-        PreparedBatchGenerationCreateWorkflowLaunch,
+        BatchGenerationTaskPersistenceSeed, CreateBatchGenerationWriteWorkflowError,
+        PrepareBatchGenerationCreateRequestError, PreparedBatchGenerationCreateWorkflowLaunch,
     };
     use crate::models::chapter;
-    use crate::models::{batch_generation_snapshot, batch_generation_task};
-    use crate::services::chapter_batch_generation_owned_task_query_service::LoadOwnedBatchGenerationTaskError;
-    use crate::services::chapter_batch_generation_resume_task_command_service::{
-        BatchGenerationResumeLaunchPersistencePlan, ResumeExecutionDispatchPlan,
+    use crate::models::{
+        batch_generation_snapshot, batch_generation_task, generation_history, project,
+        project_default_style, settings,
     };
-    use crate::services::chapter_batch_generation_runtime_state_service::{
-        build_batch_generation_execution_input, BatchGenerationCancelledPersistencePlan,
-        BatchGenerationResumeResetPersistencePlan, ResumeBatchGenerationCommandState,
-    };
-    use crate::services::chapter_generation_execution_config_service::PreparedGenerationExecutionConfig;
-    use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
-    use crate::services::chapter_generation_request_runtime_state_service::{
+    use crate::services::chapter_batch_generation_runtime_state_service::BatchGenerationQueuedCreateResponseChapter;
+    use crate::services::chapter_batch_generation_task_payload_base_service::estimated_task_minutes;
+    use crate::services::chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig;
+    use crate::services::chapter_generation_execution_contract_service::normalize_chapter_generation_target_word_count;
+    use crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig;
+    use crate::services::chapter_generation_execution_contract_service::{
         batch_generation_request_runtime_state_payload, BatchGenerationRequestRuntimeState,
     };
-    use crate::services::chapter_generation_target_word_count_service::normalize_chapter_generation_target_word_count;
-    use crate::services::chapter_story_repair_quality_context_service::aggregate_story_repair_quality_summaries;
-    use crate::services::project_access_query_service::ProjectAccessQueryError;
+    use crate::services::chapter_generation_runtime_service::story_repair_quality_context_owner::aggregate_story_repair_quality_summaries;
+    use crate::services::project_service::ProjectAccessQueryError;
 
-    fn build_resume_task(status: &str) -> crate::models::batch_generation_task::Model {
-        crate::models::batch_generation_task::Model {
-            id: "task-1".to_string(),
-            project_id: "project-1".to_string(),
-            user_id: "user-1".to_string(),
-            start_chapter_number: 1,
-            chapter_count: 1,
-            chapter_ids: json!(["chapter-1"]),
-            style_id: None,
-            target_word_count: 3000,
-            enable_analysis: false,
-            status: status.to_string(),
-            total_chapters: 1,
-            completed_chapters: 0,
-            failed_chapters: json!([]),
-            current_chapter_id: Some("chapter-1".to_string()),
-            current_chapter_number: Some(1),
-            current_retry_count: 0,
-            max_retries: 3,
-            created_at: None,
-            started_at: None,
-            completed_at: None,
-            error_message: None,
+    #[test]
+    fn should_publish_batch_generation_write_workflow_owner_contract() {
+        let contract = super::build_batch_generation_write_workflow_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_write_workflow_service"
+        );
+        assert_eq!(
+            contract["scope"],
+            "batch_generation_create_write_workflow_persist_dispatch_and_response_payload"
+        );
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/app/api/chapter_batch_generation_routes.py"
+        );
+        assert_eq!(
+            contract["rust_owner_map"][1],
+            "backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["create_entrypoints"][2],
+            "start_owned_batch_generation_write_workflow"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["persistence_contract"][2],
+            "BatchGenerationQueuedSnapshotPlan::persist"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_dispatch"][2],
+            "ChapterCandidateRouteGatewayConfig"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_state_seed_entrypoints"][0],
+            "BatchGenerationCreateStartupRuntimeState::prepare"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_state_seed_entrypoints"][3],
+            "build_batch_generation_runtime_state_payload_from_parts_with_explicit_payload"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["response_payload_entrypoints"][0],
+            "BatchGenerationQueuedSnapshotPlan::into_create_response_payload"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["response_payload_fields"][11],
+            "candidate_gateway"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["response_payload_owner"],
+            "BatchGenerationQueuedSnapshotPlan::into_create_response_payload"
+        );
+        assert_eq!(
+            contract["active_consumers"][1],
+            "chapter_batch_generation_active_gateway_smoke_service"
+        );
+        assert_eq!(
+            contract["runtime_state_owner_contract"]["owner"],
+            "chapter_batch_generation_runtime_state_service"
+        );
+        assert_eq!(
+            contract["task_payload_owner_contract"]["owner"],
+            "chapter_batch_generation_task_payload_base_service"
+        );
+        assert_eq!(
+            contract["story_repair_quality_context_owner_contract"]["owner"],
+            "chapter_generation_runtime_service::story_repair_quality_context_owner"
+        );
+        assert_eq!(
+            contract["generation_execution_config_owner_contract"]["owner"],
+            "chapter_generation_execution_contract_service::execution_config"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["runtime_knob"],
+            "python_candidate_executor_fallback"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_bootstrap_status"],
+            "lazy_imported_and_registered_for_explicit_gateway_rollback_only"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profile"],
+            "phase5-batch-generation-owner"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["batch_generation_manifest_probe_count"],
+            11
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["rust_manifest_probe_count"],
+            11
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["create_workflow_owner"],
+            "start_owned_batch_generation_write_workflow"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["runtime_dispatch_owner"],
+            "dispatch_batch_generation_runtime"
+        );
+        assert_eq!(
+            contract["create_launch_owner_contract"]["owner"],
+            "chapter_batch_generation_write_workflow_service::create_launch_startup_seed_and_persistence"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_batch_generation_write_workflow_owner_ready_for_source_map_closeout_review"
+        );
+    }
+
+    #[test]
+    fn should_publish_batch_generation_create_launch_owner_contract() {
+        let contract = super::build_batch_generation_create_launch_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_write_workflow_service::create_launch_startup_seed_and_persistence"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["startup_seed_entrypoints"][0],
+            "BatchGenerationCreateStartupRuntimeState::prepare"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["startup_seed_entrypoints"][5],
+            "BatchGenerationCreateRuntimeSeed::into_workflow_launch_parts"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["launch_projection_entrypoints"][4],
+            "BatchGenerationCreateLaunchPersistencePlan::from_workflow_launch"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["persistence_and_dispatch_entrypoints"][3],
+            "dispatch_batch_generation_runtime"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["response_projection_entrypoints"][0],
+            "BatchGenerationQueuedSnapshotPlan::into_create_response_payload"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["response_projection_fields"][6],
+            "candidate_gateway"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_seed_dependencies"][3],
+            "prepare_generation_execution_config"
+        );
+        assert_eq!(
+            contract["active_consumers"][3],
+            "chapter_batch_generation_active_gateway_smoke_service"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["runtime_state_keys"][7],
+            "candidate_gateway"
+        );
+    }
+
+    async fn setup_batch_write_owner_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite memory db");
+        let builder = DbBackend::Sqlite;
+        let schema = Schema::new(builder);
+
+        db.execute(builder.build(&schema.create_table_from_entity(batch_generation_task::Entity)))
+            .await
+            .expect("create batch generation tasks table");
+        db.execute(
+            builder.build(&schema.create_table_from_entity(batch_generation_snapshot::Entity)),
+        )
+        .await
+        .expect("create batch generation snapshots table");
+        db.execute(builder.build(&schema.create_table_from_entity(project::Entity)))
+            .await
+            .expect("create projects table");
+        db.execute(builder.build(&schema.create_table_from_entity(chapter::Entity)))
+            .await
+            .expect("create chapters table");
+        db.execute(builder.build(&schema.create_table_from_entity(settings::Entity)))
+            .await
+            .expect("create settings table");
+        db.execute(builder.build(&schema.create_table_from_entity(project_default_style::Entity)))
+            .await
+            .expect("create project default styles table");
+        db.execute(builder.build(&schema.create_table_from_entity(generation_history::Entity)))
+            .await
+            .expect("create generation history table");
+
+        db
+    }
+
+    async fn seed_create_write_owner_fixture(db: &DatabaseConnection) {
+        let now = Utc::now().naive_utc();
+
+        project::ActiveModel {
+            id: Set("project-create-db-smoke".to_string()),
+            user_id: Set("user-create-db-smoke".to_string()),
+            title: Set("Batch Create DB Smoke".to_string()),
+            description: Set(None),
+            theme: Set(None),
+            genre: Set(None),
+            target_words: Set(8000),
+            current_words: Set(1200),
+            status: Set("active".to_string()),
+            wizard_status: Set("completed".to_string()),
+            wizard_step: Set(0),
+            outline_mode: Set("simple".to_string()),
+            world_time_period: Set(None),
+            world_location: Set(None),
+            world_atmosphere: Set(None),
+            world_rules: Set(None),
+            chapter_count: Set(Some(3)),
+            narrative_perspective: Set(None),
+            character_count: Set(0),
+            default_creative_mode: Set(None),
+            default_story_focus: Set(None),
+            default_plot_stage: Set(None),
+            default_story_creation_brief: Set(None),
+            default_quality_preset: Set(None),
+            default_quality_notes: Set(None),
+            created_at: Set(now),
+            updated_at: Set(Some(now)),
         }
+        .insert(db)
+        .await
+        .expect("insert create db smoke project");
+
+        for (chapter_id, chapter_number, status, content, summary, word_count) in [
+            (
+                "chapter-create-1",
+                1,
+                "completed",
+                Some("已完成前置章节正文"),
+                Some("已完成前置章节概要"),
+                1200,
+            ),
+            ("chapter-create-2", 2, "draft", None, None, 0),
+            ("chapter-create-3", 3, "draft", None, None, 0),
+        ] {
+            chapter::ActiveModel {
+                id: Set(chapter_id.to_string()),
+                project_id: Set("project-create-db-smoke".to_string()),
+                chapter_number: Set(chapter_number),
+                title: Set(format!("第{chapter_number}章")),
+                content: Set(content.map(str::to_string)),
+                summary: Set(summary.map(str::to_string)),
+                word_count: Set(word_count),
+                status: Set(status.to_string()),
+                outline_id: Set(None),
+                sub_index: Set(1),
+                expansion_plan: Set(None),
+                created_at: Set(now),
+                updated_at: Set(Some(now)),
+            }
+            .insert(db)
+            .await
+            .expect("insert create db smoke chapter");
+        }
+
+        settings::ActiveModel {
+            id: Set("settings-create-db-smoke".to_string()),
+            user_id: Set("user-create-db-smoke".to_string()),
+            api_provider: Set("openai".to_string()),
+            api_key: Set("sk-create-owner".to_string()),
+            api_base_url: Set("https://api.example.com/v1".to_string()),
+            api_backup_urls: Set(None),
+            provider_type: Set("openai".to_string()),
+            fallback_strategy: Set("manual".to_string()),
+            azure_api_version: Set(None),
+            llm_model: Set("stored-create-model".to_string()),
+            temperature: Set(0.4),
+            max_tokens: Set(4096),
+            system_prompt: Set(Some("create-owner-prompt".to_string())),
+            preferences: Set(Some(
+                json!({
+                    "web_research": {
+                        "web_research_enabled": true
+                    }
+                })
+                .to_string(),
+            )),
+            created_at: Set(now),
+            updated_at: Set(now),
+        }
+        .insert(db)
+        .await
+        .expect("insert create db smoke settings");
     }
 
     fn chapter_model() -> chapter::Model {
@@ -1319,19 +416,20 @@ mod tests {
     fn build_test_generation_execution_config() -> PreparedGenerationExecutionConfig {
         PreparedGenerationExecutionConfig {
             ai_config: crate::ai::AIConfig::default(),
-            provider_payload: crate::services::chapter_generation_prompt_context_provider_service::PromptContextProviderPayload {
-                recent_chapters_context: String::new(),
-                previous_chapter_summary: String::new(),
-                chapter_careers: "[]".to_string(),
-                characters_info: "[]".to_string(),
-                foreshadow_reminders: "[]".to_string(),
-                relevant_memories: String::new(),
-                research_query: String::new(),
-                research_assets: "[]".to_string(),
-                external_assets: "[]".to_string(),
-                reference_assets: "[]".to_string(),
-                mcp_references: String::new(),
-            },
+            provider_payload:
+                crate::services::chapter_generation_prompt_service::PromptContextProviderPayload {
+                    recent_chapters_context: String::new(),
+                    previous_chapter_summary: String::new(),
+                    chapter_careers: "[]".to_string(),
+                    characters_info: "[]".to_string(),
+                    foreshadow_reminders: "[]".to_string(),
+                    relevant_memories: String::new(),
+                    research_query: String::new(),
+                    research_assets: "[]".to_string(),
+                    external_assets: "[]".to_string(),
+                    reference_assets: "[]".to_string(),
+                    mcp_references: String::new(),
+                },
         }
     }
 
@@ -1349,6 +447,7 @@ mod tests {
             user_id,
             runtime_seed,
             build_test_generation_execution_config(),
+            test_single_generation_gateway_config(),
         )
     }
 
@@ -1374,32 +473,13 @@ mod tests {
         )
     }
 
-    fn build_test_batch_generation_resume_persistence_plan(
-        command_state: ResumeBatchGenerationCommandState,
-        user_id: &str,
-        chapter_ids: Vec<String>,
-        enable_analysis: bool,
-    ) -> BatchGenerationResumeLaunchPersistencePlan {
-        let dispatch_plan = ResumeExecutionDispatchPlan::Batch {
-            runtime_input: build_batch_generation_execution_input(
-                user_id.to_string(),
-                chapter_ids,
-                command_state.target_word_count,
-                SingleChapterGenerationCompatOptions {
-                    enable_analysis,
-                    ..Default::default()
-                },
-                build_test_generation_execution_config(),
-            ),
-        };
-        let reset_persistence_plan =
-            BatchGenerationResumeResetPersistencePlan::from_resume_task(&command_state, None);
-
-        BatchGenerationResumeLaunchPersistencePlan::from_contract_for_test(
-            command_state,
-            dispatch_plan,
-            reset_persistence_plan,
-        )
+    fn test_single_generation_gateway_config() -> ChapterCandidateRouteGatewayConfig {
+        ChapterCandidateRouteGatewayConfig {
+            rust_executor_enabled: true,
+            fallback_on_rust_error: false,
+            disabled_reason: Some("test batch resume single-generation gateway".to_string()),
+            rollback_boundary: "test_batch_resume_single_generation_gateway".to_string(),
+        }
     }
 
     #[test]
@@ -2077,213 +1157,101 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn should_keep_resume_batch_generation_write_workflow_config_error_shape() {
-        let error =
-            super::ResumeBatchGenerationWriteWorkflowError::Config("model missing".to_string());
+    #[tokio::test]
+    async fn should_persist_db_backed_created_batch_generation_from_rust_write_owner() {
+        let db = setup_batch_write_owner_db().await;
+        seed_create_write_owner_fixture(&db).await;
 
-        assert!(matches!(
-            error,
-            super::ResumeBatchGenerationWriteWorkflowError::Config(detail)
-                if detail == "model missing"
-        ));
-    }
+        let payload = super::start_owned_batch_generation_write_workflow(
+            &db,
+            "project-create-db-smoke",
+            "user-create-db-smoke",
+            BatchGenerationCreateRouteRequest {
+                start_chapter_number: 2,
+                count: 2,
+                style_id: None,
+                target_word_count: Some(2500),
+                enable_analysis: Some(true),
+                enable_mcp: Some(false),
+                enable_web_research: None,
+                web_research_query: Some("旧都城线索".to_string()),
+                max_retries: Some(4),
+                model: Some("create-db-model".to_string()),
+                creative_mode: Some("balanced".to_string()),
+                story_focus: Some("advance_plot".to_string()),
+                plot_stage: Some("development".to_string()),
+                story_creation_brief: Some("推进第二卷主线".to_string()),
+                quality_preset: Some("plot_drive".to_string()),
+                quality_notes: Some("保持节奏紧凑".to_string()),
+                story_repair_summary: Some("补强前章伏笔".to_string()),
+                story_repair_targets: Some(vec!["伏笔回收".to_string()]),
+                story_preserve_strengths: Some(vec!["角色张力".to_string()]),
+            },
+            test_single_generation_gateway_config(),
+        )
+        .await
+        .expect("db-backed create payload");
+        let batch_id = payload["batch_id"]
+            .as_str()
+            .expect("created batch id")
+            .to_string();
+        let created_task = batch_generation_task::Entity::find_by_id(&batch_id)
+            .one(&db)
+            .await
+            .expect("load created task")
+            .expect("created task exists");
+        let created_snapshot = batch_generation_snapshot::Entity::find()
+            .filter(batch_generation_snapshot::Column::BatchTaskId.eq(&batch_id))
+            .one(&db)
+            .await
+            .expect("load created snapshot")
+            .expect("created snapshot exists");
+        let runtime_state = created_snapshot
+            .workflow_runtime_state
+            .expect("created runtime state");
 
-    #[test]
-    fn should_keep_resume_batch_generation_write_workflow_task_error_shape() {
-        let error = super::ResumeBatchGenerationWriteWorkflowError::Task(
-            LoadOwnedBatchGenerationTaskError::TaskNotFound,
-        );
-
-        assert!(matches!(
-            error,
-            super::ResumeBatchGenerationWriteWorkflowError::Task(
-                LoadOwnedBatchGenerationTaskError::TaskNotFound
-            )
-        ));
-    }
-
-    #[test]
-    fn should_keep_cancel_batch_generation_write_workflow_task_error_shape() {
-        let error = CancelBatchGenerationWriteWorkflowError::Task(
-            LoadOwnedBatchGenerationTaskError::TaskNotFound,
-        );
-
-        assert!(matches!(
-            error,
-            CancelBatchGenerationWriteWorkflowError::Task(
-                LoadOwnedBatchGenerationTaskError::TaskNotFound
-            )
-        ));
-    }
-
-    #[test]
-    fn should_keep_cancel_batch_generation_write_workflow_domain_error_shape() {
-        let error =
-            CancelBatchGenerationWriteWorkflowError::Domain("Cannot cancel task".to_string());
-
-        assert!(matches!(
-            error,
-            CancelBatchGenerationWriteWorkflowError::Domain(detail)
-                if detail == "Cannot cancel task"
-        ));
-    }
-
-    #[test]
-    fn should_keep_cancel_batch_generation_prepare_owner_contract() {
-        let task = batch_generation_task::Model {
-            id: "task-cancel-owner-1".to_string(),
-            project_id: "project-cancel-1".to_string(),
-            user_id: "user-cancel-1".to_string(),
-            start_chapter_number: 1,
-            chapter_count: 2,
-            chapter_ids: json!(["chapter-1", "chapter-2"]),
-            style_id: None,
-            target_word_count: 3000,
-            enable_analysis: true,
-            status: "running".to_string(),
-            total_chapters: 2,
-            completed_chapters: 1,
-            failed_chapters: json!([]),
-            current_chapter_id: Some("chapter-2".to_string()),
-            current_chapter_number: Some(2),
-            current_retry_count: 0,
-            max_retries: 3,
-            created_at: None,
-            started_at: None,
-            completed_at: None,
-            error_message: None,
-        };
-        let snapshot = batch_generation_snapshot::Model {
-            id: "snapshot-cancel-owner-1".to_string(),
-            batch_task_id: "task-cancel-owner-1".to_string(),
-            latest_quality_metrics: None,
-            quality_metrics_history: None,
-            quality_metrics_summary: None,
-            workflow_runtime_state: Some(json!({
-                "progress": 55,
-                "phase": "generating",
-                "status": "running"
-            })),
-            created_at: None,
-            updated_at: None,
-        };
-
-        let persistence_plan =
-            super::prepare_cancel_batch_generation_persistence_plan_from_owned_sources(
-                task.clone(),
-                Some(snapshot.clone()),
-            )
-            .expect("running task should prepare cancel persistence plan");
-
-        let payload = persistence_plan.response_payload_for_test(batch_generation_task::Model {
-            status: "cancelled".to_string(),
-            ..task
-        });
-
-        assert_eq!(payload["batch_id"], "task-cancel-owner-1");
-        assert_eq!(payload["status"], "cancelled");
-        assert_eq!(payload["message"], "Batch generation cancelled");
-        assert_eq!(payload["checkpoint"]["phase"], "cancelled");
-    }
-
-    #[test]
-    fn should_reject_terminal_status_inside_cancel_prepare_owner() {
-        let task = batch_generation_task::Model {
-            id: "task-cancel-owner-2".to_string(),
-            project_id: "project-cancel-2".to_string(),
-            user_id: "user-cancel-2".to_string(),
-            start_chapter_number: 1,
-            chapter_count: 1,
-            chapter_ids: json!(["chapter-1"]),
-            style_id: None,
-            target_word_count: 3000,
-            enable_analysis: false,
-            status: "cancelled".to_string(),
-            total_chapters: 1,
-            completed_chapters: 0,
-            failed_chapters: json!([]),
-            current_chapter_id: Some("chapter-1".to_string()),
-            current_chapter_number: Some(1),
-            current_retry_count: 0,
-            max_retries: 3,
-            created_at: None,
-            started_at: None,
-            completed_at: None,
-            error_message: None,
-        };
-
-        let error =
-            super::prepare_cancel_batch_generation_persistence_plan_from_owned_sources(task, None)
-                .expect_err("cancelled task should fail cancel preparation");
-
-        assert!(matches!(
-            error,
-            CancelBatchGenerationWriteWorkflowError::Domain(detail)
-                if detail == "Cannot cancel task in status cancelled"
-        ));
-    }
-
-    #[test]
-    fn should_keep_batch_generation_resume_persistence_owner_contract() {
-        let mut task = build_resume_task("failed");
-        task.user_id = "user-7".to_string();
-        task.target_word_count = 3100;
-        task.enable_analysis = true;
-        task.chapter_ids = json!(["chapter-1", "chapter-2"]);
-
-        let command_state = ResumeBatchGenerationCommandState::from_task(&task);
-        let persistence_plan = build_test_batch_generation_resume_persistence_plan(
-            command_state.clone(),
-            "user-7",
-            vec!["chapter-1".to_string(), "chapter-2".to_string()],
-            true,
-        );
-
-        match persistence_plan.dispatch_plan() {
-            ResumeExecutionDispatchPlan::Batch { runtime_input } => {
-                assert_eq!(runtime_input.user_id, "user-7");
-                assert_eq!(
-                    runtime_input.chapter_ids,
-                    vec!["chapter-1".to_string(), "chapter-2".to_string()]
-                );
-                assert_eq!(runtime_input.target_word_count, 3100);
-                assert!(runtime_input.compat_options.enable_analysis);
-            }
-            ResumeExecutionDispatchPlan::SingleChapter { .. } => {
-                panic!("expected batch dispatch plan");
-            }
-        }
-
+        assert_eq!(payload["project_id"], "project-create-db-smoke");
+        assert_eq!(payload["status"], "pending");
+        assert_eq!(payload["message"], "已创建批量生成任务，共 2 章");
+        assert_eq!(payload["chapters_to_generate"][0]["id"], "chapter-create-2");
+        assert_eq!(payload["chapters_to_generate"][1]["id"], "chapter-create-3");
         assert_eq!(
-            persistence_plan.response_payload()["batch_id"],
-            command_state.batch_id
-        );
-    }
-
-    #[test]
-    fn should_keep_batch_generation_resume_response_payload_owner_contract() {
-        let mut task = build_resume_task("cancelled");
-        task.chapter_count = 2;
-        task.total_chapters = 2;
-        task.target_word_count = 2800;
-        task.chapter_ids = json!(["chapter-3", "chapter-4"]);
-
-        let persistence_plan = build_test_batch_generation_resume_persistence_plan(
-            ResumeBatchGenerationCommandState::from_task(&task),
-            "user-1",
-            vec!["chapter-3".to_string(), "chapter-4".to_string()],
-            false,
+            payload["active_story_repair_payload"]["summary"],
+            "补强前章伏笔"
         );
 
-        assert_eq!(persistence_plan.response_payload()["status"], "pending");
+        assert_eq!(created_task.project_id, "project-create-db-smoke");
+        assert_eq!(created_task.user_id, "user-create-db-smoke");
+        assert_eq!(created_task.start_chapter_number, 2);
+        assert_eq!(created_task.chapter_count, 2);
         assert_eq!(
-            persistence_plan.response_payload()["message"],
-            "Task resumed and queued"
+            created_task.chapter_ids,
+            json!(["chapter-create-2", "chapter-create-3"])
+        );
+        assert_eq!(created_task.target_word_count, 2500);
+        assert!(created_task.enable_analysis);
+        assert_eq!(created_task.status, "pending");
+        assert_eq!(created_task.total_chapters, 2);
+        assert_eq!(created_task.max_retries, 4);
+
+        assert_eq!(runtime_state["phase"], "pending");
+        assert_eq!(runtime_state["status"], "pending");
+        assert_eq!(runtime_state["last_event"], "queued");
+        assert_eq!(
+            runtime_state["batch_request_runtime_state"]["model_override"],
+            "create-db-model"
         );
         assert_eq!(
-            persistence_plan.response_payload()["checkpoint"]["phase"],
-            "pending"
+            runtime_state["batch_request_runtime_state"]["compat_options"]["web_research_enabled"],
+            true
+        );
+        assert_eq!(
+            runtime_state["batch_request_runtime_state"]["compat_options"]["story_repair_summary"],
+            "补强前章伏笔"
+        );
+        assert_eq!(
+            runtime_state["active_story_repair_payload"]["summary"],
+            "补强前章伏笔"
         );
     }
 
@@ -2323,11 +1291,11 @@ mod tests {
 
     #[test]
     fn should_estimate_batch_generation_task_minutes_with_minimum_floor() {
-        assert_eq!(super::estimated_task_minutes(0, 3000, false), 1);
-        assert_eq!(super::estimated_task_minutes(1, 3000, false), 2);
-        assert_eq!(super::estimated_task_minutes(1, 6000, false), 4);
-        assert_eq!(super::estimated_task_minutes(3, 3000, true), 9);
-        assert_eq!(super::estimated_task_minutes(2, 2800, true), 5);
+        assert_eq!(estimated_task_minutes(0, 3000, false), 1);
+        assert_eq!(estimated_task_minutes(1, 3000, false), 2);
+        assert_eq!(estimated_task_minutes(1, 6000, false), 4);
+        assert_eq!(estimated_task_minutes(3, 3000, true), 9);
+        assert_eq!(estimated_task_minutes(2, 2800, true), 5);
     }
 
     #[test]
@@ -2370,6 +1338,11 @@ mod tests {
                         "scope": "batch",
                         "source": "create_response_test"
                     },
+                    "candidate_gateway": {
+                        "execution_path": "rust_candidate_executor",
+                        "fallback_applied": false,
+                        "rollback_boundary": "test_batch_candidate_gateway"
+                    },
                     "active_story_repair_payload": {
                         "summary": "沿用批量修复建议",
                         "repair_targets": ["压缩说明"],
@@ -2378,13 +1351,20 @@ mod tests {
                     }
                 })),
             );
-        let payload = super::batch_generation_create_response_payload(
+        let response_chapters = chapters
+            .iter()
+            .map(|target| BatchGenerationQueuedCreateResponseChapter {
+                id: target.id.clone(),
+                chapter_number: target.chapter_number,
+                title: target.title.clone(),
+            })
+            .collect::<Vec<_>>();
+        let payload = queued_runtime_state.into_create_response_payload(
             "task-1",
             "project-1",
-            &chapters,
+            &response_chapters,
             3000,
             false,
-            &queued_runtime_state,
         );
 
         assert_eq!(payload["batch_id"], "task-1");
@@ -2406,6 +1386,14 @@ mod tests {
         assert_eq!(
             payload["quality_history_context"]["source"],
             "create_response_test"
+        );
+        assert_eq!(
+            payload["candidate_gateway"]["execution_path"],
+            "rust_candidate_executor"
+        );
+        assert_eq!(
+            payload["checkpoint"]["candidate_gateway"],
+            payload["candidate_gateway"]
         );
         assert_eq!(
             payload["active_story_repair_payload"]["summary"],
@@ -2515,6 +1503,14 @@ mod tests {
         assert_eq!(
             response_payload["quality_history_context"]["source"],
             "plan_response"
+        );
+        assert_eq!(
+            response_payload["candidate_gateway"]["execution_path"],
+            "rust_candidate_executor"
+        );
+        assert_eq!(
+            response_payload["checkpoint"]["candidate_gateway"],
+            response_payload["candidate_gateway"]
         );
         assert_eq!(
             response_payload["active_story_repair_payload"]["summary"],
@@ -2793,92 +1789,6 @@ mod tests {
     }
 
     #[test]
-    fn should_keep_batch_generation_resume_workflow_launch_start_owner_contract() {
-        let mut task = build_resume_task("failed");
-        task.user_id = "user-41".to_string();
-        task.target_word_count = 2900;
-        task.chapter_ids = json!(["chapter-41", "chapter-42"]);
-
-        let persistence_plan = build_test_batch_generation_resume_persistence_plan(
-            ResumeBatchGenerationCommandState::from_task(&task),
-            "user-41",
-            vec!["chapter-41".to_string(), "chapter-42".to_string()],
-            true,
-        );
-
-        match persistence_plan.dispatch_plan() {
-            ResumeExecutionDispatchPlan::Batch { runtime_input } => {
-                assert_eq!(runtime_input.user_id, "user-41");
-                assert_eq!(
-                    runtime_input.chapter_ids,
-                    vec!["chapter-41".to_string(), "chapter-42".to_string()]
-                );
-                assert_eq!(runtime_input.target_word_count, 2900);
-                assert!(runtime_input.compat_options.enable_analysis);
-            }
-            ResumeExecutionDispatchPlan::SingleChapter { .. } => {
-                panic!("expected batch dispatch plan");
-            }
-        }
-
-        assert_eq!(persistence_plan.response_payload()["batch_id"], "task-1");
-        assert_eq!(persistence_plan.response_payload()["status"], "pending");
-    }
-
-    #[test]
-    fn should_keep_batch_generation_cancel_workflow_launch_start_owner_contract() {
-        let task = batch_generation_task::Model {
-            id: "task-51".to_string(),
-            project_id: "project-51".to_string(),
-            user_id: "user-51".to_string(),
-            start_chapter_number: 1,
-            chapter_count: 2,
-            chapter_ids: json!(["chapter-51", "chapter-52"]),
-            style_id: None,
-            target_word_count: 3000,
-            enable_analysis: true,
-            status: "running".to_string(),
-            total_chapters: 2,
-            completed_chapters: 1,
-            failed_chapters: json!([]),
-            current_chapter_id: Some("chapter-52".to_string()),
-            current_chapter_number: Some(2),
-            current_retry_count: 0,
-            max_retries: 3,
-            created_at: None,
-            started_at: None,
-            completed_at: None,
-            error_message: None,
-        };
-        let snapshot = batch_generation_snapshot::Model {
-            id: "snapshot-51".to_string(),
-            batch_task_id: "task-51".to_string(),
-            latest_quality_metrics: None,
-            quality_metrics_history: None,
-            quality_metrics_summary: None,
-            workflow_runtime_state: Some(json!({
-                "progress": 55,
-                "phase": "generating",
-                "status": "running"
-            })),
-            created_at: None,
-            updated_at: None,
-        };
-
-        let persistence_plan =
-            BatchGenerationCancelledPersistencePlan::from_sources(&task, Some(&snapshot));
-        let payload = persistence_plan.response_payload_for_test(batch_generation_task::Model {
-            status: "cancelled".to_string(),
-            ..task
-        });
-
-        assert_eq!(payload["batch_id"], "task-51");
-        assert_eq!(payload["status"], "cancelled");
-        assert_eq!(payload["message"], "Batch generation cancelled");
-        assert_eq!(payload["checkpoint"]["phase"], "cancelled");
-    }
-
-    #[test]
     fn should_keep_batch_generation_create_runtime_seed_contract() {
         let request_runtime_state = BatchGenerationRequestRuntimeState::new(
             crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions {
@@ -3009,6 +1919,7 @@ mod tests {
             2,
             2800,
             build_test_generation_execution_config(),
+            test_single_generation_gateway_config(),
         );
 
         assert_eq!(
@@ -3236,6 +2147,7 @@ mod tests {
                 }
             })),
             build_test_generation_execution_config(),
+            test_single_generation_gateway_config(),
         );
 
         let super::PreparedBatchGenerationCreateWorkflowLaunch {
@@ -3959,108 +2871,6 @@ mod tests {
             &["压缩说明".to_string(), "提前冲突".to_string()]
         );
         assert_eq!(compat.story_preserve_strengths(), &["尾章钩子".to_string()]);
-    }
-
-    #[test]
-    fn should_build_resume_batch_generation_execution_input_from_execution_owner() {
-        let response_payload = serde_json::json!({
-            "batch_id": "task-9",
-            "message": "Task resumed and queued",
-            "project_id": "project-1",
-            "task_type": "chapters_batch_generate",
-            "status": "pending",
-            "stage_code": "6.writing.pending",
-            "execution_mode": "interactive",
-            "current_chapter_id": null,
-            "created_at": null,
-            "checkpoint": {
-                "stage_code": "6.writing.pending",
-                "execution_mode": "interactive"
-            },
-            "completed_chapters": 0,
-            "total_chapters": 2
-        });
-        let execution_input = super::BatchGenerationExecutionInput {
-            user_id: "user-1".to_string(),
-            chapter_ids: vec!["chapter-1".to_string(), "chapter-2".to_string()],
-            target_word_count: 2800,
-            compat_options: crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions::default(),
-            ai_config: crate::ai::AIConfig::default(),
-        };
-
-        assert_eq!(response_payload["batch_id"], "task-9");
-        assert_eq!(response_payload["message"], "Task resumed and queued");
-        assert_eq!(execution_input.user_id, "user-1");
-        assert_eq!(
-            execution_input.chapter_ids,
-            vec!["chapter-1".to_string(), "chapter-2".to_string()]
-        );
-        assert_eq!(execution_input.target_word_count, 2800);
-        assert_eq!(
-            execution_input.ai_config.provider,
-            crate::ai::AIConfig::default().provider
-        );
-    }
-
-    #[test]
-    fn should_keep_resume_batch_generation_owned_prepare_owner_contract_explicit() {
-        let task = crate::models::batch_generation_task::Model {
-            id: "task-5".to_string(),
-            project_id: "project-5".to_string(),
-            user_id: "user-5".to_string(),
-            start_chapter_number: 5,
-            chapter_count: 2,
-            chapter_ids: json!(["chapter-5", "chapter-6"]),
-            style_id: None,
-            target_word_count: 3400,
-            enable_analysis: true,
-            status: "failed".to_string(),
-            total_chapters: 2,
-            completed_chapters: 0,
-            failed_chapters: json!([]),
-            current_chapter_id: Some("chapter-5".to_string()),
-            current_chapter_number: Some(5),
-            current_retry_count: 1,
-            max_retries: 3,
-            created_at: None,
-            started_at: None,
-            completed_at: None,
-            error_message: None,
-        };
-        let workflow_runtime_state = json!({
-            "batch_request_runtime_state": {
-                "compat_options": {
-                    "enable_analysis": true,
-                    "enable_mcp": true,
-                    "web_research_enabled": false,
-                    "story_repair_targets": [],
-                    "story_preserve_strengths": []
-                },
-                "model_override": null
-            }
-        });
-        let snapshot = crate::models::batch_generation_snapshot::Model {
-            id: "snapshot-5".to_string(),
-            batch_task_id: "task-5".to_string(),
-            workflow_runtime_state: Some(workflow_runtime_state.clone()),
-            latest_quality_metrics: None,
-            quality_metrics_history: None,
-            quality_metrics_summary: None,
-            created_at: Some(Utc::now().naive_utc()),
-            updated_at: Some(Utc::now().naive_utc()),
-        };
-        let command_state = ResumeBatchGenerationCommandState::from_task(&task);
-
-        assert_eq!(command_state.batch_id, "task-5");
-        assert_eq!(command_state.chapter_ids, json!(["chapter-5", "chapter-6"]));
-        assert_eq!(
-            snapshot
-                .workflow_runtime_state
-                .as_ref()
-                .and_then(|state| state.get("batch_request_runtime_state"))
-                .and_then(|state| state.get("model_override")),
-            Some(&Value::Null)
-        );
     }
 
     #[test]

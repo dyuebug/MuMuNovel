@@ -172,44 +172,6 @@ impl CareerService {
         }
     }
 
-    pub async fn update(
-        db: &DatabaseConnection,
-        career_id: &str,
-        user_id: &str,
-        name: Option<&str>,
-        description: Option<&str>,
-        stages: Option<&str>,
-        max_stage: Option<i32>,
-        category: Option<&str>,
-    ) -> Result<Option<career::Model>, String> {
-        let existing = Self::get(db, career_id, user_id).await?;
-        let Some(model) = existing else {
-            return Ok(None);
-        };
-        let mut active: career::ActiveModel = model.into();
-        if let Some(v) = name {
-            active.name = Set(v.to_string());
-        }
-        if let Some(v) = description {
-            active.description = Set(Some(v.to_string()));
-        }
-        if let Some(v) = stages {
-            active.stages = Set(v.to_string());
-        }
-        if let Some(v) = max_stage {
-            active.max_stage = Set(v);
-        }
-        if let Some(v) = category {
-            active.category = Set(Some(v.to_string()));
-        }
-        active.updated_at = Set(Some(Utc::now().naive_utc()));
-        active
-            .update(db)
-            .await
-            .map_err(|e| format!("{}", e))
-            .map(Some)
-    }
-
     pub async fn update_full_for_user(
         db: &DatabaseConnection,
         career_id: &str,

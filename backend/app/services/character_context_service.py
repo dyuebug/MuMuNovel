@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from typing import Optional
-
-from sqlalchemy import or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from typing import TYPE_CHECKING, Optional
 
 from app.logger import get_logger
-from app.models.career import Career, CharacterCareer
-from app.models.character import Character
-from app.models.relationship import CharacterRelationship, Organization, OrganizationMember
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models.character import Character
 
 logger = get_logger(__name__)
 
@@ -20,6 +19,12 @@ async def build_characters_info_with_careers(
     filter_character_names: Optional[list[str]] = None,
 ) -> str:
     """构建角色上下文与关联信息。"""
+    from sqlalchemy import or_, select
+
+    from app.models.career import Career, CharacterCareer
+    from app.models.character import Character
+    from app.models.relationship import CharacterRelationship, Organization, OrganizationMember
+
     if not characters:
         return '暂无相关角色'
 
