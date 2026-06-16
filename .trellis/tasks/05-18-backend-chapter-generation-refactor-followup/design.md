@@ -60,6 +60,169 @@ should not simply be moved into another Python route module. It should be used
 as the source map for a Rust-first package, primarily
 `chapter_single_generation` plus adjacent shared `chapter_generation` owners.
 
+### 2026-06-08 low-analysis acceleration update
+
+The migration has entered a mature owner-consolidation phase. The latest file
+audit shows most chapter-generation Python route files are already migrated or
+legacy-only; `chapters.py` remains mixed, and `chapter_route_helpers.py` is not
+a migration target. Therefore, the next rounds should stop redoing broad
+progress analysis unless a concrete route or owner map changed.
+
+Current progress summary:
+
+- Chapter route migration table: 9 migrated route files, 1 mixed shell
+  (`chapters.py`), 1 helper-only non-target (`chapter_route_helpers.py`).
+- `chapter_draft` now has a coherent Rust owner chain:
+  route package, route-facing access, detail read, apply write, and
+  history-write contract.
+- Existing gateway readiness evidence still reports Rust-owned probes plus
+  Python fallback probes; fallback shrink must wait for explicit route parity,
+  enabled-path smoke, and rollback evidence.
+- Remaining work is not "write missing Rust routes"; it is owner consolidation,
+  smoke/rollback hardening, and targeted fallback shrink.
+
+Fast planning rule:
+
+- Use the latest checkpoint and migration table as the baseline.
+- Spend at most one short source-map pass per round.
+- Then directly migrate one whole owner file/function group/module package.
+- Only expand analysis when validation fails, a route map changed, or a new
+  schema/gateway boundary appears.
+
+Updated priority after `chapter_draft` owner alignment:
+
+1. `chapter_draft` closeout:
+   finish enabled-path smoke / rollback evidence, then decide whether Python
+   draft fallback can be frozen or repointed.
+2. `chapter_single_generation` closeout:
+   finish remaining prepare/write/runtime-state overlap and active enabled-path
+   smoke so the generation compatibility shell can shrink.
+3. `chapter_generation` shared owners:
+   move shared runtime/candidate/quality semantics that are still interpreted
+   through compatibility shells into explicit Rust owners.
+4. `chapter_batch_generation` package:
+   continue only as whole read/write/resume/status/runtime owner blocks, not
+   individual helper seams.
+5. `schema / migration owner`:
+   promote startup/schema assumptions only when a package exposes concrete
+   table/field ownership pressure.
+
+### 2026-06-13 owner-collapse strategy update
+
+The owner-collapse acceleration lane has reached a natural boundary. The
+remaining `*_owner.rs` files under chapter-generation packages are no longer
+mostly forwarding-only child shells. The current surviving set is dominated by
+independent semantic owners such as runtime snapshot persistence, context
+compaction, quality runtime context normalization, story-repair quality
+projection, research payload assembly, and quality profile construction.
+
+This changes the default execution rule for the next rounds:
+
+- stop treating "delete another `*_owner.rs` file" as the default migration
+  success metric
+- continue owner-file collapse only when the child file is still a true thin
+  bridge with 1-2 direct consumers and no meaningful business boundary
+- treat independent owner files as valid stable Rust ownership, not as debt
+  that must be force-merged for cosmetic file-count reduction
+- shift the default acceleration lane to package closeout work:
+  single-generation active route closeout, batch-generation active route
+  closeout, manifest/health rollback hardening, and explicit Python shell
+  freeze or repoint readiness
+
+Current owner-collapse conclusion after the latest pass:
+
+- `chapter_generation_runtime_service/snapshot_persistence_owner.rs` is a
+  real persistence owner
+- `chapter_generation_runtime_service/context_compaction_owner.rs` is a real
+  prompt/runtime context compaction owner
+- `chapter_generation_runtime_service/quality_runtime_context_owner.rs` is a
+  real runtime quality normalization owner
+- `chapter_generation_runtime_service/story_repair_quality_context_owner.rs`
+  is a real story-repair quality owner
+- `chapter_generation_prompt_service/quality_profile_owner.rs` is a real
+  prompt quality profile owner
+- `chapter_single_generation_prepare_service/research_payload_owner.rs` is a
+  real research payload assembly owner
+
+Therefore the next high-signal migration packages should be chosen from
+module-level closeout work instead of from child-owner deletion count.
+
+### 2026-06-13 single-generation bootstrap closeout checkpoint
+
+The first module-closeout move after the owner-collapse strategy reset is now
+complete: the Python `chapter_generation_routes` bootstrap path is no longer
+part of default FastAPI startup. It has been downgraded to explicit rollback
+registration through a dedicated Python config flag.
+
+This narrows the remaining `chapter_single_generation` Python shell work:
+
+- default active startup now aligns better with the Rust readiness story
+- the remaining Python files are still kept as source-map / rollback material
+- the next closeout step should focus on whether the remaining compat stream
+  shells and `chapters.py` references can be frozen, repointed, or deleted as
+  one explicit module move with matching rollback policy and business smoke
+  evidence
+
+The package should now avoid re-opening the Python bootstrap question unless:
+
+- the rollback flag name or policy changes
+- a logged-in business smoke requires Python re-registration
+- a deployment rollback story requires stronger operational documentation
+
+After the bootstrap closeout, the next shrink step also became clearer:
+
+- `backend/app/api/chapters.py` should stop depending on
+  `chapter_generation_route_compat_service.py` for non-route background
+  analysis entrypoints
+- the compat service should progressively collapse to explicit rollback/default
+  wiring only
+- once `chapters.py` and other non-route callers stop consuming compat-only
+  helpers, the remaining decision about the compat service becomes a true
+  rollback-shell decision instead of a mixed active-runtime dependency
+
+### 2026-06-13 batch-generation bootstrap closeout checkpoint
+
+The next module-closeout move has also been applied to
+`chapter_batch_generation`: the Python
+`backend/app/api/chapter_batch_generation_routes.py` route group is no longer
+part of default FastAPI startup. It is now imported and registered only when
+the explicit Python rollback flag is enabled.
+
+This aligns the Python bootstrap state with the existing Rust readiness
+evidence:
+
+- active batch generation traffic is owned by
+  `backend-rs/src/api/chapter_batch_generation.rs`
+- batch create/status/stream/active-list/cancel/resume route behavior is
+  covered by the Rust route owner plus read/write/resume/runtime services
+- deploy manifest evidence reports `chapter_batch_generation` as Rust-owned
+  with no Python fallback probes
+- the Python batch route/service files remain source-map and rollback material,
+  not default active route ownership
+
+The next batch package step should be an explicit whole-module freeze/delete
+review for the batch Python route and service shells. Do not continue by
+editing individual Python helper bodies unless the same round also updates the
+Rust owner/readiness contract and rollback policy.
+
+Batch bootstrap re-open conditions:
+
+- the rollback flag name or operational rollback policy changes
+- a logged-in DB-backed batch smoke requires Python route re-registration
+- final deletion/repoint approval is granted for the whole batch Python
+  route/service shell package
+
+The stream entry owner has now also crossed that boundary:
+
+- `backend/app/services/chapter_generation/stream/entry_service.py` no longer
+  reaches into `chapter_generation_route_compat_service.py` for its default
+  background-analysis callback
+- both `chapters.py` and the Python stream entry now consume explicit analysis
+  owners instead of using the compat shell as an incidental dependency
+- the remaining value inside `chapter_generation_route_compat_service.py`
+  becomes easier to evaluate as true route rollback/default wiring rather than
+  a shared active-runtime dependency bucket
+
 ### Primary migration package
 
 `chapter_single_generation` is now the first Rust-first package because it is
@@ -1151,7 +1314,7 @@ Updated file-level migration map after the latest audit:
 | `chapter_analysis_task_routes.py` | `backend-rs/src/api/chapter_analysis_routes.rs` | Migrated | Python shell can be removed when route parity is no longer needed. |
 | `chapter_annotation_routes.py` | `backend-rs/src/api/chapter_crud_routes.rs` + `chapter_annotation_query_service.rs` | Migrated | Rust owns the query boundary; Python is now legacy compatibility surface. |
 | `chapter_batch_generation_routes.py` | `backend-rs/src/api/chapter_batch_generation.rs` | Migrated | Main chapter-generation/batch surface is already on Rust. |
-| `chapter_draft_routes.py` | `backend-rs/src/api/chapter_analysis_routes.rs` + draft services | Migrated | Draft route logic is already owned by Rust services/routes. |
+| `chapter_draft_routes.py` | `backend-rs/src/api/chapter_draft_routes.rs` + `chapter_draft_*` services | Migrated | Draft transport, route-facing access, detail, apply, and history-write contracts are now Rust-owned; Python is source map/fallback reference only. |
 | `chapter_expansion_plan_routes.py` | `backend-rs/src/api/chapter_crud_routes.rs` + CRUD workflow/request services | Migrated | Expansion-plan behavior now belongs to Rust write workflow. |
 | `chapter_generation_routes.py` | `backend-rs/src/api/chapter_batch_generation.rs` + single-generation services | Migrated | Single-chapter generation route shell is legacy only. |
 | `chapter_partial_regeneration_routes.py` | `backend-rs/src/api/chapter_regeneration_routes.rs` | Migrated | Partial-regeneration route shell is legacy only. |
@@ -1218,6 +1381,160 @@ Planning implication:
 - Additional stop-rule update:
   do not keep a batch execution-input constructor when the runtime launch
   owner already has the full input fields and can construct the struct once.
+- Additional stop-rule update:
+  when a shared lower-level generation seam is proven to belong to an existing
+  Rust owner file, merge it into that owner and cut consumers directly to the
+  merged owner; do not preserve or expand a compatibility shim just to keep the
+  old file name alive.
+- Latest package checkpoint update:
+  `chapter_generation_request_runtime_state_service.rs` should now be treated
+  as a shrinking compatibility shim, not a long-term owner. The real owner for
+  batch request runtime-state shape is
+  `chapter_generation_execution_contract_service.rs`, and subsequent migration
+  slices should continue deleting shim consumers rather than adding new ones.
+- Latest package checkpoint update:
+  the request-runtime-state shim deletion is now complete. The file
+  `chapter_generation_request_runtime_state_service.rs` has been removed after
+  the last consumer was cut to
+  `chapter_generation_execution_contract_service.rs`. Future shared-owner work
+  should reuse this pattern: owner merge first, whole-file deletion second.
+- Latest package checkpoint update:
+  the target-word-count shim deletion is now complete. The file
+  `chapter_generation_target_word_count_service.rs` has been removed after its
+  default/minimum target-word-count semantics and normalization helper were
+  merged into `chapter_generation_execution_contract_service.rs`, then all
+  active consumers were cut directly to that merged owner.
+- Latest package checkpoint update:
+  the next shared-owner acceleration pass should continue selecting seams that
+  already behave like subordinate runtime helpers for one stronger owner file.
+  Current candidate: verify whether
+  `chapter_generation_terminal_runtime_patch_service.rs` is now effectively a
+  subordinate runtime-state seam for
+  `chapter_batch_generation_runtime_state_service.rs`; if yes, apply the same
+  owner-merge-then-delete pattern instead of preserving another shared shim.
+- Latest package checkpoint update:
+  the terminal-runtime-patch shim deletion is now complete. The file
+  `chapter_generation_terminal_runtime_patch_service.rs` has been removed after
+  its terminal manual-review/retry patch logic and owner contract were merged
+  into `chapter_batch_generation_runtime_state_service.rs`, then the remaining
+  smoke/contract consumers were cut to that merged owner.
+- Latest package checkpoint update:
+  the `chapter_draft` detail helper shrink is now complete. The file
+  `chapter_draft_detail_service.rs` has been removed after its candidate/auto-
+  revision detail payload builders and loaders were merged into
+  `chapter_draft_route_service.rs`, which is now the single route-facing Rust
+  owner for draft access, selection, detail payload assembly, and rollback
+  contract publication.
+- Latest package checkpoint update:
+  the `chapter_draft` route-owner file relocation is now complete. The former
+  route-facing helper file `backend-rs/src/services/chapter_draft_route_service.rs`
+  has been retired after its full access/selection/detail/apply/readiness owner
+  was moved beside the actual route boundary under
+  `backend-rs/src/api/chapter_draft_routes.rs`. The temporary intermediate
+  route-owner seam `backend-rs/src/api/chapter_draft_route_owner.rs` has also
+  now been retired after its full route-facing owner was merged back into the
+  real route file in the same API package. This keeps the route transport
+  owner and route-facing draft payload owner on one file boundary, which
+  matches the route-owner consolidation rule and removes one extra API seam
+  without changing the draft apply/load behavior.
+- Latest package checkpoint update:
+  the `chapter_analysis` shared task-state helper shrink is now complete. The
+  file `chapter_analysis_task_state_service.rs` has been removed after its
+  shared analysis task lifecycle state machine was merged into
+  `chapter_analysis_service.rs`, which now owns both shared analysis error
+  types and shared task-state transitions for runtime/query consumers.
+- Latest package checkpoint update:
+  the `chapter_analysis` shared read-context helper shrink is now complete.
+  The file `chapter_analysis_read_context_service.rs` has been removed after
+  its shared candidate-attempt + recent-history loader was merged into
+  `chapter_analysis_service.rs`, which now also owns the shared analysis
+  read-context consumed by analysis view, quality metrics, and
+  single-generation runtime-restore lanes.
+- Latest package checkpoint update:
+  the `chapter_analysis` character-state helper shrink is now complete. The
+  file `chapter_analysis_character_state_service.rs` has been removed after
+  its character/organization analysis sync implementation was merged into
+  `chapter_analysis_runtime_service.rs`, which is now the single runtime owner
+  for post-persist analysis follow-up sync on the `character_states` and
+  `organization_states` branches.
+- Latest package checkpoint update:
+  the `chapter_regeneration` stream helper shrink is now complete. The files
+  `chapter_regeneration_stream_launch_service.rs` and
+  `chapter_regeneration_text_service.rs` have been removed after their SSE
+  launch/finalize implementation was merged into
+  `chapter_regeneration_stream_workflow_service.rs`, which is now the single
+  workflow owner for full/partial regeneration stream launch, progress
+  materialization, finalize cleanup, and stable finalize error semantics.
+- Latest package checkpoint update:
+  the `chapter_regeneration` query helper shrink is now complete. The file
+  `chapter_regeneration_query_service.rs` has been removed after its route
+  query normalization, owned task-list payload loading, datetime formatting,
+  and owner contract/tests were merged into
+  `chapter_regeneration_routes.rs`, which is now the single route-facing Rust
+  owner for regeneration task query bounds, access-checked task listing, and
+  rollback contract publication.
+- Latest package checkpoint update:
+  the `chapter_regeneration` apply helper shrink is now complete. The file
+  `chapter_regeneration_apply_service.rs` has been removed after its route
+  payload coercion, partial-apply validation, chapter-slice replacement,
+  persistence contract, and owner contract/tests were merged into
+  `chapter_regeneration_routes.rs`, which is now the single route-facing Rust
+  owner for partial-regeneration apply bounds, access-checked chapter update,
+  and rollback contract publication.
+- Latest package checkpoint update:
+  the `chapter_single_generation` candidate-quality helper shrink is now
+  complete. The file
+  `chapter_single_generation_candidate_quality_service.rs` has been removed
+  after its single-generation candidate quality runtime-context builder,
+  story-quality metric heuristics, continuity preflight, and quality-gate plan
+  logic were merged into `chapter_generation_runtime_service.rs`, which is now
+  the single Rust owner for the active single-generation candidate runtime plus
+  its quality-policy callbacks.
+- Latest package checkpoint update:
+  the `chapter_single_generation` active gateway smoke helper shrink is now
+  complete. The file
+  `chapter_single_generation_active_gateway_smoke_service.rs` has been removed
+  after its active-route smoke suite, readiness payload projection, owner
+  contract, and focused tests were merged into `backend-rs/src/api/health.rs`,
+  which is now the real route-facing Rust owner for the single-generation
+  active gateway health/readiness evidence.
+- Latest package checkpoint update:
+  the `chapter_batch_generation` active gateway smoke helper shrink is now
+  complete. The file
+  `chapter_batch_generation_active_gateway_smoke_service.rs` has been removed
+  from the `services` owner lane after its batch active-route smoke suite,
+  readiness payload projection, owner contract, and focused tests were moved
+  under the route-facing health owner boundary in
+  `backend-rs/src/api/health.rs` plus
+  `backend-rs/src/api/health/chapter_batch_generation_active_gateway_smoke_owner.rs`.
+- Latest package checkpoint update:
+  the `chapter_batch_generation` candidate-event helper shrink is now
+  complete. The file `chapter_candidate_event_service.rs` has been removed
+  after its two remaining real owner responsibilities were split back into the
+  actual consumers:
+  `chapter_batch_generation_read_context_stream_progress_owner.rs` now owns
+  stream progress event projection, and
+  `chapter_batch_generation_runtime_selected_candidate_event_owner.rs` now owns
+  selected-candidate snapshot plus chunk-event projection. The runtime-facing
+  batch owner remains
+  `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`,
+  and route-facing readiness evidence remains under
+  `backend-rs/src/api/health/chapter_batch_generation_active_gateway_smoke_owner.rs`.
+- Latest package checkpoint update:
+  the shared `chapter_generation` quality-gate semantics helper shrink is now
+  complete. The file
+  `backend-rs/src/services/chapter_generation_quality_gate_semantics_service.rs`
+  has been removed after its manual-review / retry-budget label semantics were
+  merged into the stronger shared owner
+  `backend-rs/src/services/chapter_generation_quality_runtime_context_service.rs`.
+  The remaining consumers now read quality-gate semantics from the same shared
+  runtime-context owner that already owns terminal quality normalization,
+  persisted quality-context rebuild, and batch/single quality payload shaping.
+- Latest package checkpoint update:
+  the next shared-owner acceleration pass should keep selecting seams that have
+  already collapsed to one real runtime owner plus evidence-only consumers.
+  The goal is not "move helper code somewhere else"; the goal is "merge the
+  helper into the real owner and delete the extra file in the same round."
 - Future Phase 5 work should prefer removing the remaining legacy shells only
   if the Rust route/service owner already exists and the change reduces drift,
   not if it merely renames wrappers.
@@ -1225,12 +1542,638 @@ Planning implication:
 ## Validation Strategy
 
 - Run `cargo check` after each completed slice with the shared target dir:
-  `$env:CARGO_TARGET_DIR='C:/Users/yanc/.codex/memories/mumu-rs-target'; cargo check`
+  `$env:CARGO_TARGET_DIR='E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/shared'; cargo check`
 - Add focused unit tests when extracting or tightening pure helpers.
 - Prefer narrow regression protection in touched service files over broad test
   churn.
+- For candidate-event owner removal rounds, validate both the focused Rust
+  owner chain and manifest readiness:
+  `cargo test chapter_batch_generation_read_context_service`,
+  `cargo test chapter_batch_generation_runtime_state_service`,
+  `cargo test api::health`,
+  `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-event-delete"`,
+  and
+  `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`.
+- For shared quality-owner merge rounds, validate both direct semantics
+  consumers and manifest readiness:
+  `cargo test services::chapter_generation_quality_runtime_context_service`,
+  `cargo test services::chapter_batch_generation_task_payload_base_service`,
+  `cargo test services::chapter_batch_generation_resume_task_command_service`,
+  `cargo test services::chapter_single_generation_runtime_state_service`,
+  `cargo test services::chapter_story_repair_quality_context_service`,
+  `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-quality-runtime-owner-merge"`,
+  and
+  `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`.
 
 ## Rollback Shape
 
 - Roll back only the latest seam slice if validation fails.
 - Do not mix unrelated refactor moves in the same execution batch.
+
+## Latest Shared-Owner Checkpoint
+
+- Latest package checkpoint update:
+  the shared `chapter_generation` task-semantics helper shrink is now
+  complete. The file
+  `backend-rs/src/services/chapter_generation_task_semantics_service.rs`
+  has been removed after its two remaining real owner responsibilities were
+  merged into the actual batch owners:
+  - `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+    now owns `active_batch_generation_statuses()`
+  - `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+    now owns `BatchGenerationTaskKind`, `batch_generation_task_kind(...)`,
+    `task_kind(...)`, `batch_generation_task_type(...)`, and `task_type(...)`
+- Remaining consumers now read active batch status semantics from the
+  read-context owner and task-kind / task-type semantics from the shared batch
+  payload owner that already serves runtime-state, write-workflow, resume, and
+  read/query projections.
+- Route-facing readiness evidence has been updated in:
+  - `backend-rs/src/api/health.rs`
+  - `backend-rs/src/api/health/chapter_batch_generation_active_gateway_smoke_owner.rs`
+  so deleted forwarding-only semantics files are no longer named as active
+  Rust owners.
+- Validation evidence for this merge:
+  - `cargo test services::chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-task-semantics-delete" -- --nocapture` -> 49 passed
+  - `cargo test services::chapter_batch_generation_task_payload_base_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-task-semantics-delete" -- --nocapture` -> 37 passed
+  - `cargo test services::chapter_batch_generation_resume_task_command_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-task-semantics-delete" -- --nocapture` -> 65 passed
+  - `cargo test services::chapter_batch_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-task-semantics-delete" -- --nocapture` -> 112 passed
+  - `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-task-semantics-delete"` -> passed
+  - `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed
+- Active Rust source scan is clean for
+  `chapter_generation_task_semantics_service`; no active `backend-rs/src`
+  references remain after the same-round owner merge and file deletion.
+- Latest package checkpoint update:
+  the `chapter_batch_generation` projection-owner collapse is now complete.
+  The forwarding-only Rust files
+  `backend-rs/src/services/chapter_batch_generation_read_context_stream_progress_owner.rs`
+  and
+  `backend-rs/src/services/chapter_batch_generation_runtime_selected_candidate_event_owner.rs`
+  have been removed after their only real production responsibilities were
+  merged into the stronger owners that already consume them:
+  - `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+    now owns the stream progress event projection contract and payload builder
+  - `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+    now owns the selected-candidate event projection contract, snapshot view,
+    progress event, and chunk event batch builder
+- Route-facing readiness evidence has been updated in:
+  - `backend-rs/src/api/health/chapter_batch_generation_active_gateway_smoke_owner.rs`
+  - `backend-rs/src/services/chapter_candidate_runtime_state_service.rs`
+  - `backend-rs/src/services/mod.rs`
+  so the deleted projection-only files are no longer named as active Rust
+  owners or target files.
+- Validation evidence for this merge:
+  - `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-projection-owner-collapse" -- --nocapture` -> 49 passed
+  - `cargo test chapter_batch_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-projection-owner-collapse" -- --nocapture` -> 112 passed
+  - `cargo test api::health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-projection-owner-collapse" -- --nocapture` -> 16 passed
+  - `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-projection-owner-collapse"` -> passed
+  - `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed
+- Active Rust source scan is clean for both deleted files; no active
+  `backend-rs/src` references remain after the same-round owner merge and file
+  deletion.
+- Latest package checkpoint update:
+  the shared `chapter_generation` execution-config helper shrink is now
+  complete. The file
+  `backend-rs/src/services/chapter_generation_execution_config_service.rs`
+  has been removed after its remaining owner responsibilities were merged back
+  into the stronger shared owner
+  `backend-rs/src/services/chapter_generation_execution_contract_service.rs`.
+- The merged owner now keeps both shared execution-contract semantics and the
+  execution-config bridge contract:
+  - `PreparedGenerationExecutionConfig`
+  - `prepare_generation_execution_config(...)`
+  - `prepare_generation_execution_config_with_provider_payload(...)`
+  - `build_generation_execution_config_owner_contract()`
+- Remaining consumers now read execution-config ownership directly from
+  `chapter_generation_execution_contract_service.rs`, including:
+  - `chapter_single_generation_prepare_service.rs`
+  - `chapter_single_generation_runtime_restore_service.rs`
+  - `chapter_single_generation_runtime_state_service.rs`
+  - `chapter_single_generation_stream_workflow_service.rs`
+  - `chapter_single_generation_write_workflow_service.rs`
+  - `chapter_batch_generation_write_workflow_service.rs`
+  - `chapter_batch_generation_runtime_state_service.rs`
+  - `chapter_batch_generation_resume_task_command_service.rs`
+  - `backend-rs/src/api/health.rs`
+  - `backend-rs/src/api/health/chapter_batch_generation_active_gateway_smoke_owner.rs`
+- Route-facing readiness evidence and prompt-context source maps have been
+  updated so the deleted forwarding-only file is no longer named as an active
+  Rust owner or target file.
+- Validation evidence for this merge:
+  - `cargo test chapter_generation_execution_contract_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-config-owner-collapse" -- --nocapture` -> 9 passed
+  - `cargo test chapter_single_generation_prepare_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-config-owner-collapse" -- --nocapture` -> 29 passed
+  - `cargo test chapter_batch_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-config-owner-collapse" -- --nocapture` -> 78 passed
+  - `cargo test chapter_batch_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-config-owner-collapse" -- --nocapture` -> 112 passed
+  - `cargo test api::health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-config-owner-collapse" -- --nocapture` -> 16 passed
+  - `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-config-owner-collapse"` -> passed
+  - `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed
+- Active Rust source scan is clean for
+  `chapter_generation_execution_config_service`; no active `backend-rs/src`
+  references remain after the same-round owner merge and file deletion.
+- Latest package checkpoint update:
+  the `chapter_batch_generation` route-facing health smoke helper shrink is
+  now complete. The file
+  `backend-rs/src/api/health/chapter_batch_generation_active_gateway_smoke_owner.rs`
+  has been removed after its only real production responsibility was merged
+  into the stronger route-facing owner
+  `backend-rs/src/api/health.rs`.
+- The health owner now keeps both active gateway smoke suites in one API
+  boundary:
+  - `chapter_single_generation_active_gateway_smoke_owner` remains inline
+  - `chapter_batch_generation_active_gateway_smoke_owner` is now also inline
+- This matches the route gateway smoke/readiness consolidation rule: public
+  health endpoint shape stays stable, but the deleted helper file is no longer
+  counted as a standalone active Rust owner.
+- Validation evidence for this merge:
+  - `cargo test api::health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/health-batch-owner-inline" -- --nocapture` -> 16 passed
+  - `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/health-batch-owner-inline"` -> passed
+  - `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed
+- Active Rust source scan is clean for
+  `chapter_batch_generation_active_gateway_smoke_owner.rs`; remaining hits are
+  only the expected inline module name inside `backend-rs/src/api/health.rs`.
+
+## 2026-06-13 active route-wiring extraction checkpoint
+
+The next `chapter_single_generation` closeout move is now clearer after the
+bootstrap and compat-dependency shrink rounds: the surviving Python
+`chapter_generation_route_compat_service.py` should no longer own the active
+default route wiring for single-generation stream/background routes.
+
+This checkpoint formalizes a new split:
+
+- active owner:
+  `backend/app/services/chapter_generation/route_wiring_service.py`
+- legacy source-map / rollback shell:
+  `backend/app/services/compat/chapter_generation_route_compat_service.py`
+
+The design reason is straightforward:
+
+- `chapter_generation_routes.py` is still an active route file, so its default
+  wiring owner should live beside the active `chapter_generation` module
+  instead of a broad `compat` bucket
+- the wiring contract is large enough to be its own owner boundary:
+  context-builder overrides, prompt/template overrides, runtime prompt
+  wiring, candidate rerank wiring, analysis callback wiring, and background
+  orchestration wiring all move together as one file-level package
+- keeping this contract in `compat` made the compat shell look like an active
+  production owner even after bootstrap gating and stream/chapters dependency
+  shrink had already reduced its legitimate role
+
+Resulting design rule for the next rounds:
+
+- treat `route_wiring_service.py` as the active Python source-map owner while
+  the legacy Python route files still exist
+- treat `chapter_generation_route_compat_service.py` as a rollback/source-map
+  shell only; do not add new active wiring or runtime dependencies to it
+- when the next freeze/delete round is ready, the remaining decision is now
+  about whether the legacy compat shell can be frozen or removed entirely,
+  not about where active single-generation route semantics live
+
+## 2026-06-13 Rust readiness evidence sync checkpoint
+
+After the Python active route owner moved to
+`backend/app/services/chapter_generation/route_wiring_service.py`, the Rust
+single-generation owner contracts and health/readiness evidence were still
+describing the old compat module as if it were the only route-wiring seam.
+
+This checkpoint closes that drift:
+
+- route-owner, prepare-owner, runtime-restore-owner, stream-workflow-owner,
+  and write-workflow-owner contracts now list
+  `route_wiring_service.py` in the Python source map
+- the active single-generation readiness evidence in
+  `backend-rs/src/api/health.rs` now distinguishes:
+  - `active_route_wiring_shells`
+  - `compat_shells`
+- the frozen source-map module list now reflects the actual Python module
+  structure that remains after the route-wiring extraction round
+
+Why this matters:
+
+- future freeze/delete decisions for the remaining Python single-generation
+  shell must rely on accurate Rust readiness evidence
+- otherwise the project will keep carrying stale rollback/source-map facts and
+  may delete or freeze the wrong boundary first
+- this is a Rust-side migration-closeout task: it makes the Rust owner and
+  readiness layer authoritative about the current Python fallback/source-map
+  topology
+
+Next design implication:
+
+- the `chapter_single_generation` background write owner-collapse round is now
+  complete
+- completed whole-file closeout:
+  `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+  has been deleted after its remaining active production logic moved into the
+  surviving owner
+  `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+- the surviving Rust owner now keeps one coherent background chain in a single
+  file-level boundary:
+  existing-task lookup, restored snapshot payload projection, route-facing
+  entry branching, launch-part preparation, persistence, and dispatch
+- route-facing wiring, health/readiness evidence, and shared owner/source-map
+  references have already been repointed to
+  `chapter_single_generation_runtime_restore_service.rs`, so the deleted write
+  owner should not be scheduled again as a next-step candidate
+- do not force-merge
+  `runtime_restore_service.rs`
+  and
+  `runtime_state_service.rs`
+  in the immediate next round
+- both surviving files still hold dense runtime/snapshot/checkpoint/terminal
+  semantics and are not forwarding-only shells
+- the next acceleration round should instead choose another whole-file or
+  whole-module owner that is still glue-heavy enough to collapse without
+  weakening readability or runtime ownership clarity, with
+  `chapter_single_generation_stream_workflow_service.rs`
+  or the next shared `chapter_generation` glue owner as the stronger
+  candidates
+
+## 2026-06-13 fast migration execution plan
+
+This section is the working plan for the next migration rounds. Treat it as
+the fast-development baseline: future rounds should start from one of the
+lanes below, confirm the local file boundary, edit the Rust owner package, and
+record only the new delta and validation evidence.
+
+### First-principles progress model
+
+Migration progress is counted by active ownership, not by raw file movement.
+A round counts as real Python-to-Rust migration only when it advances at least
+one of these outcomes:
+
+- active route or runtime traffic is owned by a Rust route/service owner
+- a Python fallback branch becomes frozen, repointed, removed, or explicitly
+  rollback-only
+- a Rust owner becomes cohesive enough to delete a forwarding-only Rust helper
+  in the same round
+- manifest, health, or smoke evidence stops naming stale Python fallback or
+  deleted Rust helper files as active targets
+- schema, startup, checkpoint, or task lifecycle assumptions move into an
+  explicit Rust owner with focused validation
+
+Do not count a round as primary migration progress if it only renames wrappers,
+moves a trivial helper, or edits Python compatibility code before Rust owner
+validation exists.
+
+### Fast lane order
+
+1. `chapter_single_generation` stream workflow closeout.
+
+   Target the stream side as the next visible whole-file / whole-function-group
+   migration unit:
+   `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`.
+   The purpose is to determine whether any remaining stream response,
+   lifecycle, or launch glue can move into stronger owners, or whether the file
+   should remain the single coherent stream workflow owner. Do not force a
+   merge into `runtime_restore_service.rs` or `runtime_state_service.rs`;
+   those are dense runtime owners, not cleanup targets.
+
+2. `chapter_single_generation` Python freeze / delete decision.
+
+   After the stream workflow owner is confirmed, convert the existing readiness
+   state into one module-level Python shell action. Candidate scope:
+   `backend/app/api/chapter_generation_routes.py`,
+   `backend/app/services/chapter_generation/route_wiring_service.py`,
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`,
+   and the `backend/app/services/chapter_generation/stream/*` source-map
+   files. The expected result is a documented freeze, repoint, or deletion
+   decision, not more active Python route logic.
+
+3. Shared `chapter_generation` Rust owner cleanup.
+
+   Continue deleting only forwarding-only shared helpers whose responsibilities
+   have collapsed into one real owner. Strong candidates are helper files or
+   submodules that only project runtime/prompt/quality data into a single
+   consumer and do not own transport shaping, persistence, rollback policy, or
+   a separate validation boundary. Keep
+   `chapter_generation_execution_contract_service.rs`,
+   `chapter_generation_runtime_service.rs`, and
+   `chapter_generation_prompt_service.rs` as stronger owners unless a focused
+   pass proves a child module is only evidence or forwarding glue.
+
+4. `chapter_batch_generation` owner reduction.
+
+   Batch generation is already in the high-complexity stage. Treat
+   `chapter_batch_generation_read_context_service.rs`,
+   `chapter_batch_generation_runtime_state_service.rs`,
+   `chapter_batch_generation_write_workflow_service.rs`, and
+   `chapter_batch_generation_resume_task_command_service.rs` as real owners by
+   default. Only collapse code that has become a forwarding-only projection or
+   duplicate task/status lookup. Do not split or merge the large runtime owner
+   just for file-count reduction.
+
+5. Business-owner source-map closeout.
+
+   For already validated business route groups (`auth`, `book_import`,
+   `characters`, `wizard-stream`, `writing_styles`, and adjacent mature
+   profiles), the next useful work is not another auth-guard smoke. The useful
+   work is deciding whether the Python source-map files can be frozen,
+   repointed, or deleted as a whole group after Rust business probes and
+   rollback notes are current.
+
+### Per-round execution contract
+
+Each migration round should be small in number of files but large in ownership
+impact. Before editing, record only these five facts:
+
+- selected lane and package
+- Python source-map files that are affected
+- Rust owner files that will survive after the round
+- behavior contract that must not change
+- validation commands, using a non-`C:` target dir for Rust build artifacts
+
+Default validation shape:
+
+- focused Rust tests for the touched owner files
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "<non-C target>"`
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  when route, manifest, health, or readiness evidence changes
+- focused Python tests only when a Python rollback/source-map shell or test
+  patch surface changes
+
+### Speed rules
+
+- Start from this plan and the latest checkpoint; do not re-analyze the whole
+  migration history every round.
+- Prefer whole-file or whole-function-group edits. Micro-slices are allowed
+  only inside the selected lane as risk checkpoints.
+- Delete a forwarding-only Rust helper in the same round that merges its last
+  responsibility into the real owner.
+- Keep dense runtime owners intact unless the next pass proves they are only
+  forwarding or evidence glue.
+- Update health/readiness/source-map evidence in the same lane whenever owner
+  files are removed or repointed.
+- Do not put Rust build artifacts on `C:`; use `D:/CodexTargets/...` or the
+  repo-local `.codex-targets/...` path if available.
+
+### Immediate next-entry recommendation
+
+The next implementation round should select lane 1:
+`chapter_single_generation_stream_workflow_service.rs`.
+
+Expected decision at the end of that round:
+
+- either collapse any remaining forwarding-only stream glue into a stronger
+  owner and delete the redundant file or helper
+- or explicitly mark the stream workflow file as the surviving real stream
+  owner, then proceed to lane 2 for Python route/stream shell freeze or delete
+  planning
+
+## 2026-06-13 stream workflow owner confirmation
+
+Lane 1 is now resolved: `chapter_single_generation_stream_workflow_service.rs`
+is a surviving real Rust owner, not a forwarding-only cleanup target.
+
+The file owns multiple active stream contracts that should stay together:
+
+- route payload to restored runtime launch preparation
+- SSE lifecycle spawn/run and event ordering
+- stream success response payload projection
+- quality-gate event projection and completion messaging
+- optional follow-up analysis launch/result projection
+- story runtime contract projection and active story-repair payload shaping
+
+Because those responsibilities are tightly coupled to the stream transport
+contract, the next migration progress should not force this file into
+`runtime_restore_service.rs` or `runtime_state_service.rs`. Those files own
+runtime restoration and persistence semantics; the stream workflow file owns
+the route-facing SSE contract.
+
+The fast plan therefore moves to lane 2: reduce the remaining Python
+single-generation route/stream shell presence. The first low-risk closeout is
+to make the legacy Python route module lazy-imported only when
+`legacy_single_generation_python_routes_enabled` is true. Default startup
+should not register or import the legacy `chapter_generation_routes.py` module;
+it remains available only for explicit rollback registration.
+
+## 2026-06-16 post-runtime-restore owner audit
+
+After the 2026-06-16 owner-absorption rounds, the next planning baseline needs
+to be adjusted again. The current bottleneck is no longer the previously
+identified shared-runtime function group alone. The more immediate and more
+coherent next package is now the remaining route-facing restore / background
+workflow concentration inside
+`backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`.
+
+This follows from the current state:
+
+- `chapter_single_generation_runtime_checkpoint_service.rs` now owns checkpoint
+  projection and task-stage persistence.
+- `chapter_single_generation_background_launch_service.rs` now owns startup
+  snapshot planning, background task seed shaping, background response payload
+  shaping, and persistence/dispatch.
+- `chapter_single_generation_existing_background_task_service.rs` now owns the
+  existing-background read-side and response projection chain.
+- `chapter_single_generation_runtime_seed_service.rs` now owns restored
+  runtime-state seed projection and launch-input reconstruction.
+
+The surviving concentration in `runtime_restore_service.rs` is therefore
+smaller and clearer than before. It is now mainly the route-facing restore and
+background workflow shell that still ties those owners together:
+
+- `PreparedSingleChapterGenerationRestoredRuntimeLaunch`
+- `SingleGenerationBackgroundWriteWorkflowEntry`
+- route-facing `prepare_*` and `start_from_route_payload(...)` orchestration
+- `from_parts(...)` and adjacent test surfaces
+- runtime-restore / write-workflow owner contracts
+
+This changes the default next-package choice:
+
+1. Prefer another whole-owner split inside
+   `chapter_single_generation_runtime_restore_service.rs` first.
+2. Only switch back to the `chapter_generation` shared-runtime owner-lift lane
+   if the remaining restore/workflow shell proves too coupled to split cleanly
+   in one round.
+
+Why this is the right acceleration move:
+
+- it continues the same active `chapter_single_generation` runtime-restore lane
+  that already produced multiple validated Rust owners in sequence
+- it keeps migration work concentrated on one real active route/runtime owner
+  chain instead of reopening a broader shared-runtime package too early
+- it improves the odds that later Python single-generation route/stream shell
+  freeze decisions can be reviewed against a smaller, easier-to-audit Rust
+  restore owner boundary
+
+Current quantitative baseline for planning:
+
+- `backend/app/**/*.py`: `293` files / about `82,945` lines
+- `backend-rs/src/**/*.rs`: `164` files / about `145,712` lines
+- chapter/generation/draft/analysis/regeneration/compat related Python files:
+  `123` files / about `26,233` lines
+
+Planning interpretation:
+
+- the project is already Rust-heavy at the executable owner layer, but Python
+  physical surface is still large
+- future acceleration should therefore count progress by active owner
+  contraction, not by Python line edits or metadata cleanup
+- do not spend the default next round on Python shell touch-up or source-map
+  maintenance unless the same round also closes an approved freeze/delete/
+  repoint package
+
+Revised next-entry recommendation:
+
+- primary:
+  split the remaining
+  `PreparedSingleChapterGenerationRestoredRuntimeLaunch` +
+  `SingleGenerationBackgroundWriteWorkflowEntry` route-facing workflow group
+  into one new dedicated Rust owner file
+- secondary fallback:
+  if that split does not give a clean whole-owner boundary, return to the
+  `chapter_generation_runtime_service.rs` single-generation-specific shared
+  function-group absorption plan as the next full package
+
+## 2026-06-14 progress audit and planning adjustment
+
+The migration has moved past the "find another Rust owner marker" phase. The
+current whole-file Rust service/runtime baseline is complete for the existing
+top-level chapter service set: all 36 `backend-rs/src/services/chapter*.rs`
+files publish `service_runtime_closeout_status`. The route/readiness layer is
+also Rust-owned for the audited chapter groups, with the latest manifest-only
+evidence still reporting 407 readiness probes and Rust-owned chapter route
+groups.
+
+The remaining bottleneck is therefore not a missing Rust route or service
+implementation. It is physical Python source-map closeout. The core chapter
+rollback/source-map package is 9 files / 1854 lines:
+
+- `backend/app/api/chapters.py`
+- `backend/app/api/chapter_generation_routes.py`
+- `backend/app/api/chapter_batch_generation_routes.py`
+- `backend/app/api/chapter_regeneration_routes.py`
+- `backend/app/api/chapter_partial_regeneration_routes.py`
+- `backend/app/api/chapter_analysis_routes.py`
+- `backend/app/api/chapter_analysis_task_routes.py`
+- `backend/app/api/chapter_draft_routes.py`
+- `backend/app/services/compat/chapter_generation_route_compat_service.py`
+
+Planning is adjusted accordingly:
+
+- Batch A: close the default-off generation route source maps
+  (`chapter_generation_routes.py`, `chapter_batch_generation_routes.py`) after
+  explicit same-round approval for freeze, delete, or repoint.
+- Batch B: close the registry-gated draft/analysis/regeneration route source
+  maps after verifying the legacy registration knobs and matching Rust owner
+  profiles.
+- Batch C: close aggregate source maps (`chapters.py` and the compatibility
+  service) only after direct Python consumers are removed, gated, or explicitly
+  approved as source-map-only tests.
+- Do not continue adding marker-only Rust changes to the already closed 36/36
+  service files. Future Rust work must be triggered by concrete drift, newly
+  added files, missing smoke/readiness evidence, or a real ownership gap.
+- If no source-map closeout approval exists and no Rust drift exists, the
+  correct fast path is to request the batch action decision, not to create
+  another micro-slice.
+
+## 2026-06-16 post-stale-closeout reset
+
+The 2026-06-16 source-map stale closeout lane is now complete. Rust
+source-map/rollback contracts under `backend-rs/src` no longer point at deleted
+Python files, including the previously remaining top-level users/admin package.
+This is useful migration hygiene, but it is not the same thing as completing
+Python-to-Rust migration.
+
+The project still contains substantial Python surface:
+
+- `backend/app/**/*.py`: `293` files / about `92,274` lines
+- `backend-rs/src/**/*.rs`: `153` files / about `155,497` lines
+- chapter/generation/draft/analysis/regeneration related Python files:
+  roughly `122`
+- highest remaining Python concentration still sits around
+  `services/chapter_generation`, `services/batch_generation`, compat shells,
+  and aggregate route/source-map files
+
+This changes the planning interpretation:
+
+- do not treat more Python source-map repoint work as the default fast lane
+- do not treat small Python edits or stale naming cleanup as equivalent to
+  active runtime migration
+- from this point, the default progress unit must again be a real Rust owner
+  package that absorbs active behavior, not just metadata or rollback mapping
+
+### Reset package order after stale closeout
+
+1. `chapter_single_generation` active runtime owner completion
+2. `chapter_generation` shared runtime owner completion
+3. `chapter_batch_generation` active owner cleanup only when it exposes a real
+   behavior gap
+4. Python source-map freeze/delete/repoint batches only after the corresponding
+   Rust runtime owner package is materially stronger
+5. `chapters` aggregate shell and schema/startup follow-up after the route and
+   runtime packages above are stable
+
+### New fast lane: active runtime owner absorption
+
+The next acceleration lane should not reopen
+`chapter_single_generation_stream_workflow_service.rs`; that file has already
+been confirmed as a surviving real owner. The higher-value gap is now inside
+the shared `chapter_generation` runtime package, where a single-generation
+result/draft/history lifecycle function group still lives in the shared file
+even though its active consumers are predominantly single-generation owners.
+
+Primary target:
+
+- source owner:
+  `backend-rs/src/services/chapter_generation_runtime_service.rs`
+- target package:
+  `chapter_single_generation`
+- preferred landing owner:
+  `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+  or a dedicated child owner such as
+  `backend-rs/src/services/chapter_single_generation_runtime_state_service/result_lifecycle_owner.rs`
+
+Function-group boundary to move as one package:
+
+- `update_latest_generated_chapter_history_quality_metrics(...)`
+- `normalized_non_empty_string(...)`
+- `GeneratedResultQualityView`
+- `generated_result_quality_view(...)`
+- `GeneratedResultLifecycleView`
+- `generated_result_lifecycle_view(...)`
+- `apply_generated_result_quality_view(...)`
+- `apply_generated_result_lifecycle_view(...)`
+- `build_single_generation_followup_draft_result(...)`
+- `build_single_generation_candidate_draft_attempt(...)`
+- `SingleGenerationCandidateDraftLifecycleView`
+- `single_generation_candidate_draft_lifecycle_view(...)`
+- `single_generation_candidate_draft_attempt_view(...)`
+- `PersistedHistoryPayloadView`
+- `persisted_history_payload_view(...)`
+
+Why this boundary matters:
+
+- these functions shape single-generation draft lifecycle, follow-up draft
+  behavior, and generated-history quality write-back
+- the active consumers are already concentrated in
+  `chapter_single_generation_stream_workflow_service.rs`,
+  `chapter_single_generation_runtime_state_service.rs`, and only one narrow
+  history-quality consumer in `chapter_analysis_runtime_service.rs`
+- leaving the group in `chapter_generation_runtime_service.rs` keeps single-
+  generation behavior split across package boundaries and slows future
+  Python-shell freeze decisions
+
+Done means:
+
+- the whole function group above is owned by the single-generation package as
+  one coherent Rust boundary
+- downstream consumers import the new owner directly
+- the old shared-runtime file no longer keeps single-generation-only draft /
+  follow-up / history-lifecycle glue
+- the same round runs focused Rust tests and `cargo check` with
+  `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/backend-rs`
+
+### Revised speed rule
+
+For the next phase, a round counts as acceleration only if it does one of the
+following:
+
+- moves an active runtime function group from a shared/compat owner into the
+  real package owner
+- removes a forwarding-only Rust helper in the same round as the owner merge
+- enables a whole Python shell freeze/delete/repoint decision by making the
+  corresponding Rust owner materially easier to audit
+
+Rounds that only rename tests, repoint stale source-map strings, or lightly
+patch Python compatibility code should now be treated as maintenance, not as
+the primary migration lane.

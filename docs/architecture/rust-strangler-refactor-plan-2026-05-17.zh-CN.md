@@ -2540,13 +2540,17 @@ group 形成可执行的 cutover 包。每个 cutover 包至少包含：
 | route group | Rust owner 证据 | Python fallback 证据 | smoke/probe 状态 | rollback / schema 假设 | 加速通道 | 下一步动作 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `settings` | Rust router 已 merge，Nginx 现已把 `/api/settings` exact-root + shared-prefix 直接指到 Rust。 | Python 仍注册 `settings` router，但 same-path fallback 需通过显式 gateway rollback 才会重新生效。 | 已有 `settings` Rust owner probes 与登录态 business owner smoke；历史 `phase5-settings-fallback` / `phase5-settings-business-fallback` / `phase5-settings-asymmetric` probes 已在 2026-06-07 gateway 收口后退役。 | schema owner 仍按 Python Alembic；rollback 可通过恢复 Nginx settings path 到 Python；preset 仍写入 `preferences` JSON，不新增 schema owner；`settings/models` 的 Python public network-error 线索仅在显式 rollback 后复用。当前真实 business smoke 实跑还依赖 `LOCAL_AUTH_USERNAME / LOCAL_AUTH_PASSWORD` 环境前提。 | gateway 收口已完成。 | 继续补 provider-success / transport stronger smoke，并把 `projects` 推进到同级 cutover 模板。 |
-| `projects` | Rust router 已 merge，Nginx 现已把 `/api/projects` 收口为 Rust exact-root + shared-prefix。 | Python 仍注册 `projects` router，但 same-path fallback 需通过显式 gateway rollback 才会重新生效。 | 已有 projects Rust owner probes，覆盖基础 CRUD、列表/详情、public import validation、multipart import、TXT/JSON 两类导出和维护修复入口；历史 `phase5-projects-fallback` probes 已在 2026-06-07 gateway 收口后退役；业务 smoke 仍需登录态加强。 | 项目表 schema 仍不由 Rust mutation；rollback 走 Nginx path 级回退；历史 Python `validate-import` / `import` / `export-data` / CRUD / 维护类线索仅在显式 rollback 后复用。 | gateway 收口已完成。 | 继续补 `projects` 登录态 business smoke，不再把 same-path Python fallback 当作当前剩余量。 |
-| `wizard-stream` | Rust router 已 merge，Nginx 现已把 `/api/wizard-stream/` 前缀直接指到 Rust。 | Python `wizard_stream` router 仍存在，但 same-path fallback 需通过显式 gateway rollback 才会重新生效；`/api/wizard/` 已确认不是独立 route group。 | 已有 6 条 Rust owner probes；历史 Python fallback probes 已退役，剩余验证重点是 stronger SSE / business smoke。 | SSE rollback 必须保留 `sse-common` 配置；schema 依赖既有 project/world-building 数据；当前 probes 仍以未登录边界为主。 | gateway 收口已完成。 | 继续补登录态 SSE stronger smoke、保留显式 rollback 步骤，不再把 same-path Python fallback 当作当前剩余量。 |
-| `memories` | Rust router 已 merge，Nginx 现已把 `/api/memories/` 收口到 Rust，并保留 `/memories/` 到 Python 页面边界。 | Python same-path API fallback 需通过显式 gateway rollback 才会重新生效；`/memories/` 非 API path 继续保留。 | 已有 6 条 Rust owner probes；历史 `memories` Python same-path fallback probes 已在 2026-06-07 收口后退役。 | schema 仍沿用 Python 历史表；rollback 需严格区分 `/api/memories/` 与 `/memories/`；登录态 vector memory / analysis / delete side effects 仍需 stronger smoke。 | gateway 收口已完成。 | 继续补 `memories` 登录态 business smoke，并评估 `/memories/` 的 deprecation/redirect 策略。 |
+| `projects` | Rust router 已 merge，Nginx 现已把 `/api/projects` 收口为 Rust exact-root + shared-prefix。 | Python 仍注册 `projects` router，但 same-path fallback 需通过显式 gateway rollback 才会重新生效。 | 已有 projects Rust owner probes，覆盖基础 CRUD、列表/详情、public import validation、multipart import、TXT/JSON 两类导出和维护修复入口；历史 `phase5-projects-fallback` probes 已在 2026-06-07 gateway 收口后退役；`phase5-projects-business-owner` 已在 2026-06-10 通过登录态 CRUD/JSON export/consistency/fix/delete business smoke。 | 项目表 schema 仍不由 Rust mutation；rollback 走 Nginx path 级回退；历史 Python `validate-import` / `import` / `export-data` / CRUD / 维护类线索仅在显式 rollback 后复用。 | gateway + 登录态 business owner 收口已完成。 | 不再增加 `projects` smoke-only helper；下一步只做显式 source-map freeze/repoint/delete 审批收口，或切换到下一个整块 business owner profile。 |
+| `wizard-stream` | Rust router 已 merge，Nginx 现已把 `/api/wizard-stream/` 前缀直接指到 Rust。 | Python `wizard_stream` router 仍存在，但 same-path fallback 需通过显式 gateway rollback 才会重新生效；`/api/wizard/` 已确认不是独立 route group。 | 历史 Python fallback probes 已退役；`phase5-wizard-stream-business-owner` 已在 2026-06-11 通过 7 条 Rust probes，其中 6 条为登录态 `/api/wizard-stream/*` SSE business probes，覆盖 world-building、regenerate、career-system、characters、outline、cleanup。 | SSE rollback 必须保留 `sse-common` 配置；schema 依赖既有 project/world-building 数据；生成类 probes 验证无 provider/settings 时的稳定 `AI配置失败` SSE error shell，cleanup 验证成功 `result/done` SSE path。 | gateway + 登录态 SSE business owner 收口已完成。 | 不再增加 `wizard-stream` micro-smoke；下一步只做 source-map freeze/repoint/delete 审批收口，或单独规划 provider-backed wizard success stronger smoke。 |
+| `memories` | Rust router 已 merge，Nginx 现已把 `/api/memories/` 收口到 Rust，并保留 `/memories/` 到 Python 页面边界。 | Python same-path API fallback 需通过显式 gateway rollback 才会重新生效；`/memories/` 非 API path 继续保留。 | 已有 6 条 Rust owner probes；历史 `memories` Python same-path fallback probes 已在 2026-06-07 收口后退役；`phase5-memories-business-owner` 已在 2026-06-11 通过 10 条登录态 business probes，覆盖 fixture import、chapter lookup、list、SQL fallback search、analysis read、stats before/after delete、foreshadows、delete side effect 和 cleanup。 | schema 仍沿用 Python 历史表；rollback 需严格区分 `/api/memories/` 与 `/memories/`；非空 query 的 vector/settings-aware search 仍属于可选 AI 集成 smoke，不作为普通 owner closeout 前置。 | gateway + 登录态 business owner 收口已完成。 | 不再增加 `memories` micro-smoke；下一步只做显式 source-map freeze/repoint/delete 审批收口、`/memories/` deprecation/redirect 策略，或切换到下一个整块 business owner profile。 |
 | `chapters` | Rust router 已 merge，Nginx 将章节 CRUD / generation / batch-generation path 指到 Rust。 | Python 仍注册多个 `chapter_*` routers，fallback probes 覆盖部分路径。 | owner/fallback probes 已有，但行为风险最高。 | schema 与任务状态表仍按 Python Alembic；rollback 必须保留 batch/SSE 兼容路径。 | 高价值 seam + stronger smoke。 | 不作为第一批移除 fallback；继续补 batch-generation status/SSE/read-side parity 和 stronger smoke。 |
-| `auth` / `users` | Rust router 已 merge，Nginx 明确 `/api/auth/`、`/api/users/` 到 Rust。 | Python 仍注册 auth/users，fallback probes 充足。 | Rust owner / fallback probes 充足。 | 安全敏感；rollback 需验证 cookie/header/JWT 行为一致。 | P1 cutover 包。 | 等 settings/projects 先跑通 shrink 流程后，再推进 auth/users。 |
-| `characters` / `outlines` / `book_import` / `relationships` / `foreshadows` / `writing_styles` / `organizations` / `careers` / `inspiration` / `mcp_plugins` / `prompt_templates` / `prompt_workshop` / `polish` / `changelog` | Rust router 已 merge，Nginx 明确主要 path 到 Rust。 | Python routers 与 fallback probes 仍存在；`changelog` 是 public GitHub proxy fallback，真实 smoke 受外部网络影响。 | characters/outlines/book_import 已有 owner/fallback probes；relationships 已补第一组 project-list / graph probe；foreshadows 已补第一组 project-list / stats probe；writing_styles 已补第一组 user / project probe；organizations 已补第一组 project-list / generate-stream probe；careers 已补第一组 list / generate-system probe；inspiration 已补第一组 generate-options / quick-generate probe；mcp_plugins 已补第一组 list / simple-create probe；prompt_templates 已补第一组 list / system-defaults probe；prompt_workshop 已补第一组 submit / like probe；polish 已补第一组 text / batch probe；changelog 已补 list / refresh public probe；业务覆盖仍分散。 | schema 仍归 Python Alembic；rollback 可 path 级恢复；relationships graph 还依赖组织成员与角色节点 join 语义；foreshadows 依赖章节上下文和 pending/overdue 查询语义；writing_styles 依赖 preset 同步与 project default style 语义；organizations 依赖 `organization_members`、组织角色映射与 generation_history 语义；careers 依赖 `careers` 与 `character_careers` 表、SSE 生成和角色职业绑定语义；inspiration 依赖 prompt template、AI provider 与可选 web research 语义；mcp_plugins 依赖 MCP client session 与后台注册/断开语义；prompt_templates 依赖 managed template sync 与 prompt formatting 语义；prompt_workshop 混合公开与登录接口且依赖云端代理模式；polish 依赖 provider 配置与 generation_history 写入；changelog 依赖 GitHub API 可用性与缓存语义。 | P1 批量包。 | 在 P0 路径形成模板后，批量补 checklist 与 stronger smoke；changelog 若进入真实 smoke 需隔离网络波动。 |
-| `background_tasks` | Rust router 已 merge，Nginx 已把 `/api/background-tasks` exact-root + shared-prefix 直接指到 Rust。 | Python same-path fallback 需通过显式 gateway rollback 才会重新生效。 | 已有 background_tasks Rust owner probes；历史 list/create Python fallback probes 已在 2026-06-07 gateway 收口后退役。 | task registry / stream hub / checkpoint 语义仍需 stronger smoke；rollback 需保留 SSE 相关 proxy 配置，并继续核对 task-missing / stream / cancel / workflow-state 差异。 | gateway 收口已完成。 | 继续补 task lifecycle、SSE、cancel、workflow-state stronger smoke，不再把 same-path Python fallback 当作当前剩余量。 |
+| `auth` / `users` | Rust router 已 merge，Nginx 明确 `/api/auth/`、`/api/users/` 到 Rust。 | Python 仍注册 auth/users；same-path fallback 需通过显式 gateway rollback 才会重新生效。 | `users` 已在 2026-06-11 通过 `phase5-users-business-owner` 登录态业务 profile，覆盖 current、list、detail、set-admin grant/revoke、reset-password、delete；`auth` 已在 2026-06-11 通过 `phase5-auth-business-owner` 登录态业务 profile，覆盖 register、local-login、bind-login、current-user、password status/set/initialize-existing、refresh、logout 和 cookie/JWT 行为。 | 安全敏感；rollback 需验证 cookie/header/JWT 行为一致；users 的 fixture 注册不计入 users route owner；auth 的 local/bind login 成功 probes 验证自身响应与 `Set-Cookie: token=`，`requires_login` probes 仍使用 bootstrap local-auth cookie。 | `users` 与 `auth` gateway + 登录态 business owner 收口均已完成。 | 不再增加 `users/auth` micro-smoke；下一步只做 source-map freeze/repoint/delete 审批收口，或单独规划 provider-backed OAuth success smoke / token refresh regression stronger smoke。 |
+| `book_import` | Rust router 已 merge，Nginx 明确 `/api/book-import*` 到 Rust。 | Python `book_import` route/service/schema 仍保留为 source-map；same-path fallback 需通过显式 gateway rollback 才会重新生效。 | 历史 auth-guard Python fallback probes 已退役；`phase5-book-import-business-owner` 已在 2026-06-11 通过 8 条登录态 probes，覆盖真实 TXT 创建任务、状态读取、终态取消壳、缺失任务 status/preview/apply、retry-stream/apply-stream SSE error shell。 | schema 仍归 Python Alembic；AI wizard 成功导入链依赖 settings/provider，不计入本轮普通 route owner closeout；rollback 可 path 级恢复 Python source-map。 | gateway + 登录态 business owner 收口已完成。 | 不再增加 `book_import` micro-smoke；下一步只做 source-map freeze/repoint/delete 审批收口，或单独规划 provider-backed apply/apply-stream 成功路径 stronger smoke。 |
+| `characters` | Rust router 已 merge，Nginx 明确 `/api/characters*` 到 Rust。 | Python `characters` route/model/schema/service 文件仍保留为 source-map；same-path fallback 需通过显式 gateway rollback 才会重新生效。 | 历史 auth-guard Python fallback probes 已退役；`characters-validate-import-public-rust` 保留 public validation 政策证据；`phase5-characters-business-owner` 已在 2026-06-11 通过 12 条 Rust probes，其中 11 条为登录态 `/api/characters/*` business probes，覆盖 create、query list、project-path list、detail、update、export、validate-import、import、delete、missing detail、missing import-project。 | schema 仍归 Python Alembic；角色扩展字段、组织/职业关联与 AI generation/provider 成功路径不作为本轮普通 route owner closeout 前置；rollback 可 path 级恢复 Python source-map。 | gateway + 登录态 business owner 收口已完成。 | 不再增加 `characters` micro-smoke；下一步只做 source-map freeze/repoint/delete 审批收口，或单独规划 provider-backed generate/generate-stream 成功路径 stronger smoke。 |
+| `outlines` | Rust router 已 merge，Nginx 明确 `/api/outlines*` 到 Rust。 | Python `outlines` route/model/schema/service 文件仍保留为 source-map；same-path fallback 需通过显式 gateway rollback 才会重新生效。 | 历史 auth-guard Python fallback probes 已退役；`phase5-outlines-business-owner` 已在 2026-06-11 通过 14 条 Rust probes，其中 13 条为登录态 `/api/outlines*` business probes，覆盖 create、query list、project-path list、detail、update、reorder、empty/created chapter lookup、create-chapters-from-plans、delete、missing detail、missing project-list、post-delete create-single-chapter not-found shell。 | schema 仍归 Python Alembic；AI provider-backed generate/expand/batch-expand 成功路径不作为本轮普通 route owner closeout 前置；rollback 可 path 级恢复 Python source-map。 | gateway + 登录态 business owner 收口已完成。 | 不再增加 `outlines` micro-smoke；下一步只做 source-map freeze/repoint/delete 审批收口，或单独规划 provider-backed generation/expansion success stronger smoke。 |
+| `writing_styles` | Rust router 已 merge，Nginx 明确 `/api/writing-styles*` 到 Rust。 | Python `writing_styles` route/model/schema/sync files 仍保留为 source-map；same-path fallback 需通过显式 gateway rollback 才会重新生效。 | 历史 fallback probes 已退役；`phase5-writing-styles-business-owner` 已在 2026-06-11 通过 13 条 Rust probes，其中 12 条为登录态 `/api/writing-styles*` business probes，覆盖 presets、user/project list、project initialize、custom CRUD、default switch、delete 和 missing detail。 | schema 仍归 Python Alembic；preset sync 与 project default style 语义已有 business owner 证据；provider-backed generation consumer 不属于本 route group closeout。 | gateway + 登录态 business owner 收口已完成。 | 不再增加 `writing_styles` micro-smoke；下一步只做 source-map freeze/repoint/delete 审批收口，或切到下一个整块 business owner profile。 |
+| `relationships` / `foreshadows` / `organizations` / `careers` / `inspiration` / `mcp_plugins` / `prompt_templates` / `prompt_workshop` / `polish` / `changelog` | Rust router 已 merge，Nginx 明确主要 path 到 Rust。 | Python routers 与 fallback probes 仍存在；`changelog` 是 public GitHub proxy fallback，真实 smoke 受外部网络影响。 | relationships 已补第一组 project-list / graph probe；foreshadows 已补第一组 project-list / stats probe；organizations 已补第一组 project-list / generate-stream probe；careers 已补第一组 list / generate-system probe；inspiration 已补第一组 generate-options / quick-generate probe；mcp_plugins 已补第一组 list / simple-create probe；prompt_templates 已补第一组 list / system-defaults probe；prompt_workshop 已补第一组 submit / like probe；polish 已补第一组 text / batch probe；changelog 已补 list / refresh public probe；业务覆盖仍分散。 | schema 仍归 Python Alembic；rollback 可 path 级恢复；relationships graph 还依赖组织成员与角色节点 join 语义；foreshadows 依赖章节上下文和 pending/overdue 查询语义；organizations 依赖 `organization_members`、组织角色映射与 generation_history 语义；careers 依赖 `careers` 与 `character_careers` 表、SSE 生成和角色职业绑定语义；inspiration 依赖 prompt template、AI provider 与可选 web research 语义；mcp_plugins 依赖 MCP client session 与后台注册/断开语义；prompt_templates 依赖 managed template sync 与 prompt formatting 语义；prompt_workshop 混合公开与登录接口且依赖云端代理模式；polish 依赖 provider 配置与 generation_history 写入；changelog 依赖 GitHub API 可用性与缓存语义。 | P1 批量包。 | 批量补整块 business owner profile 与 stronger smoke；changelog 若进入真实 smoke 需隔离网络波动。 |
+| `background_tasks` | Rust router 已 merge，Nginx 已把 `/api/background-tasks` exact-root + shared-prefix 直接指到 Rust。 | Python same-path fallback 需通过显式 gateway rollback 才会重新生效。 | 已有 background_tasks Rust owner probes；历史 list/create Python fallback probes 已在 2026-06-07 gateway 收口后退役；`phase5-background-tasks-business-owner` 已在 2026-06-11 通过登录态 create/list/detail/workflow-state/missing/cancel business smoke。 | task registry / checkpoint / workflow-state / missing-task / cancel 语义已有 business owner 证据；rollback 仍需保留 SSE 相关 proxy 配置，SSE stream content 可作为后续专项 stronger smoke。 | gateway + 登录态 business owner 收口已完成。 | 不再增加 `background_tasks` micro-smoke；下一步只做 source-map freeze/repoint/delete 审批收口、SSE stream 专项 stronger smoke，或切换到下一个整块 business owner profile。 |
 | `ai_test / ai` | Rust router 已 merge，Nginx 明确 `/api/ai-test` 与 `/api/ai/` 到 Rust。 | 当前仓库未发现对应 Python router，不能按普通同路径 fallback 统计。 | 已补 `POST /api/ai-test` 与 `POST /api/ai/test` 两条 Rust auth-boundary asymmetric probe。 | provider 配置、超时策略、SSE 行为仍需后续 stronger smoke；若产品决定保留 fallback，需要先补出明确 Python owner，否则按 Rust-only 或禁用策略处理。 | P1 asymmetric。 | 先确认是否仍需 Python fallback；若不需要，后续补 stream auth-boundary 和登录态不可达 provider failure smoke。 |
 
 本矩阵给出的提速结论：
@@ -16291,6 +16295,437 @@ pending checkpoint 和 create-response compatibility payload 仍留在
 3. 进度统计应继续以真实 Rust owner 扩张、fallback 收缩证据、route smoke /
    rollback 证据为主，不把单纯 helper relocation 当作主要迁移成果。
 
+### 2026-06-08：chapter_draft route-facing owner 文件级收口
+
+本轮不再回到 Python 壳层，也没有继续在 Rust 内部追加新的 helper seam，而是对
+`chapter_draft/history` 包做了一次真实的文件级边界收口：原先命名为
+`chapter_analysis_draft_service.rs` 的 route-facing draft owner 已整体迁到更准确的
+`chapter_draft_route_service.rs`。
+
+本轮更新 Rust owner：
+
+- `backend-rs/src/services/chapter_draft_route_service.rs`
+- `backend-rs/src/api/chapter_analysis_routes.rs`
+- `backend-rs/src/api/chapter_analysis_draft_error_mapper.rs`
+- `backend-rs/src/services/mod.rs`
+
+并继续复用已经独立存在的 draft 行为 owner：
+
+- `backend-rs/src/services/chapter_draft_detail_service.rs`
+- `backend-rs/src/services/chapter_draft_apply_service.rs`
+
+本轮收口含义：
+
+1. 候选草稿 / 自动修订草稿的 route-facing load/apply owner 现在明确属于
+   `chapter_draft_*` 文件族，而不再挂在 `chapter_analysis_*` 命名下。
+2. 这不是单纯改文件名。此前真实生产 owner 已经拆成：
+   - draft detail read owner
+   - draft apply write owner
+   - route-facing owned access / selection / allow-stale owner
+   本轮把最后一层 route-facing owner 也拉回正确模块边界，减少后续继续推进
+   `draft apply + history-write` 或 route package repoint 时的命名漂移。
+3. `chapter_analysis_routes.rs` 与 draft error mapper 现在都直接依赖
+   `chapter_draft_route_service.rs`，所以 route transport、chapter access、
+   latest-vs-explicit selection 和 error shell 仍由同一条 Rust owner 链负责。
+4. 这仍不代表 Python fallback 已退场。Python
+   `chapter_draft_routes.py` / `chapter_draft_query_service.py` /
+   `chapter_draft_workflow_service.py` 依旧是 source map 和 fallback 参考边界。
+
+本轮验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_draft_route_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-route-owner" -- --nocapture`
+- `cargo test chapter_analysis_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-route-owner" -- --nocapture`
+- `cargo test chapter_analysis_draft_error_mapper --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-route-owner" -- --nocapture`
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-route-owner"`
+
+后续规划调整：
+
+1. `chapter_draft/history` 包的 Rust owner 文件族现在更完整，后续应继续按整块
+   目标推进 `draft apply + history-write` consolidation，或准备 route package
+   repoint 所需的 rollback / smoke 证据。
+2. 不再把 analysis-named draft shell 当成长期稳定边界；后续 draft 迁移统计应以
+   `chapter_draft_*` owner 链为准。
+
+### 2026-06-08：chapter_draft route package 文件级收口
+
+本轮继续沿 `chapter_draft/history` 包推进，但目标已经从 service owner 进一步推进到
+Rust route package 本身。此前 draft 的 route-facing owner 虽然已经独立为
+`chapter_draft_route_service.rs`，但 HTTP transport 和 draft-specific error shell
+仍然挂在 `chapter_analysis_*` API 文件族下。为了让 Rust 端真正形成和 Python
+`chapter_draft_routes.py` 对齐的模块边界，这一轮把 draft route 和 draft error
+mapper 一起拆成独立 API 文件。
+
+本轮更新 Rust owner：
+
+- `backend-rs/src/api/chapter_draft_routes.rs`
+- `backend-rs/src/api/chapter_draft_error_mapper.rs`
+- `backend-rs/src/api/chapters.rs`
+- `backend-rs/src/api/mod.rs`
+- 收窄 `backend-rs/src/api/chapter_analysis_routes.rs`
+
+并继续复用已有 draft 行为 owner：
+
+- `backend-rs/src/services/chapter_draft_route_service.rs`
+- `backend-rs/src/services/chapter_draft_detail_service.rs`
+- `backend-rs/src/services/chapter_draft_apply_service.rs`
+
+本轮收口含义：
+
+1. 候选草稿 / 自动修订草稿的 HTTP transport 现在明确属于
+   `chapter_draft_routes.rs`，不再和章节分析查询/状态 transport 混在同一个
+   `chapter_analysis_routes.rs` 文件里。
+2. draft-specific error shell 也已迁到 `chapter_draft_error_mapper.rs`，所以
+   route transport、owned access、selection、allow-stale 和错误映射现在构成一条
+   更完整的 `chapter_draft_*` Rust owner 链。
+3. `chapter_analysis_routes.rs` 现在只保留分析查询、质量指标、状态查询和分析触发，
+   边界更接近真实业务模块。
+4. 这仍不是 Python fallback 退场。Python
+   `chapter_draft_routes.py` / `chapter_draft_query_service.py` /
+   `chapter_draft_workflow_service.py` 依旧是 source map 和 fallback 参考边界。
+
+本轮验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_draft_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-route-package" -- --nocapture`
+- `cargo test chapter_draft_error_mapper --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-route-package" -- --nocapture`
+- `cargo test chapter_analysis_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-route-package" -- --nocapture`
+- `cargo test chapters --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-route-package" -- --nocapture`
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-route-package"`
+
+后续规划调整：
+
+1. `chapter_draft` 的 Rust route package 与 route-facing service owner 现在已经对齐，
+   下一轮更高价值的整块目标应转向 `draft apply + history-write` consolidation。
+2. 后续验证默认不再使用 `C:/codex-targets/...`，而是统一切到工作盘
+   `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/...`。
+
+### 2026-06-08：chapter_draft apply-history 写入 owner 收口
+
+本轮继续沿同一个 `chapter_draft/history` 包推进，没有再改 Python fallback 壳层。
+目标是把候选草稿 / 自动修订草稿 apply 时写入 `generation_history` 的契约，从
+`chapter_draft_apply_service.rs` 收口到已经存在的
+`chapter_draft_history_service.rs`。这样 apply service 保持流程编排和事务写入，
+history service 统一拥有历史 payload、prompt、model 字符串和 `ActiveModel`
+构造。
+
+Python source / parity map：
+
+- `backend/app/services/chapter_draft_apply_service.py`
+- `backend/app/services/chapter_draft_workflow_service.py`
+- `backend/app/services/chapter_generation_history_service.py`
+- `backend/app/services/chapter_draft_state_service.py`
+
+本轮更新 Rust owner：
+
+- `backend-rs/src/services/chapter_draft_history_service.rs`
+- `backend-rs/src/services/chapter_draft_apply_service.rs`
+
+继续复用已有 Rust route/package owner：
+
+- `backend-rs/src/api/chapter_draft_routes.rs`
+- `backend-rs/src/services/chapter_draft_route_service.rs`
+- `backend-rs/src/services/chapter_draft_detail_service.rs`
+
+本轮收口含义：
+
+1. `chapter_draft_history_service.rs` 现在统一拥有 draft apply 的
+   `generation_history` payload/model 契约，包括
+   `chapter_candidate_apply_v1` 和 `chapter_text_reviser_apply_v1`。
+2. `chapter_draft_apply_service.rs` 现在更接近写入编排 owner：加载 draft、校验可应用
+   文本、过期判断、章节正文更新、事务提交和响应 payload；它不再重新定义 history
+   prompt/model/payload 语义。
+3. 原来在 apply service 内部的 history 相关测试已跟随 owner 移到 history service，
+   避免同一契约两边维护。
+4. 这仍不是 Python fallback 退场。Python draft apply / workflow / history 文件继续
+   作为 parity source map 和回滚参考。
+
+本轮验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_draft_apply_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-apply-history" -- --nocapture`
+  -> 19 passed
+- `cargo test chapter_draft_history_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-apply-history" -- --nocapture`
+  -> 18 passed
+- `cargo test chapter_draft_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-apply-history" -- --nocapture`
+  -> 4 passed
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-apply-history"`
+  -> passed，剩余为既有 unused/dead-code warnings
+
+后续规划调整：
+
+1. `chapter_draft` 当前 Rust owner 链已经覆盖 route package、route-facing owner、
+   detail read、apply write、history-write contract。下一轮应继续按整块推进 apply
+   transaction/write owner 或补 enabled-path smoke / rollback 证据。
+2. 不要把后续进度退回到 Python shell cleanup；只有在 Rust owner 验证后 repoint /
+   freeze / remove Python fallback，才应计入 fallback shrink。
+
+### 2026-06-08：chapter_draft route-readiness Rust owner 收尾
+
+本轮继续沿 `chapter_draft` closeout 包推进，但不再修改 Python fallback 壳层。
+目标是把四个 draft HTTP endpoint 的 cutover/readiness 证据从“隐式知道 Rust route
+存在”提升为一个可测试的 Rust owner 文件。
+
+本轮新增 Rust owner：
+
+- `backend-rs/src/services/chapter_draft_route_readiness_service.rs`
+- `backend-rs/src/services/mod.rs`
+
+readiness owner 显式记录：
+
+- route group：`chapter_draft`
+- Rust owner：`backend-rs/src/api/chapter_draft_routes.rs`
+- Python fallback shell：`backend/app/api/chapter_draft_routes.py`
+- rollback boundary：`python_chapter_draft_routes_fallback`
+- endpoint set：
+  - `GET /chapters/{chapter_id}/analysis/auto-revision-draft`
+  - `POST /chapters/{chapter_id}/analysis/auto-revision-draft/apply`
+  - `GET /chapters/{chapter_id}/analysis/candidate-draft`
+  - `POST /chapters/{chapter_id}/analysis/candidate-draft/apply`
+
+本轮收口含义：
+
+1. `chapter_draft` 现在不仅有 Rust route/service/history owner，也有 route-level
+   readiness owner，可用于后续判断 Python draft fallback 是否可以 freeze / repoint。
+2. 这仍不是 Python fallback 退场：没有改动
+   `backend/app/api/chapter_draft_routes.py`，rollback 仍保留在该 fallback shell。
+3. 后续不应继续在 `chapter_draft` 上做 readiness-only seam，除非实际修改 gateway /
+   fallback repoint；下一轮更高收益入口应转向 `chapter_single_generation`
+   prepare/write/runtime-state 整块 closeout。
+
+本轮验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_draft_route_readiness_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-readiness" -- --nocapture`
+  -> 3 passed
+- `cargo test chapter_draft_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-readiness" -- --nocapture`
+  -> 5 passed
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-readiness"`
+  -> passed，剩余为既有 unused/dead-code warnings
+
+### 2026-06-08：chapter_single_generation existing-background-task owner 收口
+
+本轮按新规划从 `chapter_draft` 切到 `chapter_single_generation`，继续走 Rust-first
+owner 收口，而不是修改 Python compatibility shell。
+
+本轮新增 Rust owner：
+
+- `backend-rs/src/services/chapter_single_generation_existing_background_task_service.rs`
+- `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+- `backend-rs/src/services/mod.rs`
+
+收口内容：
+
+1. 将“已有后台单章生成任务”读取、恢复后 task 过滤、snapshot 质量状态读取、
+   chapter id 匹配、现有任务 response payload 组装，从
+   `chapter_single_generation_write_workflow_service.rs` 迁入独立 owner。
+2. write workflow 现在只保留 background launch、task/snapshot 持久化和 runtime
+   dispatch，不再同时拥有 existing-task read/payload 细节。
+3. response contract 不变：继续保留 `task_id/chapter_id/status/message`、
+   `estimated_time_minutes`，以及
+   `latest_quality_metrics/quality_metrics_history/quality_metrics_summary_state/quality_metrics_summary/quality_history_context/active_story_repair_payload`。
+4. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map 和回滚参考。
+
+本轮验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_existing_background_task_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-existing-bg" -- --nocapture`
+  -> 6 passed
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-existing-bg" -- --nocapture`
+  -> 4 passed
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-existing-bg"`
+  -> passed，剩余为既有 unused/dead-code warnings
+
+后续规划调整：
+
+1. `chapter_single_generation` 继续作为当前 active package。下一轮优先选择
+   runtime restore / startup snapshot / stream workflow 的整块 owner，而不是回到
+   Python helper cleanup。
+2. Python compatibility shell shrink 仍放在 Rust active-path owner 与 focused
+   validation 后面，不作为下一轮起手动作。
+
+### 2026-06-09：chapter_single_generation background-response owner 收口
+
+本轮继续沿 `chapter_single_generation` 包推进，目标是让 runtime restore 文件更专注于
+恢复 runtime state、startup snapshot 与 launch parts，而不是继续拥有后台创建响应
+payload 的兼容字段。
+
+本轮新增 Rust owner：
+
+- `backend-rs/src/services/chapter_single_generation_background_response_service.rs`
+- `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+- `backend-rs/src/services/mod.rs`
+
+收口内容：
+
+1. 将 `build_single_generation_background_create_response_payload(...)` 与
+   background response compatibility payload 整组迁入独立 owner。
+2. `chapter_single_generation_runtime_restore_service.rs` 继续负责 runtime restore /
+   startup snapshot / launch parts，不再直接维护 response 字段组装细节。
+3. response contract 不变：继续输出 `task_id`、`chapter_id`、
+   `status="pending"`、`message="单章后台生成任务已创建"`、
+   `estimated_time_minutes`。
+4. 质量字段仍从 startup snapshot 投影到 response：
+   `latest_quality_metrics`、`quality_metrics_summary`、
+   `quality_metrics_history`、`quality_history_context`、
+   `active_story_repair_payload`。
+5. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map 和回滚参考。
+
+本轮验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_background_response_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-bg-response" -- --nocapture`
+  -> 2 passed
+- `cargo test chapter_single_generation_runtime_restore_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-bg-response" -- --nocapture`
+  -> 7 passed
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-bg-response"`
+  -> passed，剩余为既有 unused/dead-code warnings
+
+后续规划调整：
+
+1. `chapter_single_generation` 下一轮优先推进 stream workflow / lifecycle owner 的整块
+   active-path 证据，而不是继续拆纯响应 helper。
+2. 只有当 stream/runtime active-path owner 验证稳定后，才评估
+   `chapter_generation_route_compat_service.py` 的 freeze / repoint。
+
+### 2026-06-09：chapter_single_generation stream-success-response owner 收口
+
+本轮继续沿 `chapter_single_generation` 包推进，但不再回到 Python compatibility
+shell。目标是把单章 stream 成功响应的整组 Rust 语义从 stream 生命周期文件中迁出，
+让 `chapter_single_generation_stream_workflow_service.rs` 回到“准备 launch + spawn
+stream + 执行 runtime”的职责。
+
+本轮新增 / 调整 Rust owner：
+
+- `backend-rs/src/services/chapter_single_generation_stream_success_response_service.rs`
+- `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+- `backend-rs/src/services/mod.rs`
+
+收口内容：
+
+1. 新增 stream success response owner，统一拥有 SSE 成功响应 payload 顺序、
+   `quality_metrics` event、`quality_gate_retry` / `quality_gate_blocked` event、
+   result payload、`analysis_started` event 和 done 之前的 emission plan。
+2. story runtime contract 的构造和写回 quality metrics 也归到该 owner，避免
+   stream workflow 同时理解“怎么跑流”和“响应字段长什么样”。
+3. `chapter_single_generation_stream_workflow_service.rs` 净缩小到生命周期职责：
+   route request -> restored runtime launch -> stream progress -> runtime execution ->
+   success owner emission / error event。
+4. response contract 不变：继续保留 `chapter_id`、`chapter_number`、`title`、
+   `content`、`word_count`、`saved_word_count`、`chapter_status`、
+   `content_applied`、`content_source`、`analysis_task_id`、`quality_metrics`、
+   `quality_gate_action`、`quality_gate_message`、`hard_gate_blocked`、
+   `story_runtime_contract` 以及 candidate gateway/draft 兼容字段。
+5. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map 和回滚参考。
+
+本轮验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_stream_success_response_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-stream-success-response" -- --nocapture`
+  -> 7 passed
+- `cargo test chapter_single_generation_stream_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-stream-success-response" -- --nocapture`
+  -> 9 passed
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-stream-success-response"`
+  -> passed，剩余为既有 unused/dead-code warnings
+
+后续规划调整：
+
+1. stream success response owner 已经成块收口，不再继续拆 stream 响应 helper。
+2. `chapter_single_generation` 下一轮应转向 `runtime_state + write + route parity`
+   overlap，或补 enabled-path smoke，用证据判断 Python compat shell 是否可 freeze /
+   repoint。
+3. 后续 Rust 验证继续使用工作盘 target dir：
+   `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/<package-slug>`，
+   不再使用 C 盘目标目录。
+
+### 2026-06-09：chapter_single_generation terminal-state owner 收口
+
+本轮继续沿 `chapter_single_generation` 包推进，目标是把单章生成 runtime 中的质量门禁
+终态语义整体迁入独立 Rust owner。`chapter_single_generation_runtime_state_service.rs`
+现在只负责 lifecycle execution、task mutation、snapshot persistence 和调用终态 owner，
+不再直接维护 manual-review / retry / error 的 checkpoint 与 failed-entry 规则。
+
+本轮新增 / 调整 Rust owner：
+
+- `backend-rs/src/services/chapter_single_generation_terminal_state_service.rs`
+- `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+- `backend-rs/src/services/mod.rs`
+
+收口内容：
+
+1. 新增 terminal-state owner，统一拥有 manual-review、auto-repair retry、runtime
+   error 三类终态 payload。
+2. 质量门禁 label resolution 从 runtime_state 文件迁出，包括 analysis payload、
+   generated-result quality gate message、当前 quality metrics 和 retry budget。
+3. failed chapter entry 组装归入 terminal owner，继续保留 `chapter_id`、
+   `chapter_number`、`title`、`error`、`retry_count`、`phase`、
+   `quality_gate_status`、`quality_gate_decision`、`quality_gate_label`、
+   `quality_gate_failed_metrics`。
+4. runtime_state 仍负责真正的持久化：合并 failed-stage checkpoint、upsert runtime
+   snapshot、更新 task failed 状态并 append failed chapter entry。
+5. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map 和回滚参考。
+
+本轮验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_terminal_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-terminal-state" -- --nocapture`
+  -> 6 passed
+- `cargo test chapter_single_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-terminal-state" -- --nocapture`
+  -> 12 passed
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-terminal-state"`
+  -> passed，剩余为既有 unused/dead-code warnings
+- `git diff --check -- "backend-rs/src/services/chapter_single_generation_terminal_state_service.rs" "backend-rs/src/services/chapter_single_generation_runtime_state_service.rs" "backend-rs/src/services/mod.rs"`
+  -> passed
+
+后续规划调整：
+
+1. terminal-state owner 已经成块收口，不再继续拆终态 helper。
+2. `chapter_single_generation` 下一轮优先推进 route parity / enabled-path smoke，
+   或处理剩余 `write + runtime_restore` overlap。
+3. Python compat shell shrink 仍必须排在 Rust active-path owner 和 focused validation
+   之后。
+
+### 2026-06-08：低分析预算加速执行规划
+
+当前迁移已经过了“找 Rust 入口”的阶段。章节生成相关 Python route 的最新口径是：
+9 个 route 文件已迁移，`chapters.py` 是 mixed compatibility shell，
+`chapter_route_helpers.py` 是 helper-only 非迁移目标。继续每轮复述完整迁移历史会
+拖慢实际 Rust owner 收口。
+
+后续执行规则调整为：
+
+1. 每轮只选一个包，并用一句话说明目标。
+2. source map 最多五条，只列本轮相关 Python source 和 Rust owner。
+3. 默认按整文件、整函数组、整模块迁移，不再把 helper relocation 当主成果。
+4. 只有测试失败、route map 变化、schema/gateway 边界变化时，才允许扩展分析。
+5. 验证统一使用工作盘 target dir：
+   `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/<package-slug>`。
+
+新的优先级：
+
+1. `chapter_draft` closeout：
+   现在 Rust owner 链已覆盖 route、route-facing access、detail read、apply write、
+   history-write。下一步补 enabled-path smoke / rollback 证据，然后判断 Python
+   draft fallback 是否可 freeze / repoint。
+2. `chapter_single_generation` closeout：
+   继续整块处理 prepare/write/runtime-state overlap 和 active enabled-path smoke，
+   为 `chapter_generation_route_compat_service.py` 收缩准备证据。
+3. `chapter_generation` shared owner：
+   把仍由 compatibility shell 解释的 runtime/candidate/quality 共享语义收口到 Rust。
+4. `chapter_batch_generation` whole package：
+   只做 read/write/resume/status/runtime 的大块 owner 收口或 fallback readiness，
+   不再做孤立 seam。
+5. `chapters` fallback shrink：
+   只有具体 Rust parity branch、smoke、rollback 都具备时才动 Python shell。
+
  ---
 
  ## 8. 当前成功标准
@@ -16302,4 +16737,12535 @@ pending checkpoint 和 create-response compatibility payload 仍留在
  - smoke 结果落盘到 `tmp/smoke/`
  - 探针失败时部署脚本会终止并保留诊断
  - 关键 route group 已具备 owner / fallback / asymmetric 的最小治理资产
- - `backend-rs` 的新切片可以在不改变外部行为的前提下持续落地并验证
+- `backend-rs` 的新切片可以在不改变外部行为的前提下持续落地并验证
+
+### 2026-06-09：chapter_single_generation active-gateway-readiness owner 强化
+
+本轮继续停留在 Package B `chapter_single_generation`，但没有继续拆
+terminal/stream/background helper，也没有先动 Python compatibility shell。改动集中在
+Rust active-path readiness：现有
+`backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+从“候选网关 enabled/fallback 路径 smoke”升级为整组 readiness owner。
+
+本轮新增 / 调整 Rust owner：
+
+- `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+- `backend-rs/src/api/health.rs`
+
+收口内容：
+
+1. `/health/chapter-single-generation-active-gateway-smoke` 继续保持 public path
+   不变，但每个 probe 现在额外输出 `readiness_evidence`。
+2. `readiness_evidence` 同时覆盖四个 Rust owner：
+   candidate route gateway、stream success response、background pending response、
+   terminal-state retry checkpoint。
+3. health route 仍是薄层，只把 smoke owner 产出的 readiness payload 透传到
+   JSON 响应，不在 route 内重建业务语义。
+4. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是回滚参考；本轮只提升 Rust active-path 可观测证据。
+
+本轮验证：
+
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-active-gateway-readiness" -- --nocapture`
+  -> 4 passed
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-active-gateway-readiness" -- --nocapture`
+  -> 3 passed
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-active-gateway-readiness"`
+  -> passed，剩余为既有 unused/dead-code warnings
+- `git diff --check -- "backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs" "backend-rs/src/api/health.rs"`
+  -> passed
+
+后续规划调整：
+
+1. `chapter_single_generation` 的 active-path smoke 已能同时证明 gateway、
+   stream response、background response 和 terminal-state owner，下一步应把这份
+   evidence 接入 manifest/deploy smoke 或继续处理 `write + runtime_restore`
+   生产 overlap。
+2. 不再继续添加 smoke-only 字段，除非它能直接支持 Python compat shell
+   freeze/repoint、rollback 判断或部署前 cutover 检查。
+3. Rust 构建与测试 target 继续固定在工作盘 `.codex-targets/`，避免把编译产物放到
+   `C:`。
+
+### 2026-06-09：chapter_single_generation manifest/deploy readiness evidence
+
+本轮把上一段的 Rust readiness 证据从“本地 health smoke 可见”推进到
+“deploy manifest 可验证”。这不是新增 Python 兼容代码，也不是单纯补测试；它把
+`chapter_single_generation` active path 的 Rust owner 证据纳入部署控制面，后续
+freeze/repoint Python fallback 时可以直接依赖 manifest gate。
+
+本轮新增 / 调整：
+
+- `deploy/strangler-gateway-probes.json`
+- `backend/tests/test_tools/test_run_strangler_gateway_smoke.py`
+
+收口内容：
+
+1. `chapter-single-generation-active-gateway-smoke-rust` 现在同时属于
+   `business` 和 `phase5-single-generation-owner` profiles。
+2. manifest 直接断言 `readiness_evidence.owner_scope =
+   "active_gateway_stream_background_terminal"`。
+3. manifest 直接断言四个 Rust owner 已被该 active probe 覆盖：
+   `chapter_candidate_route_gateway_service`、
+   `chapter_single_generation_stream_success_response_service`、
+   `chapter_single_generation_background_response_service`、
+   `chapter_single_generation_terminal_state_service`。
+4. manifest 继续保留 direct fallback probe 和 rollback boundary：
+   `legacy_single_generation_direct_ai`，因此新增 deploy gate 不会提前移除
+   Python fallback。
+5. `test_run_strangler_gateway_smoke.py` 新增真实 manifest 回归，确保 route-group
+   readiness summary 能识别该 probe 具备 Rust owner、business smoke、dedicated
+   owner profile 三类证据。
+
+本轮验证：
+
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；`chapter_single_generation` 汇总为 1 个 Rust owner probe，并带有
+  `business` / `phase5-single-generation-owner` readiness flags。
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 41 passed, 1 warning。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-manifest-readiness" -- --nocapture`
+  -> 4 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-manifest-readiness" -- --nocapture`
+  -> 3 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-manifest-readiness"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `git diff --check -- "deploy/strangler-gateway-probes.json" "backend/tests/test_tools/test_run_strangler_gateway_smoke.py" "backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs" "backend-rs/src/api/health.rs"`
+  -> passed；Git 仅提示 JSON 文件后续会做 CRLF/LF 规范化。
+
+后续规划调整：
+
+1. `chapter_single_generation` 下一轮不应继续扩展 smoke-only 字段；应转向
+   `write + runtime_restore + route parity` 生产 overlap。
+2. `chapter_generation_route_compat_service.py` 仍保持冻结/回滚参考状态，只有在
+   production write/runtime owner 与 route parity 都明确后，才进入 repoint 或移除。
+3. 后续验证继续显式使用 E 盘 `.codex-targets/`，避免 Rust 编译产物落到 `C:`。
+
+### 2026-06-09：chapter_single_generation write-existing-background owner collapse
+
+本轮开始从 smoke evidence 转回生产路径 owner 收口。目标不是继续补 readiness
+字段，而是把 `chapter_single_generation` background write path 上的单消费者 Rust
+壳删除掉，让 write workflow 直接拥有 existing-background 分支。
+
+本轮新增 / 删除：
+
+- 扩展 `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+- 删除 `backend-rs/src/services/chapter_single_generation_existing_background_task_service.rs`
+- 从 `backend-rs/src/services/mod.rs` 删除旧模块注册
+
+收口内容：
+
+1. existing-background active task 查询、recovery、snapshot map 读取、quality
+   runtime context 投影、compat response payload 构造全部并入 write workflow。
+2. write workflow 现在直接拥有 background 分支的完整生产决策：
+   已有任务 payload 返回，或新 background launch parts 准备、持久化、spawn。
+3. 原独立文件只有一个生产消费者，没有独立 route、rollback、schema 或 smoke
+   边界；删除后减少一次假 owner 跳转。
+4. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍作为回滚参考，不在 Rust owner 验证前 repoint。
+
+本轮保持的行为契约：
+
+- `chapter_ids` 仍支持字符串和对象 `{ "id": ... }` 两种匹配形态。
+- 已有任务返回前仍执行 `recover_generation_task_if_needed(...)`。
+- active task 过滤仍使用 `single_generation_active_task_statuses()`。
+- 已有任务 payload 继续包含 `task_id`、`chapter_id`、`status`、
+  `message = "已有后台生成任务正在执行"`、`estimated_time_minutes`。
+- quality payload 继续包含 `latest_quality_metrics`、`quality_metrics_history`、
+  `quality_metrics_summary_state`、`quality_metrics_summary`、
+  `quality_history_context`、`active_story_repair_payload`。
+
+本轮验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-write-owner-collapse" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_runtime_restore_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-write-owner-collapse" -- --nocapture`
+  -> 7 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-write-owner-collapse"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `git diff --check -- "backend-rs/src/services/chapter_single_generation_write_workflow_service.rs" "backend-rs/src/services/chapter_single_generation_existing_background_task_service.rs" "backend-rs/src/services/mod.rs"`
+  -> passed。
+- `rg -n "chapter_single_generation_existing_background_task_service" "backend-rs/src"`
+  -> 无引用。
+
+后续规划调整：
+
+1. 不要重建 standalone existing-background task service；除非它出现多个消费者或
+   独立 rollback/route 边界。
+2. `chapter_single_generation` 下一步继续 production overlap，优先 route parity /
+   background launch persistence evidence，或转入能同时被 stream/background 消费的
+   `chapter_generation` shared owner。
+3. Python compatibility shell 仍冻结，只有 Rust production owner 与 route parity 都
+   明确后才进入 freeze/repoint/remove。
+
+### 2026-06-09：chapter_single_generation route-error owner collapse
+
+本轮继续做 `chapter_single_generation` 的 route parity 收口。原
+`backend-rs/src/api/chapter_generation_error_mapper.rs` 只有
+`chapter_generation_routes.rs` 一个生产消费者，因此它不再作为独立 route mapper
+模块存在；错误映射随 route owner 一起维护。
+
+本轮新增 / 删除：
+
+- 扩展 `backend-rs/src/api/chapter_generation_routes.rs`
+- 删除 `backend-rs/src/api/chapter_generation_error_mapper.rs`
+- 从 `backend-rs/src/api/mod.rs` 删除旧模块注册
+
+收口内容：
+
+1. `chapter_generation_routes.rs` 现在同时拥有 transport wiring、空 body 默认值、
+   gateway config handoff、stream/background workflow 调用和 route-local error
+   response contract。
+2. 单章生成错误映射不再通过单消费者 mapper 文件跳转；这减少 route parity 审计时
+   的文件跳数。
+3. 公共路由、HTTP status、错误 detail 字符串、payload shape 均保持不变。
+4. Python fallback 未改动，`chapter_generation_route_compat_service.py` 仍是回滚
+   参考。
+
+本轮保持的行为契约：
+
+- `/chapters/{chapter_id}/generate-stream` 与
+  `/chapters/{chapter_id}/generate-background` 路径不变。
+- 缺失请求 body 时仍使用 `SingleChapterGenerationRouteRequest::default()`。
+- `ChapterNotFound` 仍返回 404 / `Chapter not found`。
+- `ChapterNotFoundOrAccessDenied` 仍返回 404 /
+  `Chapter not found or access denied`。
+- target word count、creative mode、story focus、plot stage、quality preset、
+  story creation brief、quality notes 等请求校验错误仍返回 400 和原 detail。
+
+本轮验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_generation_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-route-error-owner-collapse" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-route-error-owner-collapse" -- --nocapture`
+  -> 10 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-route-error-owner-collapse"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `git diff --check -- "backend-rs/src/api/chapter_generation_routes.rs" "backend-rs/src/api/chapter_generation_error_mapper.rs" "backend-rs/src/api/mod.rs"`
+  -> passed。
+- `rg -n "chapter_generation_error_mapper" "backend-rs/src"`
+  -> 无引用。
+
+后续规划调整：
+
+1. 不要重建 standalone single-generation error mapper；除非它被多个 route owner
+   共同消费。
+2. 下一步继续生产 overlap：优先 stream/background shared launch preparation，或转入
+   同时被两条单章生成路径消费的 `chapter_generation` shared owner。
+3. Python compatibility shell 仍冻结，等待 route parity 与 production owner evidence
+   达到 repoint/remove 条件。
+
+### 2026-06-09：chapter_single_generation route-request restore owner 收口
+
+本轮继续沿同一条 `chapter_single_generation` Phase 5 主线推进，但不再新增 Python
+compatibility shell 代码。目标是把单章 stream/background 两条生产路径共有的
+route payload materialization 收口到 Rust restored runtime owner，避免
+stream workflow 和 write workflow 各自解释
+`SingleChapterGenerationRouteRequest`。
+
+本轮调整的 Rust owner：
+
+- `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+- `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+- `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+
+收口内容：
+
+1. `PreparedSingleChapterGenerationRestoredRuntimeLaunch` 新增 route-level
+   entrypoint，负责把 `SingleChapterGenerationRouteRequest` 转为内部
+   generation request，并继续执行 restored runtime launch 准备。
+2. stream workflow 不再保留本地
+   `prepare_owned_single_generation_stream_runtime_launch(...)` 解释分支，而是直接
+   调用 runtime restore owner 的
+   `prepare_runtime_launch_input_from_route_request(...)`。
+3. background write workflow 不再提前执行
+   `route_request.into_generation_request()`，而是把 route request 连同已加载的
+   chapter target 交给
+   `prepare_background_launch_parts_from_route_target(...)`。
+4. 这不是 helper-only 位移：它把 stream/background 共享的 route request ->
+   restored runtime launch 解释权集中到一个 Rust owner，减少后续 route parity /
+   Python fallback shrink 审计时的重复边界。
+5. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是运行时回滚参考。
+
+本轮验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_stream_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-route-restore-owner" -- --nocapture`
+  -> 9 passed。
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-route-restore-owner" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_runtime_restore_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-route-restore-owner" -- --nocapture`
+  -> 7 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-route-restore-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `git diff --check -- "backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs" "backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs" "backend-rs/src/services/chapter_single_generation_write_workflow_service.rs"`
+  -> passed。
+
+后续规划调整：
+
+1. 不要把 `SingleChapterGenerationRouteRequest::into_generation_request()` 重新摊回
+   stream/write workflow；route request 到 restored launch 的解释权属于
+   runtime restore owner。
+2. `chapter_single_generation` 下一步应选择更高收益块：enabled-path
+   stream/background smoke、route parity closeout，或转入同时被单章两条 lane 消费的
+   `chapter_generation` candidate/runtime/quality shared owner。
+3. Rust 构建与测试继续固定到 E 盘 `.codex-targets/`，避免编译产物进入 `C:`。
+
+### 2026-06-09：chapter_single_generation candidate-gateway owner 抽取
+
+本轮没有继续在 restored runtime owner 内部做低收益参数搬运，而是切到更靠近
+`chapter_generation` shared candidate/runtime/quality 的生产 owner 块。原本混在
+`chapter_generation_runtime_service.rs` 里的单章 candidate gateway 函数组已经整体迁出
+到新的 Rust owner：
+`backend-rs/src/services/chapter_single_generation_candidate_gateway_service.rs`。
+
+本轮新增 / 调整：
+
+- 新增 `backend-rs/src/services/chapter_single_generation_candidate_gateway_service.rs`
+- 收窄 `backend-rs/src/services/chapter_generation_runtime_service.rs`
+- 更新 `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+- 在 `backend-rs/src/services/mod.rs` 注册新 owner
+
+收口内容：
+
+1. candidate executor request 构造现在由单章 candidate gateway owner 管理，保留
+   `prompt`、`temperature`、`max_tokens`、`target_word_count`、`source`、
+   `generation_label`、`max_candidates` 和初始 runtime-state 语义。
+2. active route candidate quality adapter 也归该 owner 管理；runtime 文件只传入显式的
+   `SingleGenerationCandidateGatewayQualityContext`，不再直接承载 gateway adapter
+   细节。
+3. direct fallback candidate payload、candidate gateway metadata、candidate content
+   extraction 与空内容错误字符串都随同迁移，保持行为不变。
+4. `chapter_generation_runtime_service.rs` 回到更窄的职责：上下文加载、prompt 构造、
+   AI/候选生成编排、generated result 构造、history payload 和持久化。
+5. active gateway smoke 继续消费同一套 request/content owner，因此 readiness evidence
+   没有退化。
+6. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是回滚参考。
+
+本轮验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_candidate_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-candidate-gateway-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo test chapter_generation_runtime_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-candidate-gateway-owner" -- --nocapture`
+  -> 13 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-candidate-gateway-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-candidate-gateway-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `git diff --check -- "backend-rs/src/services/chapter_single_generation_candidate_gateway_service.rs" "backend-rs/src/services/chapter_generation_runtime_service.rs" "backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs" "backend-rs/src/services/mod.rs"`
+  -> passed。
+
+后续规划调整：
+
+1. `chapter_generation_runtime_service.rs` 不应重新承载单章 candidate gateway 细节；该类
+   request/fallback/metadata/content extraction 归
+   `chapter_single_generation_candidate_gateway_service.rs`。
+2. 下一步继续选“生产 owner 块”：优先 shared candidate-runtime/quality integration，
+   或为 single-generation enabled stream/background path 增强 route parity smoke，以支撑
+   Python compatibility shell freeze/repoint。
+3. 继续禁止以 Python compatibility shell 修改作为主进度；Python shell 只有在 Rust owner、
+   smoke、rollback 边界明确后再收缩。
+
+### 2026-06-09：chapter_generation provider-stream owner 抽取
+
+本轮继续执行 Rust-first 策略，没有改 Python compatibility shell。迁移目标从
+single-generation candidate gateway 转入 shared candidate executor 邻域，把 provider
+stream request shaping 与默认 provider output collection 整组从 runtime adapter 中抽出，
+形成新的 Rust owner：
+`backend-rs/src/services/chapter_candidate_provider_stream_service.rs`。
+
+本轮新增 / 调整：
+
+- 新增 `backend-rs/src/services/chapter_candidate_provider_stream_service.rs`
+- 收窄 `backend-rs/src/services/chapter_candidate_executor_runtime_adapter_service.rs`
+- 复用既有 `backend-rs/src/services/chapter_candidate_output_service.rs`
+- 在 `backend-rs/src/services/mod.rs` 注册新 owner
+
+收口内容：
+
+1. provider request 解析现在由 `chapter_candidate_provider_stream_service.rs` 管理，
+   包括 `prompt`、`system_prompt`、`tools`、`temperature`、`max_tokens` 与
+   `max_output_chars`。
+2. `max_tokens` 继续只接受正整数，错误字符串保持为
+   `candidate provider max_tokens must be a positive integer`。
+3. `tools` payload 继续按 `ToolDef` 列表解析，错误前缀保持为
+   `candidate provider tools payload is invalid:`。
+4. 非正 `max_output_chars` 不会传给 provider output owner，避免把无效裁剪值扩散到
+   下游。
+5. provider 输出仍经由
+   `chapter_candidate_output_service::collect_generation_candidate_output` 收集；本轮不改变
+   AI provider、SSE chunk、task lifecycle、checkpoint 或 route payload。
+6. `chapter_candidate_executor_runtime_adapter_service.rs` 现在只负责 runtime quality adapter
+   callback bridging 与 candidate record 构建，不再在同一文件里解释 provider
+   `generate_kwargs`。
+7. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是回滚参考和 source map。
+
+本轮验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_provider_stream_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-provider-stream-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_runtime_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-provider-stream-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-provider-stream-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `git diff --check -- "backend-rs/src/services/chapter_candidate_provider_stream_service.rs" "backend-rs/src/services/chapter_candidate_executor_runtime_adapter_service.rs" "backend-rs/src/services/mod.rs"`
+  -> passed。
+
+后续规划调整：
+
+1. `chapter_candidate_executor_runtime_adapter_service.rs` 不应重新承载 provider
+   `generate_kwargs` 解析；provider 默认值、tools 解析、max token 校验和输出收集入口归
+   `chapter_candidate_provider_stream_service.rs`。
+2. 下一步继续沿 shared candidate-runtime / quality owner 推进，优先选择同时被
+   single-generation 与 batch lanes 消费的整功能组，而不是只搬单个 helper。
+3. 如果要收缩
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`，必须先具备
+   Rust owner、route parity smoke 与 rollback 证据；否则它只作为 source map，不作为
+   下一轮 Python 编辑入口。
+
+### 2026-06-09：chapter_generation runtime-callback bridge owner 抽取
+
+本轮继续沿 `chapter_generation` shared candidate-runtime / quality owner 推进，没有
+修改 Python compatibility shell。上一轮已把 provider stream request shaping 移出
+runtime adapter；本轮继续把 runtime quality adapter callback bridge 整组抽出，形成新的
+Rust owner：
+`backend-rs/src/services/chapter_candidate_runtime_callback_bridge_service.rs`。
+
+本轮新增 / 调整：
+
+- 新增 `backend-rs/src/services/chapter_candidate_runtime_callback_bridge_service.rs`
+- 收窄 `backend-rs/src/services/chapter_candidate_executor_runtime_adapter_service.rs`
+- 复用既有 `backend-rs/src/services/chapter_candidate_quality_adapter_service.rs`
+- 在 `backend-rs/src/services/mod.rs` 注册新 owner
+
+收口内容：
+
+1. `ChapterCandidateQualityAdapter` 到 runtime executor closure 的桥接现在由
+   `chapter_candidate_runtime_callback_bridge_service.rs` 管理。
+2. 质量评估 closure 保持 `FnMut(&str) -> Value`，quality-gate plan closure 保持
+   `FnMut(Value, i64) -> Value`，生产 adapter 的调用入口不变。
+3. callback mutex poisoned recovery 归同一个 bridge owner，避免多个执行 owner 复制
+   `lock().unwrap_or_else(...)` 语义。
+4. `chapter_candidate_executor_runtime_adapter_service.rs` 继续收窄：它现在只做执行编排、
+   默认 provider output wiring、以及 candidate record 构建。
+5. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是回滚参考和 source map。
+
+本轮验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_runtime_callback_bridge_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-runtime-callback-bridge-owner" -- --nocapture`
+  -> 2 passed。
+- `cargo test chapter_candidate_executor_runtime_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-runtime-callback-bridge-owner" -- --nocapture`
+  -> 2 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-runtime-callback-bridge-owner" -- --nocapture`
+  -> 5 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-runtime-callback-bridge-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `git diff --check -- "backend-rs/src/services/chapter_candidate_runtime_callback_bridge_service.rs" "backend-rs/src/services/chapter_candidate_executor_runtime_adapter_service.rs" "backend-rs/src/services/mod.rs"`
+  -> passed。
+
+后续规划调整：
+
+1. `chapter_candidate_executor_runtime_adapter_service.rs` 不应重新承载 provider request
+   shaping 或 runtime quality callback bridge；这两类职责已有明确 Rust owner。
+2. 下一步如果继续同一 package，优先把 runtime adapter 中剩余的 default record
+   construction / quality gate handoff 抽成更清晰的 runtime record bridge owner，或者转到
+   production adapter / route gateway readiness 整块，推动后续 Python fallback shrink 证据。
+3. 继续禁止以 Python compatibility shell 修改作为主进度；只有 Rust owner、smoke、
+   rollback 边界明确后才收缩 Python shell。
+
+### 2026-06-09：chapter_generation runtime-record bridge owner 抽取
+
+本轮继续收窄 `chapter_generation` shared candidate executor runtime adapter，没有修改
+Python compatibility shell。上一轮已经把 provider stream 与 runtime callback bridge
+分出独立 owner；本轮把 default dependency record input 到 candidate record owner 的
+映射也整组迁出，形成新的 Rust owner：
+`backend-rs/src/services/chapter_candidate_runtime_record_bridge_service.rs`。
+
+本轮新增 / 调整：
+
+- 新增 `backend-rs/src/services/chapter_candidate_runtime_record_bridge_service.rs`
+- 收窄 `backend-rs/src/services/chapter_candidate_executor_runtime_adapter_service.rs`
+- 复用既有 `backend-rs/src/services/chapter_candidate_record_service.rs`
+- 在 `backend-rs/src/services/mod.rs` 注册新 owner
+
+收口内容：
+
+1. `ChapterCandidateDefaultRecordBuildInput` 到 `ChapterCandidateRecordRequest` 的映射现在由
+   `chapter_candidate_runtime_record_bridge_service.rs` 管理。
+2. record owner 的错误传播保持不变：清洗后空内容、workflow/meta text 仍会作为
+   `Err(String)` 透出，不会在 runtime adapter 中吞掉。
+3. quality evaluator 与 quality-gate plan callback shape 保持不变，仍传给
+   `chapter_candidate_record_service::build_generation_candidate_record(...)`。
+4. `chapter_candidate_executor_runtime_adapter_service.rs` 进一步缩为 orchestrator：它只串联
+   default dependency owner、provider stream owner、runtime callback bridge owner、runtime
+   record bridge owner。
+5. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是回滚参考和 source map。
+
+本轮验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_runtime_record_bridge_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-runtime-record-bridge-owner" -- --nocapture`
+  -> 2 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-runtime-record-bridge-owner" -- --nocapture`
+  -> 5 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-runtime-record-bridge-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `git diff --check -- "backend-rs/src/services/chapter_candidate_runtime_record_bridge_service.rs" "backend-rs/src/services/chapter_candidate_executor_runtime_adapter_service.rs" "backend-rs/src/services/mod.rs"`
+  -> passed。
+
+后续规划调整：
+
+1. `chapter_candidate_executor_runtime_adapter_service.rs` 现在已经接近纯 orchestrator；后续继续
+   在同文件里拆小块的收益下降。
+2. 下一步更高价值的是 production adapter / route gateway readiness 整块，补齐 fallback
+   shrink 所需的 active route evidence，而不是继续做低信号 helper relocation。
+3. 继续禁止把 provider parsing、runtime callback bridge、record input mapping 放回 runtime
+   adapter；这些职责已有明确 Rust owner。
+
+### 2026-06-09：single-generation active-route gateway config retention 护栏
+
+本轮从 `chapter_candidate_executor_runtime_adapter_service.rs` 的低收益继续拆分转向
+active Rust route readiness。没有修改 Python compatibility shell；重点是给已经接入
+Rust candidate route gateway 的 single-generation stream/background active path 增加
+owner 级护栏，防止后续重构把 route 传入的 gateway config 静默丢失并退回默认 direct
+AI fallback。
+
+本轮新增 / 调整：
+
+- 强化 `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+- 强化 `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. stream lifecycle 新增断言：
+   `SingleGenerationStreamLifecyclePlan::from_runtime_launch_with_gateway_config(...)`
+   会保留 route 提供的 `ChapterCandidateRouteGatewayConfig`。
+2. runtime lifecycle 新增断言：
+   `SingleGenerationRuntimeLifecyclePlan::from_runtime_launch_with_gateway_config(...)`
+   会保留 route 提供的 `ChapterCandidateRouteGatewayConfig`。
+3. 这证明 active route gateway 已不是 smoke-only owner：
+   `chapter_generation_routes.rs` 构建 config，stream/background workflow 传递 config，
+   runtime owner 消费 config，并最终进入 `execute_chapter_candidate_route_gateway(...)`。
+4. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference；不能因此声明 Python FastAPI route 已退休。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_stream_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-active-gateway-owner" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-active-gateway-owner" -- --nocapture`
+  -> 13 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-active-gateway-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_route_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-active-gateway-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_generation_runtime_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-active-gateway-owner" -- --nocapture`
+  -> 13 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-active-gateway-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. 下一轮继续 production owner block：优先做 stream/background gateway-enabled path 的
+   route-level parity evidence，而不是继续拆 runtime adapter helper。
+2. Python compatibility shell 只有在 Rust active route、smoke、rollback evidence 足够后
+   才进入 shrink/repoint。
+3. 新增验证命令一律使用
+   `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/`，避免编译产物落到
+   C 盘。
+
+### 2026-06-09：single-generation route gateway config parity 护栏
+
+本轮继续 active Rust route readiness，没有修改 Python compatibility shell。
+上一轮已证明 stream/runtime lifecycle 会保留 route-supplied
+`ChapterCandidateRouteGatewayConfig`；本轮把证据前移到 route 文件本身，让
+`chapter_generation_routes.rs` 直接证明 `AppConfig` cutover 字段在进入
+stream/background workflow 前不会丢失。
+
+本轮新增 / 调整：
+
+- 强化 `backend-rs/src/api/chapter_generation_routes.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. 新增 route-local 薄边界：
+   `build_single_generation_route_gateway_config(config) -> ChapterCandidateRouteGatewayConfig`。
+   它只委托既有 route gateway owner，不引入业务逻辑。
+2. `generate_chapter_content_background(...)` 与
+   `generate_chapter_content_stream(...)` 统一通过该 route helper 构建 gateway config。
+3. route 测试验证 `rust_executor_enabled`、`fallback_on_rust_error`、
+   `disabled_reason` trim 与 `rollback_boundary` 都能从 `AppConfig` 传到 gateway config。
+4. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_generation_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-route-gateway-config-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo test chapter_candidate_route_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-route-gateway-config-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_single_generation_stream_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-route-gateway-config-owner" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-route-gateway-config-owner" -- --nocapture`
+  -> 13 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-route-gateway-config-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-route-gateway-config-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. 下一轮继续 active-route package：优先补 enabled stream/background payload parity，
+   让 Rust active route 更接近可收缩 Python fallback shell。
+2. 不要回到 runtime adapter helper 级切分；当前更高价值是 route-level parity、
+   smoke/rollback evidence、再到 Python shell shrink/repoint。
+3. Python compatibility shell 仍冻结，直到 Rust active route 证据足够。
+
+### 2026-06-09：single-generation enabled stream/background payload parity 护栏
+
+本轮继续同一个 `chapter_single_generation` active-route package，不修改 Python
+compatibility shell。目标不是新增 smoke wrapper，而是让已有 active gateway smoke owner
+直接输出部署可读的 readiness evidence，证明 enabled Rust executor 与 direct-generation
+fallback 两条路径下的 route-facing payload 仍保持稳定。
+
+本轮新增 / 调整：
+
+- 强化 `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. active gateway smoke 现在复用生产 metadata owner：
+   `build_single_generation_candidate_gateway_metadata(...)`。
+2. smoke 只追加探针可观测字段：`generation_path`、`gateway_consumed`、`probe`，
+   不重写生产 cutover metadata 语义。
+3. readiness evidence 同时覆盖：
+   stream success response 的 `candidate_gateway`、
+   background create-response 的 task/status/repair payload、
+   terminal quality-gate projection、rollback boundary。
+4. enabled path 明确证明 `execution_path = rust_candidate_executor` 且未 fallback。
+5. direct fallback path 明确证明 `execution_path = python_fallback`、
+   `fallback_applied = true`、fallback reason 与
+   `legacy_single_generation_direct_ai` rollback boundary。
+6. background create response 被显式标记为 launch-only：
+   不在任务启动响应里提前附加终端 `candidate_gateway` metadata，避免伪 parity。
+7. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-enabled-payload-parity-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_single_generation_stream_success_response_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-enabled-payload-parity-owner" -- --nocapture`
+  -> 7 passed。
+- `cargo test chapter_single_generation_background_response_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-enabled-payload-parity-owner" -- --nocapture`
+  -> 2 passed。
+- `cargo test chapter_generation_runtime_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-enabled-payload-parity-owner" -- --nocapture`
+  -> 13 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-enabled-payload-parity-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. 下一轮继续从 readiness evidence 推进到 production owner closeout：
+   优先 runtime completion metadata preservation、background task completion parity，
+   或在 Rust owner 已验证后做 Python fallback repoint。
+2. 不再增加 smoke-only wrapper；新增工作必须收缩真实 fallback 依赖、关闭 owner seam，
+   或让 Python shell repoint/removal 变得可验证。
+3. 保持 E 盘 target-dir 约束，避免 Rust 编译产物落到 C 盘。
+
+### 2026-06-09：single-generation runtime checkpoint candidate_gateway 护栏
+
+本轮继续同一个 `chapter_single_generation` production owner closeout，不修改 Python
+compatibility shell。上一轮已经证明 stream/background/readiness evidence 能看到
+active gateway metadata；本轮把这条证据推进到后台 runtime checkpoint 持久化路径，
+让 task snapshot 也能保留同一个 `candidate_gateway` 对象。
+
+本轮新增 / 调整：
+
+- 强化 `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. 新增 runtime-state owner helper：
+   `attach_single_generation_candidate_gateway_checkpoint_metadata(...)`。
+2. background runtime finalizing / completed checkpoint 现在会从
+   `GeneratedChapterResult.candidate_gateway_metadata` 投影 `candidate_gateway`。
+3. quality-gate terminal checkpoint 如果来自已有 `GeneratedChapterResult`，同样保留
+   `candidate_gateway`；纯 provider/runtime error 没有 generated result 时不会伪造 metadata。
+4. 删除旧的未使用 `persist_with_checkpoint(...)` 包装，避免 checkpoint 持久化继续有
+   不带 payload metadata 的旁路。
+5. Rust active route 的 gateway metadata 现在形成连续链路：
+   generation runtime history -> stream success payload -> runtime task checkpoint。
+6. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-runtime-checkpoint-gateway-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_generation_runtime_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-runtime-checkpoint-gateway-owner" -- --nocapture`
+  -> 13 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-runtime-checkpoint-gateway-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-runtime-checkpoint-gateway-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. 下一轮优先做 read/status projection parity：
+   证明后台任务读取/状态查询能暴露 snapshot 内的 `candidate_gateway`。
+2. 完成 read-side 证据后，才进入 Python fallback repoint/shrink；否则仍容易出现
+   “Rust 写入了 metadata，但外部读不到”的假迁移。
+3. 不增加新的 smoke-only wrapper，继续收缩真实 production owner seam。
+
+### 2026-06-09：single-generation read/status candidate_gateway 护栏
+
+本轮继续同一个 `chapter_single_generation` production owner closeout，不修改 Python
+compatibility shell。上一轮已让后台 runtime checkpoint 持久化 `candidate_gateway`；
+本轮补齐读侧投影，避免出现“Rust 写入 metadata，但 route/status 读不到”的假迁移。
+
+本轮新增 / 调整：
+
+- 强化 `backend-rs/src/services/chapter_single_generation_prepare_service.rs`
+- 强化 `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+- 加固 `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. 单章 runtime payload base 现在会把 object-shaped
+   `workflow_runtime_state.candidate_gateway` 投影到顶层 `candidate_gateway`。
+2. existing background task read payload 现在能同时暴露：
+   `candidate_gateway` 与 `checkpoint.candidate_gateway`，两者保持同一个对象。
+3. 非 object 型 `candidate_gateway` 不会被提升，避免状态接口伪造 gateway metadata。
+4. shared task payload base 增加同样的保护，减少后续 status/task owner 分叉。
+5. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_prepare_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-read-status-gateway-owner" -- --nocapture`
+  -> 28 passed。
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-read-status-gateway-owner" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_batch_generation_task_payload_base_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-read-status-gateway-owner" -- --nocapture`
+  -> 32 passed。
+- `cargo test chapter_single_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-read-status-gateway-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-read-status-gateway-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. 下一轮优先按 route/status owner block 验证端到端状态接口是否消费该投影。
+2. 若 endpoint 证据已齐，再开始 Python fallback repoint/shrink；否则继续先补 Rust
+   读侧 owner。
+3. 不再做 helper-only 小切片，除非它属于一个明确的 route/status owner block。
+
+### 2026-06-09：single-generation route/status candidate_gateway endpoint evidence 护栏
+
+本轮继续 `chapter_single_generation` 的 Rust owner closeout，但落点放在真实
+route/status 读取入口，而不是 Python compatibility shell。上一轮已经证明 runtime
+snapshot 会写入并读侧投影 `candidate_gateway`；本轮确认状态接口和活跃任务读取入口
+确实消费同一 Rust read-context projection。
+
+本轮新增 / 调整：
+
+- 加固 `backend-rs/src/api/chapter_batch_generation.rs`
+- 加固 `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+- 复验 `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+- 复验 single-generation prepare/write/runtime-state upstream owners
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. `GET /chapters/batch-generate/{batch_id}/status` 被显式 route constant 固定为
+   task status owner entrypoint，避免后续迁移中路径漂移。
+2. status payload、active project batch payload、active task-list payload 现在都有
+   focused test 证明顶层 `candidate_gateway` 来自 snapshot object。
+3. route-facing `candidate_gateway` 与 `checkpoint.candidate_gateway` 保持同一对象，
+   读侧不会伪造非 object metadata。
+4. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-route-status-gateway-owner" -- --nocapture`
+  -> 18 passed。
+- `cargo test chapter_batch_generation::tests --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-route-status-gateway-owner" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_batch_generation_task_payload_base_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-route-status-gateway-owner" -- --nocapture`
+  -> 32 passed。
+- `cargo test chapter_single_generation_prepare_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-route-status-gateway-owner" -- --nocapture`
+  -> 28 passed。
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-route-status-gateway-owner" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-route-status-gateway-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-route-status-gateway-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. 下一轮不要再做 metadata-only 小切片，直接进入整块 owner：优先
+   `chapter_single_generation` fallback repoint readiness 或 `chapter_generation`
+   shared runtime/candidate/quality consolidation。
+2. Python fallback shrink 只能在 Rust owner、endpoint evidence、rollback boundary
+   都明确后执行，不能作为迁移主进度。
+3. 所有 Rust build/test target 继续固定到
+   `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/`。
+
+### 2026-06-09：chapter_generation shared quality callback owner collapse
+
+本轮按“整块 Rust owner”推进 `chapter_generation` shared runtime/candidate/quality
+consolidation，不修改 Python compatibility shell。此前 Rust candidate quality adapter
+已经承接 Python stream/batch candidate quality hook 的 source map，但 runtime callback
+materialization 仍在一个单独 bridge 文件中。本轮把该 bridge 整文件折叠进 shared
+quality adapter owner，减少中间层数量，避免 single/batch/route-gateway candidate flow
+继续出现质量回调锁定和 adapter callback 语义漂移。
+
+本轮新增 / 调整：
+
+- 强化 `backend-rs/src/services/chapter_candidate_quality_adapter_service.rs`
+- 更新 `backend-rs/src/services/chapter_candidate_executor_runtime_adapter_service.rs`
+- 更新 `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+- 更新 `backend-rs/src/services/mod.rs`
+- 删除中间 bridge：
+  `backend-rs/src/services/chapter_candidate_runtime_callback_bridge_service.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. `build_runtime_quality_adapter_callbacks(...)` 现在归属于
+   `chapter_candidate_quality_adapter_service.rs`，与
+   `build_chapter_candidate_quality_adapter(...)` 位于同一个 shared owner。
+2. `with_locked_callback(...)` 成为 shared quality owner 的公共内部边界，runtime adapter
+   和 default dependency wiring 都复用它，不再各自维护 callback locking。
+3. 删除独立 runtime callback bridge 模块，避免新增 Rust 中间层被误当作迁移完成度。
+4. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_quality_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-quality-owner-collapse" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_candidate_executor_runtime_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-quality-owner-collapse" -- --nocapture`
+  -> 0 tests，compile/filter pass。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-quality-owner-collapse" -- --nocapture`
+  -> 2 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-quality-owner-collapse" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_candidate_route_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-quality-owner-collapse" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_single_generation_candidate_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-quality-owner-collapse" -- --nocapture`
+  -> 3 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-quality-owner-collapse"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. 下一轮继续 `chapter_generation` shared owner consolidation，优先候选：
+   candidate provider stream owner 或 runtime record bridge owner。
+2. 继续以“整文件 / 整 function group / 整 module owner”为单位推进；能吸收的中间
+   Rust bridge 不再保留成独立迁移层。
+3. Python fallback shrink 仍延后到 Rust owner、route evidence、smoke 和 rollback
+   boundary 明确之后。
+
+### 2026-06-09：chapter_generation default record owner collapse
+
+本轮继续 `chapter_generation` shared runtime/candidate/quality consolidation，
+仍然不修改 Python compatibility shell。上一轮已经把 quality callback bridge 吸收到
+shared quality adapter owner；本轮处理另一个 forwarding-only bridge：
+`chapter_candidate_runtime_record_bridge_service.rs`。该文件只负责把
+`ChapterCandidateDefaultRecordBuildInput` 转成 record owner request，因此它更适合
+归入拥有该 input 类型的 default dependency owner。
+
+本轮新增 / 调整：
+
+- 强化 `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+- 更新 `backend-rs/src/services/chapter_candidate_executor_runtime_adapter_service.rs`
+- 更新 `backend-rs/src/services/mod.rs`
+- 删除中间 bridge：
+  `backend-rs/src/services/chapter_candidate_runtime_record_bridge_service.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. `ChapterCandidateDefaultRecordBuildInput` 与
+   `build_default_generation_candidate_record(...)` 现在位于同一个 default dependency
+   owner。
+2. runtime adapter 仍走同一条 default record construction path，但不再依赖
+   forwarding-only record bridge。
+3. empty/sanitized-invalid candidate content 继续由 record owner 返回错误，避免生成
+   fake candidate record。
+4. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-record-owner-collapse" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_runtime_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-record-owner-collapse" -- --nocapture`
+  -> 0 tests，compile/filter pass。
+- `cargo test chapter_candidate_record_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-record-owner-collapse" -- --nocapture`
+  -> 3 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-record-owner-collapse" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_candidate_route_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-record-owner-collapse" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_single_generation_candidate_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-record-owner-collapse" -- --nocapture`
+  -> 3 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-record-owner-collapse"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. 下一轮优先继续整块处理 candidate provider stream owner，或如果 provider/record/quality
+   owner 已足够稳定，则进入 active-route cutover readiness。
+2. 不再保留 forwarding-only Rust bridge 作为迁移层；默认记录映射留在 default
+   dependency owner，质量回调留在 shared quality adapter owner。
+3. Python fallback shrink 继续延后到 Rust owner、route evidence、smoke 和 rollback
+   boundary 明确之后。
+
+### 2026-06-09：chapter_generation provider readiness owner checkpoint
+
+本轮继续按“整块 Rust owner / cutover readiness”推进，不修改 Python compatibility
+shell。上一轮之后 provider stream、quality callback、default record mapping 都已经有
+真实 Rust owner，但 executor wiring readiness 仍没有把 provider stream owner 计入 Rust
+target map，容易造成迁移进度在规划层不可见。本轮因此整体更新
+`chapter_candidate_executor_wiring_service.rs`，把已完成的 owner collapse 转成可测试的
+cutover evidence。
+
+本轮新增 / 调整：
+
+- 更新 `backend-rs/src/services/chapter_candidate_executor_wiring_service.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. wiring readiness 现在包含
+   `backend-rs/src/services/chapter_candidate_provider_stream_service.rs`。
+2. readiness dependency graph 现在显式指向：
+   `collect_default_generation_candidate_output(...)`、
+   `resolve_default_candidate_provider_stream_request(...)`、
+   `build_runtime_quality_adapter_callbacks(...)`、
+   `with_locked_callback(...)`、以及
+   `build_default_generation_candidate_record(...)`。
+3. 新增测试确保已删除的
+   `chapter_candidate_runtime_callback_bridge_service.rs` 与
+   `chapter_candidate_runtime_record_bridge_service.rs` 不会重新进入 Rust target map。
+4. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_executor_wiring_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-provider-readiness-owner" -- --nocapture`
+  -> 7 passed。
+- `cargo test chapter_candidate_provider_stream_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-provider-readiness-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_runtime_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-provider-readiness-owner" -- --nocapture`
+  -> 0 tests，compile/filter pass。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-provider-readiness-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-provider-readiness-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. provider/record/quality shared owner consolidation 已足够进入下一阶段，不再继续围绕
+   forwarding helper 做小切片。
+2. 下一轮优先做 candidate executor active-route cutover readiness：production adapter、
+   route gateway smoke、enabled-path evidence，而不是继续移动 Python compatibility shell。
+3. Python fallback shrink 仍必须等待 Rust production adapter 与 smoke/rollback evidence
+   明确后再执行。
+
+### 2026-06-09：chapter_generation route-gateway cutover readiness
+
+本轮继续 `chapter_generation` candidate executor 的 Rust-first 迁移，但不修改 Python
+compatibility shell。上一轮已经把 provider/record/quality shared owner 纳入 wiring
+readiness；本轮进入下一阶段：让通用 route-gateway smoke endpoint 暴露 active-route
+cutover 所需的 owner chain 与 rollback evidence。
+
+本轮新增 / 调整：
+
+- 更新 `backend-rs/src/services/chapter_candidate_route_gateway_smoke_service.rs`
+- 更新 `backend-rs/src/api/health.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. `ChapterCandidateRouteGatewaySmokeResult` 新增 `readiness_evidence`。
+2. readiness evidence 现在包含：
+   - covered Rust owners
+   - Python source map
+   - route-gateway enablement / fallback / rollback flags
+   - runtime owner chain：
+     production adapter、route gateway、runtime adapter、default dependency、
+     provider stream、quality adapter、record mapping
+   - fallback metadata fields 和下一步 cutover gate。
+3. `/health/chapter-candidate-route-gateway-smoke` 现在把每个 probe 的
+   `readiness_evidence` 输出到部署探针 payload。
+4. 该 smoke 仍使用 fake executors，不调用真实 AI provider；它证明的是 gateway
+   consumption、fallback metadata 和 rollback boundary，不伪造真实 provider parity。
+5. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_route_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-route-gateway-cutover-readiness" -- --nocapture`
+  -> 4 passed。
+- `cargo test health::tests --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-route-gateway-cutover-readiness" -- --nocapture`
+  -> 3 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-route-gateway-cutover-readiness" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_candidate_route_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-route-gateway-cutover-readiness" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_wiring_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-route-gateway-cutover-readiness" -- --nocapture`
+  -> 7 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapter-generation-route-gateway-cutover-readiness"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. 下一轮不要回到 helper 搬迁；直接推进 active route consumption：让单章生成
+   runtime/write lane 消费 route gateway 并保持 candidate_gateway metadata 可读。
+2. Python fallback shrink 仍延后，直到 active route enabled-path smoke 和 rollback
+   evidence 明确。
+
+### 2026-06-09：chapter_single_generation active route gateway owner evidence
+
+本轮继续 `chapter_single_generation` Rust-first 包，不修改 Python compatibility shell。
+生产 route 已经通过 `AppConfig -> chapter_generation_routes -> stream/write workflow ->
+runtime lifecycle` 传递 candidate gateway config；本轮的收口重点是把这条 active route
+owner chain 变成部署 smoke 可见的证据，避免只靠 response projection helper 通过测试就
+误判为 cutover ready。
+
+本轮新增 / 调整：
+
+- 更新 `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+- 更新 `backend-rs/src/api/health.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. active smoke readiness evidence 的 `owner_scope` 升级为
+   `active_route_gateway_stream_background_runtime_terminal`。
+2. `covered_rust_owners` 现在覆盖 route、stream workflow、write workflow、runtime
+   state、shared runtime、single-generation candidate gateway、candidate executor
+   production/runtime/provider/quality/record owners，以及 stream/background/terminal
+   projection owners。
+3. 新增 `active_route_gateway_config` 证据，显式记录：
+   - route config builder
+   - gateway config owner
+   - stream/background route 是否消费 gateway config
+   - runtime launch 是否消费 gateway config
+   - enablement / fallback / disabled reason / rollback boundary
+   - 默认 direct fallback config 仍可用。
+4. 新增 `runtime_owner_chain` 证据，命名 active route 真实 Rust handoff：
+   `create_owned_single_generation_stream`、
+   `SingleGenerationBackgroundWriteWorkflowEntry::start_from_route_payload`、
+   `SingleGenerationStreamLifecyclePlan::from_runtime_launch_with_gateway_config`、
+   `SingleGenerationRuntimeLifecyclePlan::from_runtime_launch_with_gateway_config`、
+   `SingleGenerationRuntimeLaunchInput::execute_generation_with_gateway_config`。
+5. `/health/chapter-single-generation-active-gateway-smoke` 的测试现在断言新的 readiness
+   evidence 形状。endpoint 行为未改变为真实 provider 调用，仍是 fake executor / fake
+   direct fallback probe。
+6. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-active-route-gateway-owner" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_generation_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-active-route-gateway-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo test chapter_single_generation_stream_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-active-route-gateway-owner" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-active-route-gateway-owner" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-active-route-gateway-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test health::tests --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-active-route-gateway-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-active-route-gateway-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes，并包含
+  `chapter-single-generation-active-gateway-smoke-rust`。
+
+后续规划调整：
+
+1. 下一轮应从证据强化转向真实 production owner gap：优先继续
+   `chapter_single_generation` 的 `prepare + runtime_state + write` 剩余重叠，
+   或在 route parity 已足够时进入 Python fallback repoint/removal readiness。
+2. 不再追加静态 smoke 字段作为独立进度；新增 smoke 字段必须服务于 enabled-path
+   business smoke、fallback shrink 或 rollback 决策。
+3. 编译产物继续固定到 E 盘 `.codex-targets/`，不要使用 C 盘 target-dir。
+
+### 2026-06-09：chapter_single_generation production launch-parts owner closeout
+
+本轮继续 `chapter_single_generation` Rust-first package，不修改 Python compatibility
+shell。上一个 checkpoint 已经把 active route gateway owner chain 做成部署 smoke 可见；
+本轮按规划进入真实 production owner gap，把后台启动链路中的
+`task insert + startup snapshot persist + runtime lifecycle dispatch` 从
+`write_workflow` 弱 helper 收口到 `PreparedSingleGenerationBackgroundLaunchParts`
+生产 owner。
+
+本轮新增 / 调整：
+
+- 更新 `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+- 更新 `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. `PreparedSingleGenerationBackgroundLaunchParts::persist_and_dispatch(...)`
+   现在拥有完整后台 launch 生产语义：task seed -> ActiveModel insert ->
+   startup snapshot persist -> runtime lifecycle spawn。
+2. `SingleGenerationBackgroundWriteWorkflowEntry` 现在只保留 branch owner：
+   existing background task payload vs new launch parts；它不再拥有 launch-parts
+   内部持久化和 runtime dispatch。
+3. route-provided `ChapterCandidateRouteGatewayConfig` 仍沿用原路径进入 runtime
+   lifecycle，没有改变 feature flag 默认值、fallback 语义或 route payload。
+4. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+5. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 Rust production owner 收口，不是 fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_runtime_restore_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-production-owner-closeout" -- --nocapture`
+  -> 7 passed。
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-production-owner-closeout" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_stream_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-production-owner-closeout" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-production-owner-closeout" -- --nocapture`
+  -> 15 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-production-owner-closeout"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+
+后续规划调整：
+
+1. `chapter_single_generation` 只有在下一步能推进 enabled-path business smoke、
+   fallback repoint/removal readiness，或继续移除真实 owner split 时才继续作为主线。
+2. 如果没有足够 route parity 证据进入 fallback shrink，下一轮应转到
+   `chapter_generation` shared runtime/candidate/quality consolidation，以整模块 owner
+   继续减少 Python-shaped assumptions。
+3. 禁止把 metadata-only smoke 字段、trivial helper relocation、Python fallback shell
+   修修补补计为主要迁移进度。
+
+### 2026-06-09：chapter_single_generation background response 整文件折叠
+
+本轮继续 `chapter_single_generation` Rust-first package，不修改 Python
+compatibility shell。上一个 checkpoint 已经把后台 launch 的生产持久化和 dispatch
+收口到 runtime restore / launch-parts owner；本轮进一步删除一个只做转发的 response
+projection 文件：
+`backend-rs/src/services/chapter_single_generation_background_response_service.rs`。
+
+本轮新增 / 调整：
+
+- 删除 `backend-rs/src/services/chapter_single_generation_background_response_service.rs`
+- 更新 `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+- 更新 `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+- 更新 `backend-rs/src/services/mod.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. `build_single_generation_background_create_response_payload(...)` 现在归属
+   `chapter_single_generation_runtime_restore_service.rs`，和 restored launch、startup
+   snapshot、background launch-parts、quality runtime context 位于同一个 owner。
+2. 原 `background_response_service` 没有独立 transport shaping、error mapping、branch
+   selection 或 rollback knob，只是单消费者 response projection shell，因此不再作为
+   Rust target file 计入迁移口径。
+3. response compatibility payload 测试随生产 owner 移入 runtime restore 文件，继续覆盖
+   quality context 字段保留。
+4. active gateway smoke 的 `covered_rust_owners` 从已删除 shell 改为真实 owner：
+   `chapter_single_generation_runtime_restore_service`。
+5. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+6. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 Rust 整文件 owner 折叠，不是 fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_runtime_restore_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-background-response-collapse" -- --nocapture`
+  -> 9 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-background-response-collapse" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-background-response-collapse" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_stream_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-background-response-collapse" -- --nocapture`
+  -> 10 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-background-response-collapse"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+
+后续规划调整：
+
+1. 后续不要重新引入 standalone response projection shell；如果 payload projection
+   没有独立 transport/error/rollback 边界，应并入 runtime、restore 或 launch owner。
+2. `chapter_single_generation` 继续推进的条件收紧：下一步必须移除真实 owner split，
+   或推进 enabled-path business smoke / fallback repoint readiness。
+3. 如果单章生成剩余 owner split 信号不足，下一整块迁移应切到
+   `chapter_generation` shared runtime/candidate/quality consolidation。
+
+### 2026-06-09：chapter_single_generation terminal-state 整文件折叠
+
+本轮继续 `chapter_single_generation` Rust-first package，不修改 Python
+compatibility shell。上一轮已删除 background response forwarding shell；本轮继续按同一
+原则处理 terminal-state 文件：
+`backend-rs/src/services/chapter_single_generation_terminal_state_service.rs`。
+
+本轮新增 / 调整：
+
+- 删除 `backend-rs/src/services/chapter_single_generation_terminal_state_service.rs`
+- 更新 `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+- 更新 `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+- 更新 `backend-rs/src/services/mod.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. manual-review / retry terminal label resolution、terminal checkpoint merge、
+   runtime failure terminal state、`failed_chapters` append helper 现在都归属
+   `chapter_single_generation_runtime_state_service.rs`。
+2. 原 `terminal_state_service` 的生产消费者就是 runtime-state persistence owner；
+   另一个消费者只是 active smoke readiness evidence。因此它不再作为独立 Rust target
+   file 计入迁移进度。
+3. terminal-state focused tests 随生产 owner 移入 runtime-state 文件。本轮
+   `chapter_single_generation_runtime_state_service` focused tests 从 15 个扩展到
+   21 个，覆盖 manual-review、retry、error、checkpoint merge 和 failed entry append。
+4. active gateway smoke 的 `covered_rust_owners` 从已删除 shell 改为真实 owner：
+   `chapter_single_generation_runtime_state_service`。
+5. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+6. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 Rust 整文件 owner 折叠，不是 fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-terminal-state-collapse" -- --nocapture`
+  -> 21 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-terminal-state-collapse" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-terminal-state-collapse" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_stream_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-terminal-state-collapse" -- --nocapture`
+  -> 10 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-terminal-state-collapse"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+
+后续规划调整：
+
+1. `chapter_single_generation` 已连续删除两个 forwarding-only Rust shell：
+   background response 与 terminal-state。后续不应再为了“看起来有进度”继续找小壳。
+2. 下一步如果继续单章生成，必须推进 enabled-path business smoke、fallback
+   repoint/removal readiness，或确认还有真实 owner split 可整块迁移。
+3. 如果单章生成剩余 owner split 信号不足，切到 `chapter_generation` shared
+   runtime/candidate/quality consolidation，继续按整模块包推进。
+
+### 2026-06-09：chapter_single_generation stream-success response 整文件折叠
+
+本轮继续 `chapter_single_generation` Rust-first package，不修改 Python
+compatibility shell。上一轮已经删除 terminal-state projection shell；本轮继续处理
+另一个只服务 stream workflow 与 active smoke evidence 的 standalone projection 文件：
+`backend-rs/src/services/chapter_single_generation_stream_success_response_service.rs`。
+
+本轮新增 / 调整：
+
+- 删除 `backend-rs/src/services/chapter_single_generation_stream_success_response_service.rs`
+- 更新 `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+- 更新 `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+- 更新 `backend-rs/src/services/mod.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. `SingleGenerationStreamSuccessArtifacts`、quality metrics event、quality gate
+   event、analysis-started event、response payload、story runtime contract、ordered
+   SSE success emission plan 现在归属
+   `chapter_single_generation_stream_workflow_service.rs`。
+2. 原 `stream_success_response_service` 的生产消费者就是 stream workflow owner；
+   另一个消费者只是 active smoke readiness evidence。因此它不再作为独立 Rust target
+   file 计入迁移进度。
+3. stream success focused tests 随生产 owner 移入 stream workflow 文件。本轮
+   `chapter_single_generation_stream_workflow_service` focused tests 从 10 个扩展到
+   17 个，覆盖成功响应 payload、质量门事件、事件顺序、story runtime contract 和
+   emission plan。
+4. active gateway smoke 的 `covered_rust_owners` 从已删除 shell 改为真实 owner：
+   `chapter_single_generation_stream_workflow_service`。
+5. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+6. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 Rust 整文件 owner 折叠，不是 fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_stream_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-stream-success-collapse" -- --nocapture`
+  -> 17 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-stream-success-collapse" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-stream-success-collapse" -- --nocapture`
+  -> 10 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-stream-success-collapse"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+
+后续规划调整：
+
+1. 之前新增 standalone stream success response owner 的历史记录已被本 checkpoint
+   supersede；后续不要再把
+   `chapter_single_generation_stream_success_response_service.rs` 当作目标 owner。
+2. `chapter_single_generation` 已连续删除 background response、terminal-state、
+   stream-success 三个 projection shell。继续单章生成前必须先确认能推进真实
+   enabled-path smoke、fallback repoint/removal readiness，或还有非投影类 owner split。
+3. 若无高信号单章 owner split，下一轮直接转入 `chapter_generation`
+   shared runtime/candidate/quality consolidation，按整模块包推进。
+
+### 2026-06-09：chapter_generation runtime adapter 整文件折叠
+
+本轮按“整文件/整模块迁移”要求，继续 `chapter_generation` shared candidate
+executor package，不修改 Python compatibility shell。前几轮已经把 provider stream、
+runtime callback bridge、default record、quality callback 等真实职责拆给明确 owner；
+此时 `chapter_candidate_executor_runtime_adapter_service.rs` 剩余价值已经退化为
+production adapter 的桥接壳，因此本轮直接删除该文件，并把运行时 adapter 入口并入
+生产 cutover owner：
+`backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs`。
+
+本轮新增 / 调整：
+
+- 删除 `backend-rs/src/services/chapter_candidate_executor_runtime_adapter_service.rs`
+- 更新 `backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs`
+- 更新 `backend-rs/src/services/chapter_candidate_executor_wiring_service.rs`
+- 更新 `backend-rs/src/services/chapter_candidate_route_gateway_smoke_service.rs`
+- 更新 `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+- 更新 `backend-rs/src/services/mod.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. `generate_best_ranked_candidate_with_runtime_quality_adapters(...)` 与
+   `generate_best_ranked_candidate_with_runtime_adapters(...)` 现在归属
+   production adapter，和生产 cutover executor 位于同一个 Rust owner 文件。
+2. quality callback assembly 仍由 `chapter_candidate_quality_adapter_service.rs`
+   承担；default dependency 仍由
+   `chapter_candidate_executor_default_dependency_service.rs` 承担；provider output
+   collection 仍由 `chapter_candidate_provider_stream_service.rs` 承担；record
+   shaping 仍由 `chapter_candidate_record_service.rs` 承担。
+3. wiring readiness 不再把 runtime adapter 文件列为 target，runtime bridge
+   dependency 直接指向 production adapter。
+4. route gateway smoke 与 active gateway smoke 不再把已删除 runtime adapter
+   计入 covered Rust owners，并保留负向断言避免旧壳被重新加入。
+5. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+6. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 Rust owner consolidation，不是 Python fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-runtime-adapter-collapse" -- --nocapture`
+  -> 7 passed。
+- `cargo test chapter_candidate_executor_wiring_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-runtime-adapter-collapse" -- --nocapture`
+  -> 7 passed。
+- `cargo test chapter_candidate_route_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-runtime-adapter-collapse" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-runtime-adapter-collapse" -- --nocapture`
+  -> 5 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-runtime-adapter-collapse"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+
+后续规划调整：
+
+1. 不再把 `chapter_candidate_executor_runtime_adapter_service.rs` 作为可继续开发
+   owner；历史 staged runtime adapter 记录已被本 checkpoint supersede。
+2. 后续 `chapter_generation` 加速应按 production adapter、provider stream、
+   default dependency、quality adapter、route gateway smoke、wiring readiness 这些真实
+   owner 继续整块推进。
+3. 如果没有实质 owner split，下一步应转向 cutover readiness / fallback shrink
+   证据，而不是继续制造 adapter 壳。
+
+### 2026-06-09：chapter_generation route-gateway smoke 整文件折叠
+
+本轮继续 `chapter_generation` shared candidate executor package，不修改 Python
+compatibility shell。上一轮已经删除 runtime adapter 中间壳；本轮继续处理
+route-gateway smoke/readiness-only 文件：
+`backend-rs/src/services/chapter_candidate_route_gateway_smoke_service.rs`。
+该文件只证明 `chapter_candidate_route_gateway_service.rs` 可以被 health probe 消费，
+没有独立 transport、fallback、provider 或 rollback owner，因此直接整体并入真实
+route gateway owner。
+
+本轮新增 / 调整：
+
+- 删除 `backend-rs/src/services/chapter_candidate_route_gateway_smoke_service.rs`
+- 更新 `backend-rs/src/services/chapter_candidate_route_gateway_service.rs`
+- 更新 `backend-rs/src/api/health.rs`
+- 更新 `backend-rs/src/services/chapter_candidate_executor_wiring_service.rs`
+- 更新 `backend-rs/src/services/mod.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. `ChapterCandidateRouteGatewaySmokeProbe`、
+   `ChapterCandidateRouteGatewaySmokeResult`、
+   `build_default_chapter_candidate_route_gateway_smoke_probes(...)`、
+   `run_chapter_candidate_route_gateway_smoke_suite(...)`、
+   `run_chapter_candidate_route_gateway_smoke_probe(...)` 和 readiness evidence
+   projection 现在归属 `chapter_candidate_route_gateway_service.rs`。
+2. `/health/chapter-candidate-route-gateway-smoke` 的 public path 和 payload shape
+   保持不变，`api::health` 只把 import 从旧 smoke-only 文件切到真实 route gateway
+   owner。
+3. candidate executor wiring 保留 `route_gateway_smoke` readiness stage，但
+   `owner_file` 和依赖 target owner 现在都指向
+   `chapter_candidate_route_gateway_service.rs`。
+4. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+5. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 Rust owner consolidation，不是 fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_route_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-route-gateway-smoke-collapse" -- --nocapture`
+  -> 8 passed。
+- `cargo test chapter_candidate_executor_wiring_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-route-gateway-smoke-collapse" -- --nocapture`
+  -> 8 passed。
+- `cargo test api::health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-route-gateway-smoke-collapse" -- --nocapture`
+  -> 3 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-route-gateway-smoke-collapse"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. 不再把 `chapter_candidate_route_gateway_smoke_service.rs` 作为可继续开发 owner；
+   route-gateway smoke/readiness evidence 已被真实 route gateway owner 接收。
+2. 后续 candidate executor 加速不要再制造 smoke-only / adapter-only 文件。下一步
+   应转向 active route enabled-path cutover evidence，或在 Rust route gateway owner
+   被消费后开始 Python fallback shrink。
+3. 如果 `chapter_generation` shared candidate executor 已无高信号 owner split，
+   下一轮应转向 `chapter_single_generation` enabled-path/fallback shrink 或
+   `chapter_batch_generation` 整模块 owner block。
+
+### 2026-06-09：chapter_single_generation candidate gateway 整文件折叠
+
+本轮继续 `chapter_generation` / `chapter_single_generation` shared runtime
+candidate package，不修改 Python compatibility shell。前一轮曾把单章 candidate
+gateway 函数组抽到独立文件；继续推进后发现该文件没有独立 route、fallback、provider、
+rollback 或 deploy contract，只服务于 `chapter_generation_runtime_service.rs` 和
+active-route smoke evidence。因此本轮按“整文件/整模块迁移”规则反向折叠：删除独立
+candidate gateway helper 文件，并把该函数组收回真实 runtime owner。
+
+本轮新增 / 调整：
+
+- 删除 `backend-rs/src/services/chapter_single_generation_candidate_gateway_service.rs`
+- 更新 `backend-rs/src/services/chapter_generation_runtime_service.rs`
+- 更新 `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+- 更新 `backend-rs/src/services/mod.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. `chapter_generation_runtime_service.rs` 现在直接拥有单章 candidate executor
+   request 构造、active-route quality adapter 构造、direct fallback candidate payload、
+   candidate gateway metadata 和 candidate/fallback content extraction。
+2. active gateway smoke 改为从 `chapter_generation_runtime_service.rs` 复用这些
+   helper，并新增负向断言，确保已删除的
+   `chapter_single_generation_candidate_gateway_service` 不再被计入 covered Rust
+   owners。
+3. `mod.rs` 移除旧 helper 文件注册，Rust 源码中只保留 active smoke 的负向断言引用。
+4. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+5. readiness summary 预计仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 Rust runtime owner consolidation，不是 fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_generation_runtime_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-candidate-gateway-collapse" -- --nocapture`
+  -> 16 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-candidate-gateway-collapse" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_generation_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-candidate-gateway-collapse" -- --nocapture`
+  -> 11 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-candidate-gateway-collapse"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. 不再把 `chapter_single_generation_candidate_gateway_service.rs` 作为可继续开发
+   owner；历史“抽取”checkpoint 已被本 checkpoint supersede。
+2. 后续 active-route readiness 应继续围绕真实 runtime owner、
+   route-gateway enabled-path business smoke、fallback repoint/removal 证据推进，
+   不要再制造 single-generation candidate gateway forwarding shell。
+3. 如果当前 single-generation route parity 还不足以安全收缩 Python fallback，
+   下一轮直接转向 `chapter_batch_generation` 整模块 owner block，按文件/模块迁移，而
+   不是继续做 helper 级小切片。
+
+### 2026-06-09：chapter_batch_generation status task-view payload owner 收口
+
+本轮按上一 checkpoint 的规划切入 `chapter_batch_generation` 整模块 owner block，没有
+修改 Python compatibility shell。迁移目标不是新增 route，而是把 batch status task-view
+payload 的解释权从 read-context helper 收口到真实 payload contract owner：
+`backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`。
+
+本轮新增 / 调整：
+
+- 更新 `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+- 更新 `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+- 更新 `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. `build_batch_generation_status_task_payload_with_quality_context(...)` 与
+   `build_batch_generation_status_task_payload_from_task_and_snapshot_projection(...)`
+   现在归属 batch task payload-base owner，和 runtime payload、task view payload、
+   terminal fields、quality context、candidate gateway projection 位于同一个文件。
+2. `chapter_batch_generation_read_context_service.rs` 继续负责 task/snapshot 查询、
+   active task list 和 active project view，但不再拥有 status task-view payload builder。
+3. `chapter_batch_generation_runtime_state_service.rs` 直接从 payload-base import status
+   payload builder，避免 runtime cancellation/status 响应反向依赖 read-context helper。
+4. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+5. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 Rust owner consolidation，不是 fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_batch_generation_task_payload_base_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-status-payload-owner" -- --nocapture`
+  -> 34 passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-status-payload-owner" -- --nocapture`
+  -> 16 passed。
+- `cargo test chapter_batch_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-status-payload-owner" -- --nocapture`
+  -> 109 passed。
+- `cargo test chapter_batch_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-status-payload-owner" -- --nocapture`
+  -> 358 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-status-payload-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+
+后续规划调整：
+
+1. `chapter_batch_generation` 下一步继续按 whole-package block 推进，优先
+   status stream/read-context convergence、resume/cancel route parity evidence，或
+   能支撑 Python fallback shrink 的 rollback 证据。
+2. 不再把 status task-view payload builder 放回 read-context；read-context 负责查询和
+   context，payload-base 负责 route-facing payload shape。
+3. Python fallback shrink 仍延后，直到对应 Rust route owner、business smoke 和 rollback
+   boundary 明确。
+
+### 2026-06-09：chapter_batch_generation status stream 整文件折叠
+
+本轮继续 `chapter_batch_generation` 整模块 owner block，没有修改 Python
+compatibility shell。上一 checkpoint 已把 status task-view payload 收口到
+payload-base owner；本轮继续处理相邻的 status stream 文件：
+`backend-rs/src/services/chapter_batch_generation_status_stream_service.rs`。
+该文件只消费 owned read-state、投影 stream state，并向 route 输出 SSE event，
+没有独立 fallback、rollback、provider、schema 或 route branch，因此整体并入真实
+read-context/status owner：
+`backend-rs/src/services/chapter_batch_generation_read_context_service.rs`。
+
+本轮新增 / 调整：
+
+- 删除 `backend-rs/src/services/chapter_batch_generation_status_stream_service.rs`
+- 更新 `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+- 更新 `backend-rs/src/api/chapter_batch_generation.rs`
+- 更新 `backend-rs/src/services/mod.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. `BatchGenerationStatusStream`、stream state projection、cursor resolution、
+   connected/task-not-found/timeout/heartbeat/data SSE event construction 和
+   `load_owned_batch_generation_status_stream(...)` 现在归属
+   `chapter_batch_generation_read_context_service.rs`。
+2. `chapter_batch_generation.rs` 的 public route path 与 SSE payload shape 保持不变，
+   只是把 status stream loader import 切到 read-context owner。
+3. `services/mod.rs` 移除旧 status-stream shell 注册；后续不再把
+   `chapter_batch_generation_status_stream_service.rs` 当作可继续开发 owner。
+4. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+5. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 Rust 整文件 owner 折叠，不是 fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-status-stream-collapse" -- --nocapture`
+  -> 40 passed。
+- `cargo test chapter_batch_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-status-stream-collapse" -- --nocapture`
+  -> 358 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-status-stream-collapse"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+
+后续规划调整：
+
+1. `chapter_batch_generation` 后续继续按 whole-package block 推进，下一步优先
+   resume/cancel route parity evidence、stream access validation、business smoke 或
+   fallback-shrink readiness。
+2. 不再恢复 `chapter_batch_generation_status_stream_service.rs`；status stream 的
+   read-state、cursor 和 SSE projection 已属于 read-context/status owner。
+3. Python fallback shrink 仍延后，直到 route parity、business smoke 和 rollback
+   boundary 明确。
+
+### 2026-06-09：chapter_batch_generation owned-task query 整文件折叠
+
+本轮继续 `chapter_batch_generation` 整模块 owner block，没有修改 Python
+compatibility shell。前两轮已经把 status payload 和 status stream 收口到真实 owner；
+本轮继续处理同一读侧链路上的 owned task query 文件：
+`backend-rs/src/services/chapter_batch_generation_owned_task_query_service.rs`。
+该文件只负责 owned task lookup、snapshot source、recovered read-state 和共享错误类型，
+没有独立 route、fallback、rollback、schema 或 transport owner，因此整体并入
+`chapter_batch_generation_read_context_service.rs`。
+
+本轮新增 / 调整：
+
+- 删除 `backend-rs/src/services/chapter_batch_generation_owned_task_query_service.rs`
+- 更新 `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+- 更新 `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+- 更新 `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+- 更新 `backend-rs/src/api/chapter_batch_generation_error_mapper.rs`
+- 更新 `backend-rs/src/services/mod.rs`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+
+收口内容：
+
+1. `LoadOwnedBatchGenerationTaskError`、`LoadOwnedBatchGenerationTaskSourcesError`、
+   `OwnedBatchGenerationTaskSources`、`OwnedBatchGenerationTaskReadState`、
+   `load_owned_task(...)`、`load_owned_batch_generation_task_sources(...)` 和
+   `load_owned_batch_generation_task_read_state(...)` 现在归属
+   `chapter_batch_generation_read_context_service.rs`。
+2. resume command、write/cancel workflow 和 route error mapper 继续消费同一组
+   owner 类型/loader，只是 import 从旧查询壳切到 read-context owner。
+3. task-not-found、snapshot error、recovery error、HTTP error mapping、SSE payload、
+   resume response payload 和 cancel response payload 均保持不变。
+4. Python fallback 未改动：
+   `backend/app/services/compat/chapter_generation_route_compat_service.py`
+   仍是 source map / rollback reference。
+5. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 Rust 整文件 owner 折叠，不是 fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-owned-task-query-collapse" -- --nocapture`
+  -> 44 passed。
+- `cargo test chapter_batch_generation_resume_task_command_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-owned-task-query-collapse" -- --nocapture`
+  -> 63 passed。
+- `cargo test chapter_batch_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-owned-task-query-collapse" -- --nocapture`
+  -> 75 passed。
+- `cargo test chapter_batch_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-owned-task-query-collapse" -- --nocapture`
+  -> 358 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-owned-task-query-collapse"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+
+后续规划调整：
+
+1. 不再恢复 `chapter_batch_generation_owned_task_query_service.rs`；owned task
+   source/read-state lookup 已属于 read-context/status owner。
+2. `chapter_batch_generation_resume_task_command_service.rs` 是真实大 owner，当前不应为了
+   “删除文件”强行并入 write workflow，避免 write workflow 继续膨胀。
+3. 下一轮 batch 迁移应转向 resume/cancel route parity evidence、stream access
+   validation、business smoke 或 fallback-shrink readiness；如果没有这些信号，应切换到
+   更高价值的 `chapter_single_generation` / `chapter_generation` route parity 与 fallback
+   shrink 证据。
+
+### 2026-06-09：chapter_single_generation active gateway deploy-readiness 收口
+
+本轮不继续删除 Rust 文件，也不修改 Python fallback 业务代码。前几轮已经把
+`chapter_single_generation` 的 background response、terminal-state、stream-success
+response 等 forwarding-only shell 折叠进真实 Rust owner；本轮收口的是部署可见的
+readiness 证据，避免 deploy manifest 继续把已删除 shell 当作迁移目标。
+
+本轮新增 / 调整：
+
+- 更新 `deploy/strangler-gateway-probes.json`
+- 更新 `backend/tests/test_tools/test_run_strangler_gateway_smoke.py`
+- 更新 `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+- 更新 `backend-rs/src/api/health.rs`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+
+收口内容：
+
+1. `chapter-single-generation-active-gateway-smoke-rust` 的 manifest expectation
+   现在使用 `owner_scope = active_route_gateway_stream_background_runtime_terminal`。
+2. `covered_rust_owners` 现在列出真实 route/workflow/runtime/candidate owner：
+   `chapter_generation_routes`、`chapter_candidate_route_gateway_service`、
+   `chapter_single_generation_stream_workflow_service`、
+   `chapter_single_generation_write_workflow_service`、
+   `chapter_single_generation_runtime_state_service`、
+   `chapter_generation_runtime_service`、
+   `chapter_candidate_executor_production_adapter_service`、
+   `chapter_candidate_provider_stream_service`、
+   `chapter_candidate_quality_adapter_service`、
+   `chapter_candidate_record_service`、
+   `chapter_single_generation_runtime_restore_service`。
+3. manifest Python 回归测试和 Rust active smoke 测试都显式禁止旧 owner 名称回流：
+   `chapter_single_generation_stream_success_response_service`、
+   `chapter_single_generation_background_response_service`、
+   `chapter_single_generation_terminal_state_service`。
+4. health endpoint 测试现在验证 deploy 可见 payload 中包含真实 Rust owner 链入口，
+   防止 Rust 服务输出和 manifest expectation 再次漂移。
+5. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 cutover/readiness 证据收口，不是 Python fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `python -m pytest "backend/tests/test_tools/test_run_strangler_gateway_smoke.py" -k "single_generation_active_readiness_owner"`
+  -> 1 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-active-smoke-manifest-readiness" -- --nocapture`
+  -> 5 passed。
+- `cargo test api::health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-active-smoke-manifest-readiness" -- --nocapture`
+  -> 3 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-active-smoke-manifest-readiness"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. `chapter_single_generation` 后续只有在能推进 enabled-path business smoke、
+   fallback repoint/removal readiness，或还能删除真实 owner split 时才继续作为主线。
+2. 不再把已删除的 stream-success/background-response/terminal-state shell 作为
+   deploy readiness 目标；部署探针必须命名当前真实 Rust owner。
+3. 如果没有更强的 single-generation owner split，下一轮应切到 `chapter_generation`
+   shared runtime/candidate/quality owner 或 route parity/fallback shrink 证据。
+
+### 2026-06-09：chapter_generation shared candidate executor wiring retired-owner guard
+
+本轮从 `chapter_single_generation` 投影壳清理切到 `chapter_generation` shared
+candidate owner package。目标不是继续搬 Python 兼容代码，而是把 candidate executor
+cutover/readiness 的 owner 图收口到真实 Rust owner，防止后续规划或部署证据重新引用已删除
+bridge/smoke 文件。
+
+本轮新增 / 调整：
+
+- 更新 `backend-rs/src/services/chapter_candidate_executor_wiring_service.rs`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+
+收口内容：
+
+1. `validate_candidate_executor_wiring_plan(...)` 现在显式拒绝两个 retired Rust target：
+   `chapter_candidate_route_gateway_smoke_service.rs` 和
+   `chapter_candidate_executor_runtime_adapter_service.rs`。
+2. 校验覆盖三类回流入口：
+   rust target file list、stage owner file、dependency target owner。
+3. default wiring plan 继续指向真实 owner：
+   route-gateway smoke/readiness 属于 `chapter_candidate_route_gateway_service.rs`；
+   runtime quality/provider/record bridge 属于 production adapter、default dependency、
+   quality adapter、provider stream、record owner。
+4. 本轮未修改 Python fallback 业务代码，未改变 HTTP/SSE payload、provider fallback、
+   deploy probe count 或 feature flag。
+5. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 shared candidate readiness owner 收口，不是 Python fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_executor_wiring_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-wiring-retired-owner-guard" -- --nocapture`
+  -> 11 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-wiring-retired-owner-guard" -- --nocapture`
+  -> 7 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-wiring-retired-owner-guard" -- --nocapture`
+  -> 4 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-wiring-retired-owner-guard"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. `chapter_generation` shared candidate package 下一步应推进 production cutover evidence，
+   或选择 generation / word-budget / targeted-repair / finalize 这类整文件 owner 接线验证。
+2. 不再恢复 `chapter_candidate_route_gateway_smoke_service.rs` 或
+   `chapter_candidate_executor_runtime_adapter_service.rs`；它们已经不是可继续开发的 Rust
+   target。
+3. Python fallback shrink 仍需等待 Rust candidate executor owner 验证和明确的 fallback
+   freeze/repoint/removal 证据。
+
+### 2026-06-09：chapter_generation shared candidate executor owner 收口
+
+本轮继续推进 `chapter_generation` shared candidate package，重点从 readiness guard
+转到真实 Rust owner 编排收口。此前
+`chapter_candidate_executor_default_dependency_service.rs` 虽然已经承担默认 Rust
+dependency wiring，但仍手写了一份完整 candidate executor 阶段顺序，和
+`chapter_candidate_executor_service.rs` 的 workflow owner 重复。本轮把这条重复链收回
+executor owner。
+
+本轮新增 / 调整：
+
+- 更新 `backend-rs/src/services/chapter_candidate_executor_service.rs`
+- 更新 `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+
+收口内容：
+
+1. `chapter_candidate_executor_service.rs` 新增 boxed production dependency entry，
+   用于真实 async stage owner 接线；原 generic workflow 保留给单元测试和轻量组合。
+2. `chapter_candidate_executor_default_dependency_service.rs` 不再重复 executor 主流程，
+   只负责装配 default provider output、record builder、quality/rerank/finalize callbacks，
+   然后调用 executor owner。
+3. Candidate executor 的阶段顺序现在由同一个 Rust owner 维护：
+   generation -> word-budget repair -> targeted repair -> finalize ->
+   post-finalize targeted repair -> finalization。
+4. Production adapter 测试确认 runtime quality adapter / provider request owner 仍正常，
+   Python fallback 行为和 rollback boundary 未改变。
+5. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 active Rust owner consolidation，不是 Python fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_executor_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-default-dependency-executor-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-default-dependency-executor-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-default-dependency-executor-owner" -- --nocapture`
+  -> 7 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-default-dependency-executor-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `git diff --check`
+  -> 无 whitespace error；仍有既有 CRLF 提示。
+
+后续规划调整：
+
+1. 后续 shared candidate 迁移不要再在 dependency / adapter owner 里复制 executor
+   stage order；这些文件只做依赖装配、provider/quality/record adapter、rollback/readiness。
+2. 下一轮优先选择一个整文件 owner 继续推进：
+   `chapter_candidate_generation_service.rs`、
+   `chapter_candidate_word_budget_repair_service.rs`、
+   `chapter_candidate_targeted_final_repair_service.rs` 或
+   `chapter_candidate_finalize_service.rs`。
+3. 若要真正减少 Python fallback，需要先补足 candidate executor enabled-path smoke、
+   fallback freeze/repoint/removal evidence，而不是继续做 helper relocation。
+
+### 2026-06-09：chapter_generation shared candidate finalize owner 默认依赖收口
+
+本轮继续按“整文件 / 整 owner 边界”推进 `chapter_generation` shared candidate
+package，选择 `chapter_candidate_finalize_service.rs` 作为本轮边界，而不是修改
+Python fallback。此前 default dependency wiring 已经调用 executor owner，但默认
+finalize 公式装配仍留在 `chapter_candidate_executor_default_dependency_service.rs`：
+这让最终候选选择元数据、quality gate normalization、candidate pool summary 和
+word-budget repair promotion preference 的生产归属不够清晰。
+
+本轮新增 / 调整：
+
+- 更新 `backend-rs/src/services/chapter_candidate_finalize_service.rs`
+- 更新 `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+
+收口内容：
+
+1. `chapter_candidate_finalize_service.rs` 新增
+   `build_default_finalize_dependencies(...)`，由 finalize owner 统一装配默认生产
+   finalize 公式。
+2. `chapter_candidate_executor_default_dependency_service.rs` 删除本地
+   `build_default_finalize_dependencies(...)`，只调用 finalize owner 的入口。
+3. 新增 finalize owner 测试，验证默认公式构造会产生 production selection metadata
+   和 quality gate 结果。
+4. default dependency / production adapter 测试保持通过，说明 executor 生产链路、
+   Python fallback branch、rollback boundary 和 provider bridge 行为未变。
+5. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 Rust finalize owner 归属收口，不是 fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_finalize_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-finalize-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-finalize-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-finalize-owner" -- --nocapture`
+  -> 7 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-finalize-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `git diff --check`
+  -> 无 whitespace error；仍有既有 CRLF 提示。
+
+后续规划调整：
+
+1. default dependency service 只装配跨 stage callback，不能重新拥有 finalize 默认
+   公式或最终输出语义。
+2. 下一轮继续在 shared candidate package 内选择整文件 owner：
+   `chapter_candidate_generation_service.rs`、
+   `chapter_candidate_word_budget_repair_service.rs` 或
+   `chapter_candidate_targeted_final_repair_service.rs`。
+3. 真正减少 Python fallback 前，需要补足 candidate executor enabled-path smoke 与
+   fallback freeze/repoint/removal evidence。
+
+### 2026-06-09：chapter_generation shared candidate targeted repair owner 默认依赖收口
+
+本轮继续按“整文件 / 整 owner 边界”推进 `chapter_generation` shared candidate
+package，选择 `chapter_candidate_targeted_final_repair_service.rs` 作为本轮边界，
+不修改 Python fallback。继 finalize owner 收口后，default dependency wiring 中仍
+保留一组 targeted final repair 默认公式装配：suffix、temperature、max tokens、
+char limit、keep/adopt/prefer/followup policy。它们属于 targeted repair stage
+语义，不应继续由 executor default wiring 拥有。
+
+本轮新增 / 调整：
+
+- 更新 `backend-rs/src/services/chapter_candidate_targeted_final_repair_service.rs`
+- 更新 `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+
+收口内容：
+
+1. `chapter_candidate_targeted_final_repair_service.rs` 新增
+   `build_default_targeted_final_repair_dependencies(...)`，由 targeted repair owner
+   统一装配默认生产公式。
+2. `chapter_candidate_executor_default_dependency_service.rs` 删除本地 targeted 默认
+   公式装配，只负责把 provider output 与 record builder 包装成 targeted owner
+   需要的 callback。
+3. 新增 targeted owner 测试，验证默认公式会生成 targeted repair prompt、更新
+   runtime state，并在入池 candidate 上附加 repair seed metadata。
+4. default dependency / production adapter 测试保持通过，说明 executor 生产链路、
+   Python fallback branch、rollback boundary 和 provider bridge 行为未变。
+5. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 Rust targeted repair owner 归属收口，不是 fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_targeted_final_repair_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-targeted-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-targeted-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-targeted-owner" -- --nocapture`
+  -> 7 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-targeted-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `git diff --check`
+  -> 无 whitespace error；仍有既有 CRLF 提示。
+
+后续规划调整：
+
+1. default dependency service 不能重新拥有 targeted repair 默认公式或 stage policy。
+2. 下一轮继续在 shared candidate package 内选择整文件 owner：
+   `chapter_candidate_word_budget_repair_service.rs` 或
+   `chapter_candidate_generation_service.rs`。
+3. 真正减少 Python fallback 前，需要补足 candidate executor enabled-path smoke 与
+   fallback freeze/repoint/removal evidence。
+
+### 2026-06-09：chapter_generation shared candidate word-budget repair owner 默认依赖收口
+
+本轮继续按“整文件 / 整 owner 边界”推进 `chapter_generation` shared candidate
+package，选择 `chapter_candidate_word_budget_repair_service.rs` 作为本轮边界，
+不修改 Python fallback。继 finalize 和 targeted repair owner 收口后，default
+dependency wiring 中仍保留一组 word-budget repair 默认公式装配：suffix、
+apply/relax policy、temperature、max tokens、char limit、keep/select/prefer
+policy。它们属于 word-budget repair stage 语义，不应继续由 executor default
+wiring 拥有。
+
+本轮新增 / 调整：
+
+- 更新 `backend-rs/src/services/chapter_candidate_word_budget_repair_service.rs`
+- 更新 `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+
+收口内容：
+
+1. `chapter_candidate_word_budget_repair_service.rs` 新增
+   `build_default_word_budget_repair_dependencies(...)`，由 word-budget repair
+   owner 统一装配默认生产公式。
+2. `chapter_candidate_executor_default_dependency_service.rs` 删除本地 word-budget
+   默认公式装配，只负责把 provider output 与 record builder 包装成 word-budget
+   owner 需要的 callback。
+3. 新增 word-budget owner 测试，验证默认公式会生成 word-budget repair prompt、
+   更新 runtime state，并在入池 candidate 上附加 repair seed metadata。
+4. default dependency / production adapter 测试保持通过，说明 executor 生产链路、
+   Python fallback branch、rollback boundary 和 provider bridge 行为未变。
+5. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 Rust word-budget repair owner 归属收口，不是 fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_word_budget_repair_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-word-budget-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-word-budget-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-word-budget-owner" -- --nocapture`
+  -> 7 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-word-budget-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+- `git diff --check`
+  -> 无 whitespace error；仍有既有 CRLF 提示。
+
+后续规划调整：
+
+1. default dependency service 不能重新拥有 word-budget repair 默认公式或 stage
+   policy。
+2. 下一轮继续在 shared candidate package 内选择整文件 owner：
+   `chapter_candidate_generation_service.rs`。
+3. 优先把 generation 默认 dependency construction 收进 generation owner；provider
+   output、record builder、quality callback 仍作为明确注入边界保留。
+4. 真正减少 Python fallback 前，需要补足 candidate executor enabled-path smoke 与
+   fallback freeze/repoint/removal evidence。
+
+### 2026-06-09：chapter_generation shared candidate generation owner 默认依赖收口
+
+本轮继续按“整文件 / 整 owner 边界”推进 `chapter_generation` shared candidate
+package，选择 `chapter_candidate_generation_service.rs` 作为本轮边界，不修改
+Python fallback。继 finalize、targeted repair、word-budget repair owner 收口后，
+default dependency wiring 中最后一组 candidate stage 默认公式仍属于 generation
+stage：retry prompt suffix、retry strategy suffix、retry temperature、
+additional-candidate policy 和 best-candidate selection。它们不应继续由 executor
+default wiring 拥有。
+
+本轮新增 / 调整：
+
+- 更新 `backend-rs/src/services/chapter_candidate_generation_service.rs`
+- 更新 `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+- 更新 `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+- 更新 `.trellis/spec/backend/quality-guidelines.md`
+
+收口内容：
+
+1. `chapter_candidate_generation_service.rs` 新增
+   `build_default_generation_dependencies(...)`，由 generation owner 统一装配默认
+   生产公式。
+2. `chapter_candidate_executor_default_dependency_service.rs` 删除本地 generation
+   默认公式装配，只负责把 provider output 与 record builder 包装成 generation
+   owner 需要的 callback。
+3. 新增 generation owner 测试，验证默认公式会生成 retry prompt、更新 runtime
+   state，并通过默认 best-candidate selection 选择第二个候选。
+4. default dependency / production adapter 测试保持通过，说明 executor 生产链路、
+   Python fallback branch、rollback boundary 和 provider bridge 行为未变。
+5. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 Rust generation owner 归属收口，不是 fallback retirement。
+
+本轮验证全部使用 E 盘 target-dir：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_generation_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-generation-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-generation-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-generation-owner" -- --nocapture`
+  -> 7 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-generation-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. default dependency service 不能重新拥有 generation 默认公式或 stage policy。
+2. `generation`、`word-budget repair`、`targeted repair`、`finalize` 四个 candidate
+   stage owner 现在都拥有各自默认生产依赖构造。
+3. 下一轮不要继续在 default dependency service 内做公式搬迁；应转向 candidate
+   executor enabled-path smoke、fallback freeze/repoint/removal evidence，或选择
+   shared candidate package 之外的另一个整文件 owner。
+
+### 2026-06-09：chapter_batch_generation route error mapper 整文件折叠
+
+本轮从 `chapter_generation` shared candidate package 切到
+`chapter_batch_generation` whole-package block，继续按“整文件 / 整模块”推进。
+折叠对象是只被 batch route owner 消费的
+`backend-rs/src/api/chapter_batch_generation_error_mapper.rs`。该文件不再作为独立
+Rust owner 保留；create/status/stream/active/cancel/resume 的错误投影现在归属
+`chapter_batch_generation.rs` 的私有 `error_mapper` 子模块。
+
+更新内容：
+
+1. 删除 `backend-rs/src/api/chapter_batch_generation_error_mapper.rs`。
+2. `backend-rs/src/api/mod.rs` 移除旧 mapper 模块注册。
+3. `backend-rs/src/api/chapter_batch_generation.rs` 直接拥有 route 常量、route
+   handler、batch route 错误映射和对应测试。
+4. status stream 继续由 `chapter_batch_generation_read_context_service.rs` 承接，
+   resume/cancel 继续由 `chapter_batch_generation_write_workflow_service.rs` 承接；
+   route owner 只负责 HTTP/SSE 边界和错误投影。
+5. readiness summary 仍为 `rust = 127`、`python-fallback = 43`。这是预期结果：
+   本轮是 Rust batch route owner 收口，不是 Python fallback retirement。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_batch_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-route-error-owner" -- --nocapture`
+  -> 358 passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-route-error-owner" -- --nocapture`
+  -> 44 passed。
+- `cargo test chapter_batch_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-route-error-owner" -- --nocapture`
+  -> 75 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-route-error-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+后续规划调整：
+
+1. 不再把 `chapter_batch_generation_error_mapper.rs` 当作可继续开发的 Rust owner；
+   route-only 错误投影已经归并到真实 batch route owner。
+2. `chapter_batch_generation` 后续优先推进 resume/cancel route parity、stream
+   access validation、business smoke 或 fallback-shrink readiness。
+3. 如果 batch route parity 证据不足以 shrink fallback，继续选择整模块 owner
+   block，不再通过新增/恢复 route-only shell 制造迁移进度。
+
+### 2026-06-09：chapter_draft route error mapper 整文件折叠
+
+本轮继续按“整文件 / 整模块”推进 Rust route owner consolidation。原
+`backend-rs/src/api/chapter_draft_error_mapper.rs` 已只剩 draft route owner
+单消费者价值，因此被折叠进 `chapter_draft_routes.rs` 的私有 `error_mapper`
+子模块，独立 mapper 文件和 `api/mod.rs` 注册已删除。
+
+保留的行为契约：
+
+1. auto-revision、candidate draft load/apply、history、readiness、chapter access
+   404、selection-mode-sensitive not-found、stale/empty/workflow-meta 等 HTTP 错误
+   detail 保持不变。
+2. draft apply/history/detail/readiness 仍由 service owner 承接；route owner 只拥有
+   HTTP 边界和错误投影。
+3. Python fallback 未修改，readiness summary 仍为
+   `rust = 127`、`python-fallback = 43`。本轮是 Rust route owner 收口，不是
+   fallback retirement。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_draft_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-route-error-owner" -- --nocapture`
+  -> 9 passed。
+- `cargo test chapter_draft_route_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-route-error-owner" -- --nocapture`
+  -> 9 passed。
+- `cargo test chapter_draft --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-route-error-owner" -- --nocapture`
+  -> 86 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed；readiness summary 仍为 `rust = 127`、`python-fallback = 43`，
+  deploy manifest 仍为 7 probes。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-route-error-owner"`
+  -> passed，剩余为既有 unused/dead-code warnings。
+
+规划调整：
+
+1. 不再把 `chapter_draft_error_mapper.rs` 当作 Rust 迁移目标或可恢复 shell。
+2. draft 后续优先推进 route parity、enabled-path smoke、fallback
+   freeze/repoint/removal evidence。
+3. 只有当多个真实 API owner 共享同一错误 mapping boundary 时，才重新抽出共享
+   mapper；否则错误投影留在 route owner 私有模块内。
+
+### 2026-06-09：chapter_analysis query route error mapper 整文件折叠
+
+本轮继续同一条 route owner consolidation 路线。原
+`backend-rs/src/api/chapter_analysis_query_error_mapper.rs` 只被
+`chapter_analysis_routes.rs` 消费，因此已折叠进 route owner 的私有
+`error_mapper` 子模块，独立 mapper 文件和 `api/mod.rs` 注册已删除。
+
+保留的行为契约：
+
+1. owned analysis view、quality metrics、analysis task status 的 route-facing
+   query error projection 仍保留原 HTTP detail。
+2. chapter access 404、analysis not found、internal query failure 映射保持不变。
+3. `chapters_error_mapper.rs` 继续作为多 route owner 共享的底层 mapper；本轮只删除
+   analysis-query-specific 单消费者 shell。
+4. Python fallback 未修改。本轮是 Rust route owner 收口，不是 fallback retirement。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_analysis_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-analysis-route-error-owner" -- --nocapture`
+  -> 9 passed。
+- `cargo test chapter_analysis_query --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-analysis-route-error-owner" -- --nocapture`
+  -> 10 passed。
+
+规划调整：
+
+1. 不再把 `chapter_analysis_query_error_mapper.rs` 当作 Rust 迁移目标或可恢复 shell。
+2. 后续继续折叠 route-only / forwarding-only Rust shell，但共享 mapper 仍应在多 route
+   owner 消费时保留独立文件。
+3. fallback shrink 仍必须等待 route parity、business smoke、rollback boundary 和
+   freeze/repoint/removal evidence。
+
+### 2026-06-09：chapter_crud route error mapper 整文件折叠
+
+本轮继续按“整文件 / 整模块”推进 Rust route owner consolidation。原
+`backend-rs/src/api/chapter_crud_error_mapper.rs` 只被
+`chapter_crud_routes.rs` 消费，因此已折叠进 route owner 的私有 `error_mapper`
+子模块，独立 mapper 文件和 `api/mod.rs` 注册已删除。
+
+保留的行为契约：
+
+1. create/list/get/update/delete 的 CRUD 失败仍保持
+   `{ success: false, message: ... }` 响应形状。
+2. project-path chapter list 的 project not found 仍保持
+   `{ detail: "Project not found" }` 响应形状。
+3. `chapters_error_mapper.rs` 继续作为多 route owner 共享 mapper；本轮只删除
+   CRUD-specific 单消费者 shell。
+4. Python fallback 未修改。本轮是 Rust route owner 收口，不是 fallback retirement。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_crud_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-crud-route-error-owner" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_crud_workflow --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-crud-route-error-owner" -- --nocapture`
+  -> 16 passed。
+
+规划调整：
+
+1. 不再把 `chapter_crud_error_mapper.rs` 当作 Rust 迁移目标或可恢复 shell。
+2. 继续保留真正多消费者的 `chapters_error_mapper.rs`。
+3. 后续只折叠有单一真实 owner 且可用聚焦测试证明 payload parity 的 route-only
+   或 forwarding-only shell。
+
+### 2026-06-09：memories route error mapper 整文件折叠
+
+本轮继续应用“单消费者 route-only shell 折叠”规则。原
+`backend-rs/src/api/memories_error_mapper.rs` 只被 `memories.rs` 消费，因此已
+折叠进 route owner 的私有 `error_mapper` 子模块，独立 mapper 文件和
+`api/mod.rs` 注册已删除。
+
+保留的行为契约：
+
+1. project access not found 仍返回中文 detail：`项目不存在或无权限`。
+2. chapter analysis missing 仍返回中文 detail：`该章节还未进行分析`。
+3. analyze-chapter memories workflow 的 create-analysis-task error 仍复用
+   `chapters_error_mapper.rs` 的共享映射。
+4. Python fallback 未修改。本轮是 Rust route owner 收口，不是 fallback retirement。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test memories --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-memories-route-error-owner" -- --nocapture`
+  -> 26 passed。
+- `cargo test memories_query --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-memories-route-error-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo test memories_write --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-memories-route-error-owner" -- --nocapture`
+  -> 3 passed。
+
+规划调整：
+
+1. 不再把 `memories_error_mapper.rs` 当作 Rust 迁移目标或可恢复 shell。
+2. 继续保留多消费者共享的 `chapters_error_mapper.rs`。
+3. API mapper shell 基本清理到只剩共享 owner；后续应优先服务层 forwarding shell
+   折叠、fallback freeze/repoint/removal evidence 或 smoke readiness。
+
+### 2026-06-09：chapter_draft route readiness 整文件 owner 合并
+
+本轮从 API mapper 清理转向服务层证据 owner 收口。原
+`backend-rs/src/services/chapter_draft_route_readiness_service.rs` 没有生产
+route、health 或 deploy 消费者，只是记录 `chapter_draft` Rust route package
+的 readiness 证据。因此已将 probe/result/validation contract 合并进
+`backend-rs/src/services/chapter_draft_route_service.rs`，并删除独立 readiness
+文件及 `services/mod.rs` 注册。
+
+保留的行为契约：
+
+1. readiness evidence 仍覆盖 4 个 draft route：
+   auto-revision load/apply、candidate load/apply。
+2. Rust owner 仍指向 `backend-rs/src/api/chapter_draft_routes.rs`。
+3. Python fallback shell 仍记录为 `backend/app/api/chapter_draft_routes.py`，
+   rollback boundary 仍为 `python_chapter_draft_routes_fallback`。
+4. Python fallback 未修改。本轮是 Rust owner consolidation，不是 fallback
+   retirement；readiness summary 仍为 `rust = 127`、`python-fallback = 43`。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_draft_route_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-readiness-owner" -- --nocapture`
+  -> 12 passed。
+- `cargo test chapter_draft_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-readiness-owner" -- --nocapture`
+  -> 9 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-draft-readiness-owner"`
+  -> passed，只有既有 warning。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+
+规划调整：
+
+1. 不再把 `chapter_draft_route_readiness_service.rs` 当作独立 Rust target
+   或可恢复 shell。
+2. draft route readiness 证据归属 `chapter_draft_route_service.rs`，除非未来
+   变成真实共享 health/deploy endpoint。
+3. 后续提速应优先选择能推动 fallback freeze/repoint/removal 或 business smoke
+   readiness 的整模块迁移，而不是继续删除只服务测试的证据文件。
+
+### 2026-06-09：candidate executor wiring readiness 整文件 owner 合并
+
+本轮继续服务层 owner 收口。原
+`backend-rs/src/services/chapter_candidate_executor_wiring_service.rs` 没有被
+生产 Rust route/service 调用，只承载 Python
+`chapter_candidate_executor_wiring_service.py` 的迁移依赖图与 readiness
+证据。现在该整文件已移动为
+`backend-rs/src/services/chapter_candidate_executor_default_dependency_service/wiring_readiness.rs`，
+并由真实可执行装配 owner
+`chapter_candidate_executor_default_dependency_service.rs` 私有持有。
+
+保留的行为契约：
+
+1. 默认候选执行器依赖装配仍归属
+   `chapter_candidate_executor_default_dependency_service.rs`。
+2. readiness plan 仍记录 Python source map，以及 route gateway、production
+   adapter、provider stream、quality adapter、record、rerank、generation、
+   repair、finalize、executor 等 Rust owner。
+3. readiness validator 仍拒绝已退休的 runtime adapter / route-gateway smoke
+   独立 target。
+4. 独立 `chapter_candidate_executor_wiring_service.rs` 不再作为 Rust target
+   或 `services/mod.rs` 模块存在。
+5. Python fallback 未修改。本轮是 Rust owner consolidation，不是 fallback
+   retirement；readiness summary 仍为 `rust = 127`、`python-fallback = 43`。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-default-readiness-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_candidate_executor --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-default-readiness-owner" -- --nocapture`
+  -> 25 passed。
+- `cargo test chapter_candidate_route_gateway --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-default-readiness-owner" -- --nocapture`
+  -> 10 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-default-readiness-owner"`
+  -> passed，只有既有 warning。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+
+规划调整：
+
+1. 不再把 `chapter_candidate_executor_wiring_service.rs` 当作独立 Rust target
+   或可恢复 shell。
+2. candidate executor wiring readiness 证据归属默认依赖 owner；除非生产代码
+   再次消费独立 wiring service，否则不要恢复独立文件。
+3. 下一步提速应优先做能推动 business smoke、fallback freeze/repoint/removal
+   或 route-group cutover measurable 的整模块迁移。
+
+### 2026-06-09：chapters candidate route-gateway business readiness 提升
+
+本轮停止继续删除 readiness-only shell，改为把已有
+`chapter-candidate-route-gateway-smoke-rust` 提升为 `chapters` route group 的
+business/cutover readiness 证据。它仍然是 health smoke，不调用真实 provider；
+价值在于让部署 manifest 和 readiness summary 明确识别：candidate route gateway
+已经具备 Rust owner 路径、强制 Python fallback 路径、业务 smoke profile、专用 owner
+profile 和 rollback boundary。
+
+改动范围：
+
+1. `deploy/strangler-gateway-probes.json`
+   - `chapter-candidate-route-gateway-smoke-rust` 新增 `business` profile。
+   - 同一 probe 新增专用 owner profile：
+     `phase5-chapters-candidate-gateway-owner`。
+   - 保持 public path：
+     `/health/chapter-candidate-route-gateway-smoke`。
+   - 保持 `python_candidate_executor_fallback` rollback boundary。
+2. `backend/tests/test_tools/test_run_strangler_gateway_smoke.py`
+   - 新增真实 manifest 测试，验证 `chapters` readiness 现在具备
+     `has_business_smoke` 和 `has_dedicated_owner_profile`。
+   - 同时验证该 probe 仍覆盖 Rust owner path 和 Python fallback path。
+3. `.trellis/spec/backend/quality-guidelines.md`
+   - 记录新规则：该 probe 是当前 candidate gateway business/cutover readiness
+     信号，不应降级回 deploy-only，除非被更强的真实 route smoke 替换。
+
+验证：
+
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+
+readiness 结果：
+
+- 全量 manifest owner count 未变：
+  `rust = 127`，`python-fallback = 43`。
+- `chapters` route group 现在：
+  `probe_count = 23`，
+  `owner_counts = {"rust": 12, "python-fallback": 11}`，
+  `has_business_smoke = true`，
+  `has_dedicated_owner_profile = true`，
+  `has_dedicated_fallback_profile = true`，
+  `has_dedicated_asymmetric_profile = true`。
+
+规划含义：
+
+1. 这不是 Python fallback retirement，不能把 `python-fallback = 43` 说成减少。
+2. 这是 cutover 可观测性推进：后续可以围绕这个 business readiness 继续做
+   fallback freeze/repoint/removal，而不是再绕回 readiness-only 文件清理。
+3. 下一步如果继续 `chapters` / `chapter_generation`，优先补真实 active-route
+   enabled-path business smoke，或直接处理对应 fallback shell 的 freeze/repoint
+   决策。
+
+### 2026-06-09：chapter_generation candidate gateway fallback-freeze readiness
+
+本轮继续沿 `chapter_generation` / `chapters` candidate route gateway cutover
+路线推进，但不直接删除 Python fallback。新增的是一个更强的 Rust owner readiness
+probe：`chapter-candidate-route-gateway-fallback-freeze-candidate`。它在
+`rust_executor_enabled = true`、`fallback_on_rust_error = false` 的配置下执行
+Rust candidate gateway，证明“冻结 Rust 错误回退”的候选配置能走通 gateway。
+
+改动范围：
+
+1. `backend-rs/src/services/chapter_candidate_route_gateway_service.rs`
+   - `build_default_chapter_candidate_route_gateway_smoke_probes()` 从 2 个 probe
+     扩展为 3 个 probe。
+   - 新增 fallback-freeze candidate probe：
+     `chapter-candidate-route-gateway-fallback-freeze-candidate`。
+   - `readiness_evidence` 新增 `fallback_shrink_readiness`：
+     `rust_owner_path_validated`、
+     `fallback_freeze_config_validated`、
+     `python_fallback_removal_ready` 和 `remaining_blockers`。
+2. `backend-rs/src/api/health.rs`
+   - `/health/chapter-candidate-route-gateway-smoke` 仍保持原 path 和 rollback
+     boundary，但 `probe_count` 变为 3。
+   - health test 验证第二个 probe 是 Rust fallback-freeze candidate，且
+     `fallback_freeze_config_validated = true`。
+3. `deploy/strangler-gateway-probes.json`
+   - deploy expected JSON 同步为 3 个 probes。
+   - 第二个 probe 明确验证 fallback-freeze candidate 的 readiness 字段。
+4. `backend/tests/test_tools/test_run_strangler_gateway_smoke.py`
+   - manifest 测试同步断言 3 个 probes：
+     Rust owner path、Rust fallback-freeze candidate path、Python fallback path。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_candidate_route_gateway --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-gateway-freeze-readiness" -- --nocapture`
+  -> 11 passed。
+- `cargo test health::tests --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-gateway-freeze-readiness" -- --nocapture`
+  -> 3 passed。
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-gateway-freeze-readiness"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+
+readiness 结果：
+
+- 全量 manifest owner count 仍未变：
+  `rust = 127`，`python-fallback = 43`。
+- 本轮不是 fallback removal，而是 fallback freeze/repoint 前置证据。
+- `fallback_shrink_readiness.python_fallback_removal_ready` 仍为 false，这是刻意保守：
+  只有 active-route enabled-path smoke 消费该 freeze candidate，并且 Python compatibility
+  shell 被显式 frozen/repointed/removed 后，才能改变 fallback 计数。
+
+下一步：
+
+1. 将 active-route enabled-path smoke 接到该 fallback-freeze candidate 配置。
+2. 若 active route smoke 通过，再冻结或 repoint
+   `chapter_generation_route_compat_service.py` / `chapters.py` 中对应 fallback 分支。
+3. 不再把“新增 readiness 字段”误报为 Python fallback 数量下降。
+
+### 2026-06-09：single-generation active-route fallback-freeze smoke
+
+本轮完成上一节的第 1 步：`chapter_single_generation` active-route smoke 已经消费
+fallback-freeze candidate 配置。也就是说，active route 不再只有普通 Rust owner
+path 与 direct fallback path 两个探针，而是明确增加一个
+`rust_executor_enabled = true`、`fallback_on_rust_error = false` 的中间探针，用来证明
+“冻结 Rust 错误回退”的候选配置能被 active route owner 链路实际消费。
+
+改动范围：
+
+1. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+   - `build_default_chapter_single_generation_active_gateway_smoke_probes()` 从 2 个
+     probe 扩展为 3 个 probe。
+   - 新增：
+     `chapter-single-generation-active-gateway-fallback-freeze-candidate`。
+   - readiness evidence 现在覆盖 route、stream workflow、background workflow、
+     runtime state、runtime generation、candidate gateway、provider/quality/record owner、
+     stream response、background response 与 terminal quality-gate projection。
+   - `fallback_shrink_readiness` 明确记录：
+     `active_route_smoke_consumes_freeze_candidate = true`、
+     `fallback_freeze_config_validated = true`、
+     `python_fallback_removal_ready = false`。
+2. `backend-rs/src/api/health.rs`
+   - `/health/chapter-single-generation-active-gateway-smoke` 保持原 path 和
+     `legacy_single_generation_direct_ai` rollback boundary。
+   - health test 现在断言 `probe_count = 3`，并验证第二个 probe 是 active-route
+     fallback-freeze candidate。
+3. `deploy/strangler-gateway-probes.json`
+   - `chapter-single-generation-active-gateway-smoke-rust` 的 expected JSON 同步为
+     3 个 probes：
+     Rust active owner path、Rust fallback-freeze candidate path、direct fallback path。
+   - 保留 `business` 与 `phase5-single-generation-owner` profile。
+4. `backend/tests/test_tools/test_run_strangler_gateway_smoke.py`
+   - manifest 测试验证 single-generation readiness owner profile、三探针顺序、
+     active-route freeze candidate readiness 字段，以及已退役 projection shell 不再出现在
+     owner evidence 中。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+- `cargo test chapter_single_generation_active_gateway_smoke --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-active-freeze-smoke" -- --nocapture`
+  -> 7 passed。
+- `cargo test health::tests --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-active-freeze-smoke" -- --nocapture`
+  -> 3 passed。
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-active-freeze-smoke"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+
+readiness 结果：
+
+- 全量 manifest owner count 仍未变：
+  `rust = 127`，`python-fallback = 43`。
+- 这是预期结果：本轮是 active-route freeze/repoint 前置证据，不是 fallback removal。
+- `python_fallback_removal_ready` 继续保持 false，直到
+  `chapter_generation_route_compat_service.py` / `chapters.py` 的对应 compatibility shell
+  被显式 frozen、repointed 或 removed。
+
+下一步：
+
+1. 不再新增更多 readiness-only 字段；直接处理匹配的 Python compatibility shell。
+2. 优先选择整块迁移动作：按 `chapter_single_generation` route/fallback 分支整体
+   freeze 或 repoint，而不是继续拆小 helper。
+3. 只有 manifest 或 fallback branch 真实 removal/repoint 后，才能报告
+   `python-fallback` 计数减少。
+
+### 2026-06-09：single-generation route-level Python fallback manifest retirement
+
+本轮在上一节 active-route fallback-freeze smoke 通过之后，执行了真正可计量的
+fallback shrink：从 deploy manifest 中移除
+`chapters-generate-background-auth-guard-python-fallback` 与
+`chapters-generate-stream-auth-guard-python-fallback` 两个 auth-guard-only Python
+fallback probes。Python compatibility 源文件没有删除，仍作为 rollback/source map；
+但 readiness 不再把单章生成的 background/stream active routes 计入 Python fallback。
+
+改动范围：
+
+1. `deploy/strangler-gateway-probes.json`
+   - 删除：
+     `chapters-generate-background-auth-guard-python-fallback`。
+   - 删除：
+     `chapters-generate-stream-auth-guard-python-fallback`。
+   - 保留对应 Rust probes：
+     `chapters-generate-background-auth-guard-rust`、
+     `chapters-generate-stream-auth-guard-rust`。
+   - 保留 `chapter-single-generation-active-gateway-smoke-rust` 作为同一 active route
+     package 的 business/owner cutover smoke。
+2. `backend/tests/test_tools/test_run_strangler_gateway_smoke.py`
+   - manifest 测试断言两个旧 Python fallback probes 不再存在。
+   - `phase5-p0-fallback` 选择测试同步移除两个旧 probe。
+   - 测试断言全量 `python-fallback` owner count 已降为 41。
+3. `.trellis/spec/backend/quality-guidelines.md`
+   - 新增规则：active-route fallback-freeze smoke 存在后，不应恢复这两个
+     auth-guard-only Python fallback manifest probes，除非同一变更回滚 Rust active route
+     owner 或 active-route freeze smoke。
+
+验证：
+
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+- `cargo test chapter_single_generation_active_gateway_smoke --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-active-fallback-retire" -- --nocapture`
+  -> 7 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-active-fallback-retire"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `git diff --check`
+  -> passed，仅有既有 CRLF warning。
+
+readiness 结果：
+
+- 全量 readiness owner count 从 `rust = 127`、`python-fallback = 43`
+  变为 `rust = 127`、`python-fallback = 41`。
+- `chapters` route group 从 23 probes 降为 21 probes。
+- `chapters` owner count 从 `{"rust": 12, "python-fallback": 11}` 变为
+  `{"rust": 12, "python-fallback": 9}`。
+
+下一步：
+
+1. 继续只做能减少 manifest fallback 或能解锁 fallback removal 的整块迁移。
+2. 优先候选：`chapters-regeneration-tasks` fallback retirement，如果 Rust route parity
+   与 rollback evidence 已足够。
+3. 其次候选：batch active/stream/resume 这组 fallback retirement，但要先确认 batch
+   owner smoke、业务 payload 与 rollback 边界足够稳。
+
+### 2026-06-09：batch active/stream/resume route-level Python fallback manifest retirement
+
+本轮把上一节提到的 batch active/stream/resume 候选推进为真正可计量的
+fallback shrink。迁移边界按整个 route function group 处理，而不是继续拆 helper：
+active-task-list、status stream、resume 三条 batch 路由已经由
+`backend-rs/src/api/chapter_batch_generation.rs` 与对应 read/stream/write/resume
+service owner 接住，因此 deploy manifest 不再保留这三条 auth-guard-only
+Python fallback probes。
+
+改动范围：
+
+1. `deploy/strangler-gateway-probes.json`
+   - 删除：
+     `chapters-batch-active-tasks-auth-guard-python-fallback`。
+   - 删除：
+     `chapters-batch-stream-auth-guard-python-fallback`。
+   - 删除：
+     `chapters-batch-resume-auth-guard-python-fallback`。
+   - 保留对应 Rust probes：
+     `chapters-batch-active-tasks-auth-guard-rust`、
+     `chapters-batch-stream-auth-guard-rust`、
+     `chapters-batch-resume-auth-guard-rust`。
+2. `backend/tests/test_tools/test_run_strangler_gateway_smoke.py`
+   - manifest 测试断言这三个旧 Python fallback probes 不再存在。
+   - `phase5-p0-fallback` 选择测试同步移除这三个旧 probe。
+   - 测试断言全量 `python-fallback` owner count 已降为 38。
+3. `.trellis/spec/backend/quality-guidelines.md`
+   - 新增规则：batch active/stream/resume Rust auth-guard probes 与 focused
+     `chapter_batch_generation` tests 存在后，不应恢复这三个 auth-guard-only
+     Python fallback manifest probes，除非同一变更回滚 Rust batch route owner
+     或匹配测试。
+
+行为与回滚边界：
+
+- 这不是删除 Python 源码；`backend/app/api/chapter_batch_generation_routes.py`
+  仍可作为 source map / rollback shell。
+- public endpoint path、HTTP payload、SSE payload、task lifecycle、provider 调用与
+  task table 都没有在这一轮改变。
+- 回滚只需要重新加入三条 retired manifest probes，并恢复对应 smoke-tool 断言。
+
+验证：
+
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+- `cargo test chapter_batch_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-fallback-retire" -- --nocapture`
+  -> 358 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-fallback-retire"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `git diff --check`
+  -> passed，仅有既有 CRLF warning。
+
+readiness 结果：
+
+- 全量 readiness owner count 从 `rust = 127`、`python-fallback = 41`
+  变为 `rust = 127`、`python-fallback = 38`。
+- 全量 readiness probes 从 168 降为 165。
+- `chapters` route group 从 21 probes 降为 18 probes。
+- `chapters` owner count 从 `{"rust": 12, "python-fallback": 9}` 变为
+  `{"rust": 12, "python-fallback": 6}`。
+- 当前 `phase5-p0-fallback` 只剩：
+  `chapters-project-list-auth-guard-python-fallback`、
+  `chapters-analysis-auth-guard-python-fallback`、
+  `chapters-batch-analysis-status-auth-guard-python-fallback`、
+  `chapters-regeneration-tasks-auth-guard-python-fallback`。
+
+下一步：
+
+1. 后续轮次直接以 `python-fallback = 38` 为 baseline，不再从全量 Python 文件数
+   重新分析。
+2. 最优先候选是 `chapters-regeneration-tasks-auth-guard-python-fallback`：
+   Rust route owner 与对应 auth-guard probe 已存在，适合按单 route function group
+   做下一次 manifest fallback retirement。
+3. batch 剩余的 status/cancel task-not-found fallback 属于不对称行为探针，不能仅因
+   名字含 fallback 就删除；必须先确认 Rust parity、错误 shell 与 rollback 语义。
+
+### 2026-06-09：regeneration tasks route-level Python fallback manifest retirement
+
+本轮继续按“整块 route function group”推进，而不是再拆 helper。`GET
+/chapters/{chapter_id}/regeneration/tasks` 已由
+`backend-rs/src/api/chapter_regeneration_routes.rs` 直接接入
+`chapter_regeneration_query_service`，并且 manifest 已有对应 Rust auth-guard probe。
+因此移除同一路径上的 auth-guard-only Python fallback probe，让 readiness baseline
+继续下降。
+
+改动范围：
+
+1. `deploy/strangler-gateway-probes.json`
+   - 删除：
+     `chapters-regeneration-tasks-auth-guard-python-fallback`。
+   - 保留对应 Rust probe：
+     `chapters-regeneration-tasks-auth-guard-rust`。
+2. `backend/tests/test_tools/test_run_strangler_gateway_smoke.py`
+   - retired probe 集合新增 regeneration tasks fallback probe。
+   - 测试断言全量 `python-fallback` owner count 已降为 37。
+3. `.trellis/spec/backend/quality-guidelines.md`
+   - 新增规则：regeneration tasks Rust auth-guard probe 与 focused
+     `chapter_regeneration` route/query tests 存在后，不应恢复这条
+     auth-guard-only Python fallback manifest probe，除非同一变更回滚 Rust
+     route/query owner 或匹配测试。
+
+行为与回滚边界：
+
+- 这不是删除 Python 源码；`backend/app/api/chapter_regeneration_routes.py`
+  仍可作为 source map / rollback shell。
+- public endpoint path、GET 方法、auth boundary、query limit contract 与 task payload
+  形状都没有在这一轮改变。
+- 回滚只需要重新加入这一条 retired manifest probe，并恢复 smoke-tool 断言。
+
+验证：
+
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+- `cargo test chapter_regeneration --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-regeneration-fallback-retire" -- --nocapture`
+  -> 59 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-regeneration-fallback-retire"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `git diff --check`
+  -> passed，仅有既有 CRLF warning。
+
+readiness 结果：
+
+- 全量 readiness owner count 从 `rust = 127`、`python-fallback = 38`
+  变为 `rust = 127`、`python-fallback = 37`。
+- 全量 readiness probes 从 165 降为 164。
+- `chapters` route group 从 18 probes 降为 17 probes。
+- `chapters` owner count 从 `{"rust": 12, "python-fallback": 6}` 变为
+  `{"rust": 12, "python-fallback": 5}`。
+- 当前 `phase5-p0-fallback` 只剩：
+  `chapters-project-list-auth-guard-python-fallback`、
+  `chapters-analysis-auth-guard-python-fallback`、
+  `chapters-batch-analysis-status-auth-guard-python-fallback`。
+
+下一步：
+
+1. 后续轮次直接以 `python-fallback = 37` 为 baseline。
+2. 下一候选从剩余 3 个 direct `chapters` fallback probes 中选择：
+   project-list、analysis、batch-analysis-status。
+3. batch status/cancel task-not-found 仍按 asymmetric evidence 处理，不进入快速删除通道。
+
+### 2026-06-09：analysis 与 batch-analysis-status route-level Python fallback manifest retirement
+
+本轮继续按整块 route function group 推进，优先退役有“同一路径 Rust probe + focused
+Rust tests”的 fallback。`GET /chapters/{chapter_id}/analysis` 与
+`POST /chapters/analysis/status/batch` 已由
+`backend-rs/src/api/chapter_analysis_routes.rs` 接入 Rust analysis query/view owners，
+且 manifest 中存在同路径 Rust auth-guard probes。因此移除这两条 auth-guard-only
+Python fallback probes。
+
+改动范围：
+
+1. `deploy/strangler-gateway-probes.json`
+   - 删除：
+     `chapters-analysis-auth-guard-python-fallback`。
+   - 删除：
+     `chapters-batch-analysis-status-auth-guard-python-fallback`。
+   - 保留对应 Rust probes：
+     `chapters-analysis-auth-guard-rust`、
+     `chapters-batch-analysis-status-auth-guard-rust`。
+2. `backend/tests/test_tools/test_run_strangler_gateway_smoke.py`
+   - retired probe 集合新增 analysis 与 batch-analysis-status 两条 fallback probes。
+   - 测试断言全量 `python-fallback` owner count 已降为 35。
+3. `.trellis/spec/backend/quality-guidelines.md`
+   - 新增规则：analysis view 与 batch-analysis-status Rust probes 加 focused
+     `chapter_analysis` tests 存在后，不应恢复这两条 auth-guard-only Python fallback
+     manifest probes，除非同一变更回滚 Rust route/query owner 或匹配测试。
+
+行为与回滚边界：
+
+- 这不是删除 Python 源码；`backend/app/api/chapter_analysis_task_routes.py` 与
+  `backend/app/api/chapters.py` 仍可作为 source map / rollback shell。
+- public endpoint path、HTTP method、auth boundary、query/body payload contract 与
+  task tables 都没有在这一轮改变。
+- 回滚只需要重新加入两条 retired manifest probes，并恢复 smoke-tool 断言。
+
+验证：
+
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+- `cargo test chapter_analysis --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapters-analysis-fallback-retire" -- --nocapture`
+  -> 64 passed。
+- `cargo test chapter_crud --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapters-analysis-fallback-retire" -- --nocapture`
+  -> 26 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-chapters-analysis-fallback-retire"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `git diff --check`
+  -> passed，仅有既有 CRLF warning。
+
+readiness 结果：
+
+- 全量 readiness owner count 从 `rust = 127`、`python-fallback = 37`
+  变为 `rust = 127`、`python-fallback = 35`。
+- 全量 readiness probes 从 164 降为 162。
+- `chapters` route group 从 17 probes 降为 15 probes。
+- `chapters` owner count 从 `{"rust": 12, "python-fallback": 5}` 变为
+  `{"rust": 12, "python-fallback": 3}`。
+- 当前 direct `phase5-p0-fallback` 只剩：
+  `chapters-project-list-auth-guard-python-fallback`。
+- 当前 asymmetric fallback 仍保留：
+  `chapters-batch-status-task-not-found-python-fallback`、
+  `chapters-batch-cancel-task-not-found-python-fallback`。
+
+为什么暂不删除 project-list：
+
+- Rust route owner 已存在：
+  `backend-rs/src/api/chapter_crud_routes.rs` 的
+  `/chapters/project/{project_id}`。
+- 但 manifest 当前 Rust probe 是 query 形式：
+  `chapters-list-auth-guard-rust` -> `/api/chapters?project_id=test-project-id`。
+- Python fallback probe 是 path 形式：
+  `chapters-project-list-auth-guard-python-fallback` ->
+  `/api/chapters/project/test-project-id`。
+- 因此下一轮应先补同路径 Rust owner probe，再退役 project-list fallback；不要把不同
+  路径的 Rust probe 当作同一路由 cutover 证据。
+
+下一步：
+
+1. 给 `/api/chapters/project/test-project-id` 增加同路径 Rust auth-guard probe。
+2. 跑 `chapter_crud` focused tests 与 manifest validation。
+3. 若通过，再退役最后一个 direct `chapters-project-list-auth-guard-python-fallback`。
+
+### 2026-06-09：project-list path route-level Python fallback manifest retirement
+
+本轮按整块 route function group 完成 `chapters` direct fallback 收口。之前
+`chapters-list-auth-guard-rust` 只覆盖 query 形式
+`/api/chapters?project_id=test-project-id`，不能作为 path 形式
+`/api/chapters/project/test-project-id` 的 cutover 证据。因此本轮先新增同路径
+Rust probe `chapters-project-list-auth-guard-rust`，再退役
+`chapters-project-list-auth-guard-python-fallback`。
+
+改动范围：
+
+1. `deploy/strangler-gateway-probes.json`
+   - 新增：
+     `chapters-project-list-auth-guard-rust`。
+   - 删除：
+     `chapters-project-list-auth-guard-python-fallback`。
+   - 保留 query 形式 Rust probe：
+     `chapters-list-auth-guard-rust`。
+2. `backend/tests/test_tools/test_run_strangler_gateway_smoke.py`
+   - retired probe 集合新增 project-list path fallback probe。
+   - `phase5-p0-fallback` synthetic fixture 不再用已退役的 chapters direct fallback
+     probes 伪造 profile 覆盖。
+   - route-group 选择测试同步加入
+     `chapters-project-list-auth-guard-rust`。
+   - 测试断言全量 `python-fallback` owner count 已降为 34。
+3. `.trellis/spec/backend/quality-guidelines.md`
+   - 新增规则：同路径 Rust path probe 与 focused `chapter_crud` tests 存在后，
+     不应恢复 `chapters-project-list-auth-guard-python-fallback`，除非同一变更回滚
+     Rust path route owner 或匹配测试。
+
+行为与回滚边界：
+
+- 这不是删除 Python 源码；`backend/app/api/chapters.py` 仍作为 source map /
+  rollback shell。
+- public path、GET 方法、auth boundary 与 unauthorized JSON detail 由 Rust path
+  route probe 覆盖。
+- query 形式和 path 形式必须分别保留证据，不能互相冒充 cutover 或 rollback 证明。
+- 回滚只需要移除 path Rust probe、恢复 path Python fallback probe，并恢复对应
+  smoke-tool 断言。
+
+验证：
+
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+- `cargo test chapter_crud --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-project-list-fallback-retire" -- --nocapture`
+  -> 26 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-project-list-fallback-retire"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `git diff --check`
+  -> 本 checkpoint 收尾后执行。
+
+readiness 结果：
+
+- 全量 readiness owner count 从 `rust = 127`、`python-fallback = 35`
+  变为 `rust = 128`、`python-fallback = 34`。
+- 全量 readiness probes 保持 162，因为新增 1 条 Rust probe、删除 1 条 Python
+  fallback probe。
+- `chapters` owner count 从 `{"rust": 12, "python-fallback": 3}` 变为
+  `{"rust": 13, "python-fallback": 2}`。
+- `chapters` direct `phase5-p0-fallback` 已清零。
+- 剩余 `chapters` Python fallback 只剩两条 asymmetric task-not-found probes：
+  `chapters-batch-status-task-not-found-python-fallback`、
+  `chapters-batch-cancel-task-not-found-python-fallback`。
+
+下一步：
+
+1. 把 status/cancel task-not-found 作为一个 asymmetric error-shell route-function-group
+   包审计，不按名字直接删除。
+2. 只有确认 Rust status/cancel task-not-found response parity、rollback 语义和 focused
+   `chapter_batch_generation` tests 后，才 retire 或 repoint 这两条 probes。
+3. 两条 asymmetric probes 收口后，迁移重心应回到整文件/整模块 Rust owner：
+   `chapter_single_generation` 或共享 `chapter_generation`，避免继续做 helper 级小块迁移。
+
+### 2026-06-09：batch status/cancel task-not-found asymmetric fallback retirement
+
+本轮把剩余两个 `chapters` Python fallback probes 作为一个错误壳 route-function-group
+整体审计和迁移。Rust route owner 已经在
+`backend-rs/src/api/chapter_batch_generation.rs` 中接住 status 与 cancel 路由，并且
+内联 error mapper 已覆盖
+`LoadOwnedBatchGenerationTaskError::TaskNotFound -> 404 {"detail":
+"Batch generation task not found"}`。因此 manifest 不再需要用 Python fallback probe
+证明 task-not-found 404 行为，改为 Rust 登录态 asymmetric probes。
+
+改动范围：
+
+1. `deploy/strangler-gateway-probes.json`
+   - 重命名/改属：
+     `chapters-batch-status-task-not-found-python-fallback`
+     -> `chapters-batch-status-task-not-found-rust-asymmetric`。
+   - 重命名/改属：
+     `chapters-batch-cancel-task-not-found-python-fallback`
+     -> `chapters-batch-cancel-task-not-found-rust-asymmetric`。
+   - 两条 task-not-found probes 均保留 `phase5-p0-asymmetric`，并新增
+     `requires_login: true`，表示验证登录态 404 行为而不是未登录 auth guard。
+2. `backend/tests/test_tools/test_run_strangler_gateway_smoke.py`
+   - retired fallback 集合加入两条旧 Python task-not-found probes。
+   - readiness 断言更新为全量 `python-fallback = 32`。
+   - `chapters` route group 断言更新为 `{"rust": 15}` 且无 Python fallback。
+   - asymmetric profile synthetic fixture 改用 Rust task-not-found probe 名称。
+3. `.trellis/spec/backend/quality-guidelines.md`
+   - 新增规则：status/cancel task-not-found 404 合同由 Rust route owner 和 focused
+     `chapter_batch_generation` tests 保护，不应恢复对应 Python fallback probes，除非同一
+     变更回滚 Rust route owner 或错误映射测试。
+
+行为与回滚边界：
+
+- 这不是删除 Python 源码；`backend/app/api/chapter_batch_generation_routes.py` 仍作为
+  source map / rollback shell。
+- status 与 cancel 的 404 detail 保持
+  `Batch generation task not found`。
+- `phase5-p0-asymmetric` 仍然存在，但现在是 Rust-owned asymmetric evidence，不再是
+  Python fallback evidence。
+- 回滚只需要把两条 Rust asymmetric task-not-found probes 改回旧 Python fallback probe
+  名称和 owner，并恢复 smoke-tool 断言。
+
+验证：
+
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+- `cargo test chapter_batch_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-task-not-found-fallback-retire" -- --nocapture`
+  -> 358 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-batch-task-not-found-fallback-retire"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `git diff --check`
+  -> 本 checkpoint 收尾后执行。
+
+readiness 结果：
+
+- 全量 readiness owner count 从 `rust = 128`、`python-fallback = 34`
+  变为 `rust = 130`、`python-fallback = 32`。
+- 全量 readiness probes 保持 162，因为本轮只是将 2 条现有 probes 从 Python fallback
+  改属到 Rust。
+- `chapters` owner count 从 `{"rust": 13, "python-fallback": 2}` 变为
+  `{"rust": 15}`。
+- `chapters` route group 的 Python fallback probes 已清零。
+
+下一步：
+
+1. `chapters` manifest fallback 清理不再是主线；该 route group 已经在 readiness 层面
+   Rust-owned。
+2. 继续加速应回到整文件/整模块 Rust owner：优先
+   `chapter_single_generation` 的 prepare/write/runtime-state closeout，或共享
+   `chapter_generation` runtime/candidate/quality owner consolidation。
+3. 后续如果继续做 manifest fallback retirement，应切换到其他 route group，并沿用“同路径
+   Rust probe + focused Rust tests + rollback 边界”规则，避免再做 helper 级小碎片。
+
+### 2026-06-09：single-generation active gateway direct fallback smoke retirement
+
+本轮按 active route/readiness owner 整体收口
+`chapter_single_generation` 的主动网关 smoke。之前
+`chapter-single-generation-active-gateway-smoke-rust` 同时包含 Rust owner、
+fallback-freeze candidate、direct Python fallback 三个子探针，容易把“部署可回滚”
+误读成“健康探针仍需要证明 Python direct fallback 可执行”。本轮将 direct fallback
+子探针退役，active readiness 只保留 Rust owner 与 fallback-freeze candidate。
+
+改动范围：
+
+1. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+   - 移除 `chapter-single-generation-active-gateway-direct-fallback` 子探针。
+   - fallback executor 不再返回模拟 Python fallback 正文；如果被调用会返回错误，防止
+     readiness smoke 重新走 legacy direct fallback。
+   - fallback-freeze candidate 使用 Rust executor，验证
+     `rust_executor_enabled = true`、`fallback_on_rust_error = false`。
+   - readiness evidence 将 `python_fallback_removal_ready` 置为 `true`，表示 active
+     route 已消费 freeze candidate 配置。
+2. `backend-rs/src/api/health.rs`
+   - active gateway health payload 测试从 3 个子探针改为 2 个子探针。
+   - 保留 Rust owner chain、stream response、background response、terminal state
+     等 active route 消费证据。
+3. `deploy/strangler-gateway-probes.json`
+   - `chapter-single-generation-active-gateway-smoke-rust` 的
+     `expected_json.probe_count` 改为 2。
+   - `chapter-candidate-route-gateway-smoke-rust` 仍保持 3 个子探针；它的
+     `chapter-candidate-route-gateway-python-fallback` 仍是 candidate gateway rollback
+     evidence，不与本轮 active route direct fallback smoke 混用。
+4. `backend/tests/test_tools/test_run_strangler_gateway_smoke.py`
+   - single-generation active readiness 断言更新为只接受两个 Rust 子探针。
+   - 保留 candidate gateway smoke 的 3 探针断言，防止误删候选网关 fallback 证据。
+5. `.trellis/spec/backend/quality-guidelines.md`
+   - 新增规则：active route freeze candidate 验证通过后，不应恢复
+     `chapter-single-generation-active-gateway-direct-fallback` 作为 readiness 证据；
+     回滚边界通过 deployment/AppConfig gateway 配置保留。
+
+行为与回滚边界：
+
+- 这不是删除生产 Python 源码；Python compatibility shells 仍可作为 source map /
+  rollback reference。
+- readiness 不再把 direct Python fallback 当成 active route 切换证明。
+- 生产回滚仍通过部署配置中的 gateway enable/fallback 开关处理，而不是通过 health
+  smoke 继续执行 Python direct fallback。
+- 如果要回滚本 checkpoint，只需恢复 direct fallback 子探针、manifest 期望和对应测试；
+  不需要改变 Rust route owner 文件。
+
+验证：
+
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+- `cargo test chapter_single_generation_active_gateway --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-active-gateway-freeze" -- --nocapture`
+  -> 7 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-generation-active-gateway-freeze"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `git diff --check`
+  -> passed，仅有既有 CRLF warning。
+
+readiness 结果：
+
+- 全量 readiness owner count 保持 `rust = 130`、`python-fallback = 32`。
+- 全量 readiness probes 保持 162。
+- `chapters` route group 仍为 `{"rust": 15}`，无 Python fallback probes。
+- `chapter_single_generation` route group 仍为 `{"rust": 1}`，但其 active smoke 内部
+  direct fallback 子探针已退役。
+
+下一步：
+
+1. 不再把 single-generation active route 的 direct fallback smoke 当作后续迁移前置条件。
+2. 下一轮优先按整文件/整模块推进 `chapter_single_generation`
+   prepare/write/runtime-state closeout，尤其是仍作为 compatibility shell/source map 的
+   Python 逻辑。
+3. 如果继续做 readiness/fallback 方向，应直接处理真实 manifest owner 或 production
+   rollback branch，不再创建“健康探针证明 Python fallback 可执行”的中间证据。
+
+### 2026-06-09：batch resume 单章运行时显式 gateway config 切换
+
+本轮继续按“整条生产链路”推进 `chapter_single_generation` / `chapter_batch_generation`
+交叉边界，而不是搬运零散 helper。上一轮 active route readiness 已经退役 direct Python
+fallback smoke，但 batch resume 的单章恢复派发仍可通过
+`SingleGenerationRuntimeLifecyclePlan::from_runtime_launch(...)` 间接吃到默认 direct
+fallback gateway config。本轮把这条生产入口改成从路由/AppConfig 层显式传入
+`ChapterCandidateRouteGatewayConfig`。
+
+改动范围：
+
+1. `backend-rs/src/api/chapter_batch_generation.rs`
+   - `resume_batch_generation` 接收 `Extension<AppConfig>`。
+   - 使用 `build_chapter_candidate_route_gateway_config_from_app_config(&config)` 构造单章
+     candidate gateway config，并传给 resume write workflow。
+2. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+   - `resume_owned_batch_generation_write_workflow` 增加
+     `ChapterCandidateRouteGatewayConfig` 参数。
+   - 测试 helper 改为显式构造 fallback-disabled 的 single-generation gateway config。
+3. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+   - `prepare_batch_generation_resume`、`prepare_owned_batch_generation_resume`、
+     `BatchGenerationResumeLaunchPersistencePlan` 和
+     `ResumeExecutionDispatchPlan::dispatch` 全链路携带显式 gateway config。
+   - 单章恢复分支改为调用
+     `SingleGenerationRuntimeLifecyclePlan::from_runtime_launch_with_gateway_config(...)`。
+4. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+   - `default_single_generation_candidate_gateway_config` 与
+     `SingleGenerationRuntimeLifecyclePlan::from_runtime_launch` 标记为 `#[cfg(test)]`。
+   - 生产代码如果再尝试使用默认 direct fallback 构造器，会在编译期暴露。
+5. `.trellis/spec/backend/quality-guidelines.md`
+   - 新增迁移规则：batch resume 单章生产派发必须从 AppConfig/route 边界显式传入
+     `ChapterCandidateRouteGatewayConfig`，不得使用默认 direct-fallback config。
+
+行为与回滚边界：
+
+- 这不是删除 Python 源码；Python batch / chapter generation route 文件仍作为 source map
+  和 rollback reference。
+- 生产默认路径不再依赖“single generation direct AI fallback remains default”。
+- 回滚仍通过部署/AppConfig gateway 配置完成，而不是通过恢复生产代码里的默认 direct
+  fallback 构造器。
+- test-only 默认构造器保留，用于旧合同测试和 source-map 对照。
+
+验证：
+
+- `cargo test chapter_batch_generation_resume_task_command_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-resume-single-gateway-config" -- --nocapture`
+  -> 63 passed。
+- `cargo test chapter_batch_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-resume-single-gateway-config" -- --nocapture`
+  -> 358 passed。
+- `cargo test chapter_single_generation_runtime_state --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-resume-single-gateway-config" -- --nocapture`
+  -> 21 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-resume-single-gateway-config"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+
+readiness 结果：
+
+- 全量 readiness owner count 保持 `rust = 130`、`python-fallback = 32`。
+- 全量 readiness probes 保持 162。
+- 本轮不计为 manifest fallback shrink，因为没有修改 manifest owner。
+- 本轮计为 production fallback hardening：batch resume 单章运行时已经接入显式 Rust
+  gateway config，可继续推进真实 Python compatibility shell 的冻结/改指/删除。
+
+下一步：
+
+1. 对 `chapter_single_generation_stream_workflow_service.rs` 做同类收口审计：确认 stream
+   production path 只走 `from_runtime_launch_with_gateway_config`，test-only 默认构造器不进入
+   生产。
+2. 继续按整文件/整功能组推进 `chapter_generation` shared candidate/quality owner，把仍由
+   Python compatibility shell 描述的 provider/default/quality assumptions 固化到 Rust owner。
+3. 只有当 Rust owner、focused tests、AppConfig rollback 和 smoke evidence 同时就绪后，再处理
+   对应 Python compatibility shell 的冻结、改指或删除。
+
+### 2026-06-09：single-generation stream lifecycle 显式 gateway-only 收口
+
+本轮继续沿着 `chapter_single_generation` 整条 active stream 生产链路推进，而不是做
+helper 级优化。上一轮已经把 batch resume 单章路径改成显式
+`ChapterCandidateRouteGatewayConfig`；本轮把 stream lifecycle owner 也收紧为只能通过
+显式 gateway config 构造，避免测试或未来代码重新引用默认 direct Python fallback 配置。
+
+改动范围：
+
+1. `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+   - 删除 `SingleGenerationStreamLifecyclePlan::from_runtime_launch(...)` 默认构造器。
+   - 保留唯一构造入口：
+     `SingleGenerationStreamLifecyclePlan::from_runtime_launch_with_gateway_config(...)`。
+   - stream lifecycle 测试新增 fallback-disabled 的显式
+     `ChapterCandidateRouteGatewayConfig` helper。
+   - 所有 stream lifecycle spawn/owner 测试均改为显式传入 gateway config。
+2. `.trellis/spec/backend/quality-guidelines.md`
+   - 新增规则：stream lifecycle owner 不应重新提供默认 `from_runtime_launch`，测试也不应通过
+     `default_single_generation_candidate_gateway_config` 进入 direct fallback。
+
+行为与回滚边界：
+
+- 生产 stream route 原本已经从 `AppConfig` 构造 gateway config，本轮保持该行为不变。
+- 这不是 manifest fallback shrink，也不是删除 Python 源码；Python route / compatibility
+  文件仍作为 source map 和 rollback reference。
+- 回滚仍应通过 AppConfig gateway 开关完成，而不是在 stream lifecycle 文件里恢复默认 direct
+  fallback 构造器。
+
+验证：
+
+- `cargo test chapter_single_generation_stream_workflow --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-stream-gateway-cutover" -- --nocapture`
+  -> 17 passed。
+- `cargo test chapter_single_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-stream-gateway-cutover" -- --nocapture`
+  -> 99 passed。
+- `cargo test chapter_generation_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-stream-gateway-cutover" -- --nocapture`
+  -> 11 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-single-stream-gateway-cutover"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+
+readiness 结果：
+
+- 全量 readiness owner count 保持 `rust = 130`、`python-fallback = 32`。
+- 全量 readiness probes 保持 162。
+- 本轮不计为 manifest fallback shrink；它是 active stream owner hardening，让 stream 文件本身不再有
+  默认 direct fallback 构造入口。
+
+下一步：
+
+1. `chapter_single_generation` 的 active stream/background route gateway 入口已经足够明确；
+   后续不要继续在这个包里做小范围 helper 整理。
+2. 下一轮优先转向 `chapter_generation` shared candidate/quality owner consolidation，把 provider
+   default、candidate request、quality gate/runtime assumptions 作为一个共享功能组迁移和固化。
+3. 若要减少 `python-fallback = 32`，应选其他 route group 的真实 manifest owner/fallback shell，
+   不要再通过健康探针或测试便利构造器保留 direct Python fallback 证明。
+
+### 2026-06-09：shared candidate quality adapter attempt-offset 合同补齐
+
+本轮继续推进 `chapter_generation` shared candidate/quality owner consolidation，迁移单位是
+Rust 共享候选质量 adapter 的回调合同，而不是修改 Python compatibility shell。Python
+`candidate_service.py` 中的
+`quality_gate_plan_builder(candidate_metrics, attempt_offset)` 仍作为 source map；Rust owner
+现在显式承接 `attempt_offset`，避免后续 active route / batch candidate executor 迁移时丢失
+原始回调形状。
+
+改动范围：
+
+1. `backend-rs/src/services/chapter_candidate_quality_adapter_service.rs`
+   - `CandidateQualityGatePlanInput` 新增 `attempt_offset`。
+   - `ChapterCandidateQualityAdapter::build_quality_gate_plan(...)` 不再丢弃
+     `attempt_offset`，而是转交给 gate-plan resolver。
+   - runtime quality adapter callback bridge 测试确认
+     `quality_gate_plan_builder(metrics, attempt_offset)` 的 Rust 回调形状可被 executor
+     消费。
+2. `backend-rs/src/services/chapter_single_generation_candidate_quality_service.rs`
+   - `resolve_single_generation_quality_gate_plan(...)` 输出 JSON 包含
+     `attempt_offset`，作为 debug/readiness evidence。
+   - retry 语义不变：`attempt_offset` 不参与 `retry_count` 计算。
+3. `.trellis/spec/backend/quality-guidelines.md`
+   - 新增规范：shared candidate quality adapter 必须保留 Python
+     `quality_gate_plan_builder(candidate_metrics, attempt_offset)` 合同。
+   - 明确 `attempt_offset` 是合同/debug/readiness 字段，不是 retry budget。
+
+验证：
+
+- `cargo test chapter_candidate_quality_adapter --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-shared-candidate-quality-offset" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_single_generation_candidate_quality --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-shared-candidate-quality-offset" -- --nocapture`
+  -> 7 passed。
+- `cargo test chapter_candidate_route_gateway --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-shared-candidate-quality-offset" -- --nocapture`
+  -> 11 passed。
+- `cargo test chapter_candidate --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-shared-candidate-quality-offset" -- --nocapture`
+  -> 88 passed。
+- `cargo test chapter_generation_runtime --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-shared-candidate-quality-offset" -- --nocapture`
+  -> 18 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-shared-candidate-quality-offset"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+  -> passed。
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+
+readiness 结果：
+
+- 全量 readiness owner count 保持 `rust = 130`、`python-fallback = 32`。
+- 全量 readiness probes 保持 162。
+- 本轮不计为 manifest fallback shrink；它是 shared Rust owner 合同补齐。
+
+下一步：
+
+1. 不再围绕 candidate quality adapter 做 helper 级小修；该文件后续只接受整组 contract
+   closeout 或真实 consumer 切换。
+2. 下一块整包迁移优先选 `chapter_candidate_executor_default_dependency_service/` 或
+   `chapter_candidate_provider_stream_service.rs`，把 provider/default/quality/record 装配从
+   “Rust 中间桥”推进到单一 Rust owner。
+3. 如果目标转为缩减 `python-fallback = 32`，应切到真实 manifest fallback route group，
+   而不是继续在 `chapter_generation` 已为 Rust owner 的链路里做非计量优化。
+
+### 2026-06-09：candidate provider stream 有限 temperature 合同加固
+
+本轮继续按整文件 owner 推进 `chapter_generation` candidate executor Rust 迁移，选择
+`chapter_candidate_provider_stream_service.rs` 作为迁移单位。该文件已经是 active Rust
+candidate executor 的 provider stream owner，本轮不修改 Python compatibility shell，而是把
+`generate_kwargs -> AIConfig / provider request` 的边界收紧，避免无效 temperature 被透传到
+真实 AI provider 调用。
+
+改动范围：
+
+1. `backend-rs/src/services/chapter_candidate_provider_stream_service.rs`
+   - `apply_ai_config_overrides(...)` 现在要求 `temperature` 覆盖值必须能解析为有限
+     `f64`。
+   - `temperature` 和 `max_tokens` 均继续支持 JSON number / string 输入。
+   - 非有限 temperature 在 provider streaming 前返回稳定错误：
+     `candidate provider temperature must be a finite number`。
+   - 既有 `max_tokens` 正整数校验、tools payload 解析和 max-output char 限制保持不变。
+2. `.trellis/spec/backend/quality-guidelines.md`
+   - 新增 provider stream owner 规范：provider request resolution 必须拒绝非有限
+     temperature，不得把该逻辑挪回 route、compat shell 或 production adapter。
+3. `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+   - 记录本轮 checkpoint，明确这是 provider stream Rust owner 合同加固，不是 manifest
+     fallback shrink。
+
+验证：
+
+- `cargo test chapter_candidate_provider_stream --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-provider-stream-contract" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_candidate_executor_default_dependency --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-provider-stream-contract" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_candidate_executor_production_adapter --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-provider-stream-contract" -- --nocapture`
+  -> 7 passed。
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+  -> passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-provider-stream-contract"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+
+readiness 结果：
+
+- 全量 readiness owner count 保持 `rust = 130`、`python-fallback = 32`。
+- 全量 readiness probes 保持 162。
+- 本轮不计为 manifest fallback shrink；它是 provider stream Rust owner 合同加固。
+
+下一步：
+
+1. 如果继续 `chapter_generation` owner consolidation，下一块应做更大的 provider-output
+   runtime_state/progress 贯通，而不是继续给 provider kwargs 添零散校验。
+2. 如果目标是快速降低 `python-fallback = 32`，应切到 `auth`、`users`、`characters`、
+   `outlines` 或 `book_import` 中的真实 fallback route group，按 route group 整组退休。
+3. 不要再把修改 Python source-map 文件当成迁移进度；除非同轮完成 Rust owner、manifest
+   readiness 和 rollback 边界切换。
+
+### 2026-06-09：candidate provider-output runtime/progress 贯通收口
+
+本轮继续沿着 `chapter_generation` candidate executor 整组 Rust owner 推进，迁移单位不是
+Python helper，而是 provider-output runtime/progress 在 Rust candidate 生成、修复和默认
+provider owner 之间的闭环。上一轮已经收紧 provider stream request；本轮把 provider
+stream 输出阶段更新过的 `runtime_state` 从 output owner 返回，并一路写回 generation、
+word-budget repair、targeted final repair、default dependency wiring 和 provider stream
+collection 的 active request。
+
+改动范围：
+
+1. `backend-rs/src/services/chapter_candidate_output_service.rs`
+   - `ChapterCandidateOutput` 新增 `runtime_state: Option<Value>`。
+   - `collect_generation_candidate_output_from_stream(...)` 在有输入 runtime state 时返回更新后的
+     runtime state snapshot。
+2. `backend-rs/src/services/chapter_candidate_generation_service.rs`
+   - `ChapterCandidateOutputCollectInput` 新增 `runtime_state`。
+   - 初始候选和 rerank retry 候选的 collect 输入都会携带当前 runtime state。
+   - collect 完成后把 output owner 返回的 runtime state 写回 stage request。
+3. `backend-rs/src/services/chapter_candidate_word_budget_repair_service.rs`
+   - word-budget repair collect 输入携带 runtime state。
+   - 修复输出后回写 provider-output runtime state。
+4. `backend-rs/src/services/chapter_candidate_targeted_final_repair_service.rs`
+   - targeted final repair collect 输入携带 runtime state。
+   - targeted repair 输出后回写 provider-output runtime state。
+5. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+   - default collect input 和 generation/word-budget/targeted mapping 函数继续传递 runtime
+     state。
+   - executor 默认依赖测试明确区分 provider-output pass-through 字段和 finalize
+     record-sync 字段。
+6. `backend-rs/src/services/chapter_candidate_provider_stream_service.rs`
+   - default provider stream collect 把 mutable runtime state 交给 output owner，让
+     `current_chars`、`chunk_count`、candidate counters 和 provider progress 字段能沿 Rust
+     owner 回流。
+
+行为边界：
+
+- Python `chapter_candidate_*` 服务仍作为 source map / rollback reference，没有在本轮编辑。
+- `current_chars` 和 `chunk_count` 既是 provider-progress 字段，也是 final record-sync 字段；
+  executor/finalize 末端可以按最终 winner candidate 覆盖它们，这不是回归。
+- 如果要证明 provider-output runtime state 没有丢，应在 generation/repair/provider 层断言，
+  或使用不被 finalize 覆盖的稳定 provider 字段。
+- 本轮不修改 manifest owner，不减少 `python-fallback` 数字。
+
+验证：
+
+- `cargo test chapter_candidate_executor_default_dependency --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-provider-output-runtime" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_candidate --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-provider-output-runtime" -- --nocapture`
+  -> 90 passed。
+- `cargo test chapter_candidate_executor_production_adapter --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-provider-output-runtime" -- --nocapture`
+  -> 7 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-provider-output-runtime"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+  -> passed。
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+
+readiness 结果：
+
+- 全量 readiness owner count 保持 `rust = 130`、`python-fallback = 32`。
+- 全量 readiness probes 保持 162。
+- 本轮计为 Rust provider-output runtime/progress owner consolidation，不计为 manifest
+  fallback shrink。
+
+后续规划调整：
+
+1. `chapter_generation` candidate provider-output/progress 小闭环已经完成；不要继续用零散
+   provider helper 修补来冒充迁移进度。
+2. 如果目标是更快降低 `python-fallback = 32`，下一轮应切到真实 fallback route group，优先按
+   `auth`、`users`、`characters`、`outlines` 或 `book_import` 的 route group 整组 retirement
+   规划。
+3. 如果仍留在 chapter 生成域，下一轮应选择更大的 active owner 边界，例如 record/finalize 与
+   active route smoke/rollback 的整组闭环，而不是只改单个 runtime 字段。
+4. 所有 Rust 编译验证继续使用 E 盘 `--target-dir`，不要把 build artifacts 放到 C 盘。
+
+### 2026-06-09：candidate event/progress projection Rust owner 迁移
+
+本轮继续沿 `chapter_generation` / `chapter_batch_generation` 交叉边界推进，但迁移单位改为
+一个完整 event/progress projection owner，而不是继续修补 provider helper。Python
+`chapter_candidate_event_service.py` 中的 batch start、candidate progress、selected
+candidate progress、chunk event、single-generation progress kwargs，以及
+`chapter_candidate_view_service.py` 中面向事件的 selected-candidate view snapshot 语义，已被迁移到
+`backend-rs/src/services/chapter_candidate_event_service.rs`。
+
+本轮不是“只写了 Rust helper”：`chapter_batch_generation_read_context_service.rs` 已经接入
+`build_batch_generation_stream_progress_event(...)`，不再本地手写 generic stream progress JSON。
+这样 status/read-context owner 至少有一个真实 Rust 消费点，后续 batch candidate flow 可以继续把
+selected-candidate、chunk 和 single-generation progress kwargs emission 接到同一个 Rust owner。
+
+改动范围：
+
+1. `backend-rs/src/services/chapter_candidate_event_service.rs`
+   - 新增 `BatchGenerationStreamProgressEventInput` 与 batch stream progress event builder。
+   - 新增 batch start、candidate progress、selected-candidate progress、chunk event builder。
+   - 新增 `build_chapter_generation_progress_kwargs(...)`，保留中文单章生成进度 kwargs 合同。
+   - 新增 `snapshot_chapter_candidate_event_view(...)`，保留 Python truthy/index/path 归一化语义。
+2. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+   - generic stream progress event 改为调用 Rust event owner。
+3. `backend-rs/src/services/mod.rs`
+   - 注册 `chapter_candidate_event_service`。
+4. `.trellis/spec/backend/quality-guidelines.md`
+   - 新增 candidate event/progress projection owner 规则，要求后续状态、stream、batch candidate
+     emission 不再各自复制 Python-era event JSON。
+
+行为边界：
+
+- Python `chapter_candidate_event_service.py` 与 `chapter_candidate_view_service.py` 暂时保留为
+  source map / rollback reference，没有在本轮删除。
+- selected-candidate、chunk、single-generation progress kwargs builder 已经有 Rust 合同测试，但除
+  generic stream progress 之外，还没有全部接入生产 Rust batch candidate emission path。
+- 因此本轮计为 Rust event/progress projection owner 迁移，不计为 manifest fallback shrink。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+  -> passed。
+- `cargo test chapter_candidate_event --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-event-owner" -- --nocapture`
+  -> 7 passed。
+- `cargo test chapter_batch_generation_read_context --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-event-owner" -- --nocapture`
+  -> 44 passed。
+- `cargo test chapter_candidate --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-event-owner" -- --nocapture`
+  -> 97 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-event-owner"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+
+readiness 结果：
+
+- 全量 readiness owner count 保持 `rust = 130`、`python-fallback = 32`。
+- 全量 readiness probes 保持 162。
+- 本轮不减少 Python fallback 数量，因为没有修改 manifest owner，也没有冻结/改指/删除 fallback route
+  branch。
+
+后续规划调整：
+
+1. 如果继续 chapter 域，下一块应按 batch candidate event emission / selected-candidate publish
+   整组接入 Rust event owner，而不是继续新增未消费 builder。
+2. 如果目标是更快降低 `python-fallback = 32`，应切到真实 fallback route group，按
+   `auth`、`users`、`characters`、`outlines` 或 `book_import` 这类整组 route/fallback owner 推进。
+3. 后续汇报进度必须分清三类数字：Rust owner 覆盖、active-path consumer 接入、manifest fallback
+   shrink；不要把 Rust 合同测试通过直接等价为 Python fallback 减少。
+
+### 2026-06-09：selected candidate event batch 决策迁入 Rust owner
+
+本轮继续推进上一节的 candidate event/progress projection owner，但不再新增零散 payload helper。
+迁移单位是 Python `batch_generation_candidate_service.py` 里的
+`emit_batch_generation_selected_candidate_events(...)` 事件批次决策：是否有 `stream_task_id`、是否发
+selected-candidate progress、是否根据 `stream_chunks` 和 `quality_gate_plan.action` 继续发 chunk
+events。该决策现在由 Rust
+`backend-rs/src/services/chapter_candidate_event_service.rs` 的
+`build_batch_generation_selected_candidate_event_batch(...)` 统一拥有。
+
+改动范围：
+
+1. `backend-rs/src/services/chapter_candidate_event_service.rs`
+   - 新增 `BatchGenerationSelectedCandidateEventBatchInput`。
+   - 新增 `BatchGenerationSelectedCandidateEventBatch`。
+   - 新增 `build_batch_generation_selected_candidate_event_batch(...)`。
+   - 保留 Python 语义：缺少 `stream_task_id` 时不发事件；有 task 时先发 selected progress；
+     `stream_chunks=true` 且 `str(action or "continue") == "continue"` 时才追加 chunks。
+2. `.trellis/spec/backend/quality-guidelines.md`
+   - 新增 selected-event batch rule：生产 publisher 后续只能 fan out Rust owner 返回的 event batch，
+     不应重新拆分 stream gating / chunk gating / quality-gate action 判断。
+3. `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+   - 记录 checkpoint，并明确这仍不是 manifest fallback shrink。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"`
+  -> passed。
+- `cargo test chapter_candidate_event --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-event-batch-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo test chapter_candidate --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-event-batch-owner" -- --nocapture`
+  -> 101 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mumunovel-candidate-event-batch-owner"`
+  -> passed，只有既有 unused/dead-code warnings。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+
+readiness 结果：
+
+- 全量 readiness owner count 保持 `rust = 130`、`python-fallback = 32`。
+- 全量 readiness probes 保持 162。
+- 本轮是 Rust event-batch owner 迁移，不修改 manifest owner，不减少 Python fallback。
+
+后续规划调整：
+
+1. 如果继续这一条线，下一步必须接真实 Rust batch selected-candidate publisher / emission path，
+   让 publisher 只负责 fan out event batch。
+2. 如果当前 Rust 端没有生产 publisher 可接，不要继续堆 event helper；应切到 `auth`、`users`、
+   `characters`、`outlines`、`book_import` 的真实 fallback route group，按整组 Python fallback
+   shrink 推进。
+3. 本轮后 `chapter_candidate_event_service.rs` 已经拥有 payload 构造和批次决策两层，不应再在
+   read-context、batch workflow 或 publisher 中复制 selected-candidate/chunk event 判断。
+
+### 2026-06-09：users route group Python fallback 证据整组退役
+
+本轮从“继续堆 Rust helper”切到可量化 fallback shrink，按 route group 整体移除 `users`
+的 Python fallback readiness 证据。`backend/app/api/users.py` 没有删除，仍作为 legacy
+source map / rollback reference；真正的 readiness owner 是 `backend-rs/src/api/users.rs`。
+
+退役范围：
+
+1. `users-current-auth-guard-python-fallback`
+2. `users-list-auth-guard-python-fallback`
+3. `users-set-admin-auth-guard-python-fallback`
+4. `users-reset-password-auth-guard-python-fallback`
+
+当前 readiness 影响：
+
+- `deploy/strangler-gateway-probes.json` 全量 probes 从 162 降为 158。
+- 全量 owner count 从 `rust = 130`、`python-fallback = 32` 更新为
+  `rust = 130`、`python-fallback = 28`。
+- `users` route group 现在是 Rust-only readiness group：
+  `owner_counts = {'rust': 4}`，`has_python_fallback = false`。
+
+验证：
+
+- `python -m json.tool "deploy/strangler-gateway-probes.json" > $null` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed。
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed，1 warning。
+
+后续规划调整：
+
+1. 下一轮如果目标是继续快速降低 `python-fallback = 28`，优先选择 `outlines`、
+   `book_import`、`characters` 或剩余 `auth` fallback route group，按整组 manifest
+   owner/route owner/rollback evidence 推进。
+2. 不要把继续优化 Rust 内部 helper 当作 fallback 数字下降；只有 fallback probe 被移除、
+   repoint、冻结，或真实 fallback branch 被删除/改指，才更新 `python-fallback` 计数。
+3. `users-*python-fallback` probe 不应恢复，除非同一变更回滚
+   `backend-rs/src/api/users.rs` 或对应 Rust readiness probe。
+
+### 2026-06-09：book_import route group Python fallback 证据整组退役
+
+本轮继续按 route group 整体推进，移除 `book_import` 的 7 个 auth-guard-only Python
+fallback readiness probes。Python `backend/app/api/book_import.py`、
+`backend/app/services/book_import_service.py`、`backend/app/schemas/book_import.py`
+没有删除，仍作为 source map / rollback reference；当前 readiness owner 是
+`backend-rs/src/api/book_import.rs` 及其 Rust service owner 组。
+
+退役范围：
+
+1. `book-import-create-task-auth-guard-python-fallback`
+2. `book-import-task-status-auth-guard-python-fallback`
+3. `book-import-preview-auth-guard-python-fallback`
+4. `book-import-cancel-auth-guard-python-fallback`
+5. `book-import-apply-auth-guard-python-fallback`
+6. `book-import-retry-stream-auth-guard-python-fallback`
+7. `book-import-apply-stream-auth-guard-python-fallback`
+
+当前 readiness 影响：
+
+- `deploy/strangler-gateway-probes.json` 全量 probes 从 158 降为 151。
+- 全量 owner count 从 `rust = 130`、`python-fallback = 28` 更新为
+  `rust = 130`、`python-fallback = 21`。
+- `book_import` route group 现在是 Rust-only readiness group：
+  `owner_counts = {'rust': 7}`，`has_python_fallback = false`。
+
+验证：
+
+- `python -m json.tool "deploy/strangler-gateway-probes.json" > $null` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed。
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed，1 warning。
+
+后续规划调整：
+
+1. 下一轮继续降低 `python-fallback = 21` 时，优先选择 `characters` 或 `outlines`
+   这类仍有 Rust/Python fallback 对称 auth-guard probes 的 route group。
+2. `auth` 仍有 9 个 Python fallback probes，但认证行为差异风险更高，应作为单独整组
+   cutover/fallback policy 处理，不要和普通业务 route group 混在同一轮。
+3. `book-import-*python-fallback` probes 不应恢复，除非同一变更回滚
+   `backend-rs/src/api/book_import.rs` 或对应 Rust readiness probes。
+
+### 2026-06-09：outlines route group Python fallback 证据整组退役
+
+本轮继续按 route group 整体推进，移除 `outlines` 的 5 个 auth-guard-only Python
+fallback readiness probes。Python `backend/app/api/outlines.py`、
+`backend/app/models/outline.py`、`backend/app/schemas/outline.py` 以及相关 outline
+runtime/quality helper 没有删除，仍作为 source map / rollback reference；当前
+readiness owner 是 `backend-rs/src/api/outlines.rs` 及 Rust outline service owner 组。
+
+退役范围：
+
+1. `outlines-project-list-auth-guard-python-fallback`
+2. `outlines-list-auth-guard-python-fallback`
+3. `outlines-generate-stream-auth-guard-python-fallback`
+4. `outlines-batch-expand-stream-auth-guard-python-fallback`
+5. `outlines-create-chapters-from-plans-auth-guard-python-fallback`
+
+当前 readiness 影响：
+
+- `deploy/strangler-gateway-probes.json` 全量 probes 从 151 降为 146。
+- 全量 owner count 从 `rust = 130`、`python-fallback = 21` 更新为
+  `rust = 130`、`python-fallback = 16`。
+- `outlines` route group 现在是 Rust-only readiness group：
+  `owner_counts = {'rust': 5}`，`has_python_fallback = false`。
+
+验证：
+
+- `python -m json.tool "deploy/strangler-gateway-probes.json" > $null` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed。
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed，1 warning。
+
+后续规划调整：
+
+1. 下一轮继续降低 `python-fallback = 16` 时，优先选择 `characters`。它仍有 6 个
+   fallback probes，但包含 `validate-import` asymmetric/public path，需要先按整组
+   route policy 明确是否同时退役 asymmetric fallback。
+2. `auth` 仍有 9 个 Python fallback probes，是剩余最大块，但涉及登录、密码和 callback
+   行为差异，应作为单独 auth cutover 包处理。
+3. `outlines-*python-fallback` probes 不应恢复，除非同一变更回滚
+   `backend-rs/src/api/outlines.rs` 或对应 Rust readiness probes。
+
+### 2026-06-09：characters regular auth-guard Python fallback 功能组退役
+
+本轮按 route function group 推进，移除 `characters` 的 5 个普通 auth-guard-only Python
+fallback readiness probes。`characters-validate-import-*` 没有一并删除，因为它是明确的
+asymmetric policy：Rust 侧验证 public validate-import 路径返回 200，Python fallback
+侧保留 legacy auth-guard 401 作为行为差异证据。
+
+Python `backend/app/api/characters.py`、`backend/app/models/character.py`、
+`backend/app/schemas/character.py` 以及角色生成/上下文/状态相关 Python service 没有删除，
+仍作为 source map / rollback reference；当前 regular route readiness owner 是
+`backend-rs/src/api/characters.rs` 及 `backend-rs/src/services/character_service.rs`。
+
+退役范围：
+
+1. `characters-project-list-auth-guard-python-fallback`
+2. `characters-list-auth-guard-python-fallback`
+3. `characters-generate-stream-auth-guard-python-fallback`
+4. `characters-export-auth-guard-python-fallback`
+5. `characters-import-auth-guard-python-fallback`
+
+保留范围：
+
+- `characters-validate-import-auth-guard-python-fallback`
+  继续与 `characters-validate-import-public-rust` 组成 `phase5-p1-asymmetric` evidence。
+
+当前 readiness 影响：
+
+- `deploy/strangler-gateway-probes.json` 全量 probes 从 146 降为 141。
+- 全量 owner count 从 `rust = 130`、`python-fallback = 16` 更新为
+  `rust = 130`、`python-fallback = 11`。
+- `characters` route group 现在是 regular Rust-owned、asymmetric fallback-retained：
+  `owner_counts = {'rust': 6, 'python-fallback': 1}`，普通 fallback profile 为空，
+  asymmetric profile 保留 `phase5-p1-asymmetric`。
+
+验证：
+
+- `python -m json.tool "deploy/strangler-gateway-probes.json" > $null` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed。
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed，1 warning。
+
+后续规划调整：
+
+1. 现在普通业务 route group fallback 已基本清空，剩余 `python-fallback = 11` 主要来自
+   `auth = 9`、`characters validate-import asymmetric = 1`、`python-fallback-root = 1`。
+2. 下一轮若继续快速下降，应进入 `auth` 整组 cutover；但它涉及 logout、user、password、
+   refresh、callback、local/bind login，需要按 auth policy 包整体处理，不要和普通业务
+   route group 混在同一轮。
+3. `characters-*` regular fallback probes 不应恢复，除非同一变更回滚
+   `backend-rs/src/api/characters.rs` 或对应 Rust readiness probes。`validate-import`
+   asymmetric probe 的去留应由 public validation route policy 单独决定。
+
+### 2026-06-09：auth route group Python fallback 证据整组退役
+
+本轮进入剩余最大块 `auth`，按 route group 整体移除 9 个 Python fallback readiness
+probes。Rust 侧已经拥有 config、logout、LinuxDo URL misconfiguration、current user、
+password status/set/initialize、refresh、callback missing-code、local/bind invalid login 的
+readiness evidence。
+
+Python `backend/app/api/auth.py`、`backend/app/middleware/auth_middleware.py`、
+`backend/app/user_manager.py`、`backend/app/user_password.py`、
+`backend/app/services/oauth_service.py` 没有删除，仍作为 source map / rollback
+reference；当前 readiness owner 是 `backend-rs/src/api/auth.rs`、
+`backend-rs/src/middleware/auth.rs`、`backend-rs/src/services/auth.rs` 和
+`backend-rs/src/services/auth_password_workflow_service.rs`。
+
+退役范围：
+
+1. `auth-logout-public-python-fallback`
+2. `auth-user-auth-guard-python-fallback`
+3. `auth-password-status-auth-guard-python-fallback`
+4. `auth-password-set-auth-guard-python-fallback`
+5. `auth-password-initialize-auth-guard-python-fallback`
+6. `auth-refresh-auth-guard-python-fallback`
+7. `auth-callback-missing-code-python-fallback`
+8. `auth-local-login-invalid-credentials-python-fallback`
+9. `auth-bind-login-invalid-credentials-python-fallback`
+
+当前 readiness 影响：
+
+- `deploy/strangler-gateway-probes.json` 全量 probes 从 141 降为 132。
+- 全量 owner count 从 `rust = 130`、`python-fallback = 11` 更新为
+  `rust = 130`、`python-fallback = 2`。
+- `auth` route group 现在是 Rust-only readiness group：
+  `owner_counts = {'rust': 11}`，`has_python_fallback = false`。
+
+验证：
+
+- `python -m json.tool "deploy/strangler-gateway-probes.json" > $null` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed。
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q`
+  -> 42 passed，1 warning。
+
+后续规划调整：
+
+1. 当前 `python-fallback = 2` 已不是普通 route group backlog，只剩
+   `characters-validate-import-auth-guard-python-fallback` 和 `python-fallback-root`。
+2. `characters validate-import` 的去留需要 public validation route policy 决定：若 Rust
+   public validate-import 是最终策略，可以单独退役该 asymmetric fallback probe。
+3. `python-fallback-root` 是根路径 / fallback process sentinel；若后续要降到 0，需要先确认
+   deploy profile 不再需要 Python fallback process 存活探针。
+4. `auth-*python-fallback` probes 不应恢复，除非同一变更回滚 Rust auth route/middleware
+   owner 或对应 Rust readiness probes。
+
+### 2026-06-09：characters validate-import asymmetric Python fallback 证据退役
+
+本轮继续按 route policy 整体推进，移除
+`characters-validate-import-auth-guard-python-fallback`。Rust 侧
+`characters-validate-import-public-rust` 继续作为 public validate-import 路径的
+`phase5-p1-asymmetric` evidence；Python `characters` route/model/schema/service 仍作为
+source map / rollback reference，没有删除生产 Python 源码。
+
+当前 readiness 影响：
+
+- `deploy/strangler-gateway-probes.json` 全量 probes 从 132 降为 131。
+- 全量 owner count 从 `rust = 130`、`python-fallback = 2` 更新为
+  `rust = 130`、`python-fallback = 1`。
+- `characters` route group 现在是 Rust-only readiness group：
+  `owner_counts = {'rust': 6}`，`has_python_fallback = false`，并继续保留
+  `characters-validate-import-public-rust` 作为 asymmetric/public route policy evidence。
+
+后续规划调整：
+
+1. `characters-validate-import-auth-guard-python-fallback` 不应恢复，除非同一变更回滚
+   Rust public validate-import route policy 或 `backend-rs/src/api/characters.rs`。
+2. 当前唯一剩余顶层 Python fallback readiness owner 是 `python-fallback-root`；它是
+   `/` deploy/static root sentinel，不是普通业务 route group backlog。
+
+### 2026-06-09：root deploy Python fallback owner 迁为 Rust SPA/static owner
+
+本轮把最后一个顶层 Python fallback readiness owner
+`python-fallback-root` 迁为 Rust owner `rust-spa-root`。Rust
+`backend-rs/src/api/router.rs` 已通过 `static_dir`、`/assets` 和 SPA fallback 服务
+`backend/static/index.html`，因此 `/` 根路径可以由 Rust 承担 deploy/business
+入口 readiness。该动作是部署入口 owner cutover，不是删除 Python 源码。
+
+当前 readiness 影响：
+
+- `deploy/strangler-gateway-probes.json` 全量 probes 保持 131。
+- 全量 owner count 从 `rust = 130`、`python-fallback = 1` 更新为
+  `rust = 131`、`python-fallback = 0`。
+- `rust-spa-root` 保留 `deploy` 和 `business` profiles，但不再挂 `route-groups`：
+  `/` 是部署/静态入口，不应继续污染 route group 迁移剩余量统计。
+
+后续规划调整：
+
+1. 后续“Python -> Rust 迁移进度”默认以 `python-fallback = 0` 为当前 manifest
+   readiness baseline；不要再把保留的 Python source map 文件数等同于 active fallback
+   backlog。
+2. 下一阶段应转为 Rust owner 质量收口：登录态 business smoke、SSE/task lifecycle、
+   schema owner 风险和删除/冻结 Python source map 的显式 rollback policy。
+3. `python-fallback-root` 不应恢复，除非同一变更回滚
+   `backend-rs/src/api/router.rs` 的 static/SPA fallback route owner。
+
+### 2026-06-09：chapter_single_generation runtime restore Rust owner 收口
+
+本轮在 manifest readiness 已达到 `rust = 131`、`python-fallback = 0` 后继续推进，
+迁移指标不再是 fallback 数量下降，而是 `chapter_single_generation` 整模块 Rust owner
+质量收口。Python `chapter_generation_routes.py`、`chapters.py`、
+`chapter_generation_route_compat_service.py` 和 stream `entry_service.py` 没有删除，仍作为
+source map / rollback reference。
+
+Rust owner 收口范围：
+
+1. `backend-rs/src/api/chapter_generation_routes.rs`
+2. `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+3. `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+4. `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+5. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+
+本轮实际变更集中在
+`backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`：
+
+- 移除不再被生产/测试路径消费的 runtime restore accessor。
+- 将 runtime seed-source diagnostic 和 restored-launch `into_parts()` 分解接口限制为
+  `#[cfg(test)]`，避免把测试辅助暴露成生产 owner surface。
+- 保持 background launch parts 对 task seed、startup snapshot、runtime input、
+  persist/dispatch 的连贯 ownership。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_single_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-single-generation-owner" -- --nocapture`
+  -> 99 passed。
+- `cargo test chapter_generation_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-single-generation-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-single-generation-owner"`
+  -> passed；剩余 warning 为既有 unused/dead-code 噪声，不属于本轮清理新增。
+
+后续规划调整：
+
+1. `python-fallback = 0` 是当前 manifest readiness baseline；后续不要再用保留的
+   Python source-map 文件数量冒充 active fallback backlog。
+2. 下一阶段优先按整模块推进：logged-in business smoke、single-generation SSE/task
+   lifecycle、schema owner 风险、以及 Python source-map freeze/delete rollback policy。
+3. 如果要删除或冻结 Python source-map 文件，必须同轮写明 rollback 边界并验证对应 Rust
+   route/service owner。
+
+### 2026-06-09：chapter_single_generation active gateway smoke owner 加固
+
+本轮继续在 `python-fallback = 0` baseline 之后做 Rust owner 质量收口，不修改 Python 源码。
+迁移单位是整个
+`backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+active gateway smoke owner，以及它在 health endpoint 和 manifest 中暴露的 readiness
+contract。
+
+变更范围：
+
+1. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+2. `backend-rs/src/api/health.rs`
+3. `deploy/strangler-gateway-probes.json`
+4. `backend/tests/test_tools/test_run_strangler_gateway_smoke.py`
+
+收口结果：
+
+- 移除 active smoke owner 文件级 `#![allow(dead_code)]`，避免未来 test-only / forwarding-only
+  surface 被宽免掩盖。
+- `covered_rust_owners` 去重，并继续排除已退休的
+  `chapter_single_generation_stream_success_response_service`、
+  `chapter_single_generation_background_response_service`、
+  `chapter_single_generation_terminal_state_service`。
+- `python_source_map` 补齐
+  `chapter_generation_routes.py`、`chapters.py`、
+  `chapter_generation_route_compat_service.py` 和 stream `entry_service.py`。
+- 新增 `python_source_map_policy` 与 `rollback_policy`，明确这些 Python 文件当前只是
+  source map / rollback reference；freeze/delete 必须在同轮写明 rollback 边界并验证 Rust
+  owner。
+- manifest 仍保持 `rust = 131`、`python-fallback = 0`，本轮不计为 fallback shrink。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_single_generation_active_gateway_smoke --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-single-generation-smoke-owner" -- --nocapture`
+  -> 7 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-single-generation-smoke-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-single-generation-smoke-owner"`
+  -> passed；剩余 warning 为既有 unused/dead-code 噪声。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed。
+- `python -m pytest backend/tests/test_tools/test_run_strangler_gateway_smoke.py -q -k "single_generation_active_gateway or manifest"`
+  -> 17 passed，25 deselected，1 warning。
+
+后续规划调整：
+
+1. 后续如果冻结/删除 `chapter_single_generation` Python source-map 文件，应以本轮
+   active gateway smoke owner 的 `python_source_map_policy` 和 `rollback_policy` 为证据。
+2. 真正继续“整块迁移”时，优先补登录态 stream/background business smoke 或转入另一个
+   Rust owner 包，而不是继续做没有 rollback/smoke 增益的 helper 微清理。
+
+### 2026-06-09：chapter_single_generation runtime restore 私有 API 收口
+
+本轮继续按整文件 owner 推进，迁移单位是
+`backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`。当前
+manifest baseline 已经是 `rust = 131`、`python-fallback = 0`，所以本轮目标不是再压缩
+fallback 数，而是把 Rust runtime restore owner 的生产 API 面收紧，避免迁移后继续暴露
+Python 阶段的手工 runtime-state 拼装入口。
+
+Python source map 保持不变：
+
+1. `backend/app/api/chapter_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+4. `backend/app/services/chapter_generation/stream/entry_service.py`
+
+收口结果：
+
+- `build_single_generation_runtime_state_payload_from_sources`、
+  `build_single_generation_runtime_state_payload_from_parts`、
+  `resolve_single_generation_runtime_compat_options_from_seed`、
+  `build_single_generation_runtime_launch_input` 从 `pub(crate)` 降为当前文件私有函数。
+- 生产路径仍通过 Rust runtime restore + prepare/write workflow owner 生成 startup snapshot、
+  runtime launch input、background launch parts 和 active gateway smoke payload。
+- `from_parts`、`into_parts`、`startup_snapshot_plan()` 继续限制为测试辅助面，生产代码不能再依赖
+  Python 风格的手工拆装恢复态入口。
+- 保留跨 owner 仍被真实使用的 Rust API：pending checkpoint、startup snapshot plan、
+  background launch parts 和 active gateway smoke 的 background create response payload。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_single_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-single-generation-runtime-owner-closeout" -- --nocapture`
+  -> 99 passed。
+- `cargo test chapter_generation_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-single-generation-runtime-owner-closeout" -- --nocapture`
+  -> 11 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-single-generation-runtime-owner-closeout"`
+  -> passed；剩余 warning 为既有 unused/dead-code 噪声。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`。
+
+后续规划调整：
+
+1. 下一步如果继续 `chapter_single_generation`，优先补登录态 stream/background business
+   smoke，而不是继续清理没有 smoke/rollback 增益的内部 helper。
+2. 如果短期无法稳定启动登录态 harness，则转到下一个整 route/service package，选择仍有
+   active smoke、rollback 或 source-map freeze 决策缺口的 owner。
+3. Python source-map 文件只在同轮具备 rollback policy 和 Rust owner 验证时冻结或删除。
+
+### 2026-06-09：chapter_candidate_event owner dead-code 边界收口
+
+本轮从 `chapter_single_generation` 私有 API 收口切换到共享
+`chapter_candidate_event` Rust owner 包。迁移单位是整个候选事件投影 owner 文件及其
+真实 read-context 消费者；目标不是继续压缩 fallback 数，而是让已迁移 Rust owner 的
+生产消费面和待接入面更清楚。当前 manifest baseline 仍为 `rust = 131`、
+`python-fallback = 0`。
+
+Python source map 保持不变：
+
+1. `backend/app/services/chapter_candidate_event_service.py`
+2. `backend/app/services/batch_generation_candidate_service.py` 中
+   selected-candidate event emitter 对应逻辑
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_event_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+
+收口结果：
+
+- 移除 `chapter_candidate_event_service.rs` 文件级 `#![allow(dead_code)]`，避免整个
+  owner 继续被宽免。
+- 已被真实 read-context/status stream owner 消费的
+  `build_batch_generation_stream_progress_event` 保持正常 Rust dead-code 检查。
+- 只对尚未接入生产 publisher 的 selected-candidate/chunk event batch 投影函数组保留局部
+  `#[allow(dead_code)]`，让剩余迁移缺口显式且范围可控。
+- 没有修改 Python source-map 文件，也没有改变 deploy/readiness manifest owner count。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_event_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-event-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-event-owner" -- --nocapture`
+  -> 44 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-event-owner"`
+  -> passed；剩余 warning 为既有 unused/dead-code 噪声。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`。
+
+后续规划调整：
+
+1. 下一步继续候选事件包时，应把 selected-candidate/chunk event batch 投影接入真实 Rust
+   batch publisher / status-stream 路径，而不是继续做 helper 清理。
+2. Python source-map 文件仍保留为 rollback reference；只有在 Rust publisher path 验证
+   并写明 source-map freeze/delete policy 后，才考虑冻结或删除。
+
+### 2026-06-09：chapter_candidate_rerank formula owner 收口
+
+本轮继续 candidate package，不再把 `chapter_candidate_rerank_service.rs` 视为 staged
+helper，而是按整文件 Rust formula owner 收口。该文件已经被 generation、finalize、
+word-budget repair、targeted final repair 和 default executor dependency owner 直接消费，
+因此文件级 `dead_code` 宽免会掩盖真实 owner 边界。
+
+Python source map 保持不变：
+
+1. `backend/app/services/chapter_candidate_rerank_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_rerank_service.rs`
+2. `backend-rs/src/services/chapter_candidate_generation_service.rs`
+3. `backend-rs/src/services/chapter_candidate_finalize_service.rs`
+4. `backend-rs/src/services/chapter_candidate_word_budget_repair_service.rs`
+5. `backend-rs/src/services/chapter_candidate_targeted_final_repair_service.rs`
+6. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+7. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service/wiring_readiness.rs`
+
+收口结果：
+
+- 移除 `chapter_candidate_rerank_service.rs` 文件级 `#![allow(dead_code)]`。
+- 文件头从 staged owner 说明更新为真实 Rust formula owner 说明。
+- 删除 stricter check 暴露出的未消费私有 helper
+  `candidates_len_from_pool_size(...)`。
+- Python rerank 文件继续作为 source map / rollback reference；manifest readiness 不变，仍为
+  `rust = 131`、`python-fallback = 0`。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_rerank_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-rerank-owner" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_candidate_generation_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-rerank-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_candidate_finalize_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-rerank-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_word_budget_repair_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-rerank-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_targeted_final_repair_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-rerank-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-rerank-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-rerank-owner"`
+  -> passed；剩余 warning 不来自 rerank owner。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`。
+
+后续规划调整：
+
+1. 不要恢复 candidate rerank 文件级 `allow(dead_code)`；后续未消费公式应删除或局部说明。
+2. candidate package 下一步优先选择仍有文件级 staged/dead-code 宽免的整 owner，或把
+   selected-candidate/chunk event batch 接入真实 production publisher。
+
+### 2026-06-09：chapter_candidate_generation workflow owner 收口
+
+本轮继续 candidate package，按整文件 owner 收口
+`backend-rs/src/services/chapter_candidate_generation_service.rs`。该文件已经不再只是 staged
+helper；`chapter_candidate_executor_default_dependency_service.rs` 通过默认依赖构建器直接调用
+candidate-pool generation workflow，因此可以移除文件级 `dead_code` 宽免。
+
+Python source map 保持不变：
+
+1. `backend/app/services/chapter_candidate_generation_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_generation_service.rs`
+2. `backend-rs/src/services/chapter_candidate_executor_service.rs`
+3. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+4. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service/wiring_readiness.rs`
+5. generation workflow 依赖的配套 owner：
+   `chapter_candidate_rerank_service.rs`、`chapter_candidate_record_service.rs`、
+   `chapter_candidate_output_service.rs`、`chapter_candidate_runtime_state_service.rs`
+
+收口结果：
+
+- 移除 `chapter_candidate_generation_service.rs` 文件级 `#![allow(dead_code)]`。
+- 文件头从 staged owner 说明更新为真实 Rust workflow owner 说明。
+- 将 `ChapterCandidateGenerationResult::candidate_count()` 限制为 `#[cfg(test)]`，因为生产代码
+  直接消费 result payload，只有测试需要便捷计数断言。
+- Python generation 文件继续作为 source map / rollback reference；manifest readiness 不变，
+  仍为 `rust = 131`、`python-fallback = 0`。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_generation_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-generation-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-generation-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_candidate_executor_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-generation-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-generation-owner"`
+  -> passed；剩余 warning 不来自 generation owner。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`。
+
+后续规划调整：
+
+1. 不要恢复 candidate generation 文件级 `allow(dead_code)`；后续未消费 generation helper
+   应收窄为 private / test-only 或直接删除。
+2. 下一轮继续 whole-candidate-package 模式，优先处理仍有文件级 staged/dead-code 宽免的
+   `finalize`、`word_budget_repair`、`targeted_final_repair`、`quality_adapter`、
+   `runtime_state` 或 default dependency owner。
+3. 一旦 runtime publisher 边界明确，优先把 selected-candidate/chunk event batch 接入真实
+   production publisher，而不是继续只做 helper 收口。
+
+### 2026-06-09：chapter_candidate_finalize owner 收口
+
+本轮继续 candidate package，按整文件 owner 收口
+`backend-rs/src/services/chapter_candidate_finalize_service.rs`。该文件已经不是 staged helper；
+default executor dependency owner 直接通过该模块解析 final candidate state，并生成 selected
+candidate 的最终 payload。
+
+Python source map 保持不变：
+
+1. `backend/app/services/chapter_candidate_finalize_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_finalize_service.rs`
+2. `backend-rs/src/services/chapter_candidate_executor_service.rs`
+3. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+4. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service/wiring_readiness.rs`
+5. finalize 依赖的配套 owner：`chapter_candidate_rerank_service.rs`、
+   `chapter_candidate_runtime_state_service.rs`
+
+收口结果：
+
+- 移除 `chapter_candidate_finalize_service.rs` 文件级 `#![allow(dead_code)]`。
+- 文件头从 staged owner 说明更新为真实 Rust final-candidate orchestration owner 说明。
+- 新增 `build_default_finalize_dependencies()`，让 finalize owner 自己组装 production
+  rerank/formula 依赖，而不是只保留测试注入 seam。
+- 新增默认依赖测试，验证 finalize owner 能通过真实 Rust rerank dependency chain 解析最终候选。
+- Python finalize 文件继续作为 source map / rollback reference；manifest readiness 不变，仍为
+  `rust = 131`、`python-fallback = 0`。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_finalize_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-finalize-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-finalize-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_candidate_executor_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-finalize-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-finalize-owner"`
+  -> passed；剩余 warning 不来自 finalize owner。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. 不要恢复 candidate finalize 文件级 `allow(dead_code)`；后续未消费 finalize helper
+   应收窄为 private / test-only 或直接删除。
+2. 下一轮继续 whole-candidate-package 模式，优先处理 `word_budget_repair`、
+   `targeted_final_repair`、`quality_adapter`、`runtime_state`、default dependency 或
+   production adapter 中仍带 staged/dead-code 文件级宽免的 owner。
+3. 一旦 runtime publisher 边界明确，优先把 selected-candidate/chunk event batch 接入真实
+   production publisher，而不是继续只做 helper 收口。
+
+### 2026-06-09：chapter_candidate_word_budget_repair owner 收口
+
+本轮继续 candidate package，按整文件 owner 收口
+`backend-rs/src/services/chapter_candidate_word_budget_repair_service.rs`。该文件已经不是 staged
+helper；default executor dependency owner 通过真实 Rust rerank formulas 和共享 output/record
+注入点直接调用 word-budget repair workflow。
+
+Python source map 保持不变：
+
+1. `backend/app/services/chapter_candidate_word_budget_repair_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_word_budget_repair_service.rs`
+2. `backend-rs/src/services/chapter_candidate_executor_service.rs`
+3. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+4. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service/wiring_readiness.rs`
+5. word-budget repair 依赖的配套 owner：`chapter_candidate_rerank_service.rs`、
+   `chapter_candidate_record_service.rs`、`chapter_candidate_output_service.rs`、
+   `chapter_candidate_runtime_state_service.rs`
+
+收口结果：
+
+- 移除 `chapter_candidate_word_budget_repair_service.rs` 文件级 `#![allow(dead_code)]`。
+- 文件头从 staged owner 说明更新为真实 Rust word-budget repair owner 说明。
+- 新增 `build_default_word_budget_repair_dependencies()`，让 repair owner 在 Rust 内组装
+  production rerank/formula callbacks。
+- 将 `runtime_state` 贯通到 repair output collection boundary，并在收集后恢复到 request，
+  保证 repair attempt 不丢失任务进度状态。
+- 新增默认依赖测试，验证 repair owner 能通过真实 Rust formula chain 构建 prompt、调用
+  collector、创建 candidate record，并附加 repair seed metadata。
+- Python word-budget repair 文件继续作为 source map / rollback reference；manifest readiness
+  不变，仍为 `rust = 131`、`python-fallback = 0`。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_word_budget_repair_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-word-budget-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-word-budget-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_candidate_executor_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-word-budget-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-word-budget-owner"`
+  -> passed；剩余 warning 不来自 word-budget repair owner。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. 不要恢复 word-budget repair 文件级 `allow(dead_code)`；后续未消费 repair helper
+   应收窄为 private / test-only 或直接删除。
+2. 继续相邻整文件 owner：`targeted_final_repair`，之后推进 `runtime_state`、
+   `quality_adapter`、default dependency 或 production adapter。
+
+### 2026-06-09：chapter_candidate_targeted_final_repair owner 收口
+
+本轮继续 candidate package，按整文件 owner 收口
+`backend-rs/src/services/chapter_candidate_targeted_final_repair_service.rs`。该文件已经不是
+staged helper；default executor dependency owner 通过真实 Rust targeted-repair formulas 和
+共享 output/record 注入点直接调用 targeted final repair workflow。
+
+Python source map 保持不变：
+
+1. `backend/app/services/chapter_candidate_targeted_final_repair_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_targeted_final_repair_service.rs`
+2. `backend-rs/src/services/chapter_candidate_executor_service.rs`
+3. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+4. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service/wiring_readiness.rs`
+5. targeted final repair 依赖的配套 owner：`chapter_candidate_rerank_service.rs`、
+   `chapter_candidate_record_service.rs`、`chapter_candidate_output_service.rs`、
+   `chapter_candidate_runtime_state_service.rs`、`chapter_candidate_finalize_service.rs`
+
+收口结果：
+
+- 移除 `chapter_candidate_targeted_final_repair_service.rs` 文件级 `#![allow(dead_code)]`。
+- 文件头从 staged owner 说明更新为真实 Rust targeted final repair owner 说明。
+- 新增 `build_default_targeted_final_repair_dependencies()`，让 targeted repair owner 在 Rust
+  内组装 production targeted-repair formulas。
+- 将 `runtime_state` 贯通到 targeted repair output collection boundary，并在收集后恢复到
+  request，保证 targeted quality-repair attempt 不丢失任务进度状态。
+- 新增默认依赖测试，验证 owner 能通过真实 Rust formula chain 构建 targeted prompt、调用
+  collector、创建 candidate record，并附加 repair-seed metadata。
+- Python targeted repair 文件继续作为 source map / rollback reference；manifest readiness
+  不变，仍为 `rust = 131`、`python-fallback = 0`。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_targeted_final_repair_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-targeted-repair-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-targeted-repair-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_candidate_executor_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-targeted-repair-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo test chapter_candidate_finalize_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-targeted-repair-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-targeted-repair-owner"`
+  -> passed；剩余 warning 不来自 targeted final repair owner。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. 不要恢复 targeted final repair 文件级 `allow(dead_code)`；后续未消费 targeted repair
+   helper 应收窄为 private / test-only 或直接删除。
+2. candidate package 后续继续处理仍带文件级 staged/dead-code 宽免的 `runtime_state`、
+   `quality_adapter`、`record`、default dependency、production adapter 或 route gateway owner。
+
+### 2026-06-09：chapter_candidate_runtime_state owner 收口
+
+本轮继续 candidate package，按整文件 owner 收口
+`backend-rs/src/services/chapter_candidate_runtime_state_service.rs`。该文件已经不是 staged
+helper；generation、output collection、word-budget repair、targeted final repair、finalize、
+event 和 batch payload owner 都直接消费该模块的 attempt labels、runtime snapshot、
+checkpoint fields 与 state sync。
+
+Python source map 保持不变：
+
+1. `backend/app/services/chapter_candidate_runtime_state_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_runtime_state_service.rs`
+2. `backend-rs/src/services/chapter_candidate_generation_service.rs`
+3. `backend-rs/src/services/chapter_candidate_output_service.rs`
+4. `backend-rs/src/services/chapter_candidate_word_budget_repair_service.rs`
+5. `backend-rs/src/services/chapter_candidate_targeted_final_repair_service.rs`
+6. `backend-rs/src/services/chapter_candidate_finalize_service.rs`
+7. `backend-rs/src/services/chapter_candidate_event_service.rs`
+8. `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+9. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service/wiring_readiness.rs`
+
+收口结果：
+
+- 移除 `chapter_candidate_runtime_state_service.rs` 文件级 `#![allow(dead_code)]`。
+- 文件头从 staged owner 说明更新为真实 Rust runtime-state owner 说明。
+- 将 `build_chapter_candidate_runtime_state(...)` 收窄为 `#[cfg(test)]`；当前生产消费者已直接消费
+  labels、snapshot、checkpoint field insertion 和 sync，该 initializer 仅作为 Python source-map
+  行为测试保留。
+- Python runtime-state 文件继续作为 source map / rollback reference；manifest readiness 不变，
+  仍为 `rust = 131`、`python-fallback = 0`。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-runtime-state-owner" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_candidate_generation_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-runtime-state-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_candidate_output_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-runtime-state-owner" -- --nocapture`
+  -> 7 passed。
+- `cargo test chapter_candidate_word_budget_repair_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-runtime-state-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_targeted_final_repair_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-runtime-state-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_finalize_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-runtime-state-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_candidate_event_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-runtime-state-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo test chapter_batch_generation_task_payload_base_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-runtime-state-owner" -- --nocapture`
+  -> 34 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-runtime-state-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_candidate_executor_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-runtime-state-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-runtime-state-owner"`
+  -> passed；剩余 warning 不来自 runtime-state owner。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. 不要恢复 runtime-state 文件级 `allow(dead_code)`；后续未消费 source-map helper 应改为
+   test-only，或在 source-map freeze 后删除。
+2. candidate package 下一步优先处理 `record` 或 `quality_adapter`，因为它们是 default
+   dependency / production adapter 之前的共享底层 owner。
+
+### 2026-06-09：chapter_candidate_record owner 收口
+
+本轮继续 candidate package，按整文件 owner 收口
+`backend-rs/src/services/chapter_candidate_record_service.rs`。该文件已经不是 staged
+helper；generation、word-budget repair、targeted final repair、default dependency wiring
+和 production adapter 已经通过真实 Rust candidate executor 链消费该模块，用于候选文本清洗、
+quality-gate normalization 和 candidate selection metadata。
+
+Python source map 保持不变：
+
+1. `backend/app/services/chapter_candidate_record_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_record_service.rs`
+2. `backend-rs/src/services/chapter_candidate_generation_service.rs`
+3. `backend-rs/src/services/chapter_candidate_word_budget_repair_service.rs`
+4. `backend-rs/src/services/chapter_candidate_targeted_final_repair_service.rs`
+5. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+6. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service/wiring_readiness.rs`
+7. `backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs`
+8. `backend-rs/src/services/chapter_candidate_route_gateway_service.rs`
+
+收口结果：
+
+- 移除 `chapter_candidate_record_service.rs` 文件级 `#![allow(dead_code)]`。
+- 文件头从 staged owner 说明更新为真实 Rust candidate-record owner 说明。
+- 聚焦编译验证确认该文件没有自身 dead-code warning，本轮无需删除私有 helper，也无需
+  `#[cfg(test)]` 收窄。
+- Python record 文件继续作为 source map / rollback reference；manifest readiness 不变，
+  仍为 `rust = 131`、`python-fallback = 0`。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_record_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-record-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-record-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_candidate_executor_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-record-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-record-owner" -- --nocapture`
+  -> 7 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-record-owner"`
+  -> passed；剩余 warning 不来自 record owner。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. 不要恢复 record 文件级 `allow(dead_code)`；后续未消费 record helper 应改为
+   private / test-only，或在 source-map freeze 后删除。
+2. candidate package 下一步优先处理 `chapter_candidate_quality_adapter_service.rs`，然后再处理
+   default dependency / executor / production adapter / route gateway 这些更高层 owner。
+
+### 2026-06-09：chapter_candidate_quality_adapter owner 收口
+
+本轮继续 candidate package，按整文件 owner 收口
+`backend-rs/src/services/chapter_candidate_quality_adapter_service.rs`。该文件已经不是
+dead-code-tolerant staged helper；production adapter、route gateway、single-generation runtime /
+active gateway smoke 和 default dependency wiring readiness 都已经把它作为共享 Rust callback
+边界消费。
+
+Python source map 保持不变：
+
+1. `backend/app/services/chapter_generation/stream/candidate_service.py`
+2. `backend/app/services/batch_generation_candidate_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_quality_adapter_service.rs`
+2. `backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs`
+3. `backend-rs/src/services/chapter_candidate_route_gateway_service.rs`
+4. `backend-rs/src/services/chapter_generation_runtime_service.rs`
+5. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+6. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+7. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service/wiring_readiness.rs`
+
+收口结果：
+
+- 移除 `chapter_candidate_quality_adapter_service.rs` 文件级 `#![allow(dead_code)]`。
+- 文件头更新为真实 Rust shared quality-adapter owner 说明。
+- 删除未消费的 `ChapterCandidateQualityAdapter::log_prefix()` 方法；这是移除文件级
+  `allow(dead_code)` 后编译器暴露出的唯一文件内死代码。
+- `log_prefix` context 字段继续保留为现有 source-map / caller construction contract 的一部分；
+  当前多个消费者仍填充该字段，只是 callable accessor 已无真实消费者。
+- Python source-map 文件继续作为 rollback reference；manifest readiness 不变，
+  仍为 `rust = 131`、`python-fallback = 0`。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_quality_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-quality-adapter-owner" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-quality-adapter-owner" -- --nocapture`
+  -> 7 passed。
+- `cargo test chapter_candidate_route_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-quality-adapter-owner" -- --nocapture`
+  -> 9 passed。
+- `cargo test chapter_generation_runtime_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-quality-adapter-owner" -- --nocapture`
+  -> 16 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-quality-adapter-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-quality-adapter-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_candidate_executor_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-quality-adapter-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-quality-adapter-owner"`
+  -> passed；剩余 warning 不来自 quality-adapter owner。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. 不要恢复 quality-adapter 文件级 `allow(dead_code)`；后续未消费 callback helper 应删除或改为
+   test-only。
+2. candidate package 下一步优先处理 `chapter_candidate_executor_default_dependency_service.rs`；
+   底层 generation / repair / finalize / runtime-state / record / quality-adapter owner 已基本收口，
+   可以开始整体收紧 default dependency 这个组合 owner。
+
+### 2026-06-09：chapter_candidate_executor_default_dependency owner 收口
+
+本轮继续 candidate package，按整文件 owner 收口
+`backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs` 及其
+`wiring_readiness` 子模块。该文件已经从 Python
+`chapter_candidate_executor_wiring_service.py` 的 staged wiring 迁移为真实 Rust 默认依赖组合
+owner，负责把 generation、word-budget repair、targeted final repair、finalize、rerank、record、
+provider output 和 quality-adapter owner 串成候选执行链。
+
+Python source map 保持不变：
+
+1. `backend/app/services/chapter_candidate_executor_wiring_service.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+4. `backend/app/services/chapter_generation/stream/candidate_service.py`
+5. `backend/app/services/batch_generation_candidate_service.py`
+6. `backend/app/services/chapter_candidate_executor_service.py`
+7. `backend/app/services/chapter_candidate_rerank_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+2. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service/wiring_readiness.rs`
+3. `backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs`
+4. `backend-rs/src/services/chapter_candidate_provider_stream_service.rs`
+5. `backend-rs/src/services/chapter_candidate_quality_adapter_service.rs`
+6. `backend-rs/src/services/chapter_candidate_record_service.rs`
+7. `backend-rs/src/services/chapter_candidate_executor_service.rs`
+8. `backend-rs/src/services/chapter_candidate_route_gateway_service.rs`
+
+收口结果：
+
+- 移除 `chapter_candidate_executor_default_dependency_service.rs` 文件级
+  `#![allow(dead_code)]`。
+- 文件头从 staged wiring 说明更新为真实 Rust default dependency owner 说明。
+- 将 `wiring_readiness` 改为 `#[cfg(test)]`，让 source-map / readiness plan 明确作为测试证据存在，
+  不再作为生产路径 dead code 编译。
+- 移除 `wiring_readiness.rs` 文件级 `#![allow(dead_code)]`。
+- 删除 readiness 模型里过期的 `ExternalFormulaCallback` variant 和 `formula_dependency()` helper；
+  当前计划直接记录真实 Rust target owner，同时保持 `external_formula_dependency_count = 0` 和
+  no cutover blockers 的证据。
+- Python source-map 文件继续作为 rollback reference；manifest readiness 不变，仍为
+  `rust = 131`、`python-fallback = 0`。本轮计入 Rust owner closeout，不计入 fallback 数量下降。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-default-dependency-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-default-dependency-owner" -- --nocapture`
+  -> 7 passed。
+- `cargo test chapter_candidate_route_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-default-dependency-owner" -- --nocapture`
+  -> 9 passed。
+- `cargo test chapter_candidate_executor_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-default-dependency-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo test chapter_candidate_provider_stream_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-default-dependency-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-default-dependency-owner"`
+  -> passed；剩余 warning 不来自 default-dependency owner。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. 不要恢复 default dependency 或 readiness 子模块的文件级 `allow(dead_code)`；source-map /
+   readiness-only helper 后续应保持 test-only，或在 freeze 后删除。
+2. candidate package 下一步优先收口 `chapter_candidate_executor_service.rs`，然后再处理
+   `chapter_candidate_executor_production_adapter_service.rs` 与
+   `chapter_candidate_route_gateway_service.rs` 这两个更高层 cutover / rollback owner。
+
+### 2026-06-09：chapter_candidate_executor core owner 收口
+
+本轮继续 candidate package，按整文件 owner 收口
+`backend-rs/src/services/chapter_candidate_executor_service.rs`。该文件从 Python
+`chapter_candidate_executor_service.py` 的 staged Rust owner 收口为真实 Rust 候选执行编排
+owner，负责 generation -> word-budget repair -> targeted repair -> finalize 的核心 stage 顺序。
+当前生产路径通过 boxed dependency workflow 被 default dependency、production adapter、route gateway
+和 active generation runtime 消费；泛型 dependency-injection workflow 作为同一 stage 合同的测试证据保留。
+
+Python source map 保持不变：
+
+1. `backend/app/services/chapter_candidate_executor_service.py`
+2. `backend/app/services/chapter_candidate_executor_wiring_service.py`
+3. `backend/app/services/chapter_candidate_rerank_service.py`
+4. `backend/app/api/chapters.py`
+5. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_executor_service.rs`
+2. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+3. `backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs`
+4. `backend-rs/src/services/chapter_candidate_route_gateway_service.rs`
+5. `backend-rs/src/services/chapter_generation_runtime_service.rs`
+
+收口结果：
+
+- 移除 `chapter_candidate_executor_service.rs` 文件级 `#![allow(dead_code)]`。
+- 文件头从 staged-owner 说明更新为真实 Rust candidate-executor orchestration owner 说明。
+- 保留生产路径实际消费的 boxed dependency workflow，作为 default dependency wiring 与 production
+  adapter 的 Rust owner 入口。
+- 将旧泛型 dependency-injection workflow 及其私有 stage helper 改为 `#[cfg(test)]`；`cargo check`
+  已证明该路径当前是测试合同证据，而不是生产消费路径。
+- Python source-map 文件继续作为 rollback reference；manifest readiness 不变，仍为
+  `rust = 131`、`python-fallback = 0`。本轮计入 Rust owner closeout，不计入 fallback 数量下降。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_executor_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-executor-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-executor-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-executor-owner" -- --nocapture`
+  -> 7 passed。
+- `cargo test chapter_candidate_route_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-executor-owner" -- --nocapture`
+  -> 9 passed。
+- `cargo test chapter_generation_runtime_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-executor-owner" -- --nocapture`
+  -> 16 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-executor-owner"`
+  -> passed；剩余 warning 不来自 executor owner。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. 不要恢复 executor 文件级 `allow(dead_code)`；如果泛型注入 workflow 后续重新进入生产路径，
+   必须通过真实消费者证明，而不是用文件级 allow 隐藏。
+2. candidate package 下一步优先收口
+   `chapter_candidate_executor_production_adapter_service.rs`，最后再处理
+   `chapter_candidate_route_gateway_service.rs` 这个 route/cutover owner。
+
+### 2026-06-09：chapter_candidate_executor_production_adapter owner 收口
+
+本轮继续 candidate package，按整文件 owner 收口
+`backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs`。该文件已经从
+rollback-aware staged 说明收口为真实 Rust production adapter owner，负责在 Rust candidate
+executor path 与保留的 Python fallback callback contract 之间做生产 cutover 决策；route gateway
+和 active generation runtime 继续负责把 deployment / AppConfig 策略传入该 owner。
+
+Python source map 保持不变：
+
+1. `backend/app/api/chapters.py`
+2. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+3. `backend/app/services/chapter_generation/stream/candidate_service.py`
+4. `backend/app/services/batch_generation_candidate_service.py`
+5. `backend/app/services/chapter_candidate_executor_service.py`
+6. `backend/app/services/chapter_candidate_executor_wiring_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs`
+2. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+3. `backend-rs/src/services/chapter_candidate_executor_service.rs`
+4. `backend-rs/src/services/chapter_candidate_route_gateway_service.rs`
+5. `backend-rs/src/services/chapter_generation_runtime_service.rs`
+6. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 移除 `chapter_candidate_executor_production_adapter_service.rs` 文件级
+  `#![allow(dead_code)]`。
+- 文件头从 rollback-aware staged 说明更新为真实 Rust production adapter owner 说明。
+- `cargo check` 已确认移除文件级 allowance 后不存在 production-adapter-local dead-code warning。
+- 保留显式 fallback / rollback config 与 Python fallback callback contract；Python source map 仍是
+  rollback reference，直到 active route 消费 fallback-freeze 策略并显式冻结、重指向或删除兼容壳。
+- manifest readiness 不变，仍为 `rust = 131`、`python-fallback = 0`。本轮计入 Rust owner
+  closeout，不计入 fallback 数量下降。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-production-adapter-owner" -- --nocapture`
+  -> 7 passed。
+- `cargo test chapter_candidate_route_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-production-adapter-owner" -- --nocapture`
+  -> 9 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-production-adapter-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_generation_runtime_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-production-adapter-owner" -- --nocapture`
+  -> 16 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-production-adapter-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-production-adapter-owner"`
+  -> passed；不存在 production-adapter-local warning。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. 不要恢复 production adapter 文件级 `allow(dead_code)`；rollback/source-map 行为变化必须通过真实
+   route / runtime consumer 或 focused tests 表达，而不是文件级 allowance。
+2. candidate package 下一步收口
+   `chapter_candidate_route_gateway_service.rs` 作为最终整文件 candidate gateway owner，因为较低层
+   candidate owners 已经收口，该文件拥有 route / cutover / smoke readiness 边界。
+
+### 2026-06-09：chapter_candidate_route_gateway owner 收口
+
+本轮完成 candidate package 收口，按整文件 owner 收口
+`backend-rs/src/services/chapter_candidate_route_gateway_service.rs`。该文件现在明确作为 chapter
+candidate route / deployment gateway 的 Rust owner，负责把 deployment config 投影到
+rollback-aware production adapter，并拥有 route-level smoke / readiness evidence。
+
+Python source map 保持不变：
+
+1. `backend/app/api/chapters.py`
+2. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+3. `backend/app/services/chapter_generation/stream/candidate_service.py`
+4. `backend/app/services/batch_generation_candidate_service.py`
+5. `backend/app/services/chapter_candidate_executor_service.py`
+6. `backend/app/services/chapter_candidate_executor_wiring_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_route_gateway_service.rs`
+2. `backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs`
+3. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+4. `backend-rs/src/services/chapter_candidate_executor_service.rs`
+5. `backend-rs/src/services/chapter_generation_runtime_service.rs`
+6. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 移除 `chapter_candidate_route_gateway_service.rs` 最后一个文件级
+  `#![allow(dead_code)]`。
+- 文件头更新为真实 Rust route / deployment gateway owner 说明，明确 cutover、fallback、
+  rollback 与 smoke/readiness 职责。
+- smoke probe suite 继续内聚在同一个 route gateway owner 文件内，不恢复已退休的
+  `chapter_candidate_route_gateway_smoke_service.rs` 壳。
+- `cargo check` 和 candidate-owner 扫描确认：
+  `chapter_candidate*_service` Rust owner 文件中已经没有文件级 `allow(dead_code)` 或 staged-owner
+  文案命中。
+- Python source-map 文件继续作为 rollback reference；manifest readiness 不变，仍为
+  `rust = 131`、`python-fallback = 0`。本轮是 candidate package 最终 Rust owner closeout，
+  不计入 fallback 数量下降。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_route_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-route-gateway-owner" -- --nocapture`
+  -> 9 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-route-gateway-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-route-gateway-owner" -- --nocapture`
+  -> 7 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-route-gateway-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_generation_runtime_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-route-gateway-owner" -- --nocapture`
+  -> 16 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-route-gateway-owner"`
+  -> passed；剩余 warning 不来自 route gateway owner。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+- `rg -n "#!\[allow\(dead_code\)\]|Staged Rust owner|Staged executable Rust wiring" "backend-rs/src/services" -g "chapter_candidate*_service.rs" -g "chapter_candidate*_service/*.rs"`
+  -> no matches。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. candidate executor package 在已跟踪的 `chapter_candidate*_service` Rust owner 文件范围内完成
+   owner closeout；后续不要再把该包的进度描述为 fallback count 下降。
+2. 下一轮迁移加速应切换到相邻整模块 package，例如 active route / source-map freeze 证据，或其它
+   仍存在 production dead-code、compatibility-shell drift、rollback 不清晰的 Rust owner package。
+
+### 2026-06-09：chapter_generation execution contract owner 收口
+
+本轮从 candidate package 收口切换到相邻共享 `chapter_generation` execution contract owner。
+选定的整文件边界是
+`backend-rs/src/services/chapter_generation_execution_contract_service.rs`，该文件负责
+single-generation 与 batch resume/runtime 共同消费的 Rust 兼容选项和 prompt override 投影。
+
+Python source map 保持不变：
+
+1. `backend/app/api/chapter_generation_routes.py`
+2. `backend/app/api/chapter_batch_generation_routes.py`
+3. `backend/app/services/chapter_generation/*`
+4. `backend/app/services/batch_generation_candidate_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_generation_execution_contract_service.rs`
+2. `backend-rs/src/services/chapter_single_generation_prepare_service.rs`
+3. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+4. `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+5. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+6. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+
+收口结果：
+
+- 保留 `SingleChapterGenerationCompatOptions` 作为 route/request compatibility fields 的共享 Rust
+  execution contract。
+- 将 `style_id()` 与 `enable_mcp()` accessor 收窄为 `#[cfg(test)]`，因为生产消费者已经直接携带
+  struct fields，这两个 accessor 只服务 source-map / compatibility contract 断言。
+- 保持外部可见的 prompt override projection 和 serialized compatibility option shape 不变。
+- `cargo check` 已确认此前 `style_id` / `enable_mcp` 的 production warnings 不再出现。
+- manifest readiness 不变，仍为 `rust = 131`、`python-fallback = 0`。本轮是 Rust owner
+  closeout 和 production warning reduction，不计入 fallback 数量下降。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_generation_execution_contract_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-execution-contract-owner" -- --nocapture`
+  -> 2 passed。
+- `cargo test chapter_single_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-execution-contract-owner" -- --nocapture`
+  -> 99 passed。
+- `cargo test chapter_batch_generation_resume_task_command_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-execution-contract-owner" -- --nocapture`
+  -> 63 passed。
+- `cargo test chapter_batch_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-execution-contract-owner" -- --nocapture`
+  -> 109 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-execution-contract-owner"`
+  -> passed；`style_id` / `enable_mcp` production warnings 已消失。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. 继续从 remaining production dead-code warnings 中选择整文件或整函数组 owner，不做 trivial helper rename。
+2. 下一轮优先考虑 `chapter_batch_generation` read-context / payload-base owner，因为它们仍围绕已迁移的
+   route/status/runtime contract 暴露 production warning drift。
+
+### 2026-06-09：chapter_batch_generation read-context status owner 收口
+
+本轮继续 `chapter_batch_generation` package，按函数组 owner 收口
+`backend-rs/src/services/chapter_batch_generation_read_context_service.rs`。目标是清理 status stream
+和 owned-task query owner 折叠进 read-context owner 后遗留的 source-map-only 状态。
+
+Python source map 保持不变：
+
+1. `backend/app/api/chapter_batch_generation_routes.py`
+2. `backend/app/services/chapter_generation/batch_service.py`
+3. `backend/app/services/chapter_generation/status_stream_service.py`
+4. `backend/app/services/chapter_generation/task_query_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+2. `backend-rs/src/api/chapter_batch_generation.rs`
+3. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+
+收口结果：
+
+- 删除 `batch_generation_task_contains_chapter(...)`；task selection / read-state ownership 已迁入当前
+  batch owners，该 helper 不再有真实 Rust production consumer。
+- 将 `BatchGenerationStreamState::from_task_state(...)` 收窄为 `#[cfg(test)]`；production status
+  stream 现在通过 owned read-state owner 进入
+  `from_task_state_with_quality_context(...)`。
+- 将 `BatchGenerationStreamState::terminal_label` 字段收窄为 `#[cfg(test)]`；production stream
+  行为已由 `message`、`phase`、`terminal_kind` 和 emitted SSE events 承载，`terminal_label`
+  只保留为 compatibility / source-map 断言证据。
+- 保持 status stream payload / event 行为和 route/API contract 不变。
+- `cargo check` 已确认此前
+  `batch_generation_task_contains_chapter`、`from_task_state`、`terminal_label` 的 production
+  warnings 已消失。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-batch-read-context-owner" -- --nocapture`
+  -> 44 passed。
+- `cargo test chapter_batch_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-batch-read-context-owner" -- --nocapture`
+  -> 358 passed。
+- `cargo test chapter_batch_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-batch-read-context-owner" -- --nocapture`
+  -> 109 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-batch-read-context-owner"`
+  -> passed；目标 read-context production warnings 已消失。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. 继续在 `chapter_batch_generation` 内推进，但切到
+   `chapter_batch_generation_task_payload_base_service.rs`，因为 production `cargo check` 仍显示
+   payload-base owner drift。
+2. 仍按同一原则执行：删除 forwarding-only helper，或在 focused batch route/runtime tests 通过后把
+   source-map-only accessor 收窄为 test-only。
+
+### 2026-06-09：chapter_batch_generation payload-base owner 收口
+
+本轮继续 `chapter_batch_generation` package，按 payload-base response / task-view 函数组
+owner 收口 `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`。目标是
+清理 create、resume、status、read/query payload assembly 已迁入共享 payload-base owner 后遗留的
+forwarding-only production surface。
+
+Python source map 保持不变：
+
+1. `backend/app/api/chapter_batch_generation_routes.py`
+2. `backend/app/services/chapter_generation/batch_service.py`
+3. `backend/app/services/chapter_generation/task_query_service.py`
+4. `backend/app/services/chapter_generation/status_stream_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+5. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+
+收口结果：
+
+- 删除 `BatchGenerationCommandProgressSummary::batch_id()`；summary payload materialization
+  已由 payload-base owner 承载，该 accessor 没有 production / test consumer。
+- 删除 `build_batch_generation_task_runtime_payload_from_runtime_parts(...)`；它只是
+  `build_batch_generation_task_response_payload_from_runtime_parts(...)` 的 forwarding-only wrapper。
+- 同文件测试改为直接调用
+  `build_batch_generation_task_response_payload_from_runtime_parts(...)`，并通过
+  `BatchGenerationTaskResponsePayloadOptions` 覆盖 checkpoint override、stage code、
+  execution mode 和 loading-stage compatibility assertions。
+- 精确 `rg` 已确认旧 wrapper 与 accessor 在 `backend-rs/src` 下无剩余命中。
+- HTTP/task payload behavior 保持不变；本轮是 Rust owner closeout 与 production warning
+  reduction，不计入 fallback 数量下降。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_batch_generation_task_payload_base_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-batch-payload-base-owner" -- --nocapture`
+  -> 34 passed。
+- `cargo test chapter_batch_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-batch-payload-base-owner" -- --nocapture`
+  -> 358 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-batch-payload-base-owner"`
+  -> passed；目标 payload-base wrapper / accessor warnings 已消失。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. 继续用 production `cargo check` warnings 选择下一个整块 Rust owner，不做 one-off helper rename。
+2. 若相邻 `chapter_batch_generation` runtime / write owner 能继续删除整块 forwarding surface，则优先推进；
+   否则切到下一个有明确 warning reduction 和 focused tests 的 `chapter_generation` 或
+   `chapter_single_generation` owner。
+
+### 2026-06-09：chapter_batch_generation runtime-state persistence owner 收口
+
+本轮继续 `chapter_batch_generation` package，按 runtime-state persistence 函数组 owner 收口
+`backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`。目标是清理真实 runtime
+owner 已迁入 `BatchGenerationRuntimePersistencePlan::persist(...)`、cancel/resume plans、snapshot
+writes、retry metadata 和 failed-chapter append semantics 后遗留的 DB-direct task-stage persistence
+helper。
+
+Python source map 保持不变：
+
+1. `backend/app/api/chapter_batch_generation_routes.py`
+2. `backend/app/services/chapter_generation/batch_service.py`
+3. `backend/app/services/chapter_generation/runtime_state_service.py`
+4. `backend/app/services/chapter_generation/status_stream_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+5. `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+
+收口结果：
+
+- 删除 `BatchGenerationTaskStage::persist_for_task(...)`；该 helper 在 batch runtime owner 内没有
+  production consumer。
+- 保留 `BatchGenerationTaskStage::apply_to_active_model(...)`，它仍是 cancel、resume-reset 和
+  runtime persistence plans 共享的 task-stage mutation helper。
+- production persistence 继续由 `BatchGenerationRuntimePersistencePlan::persist(...)` 承载，确保
+  snapshot upsert、retry count updates、failed-chapter append behavior 不会被旧 DB-direct task
+  update path 绕过。
+- 精确 `rg` 已确认 `persist_for_task` 不再存在于
+  `chapter_batch_generation_runtime_state_service.rs`；analysis 与 single-generation owner 中的同名 helper
+  属于其它 owner，本轮未触碰。
+- batch task lifecycle behavior 保持不变；本轮是 Rust runtime owner closeout 与 production warning
+  reduction，不计入 fallback 数量下降。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_batch_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-batch-runtime-state-owner" -- --nocapture`
+  -> 109 passed。
+- `cargo test chapter_batch_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-batch-runtime-state-owner" -- --nocapture`
+  -> 358 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-batch-runtime-state-owner"`
+  -> passed；目标 batch runtime-state `persist_for_task` warning 已消失。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. 继续从 remaining production `cargo check` warnings 中选择下一个有真实 consumer impact 的整块 owner。
+2. 如果 batch 剩余 warnings 不再对应 coherent forwarding 或 source-map-only surface，则优先切到
+   `chapter_generation` / `chapter_single_generation` owner closeout。
+
+### 2026-06-09：chapter_regeneration prepare request accessor owner 收口
+
+本轮切到 `chapter_regeneration` package，按 request accessor surface 整块收口
+`backend-rs/src/services/chapter_regeneration_prepare_service.rs`。目标是保留 route payload fields
+和 request normalization 行为，同时把现在只服务 source-map / route tests 的 request accessor 从
+production build 中移出，减少 Rust owner warning drift。
+
+Python source map 保持不变：
+
+1. `backend/app/api/chapter_regeneration_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/chapter_generation/regeneration/*`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_regeneration_prepare_service.rs`
+2. `backend-rs/src/api/chapter_regeneration_routes.rs`
+3. `backend-rs/src/services/chapter_regeneration_stream_workflow_service.rs`
+4. `backend-rs/src/services/chapter_generation_execution_contract_service.rs`
+5. `backend-rs/src/services/chapter_generation_research_payload_service.rs`
+
+收口结果：
+
+- 将 `FullChapterRegenerationStreamRequest::enable_web_research()` 标记为 `#[cfg(test)]`。
+- 将 `FullChapterRegenerationStreamRequest::web_research_query()` 标记为 `#[cfg(test)]`。
+- 保留 production route payload fields 与 `compat_options_with_web_research_default(...)`，确保 web
+  research flags / query 仍进入共享 `SingleChapterGenerationCompatOptions`、research provider payload
+  和 prompt note generation。
+- full / partial regeneration request normalization、Python-compatible bounds 与 route/source-map
+  assertions 保持不变。
+- `cargo check` 已确认目标 regeneration prepare accessor warnings 消失；本轮是 Rust owner closeout
+  与 production warning reduction，不计入 fallback 数量下降。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_regeneration_prepare_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-prepare-owner" -- --nocapture`
+  -> 22 passed。
+- `cargo test chapter_regeneration --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-prepare-owner" -- --nocapture`
+  -> 59 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-prepare-owner"`
+  -> passed；目标 regeneration prepare accessor warnings 已消失。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. 下一轮继续从 `cargo check` warning batch 选择一个完整 Rust owner，而不是 isolated helper cleanup。
+2. 优先选择相邻 `chapter_regeneration`、`chapter_single_generation` 或 `chapter_generation` owner
+   closeout，要求 Python source map 可冻结，且能用 focused suite + manifest smoke 验证。
+
+### 2026-06-09：chapter_story_repair quality-context owner 收口
+
+本轮根据最新 production `cargo check` warnings 选择一个完整 Rust owner：
+`backend-rs/src/services/chapter_story_repair_quality_context_service.rs`。该文件已经承载 story repair
+quality context 的恢复、合并、聚合与 quality gate reconciliation，本轮清理的是已被 merged/reconciled
+gate path 替代的旧 quality-gate extraction surface。
+
+Python source map 保持不变：
+
+1. `backend/app/api/chapters.py`
+2. `backend/app/services/story_repair_payload_service.py`
+3. `backend/app/services/quality_domain/story_quality_feedback_service.py`
+4. `backend/app/services/quality_domain/task_quality_snapshot_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_story_repair_quality_context_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+5. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+6. `backend-rs/src/services/chapter_candidate_quality_adapter_service.rs`
+
+收口结果：
+
+- 删除未使用的 `CURRENT_CHAPTER_QUALITY_SOURCE_LABEL`；当前章节质量与手工修复合并路径仍使用
+  `MANUAL_PLUS_CURRENT_CHAPTER_QUALITY_SOURCE_LABEL`。
+- 删除 `quality_gate_from_quality_context(...)`；production 与 tests 已统一使用
+  `merged_quality_gate_from_quality_context(...)` 或
+  `reconciled_quality_gate_from_quality_context(...)`。
+- quality gate merge semantics 保持不变：latest metrics 优先，summary 补字段，failed metrics 合并，
+  manual-review terminal label 仍由现有 Rust owner reconciliation 处理。
+- Python source-map 文件继续作为 rollback/reference，不修改 Python runtime。
+- 精确 `rg` 确认被删除的旧常量/函数名在 `backend-rs/src` 无剩余命中；本轮是 Rust owner warning
+  closeout 与 source-map freeze，不计入 fallback 数量下降。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_story_repair_quality_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-story-repair-quality-owner" -- --nocapture`
+  -> 9 passed。
+- `cargo test story_repair --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-story-repair-quality-owner" -- --nocapture`
+  -> 32 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-story-repair-quality-owner"`
+  -> passed；目标 story-repair quality-context warnings 已消失。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+
+后续规划调整：
+
+1. 本轮扫描后剩余 chapter-specific production warning 主要指向
+   `chapter_analysis_runtime_service::enqueue_chapter_analysis_task(...)`。
+2. 下一轮应按 analysis-runtime owner 整块判断：如果它是真实缺失的 Rust route/task 入口，则接入
+   Rust 路径；如果 Python-compatible task entrypoint 已完整迁到其它 owner，则删除或冻结该旧 surface。
+
+### 2026-06-10：chapter_analysis runtime trigger owner 收口
+
+本轮根据剩余 chapter-specific production warning 选择
+`backend-rs/src/services/chapter_analysis_runtime_service.rs` 作为完整 Rust owner。经确认，真实 Rust
+路由路径已经是 `chapter_analysis_routes.rs -> trigger_chapter_analysis_write_workflow(...)`，该 workflow
+会创建 analysis task、加载 response payload，并通过 `dispatch_prepared_chapter_analysis_trigger(...)`
+启动后台分析。旧 `enqueue_chapter_analysis_task(...)` 只创建/投影任务但不 dispatch，继续保留会制造
+错误入口和 production warning drift。
+
+Python source map 保持不变：
+
+1. `backend/app/api/chapter_analysis_task_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/chapter_analysis_service.py`
+4. `backend/app/services/batch_generation_analysis_service.py`
+5. `backend/app/services/chapter_generation/stream/finalize_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/api/chapter_analysis_routes.rs`
+2. `backend-rs/src/services/chapter_analysis_runtime_service.rs`
+3. `backend-rs/src/services/chapter_analysis_query_service.rs`
+4. `backend-rs/src/services/chapter_analysis_task_state_service.rs`
+5. `backend-rs/src/api/chapters_error_mapper.rs`
+
+收口结果：
+
+- 删除 `enqueue_chapter_analysis_task(...)`，该旧 surface 无 Rust consumer，且不负责后台 dispatch。
+- 保留 production route owner：
+  `chapter_analysis_routes.rs -> trigger_chapter_analysis_write_workflow(...)`。
+- 保留 Rust write workflow contract：prepare accessible chapter、create analysis task、load task status
+  response payload、dispatch prepared background execution，并通过
+  `PrepareChapterAnalysisTriggerError` 保持错误映射。
+- 精确 `rg` 确认 `enqueue_chapter_analysis_task` 在 `backend-rs/src` 无剩余命中；active route 仍解析到
+  `trigger_chapter_analysis_write_workflow` 和 `dispatch_prepared_chapter_analysis_trigger`。
+- Python source-map 文件继续作为 rollback/reference，不修改 Python runtime。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_analysis_runtime_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-analysis-runtime-owner" -- --nocapture`
+  -> 17 passed。
+- `cargo test chapter_analysis --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-analysis-runtime-owner" -- --nocapture`
+  -> 64 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-analysis-runtime-owner"`
+  -> passed；目标 analysis-runtime warning 已消失。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+
+后续规划调整：
+
+1. 下一轮重新扫描 production warnings，继续从 remaining warning 中选择完整 Rust owner。
+2. 优先选择“旧 surface 已被真实 Rust route/workflow owner 替代”的文件级收口；不要先编辑 Python
+   fallback shell。
+
+### 2026-06-10：prompt_template request/service owner 收口
+
+chapter-specific warning surface 清空后，本轮从剩余 production `cargo check` warnings 中选择
+`prompt_template` route/service owner。迁移单元保持在文件/函数组级别：
+`backend-rs/src/services/prompt_template_request_service.rs` 与
+`backend-rs/src/services/prompt_template_service.rs`。目标是删除已经被 typed route payload 与当前
+sync/status hash owner 替代的旧 Rust bridge。
+
+Python source map 保持不变：
+
+1. `backend/app/api/prompt_templates.py`
+2. `backend/app/services/prompt_service.py`
+3. `backend/app/services/prompt_template_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/api/prompt_templates.rs`
+2. `backend-rs/src/services/prompt_template_request_service.rs`
+3. `backend-rs/src/services/prompt_template_service.rs`
+4. `backend-rs/src/services/prompt_template_sync_status_query_service.rs`
+5. `backend-rs/src/services/prompt_template_*_payload_adapter_service.rs`
+
+收口结果：
+
+- 删除 `build_prompt_template_import_request_from_route_body(...)`；production import route 已直接反序列化
+  `PromptTemplateImportRouteRequest`，并调用
+  `build_prompt_template_import_request_from_route_payload(...)`。
+- request-service tests 改为覆盖 typed route payload owner，不再覆盖已退休的 raw `Value` body bridge。
+- 删除 `PromptTemplateService::content_matches_system(...)`；当前 sync/status path 直接使用
+  `calculate_content_hash(...)`、`is_legacy_hash(...)` 与 `build_sync_status(...)`。
+- 精确 `rg` 确认两个 retired surface 名称在 `backend-rs/src` 无剩余命中。
+- 不修改 Python runtime；Python prompt-template 代码继续作为 source-map/rollback reference。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test prompt_template_request_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/prompt-template-owner" -- --nocapture`
+  -> 9 passed。
+- `cargo test prompt_template --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/prompt-template-owner" -- --nocapture`
+  -> 23 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/prompt-template-owner"`
+  -> passed；目标 prompt-template request/service warnings 已消失。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+- `git diff --check`
+  -> 仅有既有 CRLF normalization warnings：`.gitignore`、
+  `deploy/strangler-gateway-probes.json`、
+  `docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md`。
+
+后续规划调整：
+
+1. 下一轮继续从 remaining production `cargo check` warnings 选择完整 Rust owner。
+2. 优先选择有多个 warning 或明确 retired bridge 的 route/service owner，例如
+   `foreshadow_request_service`，不要转向无关 config 或全局 task utility API。
+
+### 2026-06-10：foreshadow request route-payload owner 收口
+
+本轮根据 remaining production warning 选择
+`backend-rs/src/services/foreshadow_request_service.rs` 作为完整 Rust route-payload owner。
+真实 production path 已经由 Rust route/runtime 持有：
+`foreshadows.rs -> build_sync_foreshadow_from_analysis_request_from_route_payload(...)`，
+以及 `chapter_analysis_runtime_service.rs -> SyncForeshadowFromAnalysisRouteRequest::new(...)`。
+旧 warning 对应的 `body()` accessor 只是测试/source-map 观察口，不属于 production owner surface。
+
+Python source map 保持不变：
+
+1. `backend/app/api/foreshadows.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/foreshadow_service.py`
+4. `backend/app/services/chapter_analysis_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/api/foreshadows.rs`
+2. `backend-rs/src/services/foreshadow_request_service.rs`
+3. `backend-rs/src/services/foreshadow_service.rs`
+4. `backend-rs/src/services/chapter_analysis_runtime_service.rs`
+
+收口结果：
+
+- `SyncForeshadowFromAnalysisRouteRequest::body()` 标记为 `#[cfg(test)]`，不再暴露为 production
+  dead-code surface。
+- 保留 `SyncForeshadowFromAnalysisRouteRequest::new(...)`、`Deserialize` 和 owned `body`
+  字段，生产 route 与 runtime 仍按 owned payload 移交。
+- 保留 route-payload builder：
+  `build_sync_foreshadow_from_analysis_request_from_route_payload(...)`。
+- 不修改 Python runtime；Python foreshadow / chapter-analysis 文件继续作为 source-map/rollback
+  reference。
+- 本轮是 Rust owner warning closeout 与 source-map freeze evidence，不以 fallback 数变化计进度。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test foreshadow_request_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/foreshadow-request-owner" -- --nocapture`
+  -> 10 passed。
+- `cargo test foreshadow --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/foreshadow-request-owner" -- --nocapture`
+  -> 19 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/foreshadow-request-owner"`
+  -> passed；目标 `foreshadow_request_service::body` production warning 已消失。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+
+后续规划调整：
+
+1. 继续 warning-led Rust owner closeout，但每轮必须保持整文件/整函数组/整模块粒度。
+2. 下一轮优先选择有明确 route/service consumer 证据的 owner；避免为了清 warning 直接横扫
+   `config`、`tasks`、`utils::sse` 等全局工具。
+3. Python fallback/source-map 文件默认冻结；只有匹配 Rust owner 与 rollback boundary 同轮变化时才修改。
+
+### 2026-06-10：career service owner 收口
+
+本轮根据 remaining production warning 选择
+`backend-rs/src/services/career_service.rs` 作为完整 Rust service owner。目标 warning 是
+`CareerService::update(...)`。真实 production update route 已经由
+`backend-rs/src/api/careers.rs -> CareerService::update_full_for_user(...)` 持有，旧窄版 update
+surface 没有 Rust consumer，继续保留只会制造 route/service owner drift。
+
+Python source map 保持不变：
+
+1. `backend/app/api/careers.py`
+2. `backend/app/services/career_service.py`
+3. `backend/app/services/wizard_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/api/careers.rs`
+2. `backend-rs/src/services/career_service.rs`
+3. `backend-rs/src/services/wizard_service.rs`
+4. `backend-rs/src/services/book_import_ai_generation_service.rs`
+
+收口结果：
+
+- 删除未使用的窄版 `CareerService::update(...)` bridge。
+- 保留 production update owner：`careers.rs -> CareerService::update_full_for_user(...)`。
+- 保留 create/list/get/delete 以及 wizard/import 生成路径使用的显式 full-field owner 方法。
+- 精确 `rg` 确认 `CareerService::update` 在 `backend-rs/src` 无剩余 caller；
+  route update 只使用 `update_full_for_user`。
+- 不修改 Python runtime；Python career 文件继续作为 source-map/rollback reference。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test career --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/career-owner" -- --nocapture`
+  -> 7 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/career-owner"`
+  -> passed；目标 `CareerService::update` production warning 已消失，剩余 warning 属于其他 owner。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+
+后续规划调整：
+
+1. 下一轮继续从 remaining production warnings 中选择真实 Rust owner，但避免无 owner 证据的全局扫尾。
+2. `ai` owner 可以作为下一轮候选，前提是按模块级 API/export cleanup 处理，而不是零散清 warning。
+3. Python source-map 文件继续默认冻结；只有 Rust owner 与 rollback boundary 同轮变化才修改 Python。
+
+### 2026-06-10：ai module API/export owner 收口
+
+本轮选择 `backend-rs/src/ai` 作为完整 Rust 模块 owner，而不是零散处理 warning。收口目标是删除
+AI 模块旧兼容 API/export surface，同时保留 production caller 已经使用的显式导入路径：
+`crate::ai::config`、`crate::ai::service` 与 `crate::ai::types`。
+
+Python source map 保持不变：
+
+1. `backend/app/services/ai_service.py`
+2. `backend/app/api/settings.py`
+3. `backend/app/api/ai_test.py`
+4. `backend/app/services/chapter_generation_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/ai/mod.rs`
+2. `backend-rs/src/ai/config.rs`
+3. `backend-rs/src/ai/service.rs`
+4. `backend-rs/src/ai/types.rs`
+5. `backend-rs/src/ai/clients/openai.rs`
+6. `backend-rs/src/api/settings.rs`
+7. `backend-rs/src/api/ai_test.rs`
+8. `backend-rs/src/services/settings_service.rs`
+
+收口结果：
+
+- 删除 `ai/mod.rs` 中旧 `AIService` 与 `types::*` re-export；production caller 已使用显式模块路径。
+- 删除未读取的旧 `AIConfig.max_retries` 与 `AIConfig.request_delay_ms` 字段；transport retry
+  继续由 `transport_max_retries` 和 OpenAI transport request options 持有。
+- 删除未使用的 `AIService::config(...)` 和非 detailed
+  `AIService::generate_text_with_tool_choice(...)`；保留 normal text generation 与 detailed
+  tool-choice path。
+- 删除未使用的 `AIRequestError::with_transport_diagnostics(...)`；状态码感知 diagnostics 仍由
+  `with_transport_status(...)` 持有。
+- 修复 `OpenAIClient::pick_fallback_model(...)` 同分候选选择：保持 provider model-list 顺序，使
+  `deepseek-chat` 继续优先于 `deepseek-reasoner`，符合现有 fallback parity test。
+- 不修改 Python runtime；Python AI/settings 文件继续作为 source-map/rollback reference。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test prefers_similar_chat_model_for_fallback --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/ai-owner" -- --nocapture`
+  -> 1 passed。
+- `cargo test ai --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/ai-owner" -- --nocapture`
+  -> 206 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/ai-owner"`
+  -> passed；目标 AI module warnings 已消失，剩余 warning 属于 `config`、`tasks`、`utils::sse`
+  等其他 owner。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+
+后续规划调整：
+
+1. 下一轮优先考虑 `tasks` owner cleanup，前提是 registry/stream API 能作为一个 task-runtime
+   owner 整体收口。
+2. 若 task-runtime owner 边界不清晰，则选择 `utils::sse` 作为 utility owner cleanup，并先确认
+   public SSE helper surface 已不再属于 production routing。
+3. `AppConfig` dead-field cleanup 留给单独 config owner pass，因为它可能牵涉部署/startup 兼容假设。
+
+### 2026-06-10：tasks runtime registry/stream owner 收口
+
+本轮选择 Rust task runtime package 作为完整 owner：
+`backend-rs/src/tasks/registry.rs` 与 `backend-rs/src/tasks/stream.rs`。目标不是改变 task
+lifecycle 行为，而是删除没有 production route / recovery consumer 的旧 public runtime API，
+让后台任务运行时 owner 更清晰。
+
+Python source map 保持不变：
+
+1. `backend/app/api/background_tasks.py`
+2. `backend/app/services/task_service.py`
+3. `backend/app/services/chapter_generation/*`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/tasks/registry.rs`
+2. `backend-rs/src/tasks/stream.rs`
+3. `backend-rs/src/tasks/persistence.rs`
+4. `backend-rs/src/tasks/recovery.rs`
+5. `backend-rs/src/api/background_tasks.rs`
+6. `backend-rs/src/main.rs`
+
+收口结果：
+
+- 删除未使用的 `TaskRegistry::remove(...)` 与 `TaskRegistry::count_active_for_user(...)`。
+- 删除未使用的 `TaskStreamHub::unsubscribe(...)`、`TaskStreamHub::fanout_async(...)`、
+  `TaskStreamHub::has_subscribers(...)` 和 `TaskStreamHub::cleanup_stale(...)`。
+- 保留 active registry contract：
+  `insert/get/update/list_for_user/find_active/all_records/load_records/prune_old_tasks`。
+- 保留 active stream contract：`subscribe` 用于 SSE consumer，`fanout` 用于 route/runtime
+  event publication。
+- 精确 `rg` 确认 retired method names 在 `backend-rs/src` 无剩余 caller；剩余
+  `tasks.remove(id)` 是 `prune_old_tasks` 内部 `HashMap::remove`，不是被删除的 public
+  registry API。
+- 不修改 Python runtime；Python background task / chapter generation task 文件继续作为
+  source-map/rollback reference。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test tasks --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/tasks-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/tasks-owner"`
+  -> passed；目标 task runtime warnings 已消失，剩余 warning 属于 `config` 与
+  `utils::sse`。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+
+后续规划调整：
+
+1. 下一轮优先选择 `utils::sse` utility owner，前提是 `rg` 确认其 helper surface 不再被
+   production routing 消费。
+2. `AppConfig` 留给独立 config owner pass，因为字段可能仍承担部署/startup 兼容说明。
+3. 后续进度继续按 Rust owner 收口、warning reduction、smoke evidence、source-map/rollback
+   freeze 统计，不再按 fallback count 统计。
+
+### 2026-06-10：utils::sse utility owner 收口
+
+本轮选择 `backend-rs/src/utils/sse.rs` 作为完整 utility owner。该文件仍有 active Rust
+production consumer：`SseChannel`、keep-alive builders、base event builders，以及
+stream-oriented `SseProgress::{start, preparing, generating, complete}`。本轮删除的是旧
+Python-style 字符串 formatter 与未使用 shared progress tracker helper，不改变现有 SSE
+payload shape。
+
+Python source map 保持不变：
+
+1. `backend/app/utils/sse.py`
+2. `backend/app/api/*` 中旧 SSE payload shaping 参考路径
+
+Rust owner / consumer：
+
+1. `backend-rs/src/utils/sse.rs`
+2. `backend-rs/src/api/background_tasks.rs`
+3. `backend-rs/src/api/chapter_generation_routes.rs`
+4. `backend-rs/src/api/chapter_batch_generation.rs`
+5. `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+6. `backend-rs/src/services/chapter_regeneration_stream_launch_service.rs`
+
+收口结果：
+
+- 删除未使用的 `format_sse(...)`；active Rust route 使用 `axum::sse::Event` builders，不再
+  hand-format SSE string。
+- 删除未使用的 `SharedProgress` 与 `shared_progress(...)`。
+- 删除未使用的 `SseProgress::progress/parsing/saving/retry/warning`。
+- `SseProgress::current_progress()` 改为 `#[cfg(test)]`，保留 focused stream tests 的状态断言。
+- 保留生产 SSE contract：`SseChannel`、`SseTaskCapture`、`sse_progress`、`sse_chunk`、
+  `sse_result`、`sse_json`、`sse_error`、`sse_done`、`default_sse_keep_alive`、
+  `named_sse_keep_alive`，以及 single-generation / regeneration stream 正在使用的 tracker
+  methods。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test utils::sse --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/sse-owner" -- --nocapture`
+  -> 2 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/sse-owner"`
+  -> passed；目标 `utils::sse` production warnings 已消失。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+
+### 2026-06-10：config startup contract owner 收口
+
+本轮选择 `backend-rs/src/config.rs` 与 `backend-rs/src/main.rs` startup call site 作为
+config/startup owner。剩余 warning 字段属于 env/deployment contract，直接删除会破坏部署和
+测试构造语义，因此本轮选择让 Rust startup 显式消费并记录这些字段，而不是删字段。
+
+Python source map 保持不变：
+
+1. `backend/app/config.py`
+2. `backend/app/bootstrap/*`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/config.rs`
+2. `backend-rs/src/main.rs`
+3. `backend-rs/src/api/router.rs`
+4. `backend-rs/src/api/auth.rs`
+5. `backend-rs/src/services/auth.rs`
+6. `backend-rs/src/services/chapter_candidate_route_gateway_service.rs`
+
+收口结果：
+
+- 新增 `AppConfig::log_startup_contract()`，记录 app name/version、log-level、
+  debug/runtime mode、startup schema sync policy、session refresh threshold。
+- `main.rs` 在 `config::load()` 成功后立即调用 `cfg.log_startup_contract()`。
+- 保留所有环境变量名与默认值；不改变 deployment/auth/database/CORS/gateway config 行为。
+- production main binary `cargo check` warning set 已清零。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test config --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/config-owner" -- --nocapture`
+  -> 25 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/config-owner"`
+  -> passed，production warnings 为 0。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+
+后续规划调整：
+
+1. warning-led Rust owner closeout 本 checkpoint 已完成。
+2. 下一轮应回到业务/模块 owner，而不是继续做 warning cleanup：优先
+   `chapter_single_generation`、`chapter_batch_generation`、`chapter_candidate_event_service`，
+   或已经通过 smoke gate 的 source-map freeze/removal candidate。
+3. `project_export_payload_adapter_service` 的 test-only unused import warning 可另开 test hygiene
+   round；它不是 production migration blocker。
+
+### 2026-06-10：chapter candidate event + batch runtime selected-candidate 生产消费链收口
+
+本轮选择 `chapter_candidate_event_service` 与 batch runtime/read-context consumer chain 作为一个
+完整函数组 owner。目标不是继续搬 payload helper，而是补上 2026-06-09 留下的真实生产消费缺口：
+Rust 已拥有 selected-candidate/chunk event batch 决策后，batch runtime 必须在真实生成路径中消费它。
+
+Python source map 保持不变：
+
+1. `backend/app/services/chapter_candidate_event_service.py`
+2. `backend/app/services/batch_generation_candidate_service.py`
+3. `backend/app/services/chapter_generation/stream/candidate_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_event_service.rs`
+2. `backend-rs/src/services/chapter_generation_runtime_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+5. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+6. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+7. `backend-rs/src/api/chapter_batch_generation.rs`
+
+收口结果：
+
+- batch create 与 resume runtime input 现在都携带 route/AppConfig 的
+  `ChapterCandidateRouteGatewayConfig`，rollback knob 仍由部署配置控制。
+- batch 单章生成执行从旧 direct provider payload path 切到
+  `generate_and_persist_chapter_content_with_candidate_route_gateway(...)`，开始真正消费 Rust
+  candidate route gateway / executor owner。
+- `GeneratedChapterResult` 新增可选 `selected_candidate_event_source`，只作为运行时事件源使用，不改变
+  已持久化 chapter/history payload shape。
+- batch runtime 通过 `build_batch_generation_selected_candidate_event_batch(...)` 生成
+  `selected_candidate_events` workflow snapshot；chunk 是否发出仍由 `stream_chunks` 与
+  `quality_gate_plan.action == "continue"` 共同决定。
+- batch read-context/status stream 读取 `selected_candidate_events`，纳入 observation key，并在
+  generic progress 之后、analysis/terminal event 之前输出。
+- 删除旧的 direct provider batch generation 入口
+  `generate_and_persist_chapter_content_with_provider_payload(...)` 及其内部未用 helper，避免 batch
+  继续绕开 Rust candidate gateway。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_event_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-event-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-event-owner" -- --nocapture`
+  -> 45 passed。
+- `cargo test chapter_batch_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-event-owner" -- --nocapture`
+  -> 111 passed。
+- `cargo test chapter_batch_generation_resume_task_command_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-event-owner" -- --nocapture`
+  -> 63 passed。
+- `cargo test chapter_batch_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-event-owner" -- --nocapture`
+  -> 75 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-event-owner"`
+  -> passed，production warnings 为 0。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 仍为 `rust = 131`、`python-fallback = 0`。
+
+后续规划调整：
+
+1. selected-candidate/chunk event batch 已接入真实 Rust batch runtime/read-stream path；下一轮不要再把
+   candidate event helper 当作迁移主目标。
+2. 下一轮优先做更大的 `chapter_batch_generation` owner block：带 candidate gateway enabled 的
+   create/status/stream/resume business smoke，或 UI-facing stream/status payload parity 验证。
+3. 若切换包，优先 `chapter_single_generation` enabled-path/fallback-shrink，继续沿 AppConfig
+   rollback boundary 推进，不从 Python compatibility shell 起手。
+
+### 2026-06-10：chapter_batch_generation active gateway business smoke 收口
+
+本轮选择 `chapter_batch_generation` enabled-path / business smoke 作为整块 owner。目标不是继续拆
+helper，而是证明 batch create/status/stream/resume 这条 Rust 生产链已经消费 AppConfig candidate
+gateway config、runtime selected-candidate snapshot 与 read-context SSE event 投影。
+
+Python source map 保持不变：
+
+1. `backend/app/api/chapters.py`
+2. `backend/app/services/batch_generation_candidate_service.py`
+3. `backend/app/services/chapter_generation/stream/candidate_service.py`
+4. `backend/app/services/chapter_candidate_event_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+2. `backend-rs/src/api/health.rs`
+3. `backend-rs/src/api/chapter_batch_generation.rs`
+4. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+5. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+6. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+7. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+8. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 新增 batch active gateway smoke owner，包含 enabled Rust owner 与 fallback-freeze candidate
+  两个子探针。
+- health endpoint 新增 `/health/chapter-batch-generation-active-gateway-smoke`，payload 证明
+  create/resume route、runtime execution input、selected-candidate snapshot、read-context SSE
+  都在 Rust owner 链内。
+- strangler manifest 新增 `chapter-batch-generation-active-gateway-smoke-rust`，profiles 覆盖
+  `deploy`、`route-groups`、`business`、`phase5-p1`、`phase5-batch-generation-owner`。
+- 只开放两个 crate-internal owner 函数：
+  `build_batch_generation_selected_candidate_event_snapshot(...)` 与
+  `BatchGenerationStreamState::events(...)`，没有复制 selected-candidate/chunk 判断逻辑。
+- readiness owner count 从 `rust = 131` 提升到 `rust = 132`，`python-fallback = 0` 保持不变；
+  这次按 business owner 计进度，不再按 fallback 数下降计进度。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-generation-owner" -- --nocapture`
+  -> 5 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-generation-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_batch_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-generation-owner" -- --nocapture`
+  -> 367 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-generation-owner"`
+  -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  -> passed，readiness owner count 为 `rust = 132`、`python-fallback = 0`。
+
+后续规划调整：
+
+1. `chapter_batch_generation` 已有 enabled-path business smoke；下一步不要再新增 helper-only smoke。
+2. 下一块优先在 batch candidate/event Python source map 上做 freeze/delete review，或补真实 DB-backed
+   logged-in create/status/stream/resume smoke。
+3. 所有 Rust 验证继续使用 E 盘 target-dir，避免编译产物回到 C 盘。
+
+### 2026-06-10：chapter_batch_generation active gateway cutover/source-map freeze 收口
+
+本轮选择 `chapter_batch_generation` route-gateway cutover evidence 作为整块 owner。结论是：
+active batch generation 流量已经由 `deploy/nginx/mumunovel.conf` 路由到 Rust，Python 批量生成
+route/service 文件在当前阶段只作为 source-map / rollback inventory 保留；不要继续在这些 Python
+文件里做零散业务修补。
+
+Python source map 保持不变：
+
+1. `backend/app/api/chapters.py`
+2. `backend/app/api/chapter_batch_generation_routes.py`
+3. `backend/app/services/batch_generation/create_service.py`
+4. `backend/app/services/batch_generation/query_service.py`
+5. `backend/app/services/batch_generation/resume_service.py`
+6. `backend/app/services/batch_generation/status_response_builder.py`
+7. `backend/app/services/batch_generation_create_service.py`
+8. `backend/app/services/batch_generation_query_service.py`
+9. `backend/app/services/batch_generation_resume_service.py`
+10. `backend/app/services/batch_generation_status_service.py`
+11. `backend/app/services/batch_generation_candidate_service.py`
+12. `backend/app/services/chapter_generation/stream/candidate_service.py`
+13. `backend/app/services/chapter_candidate_event_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+2. `backend-rs/src/api/chapter_batch_generation.rs`
+3. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+5. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+6. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+7. `deploy/nginx/mumunovel.conf`
+8. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- batch active gateway smoke 的 readiness evidence 新增 `active_gateway_cutover`，明确记录 nginx
+  deployment owner、Rust route owner、create/status/stream/active-tasks/cancel/resume 路由全部
+  指向 Rust。
+- `python_source_map` 扩展为完整 batch route/service shell inventory，不再只列 candidate/event
+  helper。
+- `python_source_map_policy` 明确 `active_gateway_cutover = nginx_routes_to_rust`，并把
+  `batch_generation_create_service.py`、`batch_generation_resume_service.py`、
+  `batch_generation_status_service.py` 标记为 compatibility shell，把
+  `batch_generation_query_service.py` 标记为 residual logic shell。
+- 删除/冻结边界改为整模块：
+  `delete_or_freeze_batch_generation_python_route_and_service_shells_as_one_module_after_logged_in_db_smoke`。
+- `deploy/strangler-gateway-probes.json` 的 expected payload 同步校验上述 cutover/source-map
+  contract。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-generation-cutover-owner" -- --nocapture`
+  -> 5 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-generation-cutover-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-generation-cutover-owner"`
+  -> passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+
+后续规划调整：
+
+1. 不再把 batch Python service 文件作为 active 业务迁移目标；除非同一轮完成整模块 freeze/delete。
+2. 下一步优先补 logged-in DB-backed batch business smoke，覆盖 create/status/stream/resume 的真实 DB
+   路径。
+3. DB-backed smoke 通过后，按整模块删除或冻结 batch Python route/service shells，而不是逐文件慢慢改。
+
+### 2026-06-10：chapter_batch_generation DB-backed read owner business smoke 收口
+
+本轮选择 `chapter_batch_generation_read_context_service` 作为 logged-in DB-backed read owner。
+前一轮 active gateway smoke 已证明 batch create/resume/runtime/readiness 链路走 Rust；本轮补上真实
+SQLite DB 读取证据，证明 status、active project、active task list 这三个 UI-facing read path
+不是只靠内存假对象。
+
+Python source map 保持不变：
+
+1. `backend/app/api/chapters.py`
+2. `backend/app/api/chapter_batch_generation_routes.py`
+3. `backend/app/services/batch_generation/query_service.py`
+4. `backend/app/services/batch_generation/status_response_builder.py`
+5. `backend/app/services/batch_generation_query_service.py`
+6. `backend/app/services/batch_generation_status_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+2. `backend-rs/src/api/chapter_batch_generation.rs`
+3. `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+4. `backend-rs/src/services/chapter_generation_snapshot_service.rs`
+5. `backend-rs/src/services/project_access_query_service.rs`
+
+收口结果：
+
+- 新增 DB-backed business smoke test module，使用 SQLite memory DB 创建 `projects`、
+  `batch_generation_tasks`、`batch_generation_snapshots` 三张表。
+- 种子数据模拟 logged-in 用户拥有的 running batch task，并带上 Rust candidate gateway metadata、
+  selected-candidate runtime events、quality metrics、active story repair payload。
+- 同一份 DB-backed task 被三条 Rust read owner path 读取：
+  `load_owned_batch_generation_status_payload(...)`、
+  `load_active_batch_generation_view_from_route_project(...)`、
+  `load_active_user_batch_generation_task_list_view_from_route_query(...)`。
+- 断言 status payload、active project payload、active task list payload 都保留
+  `candidate_gateway.execution_path = rust_candidate_executor`、rollback boundary、quality metrics
+  与 story repair payload。
+- 这补齐了上一轮 cutover/source-map freeze 的弱点：batch read path 现在有真实 DB-backed Rust 证据。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-generation-db-smoke-owner" -- --nocapture`
+  -> 46 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-generation-db-smoke-owner" -- --nocapture`
+  -> 5 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-generation-db-smoke-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-generation-db-smoke-owner"`
+  -> passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+
+后续规划调整：
+
+1. 下一步可以进入 batch Python route/service shells 的整模块 freeze/delete review。
+2. 删除风险若仍高，就先把完整 batch Python 模块冻结为 source-map only，并记录回滚边界；不要再做
+   Python 小块修补。
+3. 判断删除 readiness 时，用 active gateway smoke 覆盖 create/runtime，用本轮 DB-backed smoke 覆盖
+   status/active/list read path。
+
+### 2026-06-10：chapter_batch_generation Python shell full-module freeze 收口
+
+本轮选择 batch Python route/service shell freeze boundary 作为整模块 owner。审计结果显示：
+`backend/app/bootstrap/router_registry.py` 仍注册 `chapter_batch_generation_routes`，并且
+`chapters.py`、`chapter_batch_generation_routes.py`、compat service 仍引用 batch query/status 顶层
+shell；所以这一轮直接删除 Python 文件会破坏 Python rollback 面。由于 active gateway traffic 已经走
+Rust，正确动作是整模块冻结为 source-map only，而不是继续小块修改 Python。
+
+冻结为 rollback-only 的 Python source map：
+
+1. `backend/app/api/chapter_batch_generation_routes.py`
+2. `backend/app/services/batch_generation/create_service.py`
+3. `backend/app/services/batch_generation/query_service.py`
+4. `backend/app/services/batch_generation/resume_service.py`
+5. `backend/app/services/batch_generation/status_response_builder.py`
+6. `backend/app/services/batch_generation_create_service.py`
+7. `backend/app/services/batch_generation_query_service.py`
+8. `backend/app/services/batch_generation_resume_service.py`
+9. `backend/app/services/batch_generation_status_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+3. `backend-rs/src/api/chapter_batch_generation.rs`
+4. `deploy/nginx/mumunovel.conf`
+5. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- batch active gateway readiness payload 新增 `full_module_freeze_ready = true`、`freeze_scope`、
+  `freeze_reason`、`python_bootstrap_status = registered_for_explicit_gateway_rollback_only`。
+- 新增 `frozen_module_files`，将完整 Python route/service shell inventory 固化到 Rust readiness
+  evidence，避免每轮重新分析。
+- 新增 `db_backed_business_smoke` evidence，明确 freeze/delete readiness 依赖上一轮 SQLite-backed
+  read smoke。
+- `deploy/strangler-gateway-probes.json` 同步校验上述 freeze contract。
+- 本轮未编辑/删除 Python 文件，保留 rollback 面；后续不得再对这组 Python 文件做小块业务修补。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-generation-freeze-owner" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-generation-freeze-owner" -- --nocapture`
+  -> 46 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-generation-freeze-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-generation-freeze-owner"`
+  -> passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+
+后续规划调整：
+
+1. batch Python route/service 模块现在视为 frozen source-map only。
+2. 除非同一轮移除 Python bootstrap 注册/imports 或恢复显式 rollback route，否则不要再编辑这些
+   Python 文件。
+3. 下一轮切换到新的 Rust owner，优先 `chapter_single_generation` source-map freeze/delete review，
+   或其他已有 active Rust route + DB-backed evidence 的整模块。
+
+### 2026-06-10：chapter_single_generation Python shell full-module freeze 收口
+
+本轮选择 single-generation Python route/compat/stream shell freeze boundary 作为整模块
+owner。审计结果显示：`backend/app/bootstrap/router_registry.py` 仍注册
+`chapter_generation_routes`，`backend/app/api/chapters.py` 与
+`backend/app/services/compat/chapter_generation_route_compat_service.py` 仍引用兼容 route 和
+stream entry shell；所以这一轮直接删除 Python 文件会破坏 Python rollback 面。由于 active
+stream/background traffic 已经由 Rust active gateway smoke 覆盖，正确动作是整模块冻结为
+source-map only，而不是继续小块修改 Python。
+
+冻结为 rollback-only 的 Python source map：
+
+1. `backend/app/api/chapter_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+4. `backend/app/services/chapter_generation/stream/entry_service.py`
+5. `backend/app/services/chapter_generation/stream/candidate_service.py`
+6. `backend/app/services/chapter_generation/stream/finalize_service.py`
+7. `backend/app/services/chapter_generation/stream/wiring_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+2. `backend-rs/src/api/chapter_generation_routes.rs`
+3. `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+4. `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+5. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+6. `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+7. `deploy/nginx/mumunovel.conf`
+8. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- single-generation active gateway readiness payload 新增 `full_module_freeze_ready = true`、
+  `freeze_scope`、`freeze_reason`、`python_bootstrap_status =
+  registered_for_explicit_gateway_rollback_only`。
+- 新增 `frozen_module_files`、`compat_shells`、`stream_shells`，将完整 Python
+  route/compat/stream shell inventory 固化到 Rust readiness evidence，避免每轮重新分析。
+- 新增 `active_gateway_cutover` block，记录 nginx deployment owner、Rust route owner、
+  stream/background routes routed to Rust，以及 SSE stream route。
+- rollback policy 从
+  `keep_until_logged_in_stream_background_business_smoke_or_explicit_freeze_delete_round`
+  收口为 `keep_as_source_map_until_explicit_freeze_delete_round`。
+- `deploy/strangler-gateway-probes.json` 同步校验上述 freeze contract。
+- 本轮未编辑/删除 Python 文件，保留 rollback 面；后续不得再对这组 Python 文件做小块业务修补。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-generation-freeze-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-generation-freeze-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-generation-freeze-owner"`
+  -> passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `git diff --check` -> no whitespace errors；仅剩既有 CRLF/LF warning。
+
+后续规划调整：
+
+1. single-generation Python route/compat/stream 模块现在视为 frozen source-map only。
+2. 除非同一轮移除 Python bootstrap 注册/imports 或恢复显式 rollback route，否则不要再编辑这些
+   Python 文件。
+3. 下一轮优先转向 `chapter_generation` shared owner cleanup，或补一个 DB-backed
+   single-generation business smoke，用 logged-in stream/background persistence 证明 Rust owner
+   不再依赖 Python shell。
+
+### 2026-06-10：chapter_single_generation DB-backed background persistence smoke 收口
+
+本轮选择 `chapter_single_generation_runtime_restore_service` 作为 single-generation
+background persistence 的整函数组 owner。上一轮已经把 Python route/compat/stream shell 冻结为
+source-map only；这一轮补真实 SQLite-backed Rust write smoke，证明后台单章生成 task seed 与
+startup snapshot 持久化不依赖 Python shell。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/api/chapter_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+4. `backend/app/services/chapter_generation/stream/entry_service.py`
+5. `backend/app/services/chapter_generation/stream/candidate_service.py`
+6. `backend/app/services/chapter_generation/stream/finalize_service.py`
+7. `backend/app/services/chapter_generation/stream/wiring_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+2. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+3. `backend-rs/src/services/chapter_generation_snapshot_service.rs`
+4. `backend-rs/src/models/batch_generation_task.rs`
+5. `backend-rs/src/models/batch_generation_snapshot.rs`
+6. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 新增 DB-backed business smoke test，使用 Rust SeaORM schema 创建 SQLite memory
+  `batch_generation_tasks` 与 `batch_generation_snapshots`。
+- smoke 从 single-chapter target、active story repair payload、quality metrics 与
+  fallback-disabled `ChapterCandidateRouteGatewayConfig` 构造 restored runtime launch。
+- 直接执行
+  `PreparedSingleGenerationBackgroundLaunchParts::persist_and_dispatch(...)`，验证 Rust owner
+  写入 background task seed 与 startup runtime snapshot。
+- 断言 task lifecycle 字段（`pending`、retry counters、chapter ids）、active story repair
+  payload，以及 `workflow_runtime_state` 内 quality metrics。
+- single-generation active gateway readiness payload 与
+  `deploy/strangler-gateway-probes.json` 新增 `db_backed_business_smoke` evidence，部署 smoke
+  会校验该 Rust owner 证据。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_single_generation_runtime_restore_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-generation-db-smoke-owner" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-generation-db-smoke-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-generation-db-smoke-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-generation-db-smoke-owner"`
+  -> passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `git diff --check` -> no whitespace errors；仅剩既有 CRLF/LF warning。
+
+后续规划调整：
+
+1. single-generation background task persistence 现在由
+   `chapter_single_generation_runtime_restore_service` 作为 Rust owner 记录。
+2. 除非同一轮移除 Python bootstrap imports 或恢复显式 rollback route，否则不要再编辑冻结的
+   Python single-generation route/compat/stream source map。
+3. 下一轮优先推进 `chapter_generation` shared owner cleanup，尤其是 single/batch 共同消费的
+   candidate/runtime semantics；如果 stream 侧成为阻塞，再补 DB-backed stream-side smoke。
+
+### 2026-06-10：chapter_generation shared task semantics owner 收口
+
+本轮选择 `chapter_generation_task_semantics_service` 作为 single/batch 共用 task semantics
+owner。Python source-map 里仍有
+`backend/app/services/batch_generation/status_response_builder.py` 的
+`_resolve_batch_generation_task_type(...)`，但该 Python 文件已属于 frozen batch source map；因此迁移动作不是
+继续改 Python helper，而是在 Rust shared owner 里固化兼容合同，并让 single/batch readiness 同时命名该
+owner。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/services/batch_generation/status_response_builder.py`
+2. `backend/app/services/batch_generation_query_service.py`
+3. `backend/app/api/chapter_batch_generation_routes.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_generation_task_semantics_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+5. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+6. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+7. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 新增 Rust compatibility test，固化 Python `_resolve_batch_generation_task_type(...)` 合同：
+  单个 chapter id 映射 `chapter_single_generate`，多章或 malformed single shape 映射
+  `chapters_batch_generate`。
+- single-generation active gateway readiness owner list 新增
+  `chapter_generation_task_semantics_service`。
+- batch-generation active gateway readiness owner list 新增
+  `chapter_generation_task_semantics_service`。
+- `deploy/strangler-gateway-probes.json` 同步校验 single/batch 两个 active gateway probe 的
+  shared task semantics owner。
+- 本轮未编辑 Python 文件；Python status builder 继续保持 rollback source-map only。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_generation_task_semantics_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-shared-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-shared-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-shared-owner" -- --nocapture`
+  -> 5 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-shared-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-shared-owner"`
+  -> passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `git diff --check` -> no whitespace errors；仅剩既有 CRLF/LF warning。
+
+后续规划调整：
+
+1. task type/status semantics 现在视为
+   `chapter_generation_task_semantics_service` 的 Rust-owned shared owner。
+2. 除非同一轮移除 rollback/import path，否则不要再编辑 frozen Python status response builder。
+3. 下一轮继续 `chapter_generation` shared owner cleanup，优先 shared runtime/candidate semantics
+   owner；如果 route stream persistence 成为可测缺口，再补 DB-backed stream-side smoke。
+
+### 2026-06-10：chapter_generation shared candidate runtime owner 收口
+
+本轮选择 `chapter_generation_runtime_service` 作为 single-generation candidate/runtime
+共享函数组 owner。对应 Python 代码继续作为 source-map/rollback 参照保留，不做小块 Python 修补；
+真正的迁移推进点是把 candidate content、fallback payload、gateway metadata、history attachment、
+validation boundary 和 rollback boundary 收口成 Rust owner 可发布的 contract。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+2. `backend/app/services/chapter_generation/stream/candidate_service.py`
+3. `backend/app/services/batch_generation_candidate_service.py`
+4. `backend/app/services/batch_generation_execution_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_generation_runtime_service.rs`
+2. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+3. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 新增 `build_single_generation_candidate_runtime_owner_contract()`，在 Rust runtime owner
+  中显式记录 Python source map、Rust owner map、行为合同、验证边界和 rollback 边界。
+- 新增 `build_single_generation_direct_fallback_candidate_payload(...)`，将
+  `direct_generation_fallback` Python-compatible payload shape 从真实 provider 调用中拆出，便于
+  Rust 侧直接测试。
+- 补强 `chapter_generation_runtime_service` 测试，覆盖 `full_content` 优先级、`content`
+  兼容字段、空/缺失内容错误、gateway metadata shape、direct fallback payload shape。
+- single-generation active gateway readiness 现在嵌入 shared candidate runtime owner contract，
+  不再只靠 owner 名称列表证明该 Rust 边界。
+- `deploy/strangler-gateway-probes.json` 同步校验该 shared runtime owner contract。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_generation_runtime_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-runtime-owner" -- --nocapture`
+  -> 20 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-runtime-owner" -- --nocapture`
+  -> 6 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-runtime-owner"`
+  -> passed。
+
+后续规划调整：
+
+1. shared candidate content/metadata/fallback semantics 现在视为
+   `chapter_generation_runtime_service` 的 Rust-owned owner。
+2. 除非同一轮移除或 repoint import/bootstrap rollback path，否则不要再编辑上述 Python candidate
+   helpers。
+3. 下一轮继续按整 owner 推进，优先选择能减少 source-map ambiguity 的 route-facing
+   stream/background DB smoke 或 batch runtime consumer contract。
+
+### 2026-06-10：chapter_generation batch runtime consumer contract 收口
+
+本轮选择 batch active gateway smoke owner 作为 shared
+`chapter_generation_runtime_service` candidate runtime owner 的消费者合同。上一轮已经让 shared
+runtime owner 发布 contract；这一轮让 batch active-route readiness 直接消费同一份 contract，避免
+batch 侧只靠 owner 名称列表证明迁移进度。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/services/batch_generation_candidate_service.py`
+2. `backend/app/services/batch_generation_execution_service.py`
+3. `backend/app/services/chapter_generation/stream/candidate_service.py`
+4. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_generation_runtime_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+3. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+4. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- `chapter_batch_generation_active_gateway_smoke_service` 现在在 batch active-route
+  readiness evidence 中嵌入
+  `build_single_generation_candidate_runtime_owner_contract()`。
+- batch smoke 测试断言 shared runtime contract 包含 batch Python source-map、accepted
+  candidate content fields，以及 rollback source-map policy。
+- `deploy/strangler-gateway-probes.json` 同步校验 batch active gateway probe 消费 shared
+  runtime owner contract。
+- 本轮不编辑 Python 文件；对应 Python candidate helpers 继续保持 rollback/source-map only。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-batch-runtime-consumer" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_generation_runtime_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-batch-runtime-consumer" -- --nocapture`
+  -> 20 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-batch-runtime-consumer" -- --nocapture`
+  -> 6 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-batch-runtime-consumer" -- --nocapture`
+  -> 4 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-batch-runtime-consumer"`
+  -> passed。
+- `git diff --check` -> no whitespace errors；仅剩既有 CRLF/LF warning。
+
+后续规划调整：
+
+1. single 和 batch active gateway readiness 都已消费 shared
+   `chapter_generation_runtime_service` candidate runtime owner。
+2. 下一轮继续找能减少 source-map ambiguity 的整 owner，例如 DB-backed stream/background
+   consumer smoke，或对一个 Python candidate/route module 做显式 freeze/delete 边界。
+
+### 2026-06-10：chapter_batch_generation DB-backed stream selected-candidate consumer 收口
+
+本轮选择 `chapter_batch_generation_read_context_service` 作为 DB-backed stream
+selected-candidate projection owner。上一轮已经证明 batch active gateway 会消费 shared
+`chapter_generation_runtime_service` candidate runtime owner contract；这一轮补上真实 SQLite
+snapshot runtime state 到 Rust stream event projection 的证据，避免迁移进度只停留在 readiness
+元数据层。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/services/batch_generation_candidate_service.py`
+2. `backend/app/services/batch_generation_execution_service.py`
+3. `backend/app/services/batch_generation/status_response_builder.py`
+4. `backend/app/services/batch_generation_query_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+3. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 新增 DB-backed business smoke：
+  `should_project_db_backed_selected_candidate_events_into_batch_stream_state_from_rust_owner`。
+- 测试使用 SQLite memory DB 写入 `projects`、`batch_generation_tasks`、
+  `batch_generation_snapshots`，并在 persisted `workflow_runtime_state` 中保留
+  selected-candidate progress/chunk events、candidate gateway metadata、quality metrics、
+  active story repair payload。
+- `load_owned_batch_generation_stream_state(...)` 现在有 DB-backed 证据覆盖：
+  `running` status、`65` progress、selected-candidate event count、progress message、
+  chunk type/content、observation-key selected-candidate projection。
+- batch active gateway readiness 的 `db_backed_business_smoke.covered_paths` 新增
+  `load_owned_batch_generation_stream_state`。
+- `deploy/strangler-gateway-probes.json` 同步校验 batch active gateway DB-backed smoke 覆盖
+  status、stream、active project view、active user task-list read paths。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-read-context-stream-db-smoke" -- --nocapture`
+  -> 47 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-read-context-stream-db-smoke" -- --nocapture`
+  -> 5 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-read-context-stream-db-smoke" -- --nocapture`
+  -> 4 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-read-context-stream-db-smoke"`
+  -> passed。
+- `git diff --check` -> no whitespace errors；仅剩既有 CRLF/LF warning。
+
+后续规划调整：
+
+1. DB-backed batch stream selected-candidate projection 现在视为
+   `chapter_batch_generation_read_context_service` 的 Rust-owned read owner。
+2. Python batch candidate / execution / status / query shells 继续只作为 source-map/rollback
+   参照；除非同一轮处理 import/bootstrap rollback boundary，否则不要再改这些 Python 文件。
+3. 下一轮优先做能减少 source-map ambiguity 的整 owner：一个 batch candidate/query module 的
+   explicit freeze/delete boundary，或另一个 DB-backed route-facing stream/background smoke。
+
+### 2026-06-10：chapter_batch_generation DB-backed active project/list read owner 收口
+
+本轮继续选择 `chapter_batch_generation_read_context_service`，但不重复 stream
+selected-candidate 证据，而是补齐 route-facing active project 与 active user task-list 查询合同。
+这轮推进点是：Rust read owner 现在用真实 SQLite DB-backed fixture 证明 Python query/status
+source-map 中最容易漂移的筛选、排序、limit、租户隔离和 snapshot payload 投影，而不是继续搬 helper。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/services/batch_generation_query_service.py`
+2. `backend/app/services/batch_generation/status_response_builder.py`
+3. `backend/app/api/chapter_batch_generation_routes.py`
+4. `backend/app/api/chapters.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+3. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 新增 DB-backed read-owner smoke：
+  `should_filter_sort_and_limit_db_backed_active_batch_views_from_rust_read_owner`。
+- 新增测试 fixture helper，直接写入 batch task + snapshot runtime state，并覆盖
+  candidate gateway metadata、progress、active story repair payload、quality metrics。
+- `load_active_batch_generation_view_from_route_project(...)` 现在有 DB-backed 证据证明：
+  同一用户同一项目只选最新 active task，且排除跨用户任务。
+- `load_active_user_batch_generation_task_list_view_from_route_query(...)` 现在有 DB-backed
+  证据证明：按 `created_at desc` 排序、遵守 route `limit`、包含同用户跨项目任务、排除跨用户任务。
+- active/list payload 断言同步覆盖 snapshot-owned `candidate_gateway`、`checkpoint.progress`
+  和 `active_story_repair_payload`，进一步减少 Python query/status shell 的 source-map
+  ambiguity。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-read-context-active-list-db-smoke" -- --nocapture`
+  -> 48 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-read-context-active-list-db-smoke" -- --nocapture`
+  -> 5 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-read-context-active-list-db-smoke" -- --nocapture`
+  -> 4 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-read-context-active-list-db-smoke"`
+  -> passed。
+
+后续规划调整：
+
+1. DB-backed active project/list query projection 现在视为
+   `chapter_batch_generation_read_context_service` 的 Rust-owned read owner。
+2. Python batch query/status shell 继续只是 source-map/rollback 参照；本轮增强了后续
+   explicit freeze/delete 的证据，但没有单独删除或 repoint Python import。
+3. 下一步如果继续 batch lane，优先审计 Python batch query/status shell 的
+   freeze/delete + bootstrap rollback boundary；如果仍有风险，则补 DB-backed resume/cancel
+   route-facing smoke。
+
+### 2026-06-10：chapter_batch_generation DB-backed cancel write-owner 收口
+
+本轮先审计 Python batch query/status shell 是否可以直接删除。结论是不安全：
+`backend/app/services/batch_generation_query_service.py` 仍被 Python route rollback shells import，
+`backend/app/services/batch_generation/status_response_builder.py` 仍被 Python resume/status
+compatibility code import。因此本轮不做 Python 小修或误删，而是选择
+`chapter_batch_generation_write_workflow_service` 的 cancel DB-backed write owner，补齐真实写路径
+持久化证据。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/services/batch_generation_query_service.py`
+2. `backend/app/services/batch_generation/status_response_builder.py`
+3. `backend/app/services/batch_generation/resume_service.py`
+4. `backend/app/api/chapter_batch_generation_routes.py`
+5. `backend/app/api/chapters.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+5. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 在 `chapter_batch_generation_write_workflow_service` 增加 SQLite-backed write-owner fixture，
+  覆盖 batch task 与 snapshot runtime state。
+- 新增 DB-backed smoke：
+  `should_persist_db_backed_cancelled_batch_generation_from_rust_write_owner`。
+- 测试通过 `cancel_owned_batch_generation_write_workflow(...)` 进入 Rust write owner，断言返回
+  payload 已是 cancelled，包含 terminal status、candidate gateway metadata 和
+  active story repair payload。
+- 测试随后重新读取 DB task 与 snapshot，确认 Rust owner 已持久化 `cancelled` 状态、
+  `completed_at`、cancelled checkpoint phase/status/progress/event/message，以及 rollback metadata。
+- 这比继续改 Python status/query shell 更直接：cancel route-facing 写路径现在有真实 DB-backed
+  Rust 证据。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_batch_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-write-cancel-db-smoke" -- --nocapture`
+  -> 76 passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-write-cancel-db-smoke" -- --nocapture`
+  -> 48 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-write-cancel-db-smoke" -- --nocapture`
+  -> 5 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-write-cancel-db-smoke" -- --nocapture`
+  -> 4 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-write-cancel-db-smoke"`
+  -> passed。
+
+后续规划调整：
+
+1. DB-backed cancel persistence 现在视为
+   `chapter_batch_generation_write_workflow_service` 与
+   `chapter_batch_generation_runtime_state_service` 的 Rust-owned write owner。
+2. Python batch query/status/resume shells 继续保持 source-map/rollback 参照；要删除必须同轮处理
+   import/bootstrap rollback boundary。
+3. 下一轮如果继续 batch lane，优先补 DB-backed resume route-facing smoke；否则做一轮专门的
+   Python import edge freeze/delete 审计并一次性 repoint。
+
+### 2026-06-10：chapter_batch_generation DB-backed resume prepare owner 收口
+
+本轮选择 `chapter_batch_generation_resume_task_command_service` 作为整 owner 收口对象，
+不再做 Python 兼容壳的小修。Rust resume owner 现在通过真实 SQLite DB-backed smoke 覆盖
+owned task/snapshot 读取、runtime request state 恢复、前置章节校验、失败章节 resume selection、
+batch dispatch plan、response payload 和显式 candidate gateway rollback boundary。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/services/batch_generation/resume_service.py`
+2. `backend/app/services/batch_generation/status_response_builder.py`
+3. `backend/app/services/batch_generation_query_service.py`
+4. `backend/app/api/chapter_batch_generation_routes.py`
+5. `backend/app/api/chapters.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+5. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+6. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 新增 DB-backed resume prepare smoke：
+  `should_prepare_db_backed_owned_resume_launch_from_rust_owner`。
+- resume owner SQLite fixture 现在创建 batch task / snapshot 表，并种入真实 settings、
+  project、chapters、failed task 和 persisted snapshot runtime state。
+- 测试显式把前置章节置为 completed，确认 Rust owner 走真实 prerequisite gate，而不是绕过
+  业务约束。
+- `prepare_owned_batch_generation_resume(...)` 现在有 DB-backed 证据证明：按 user/batch 读取
+  owned task/snapshot、恢复 `resume-db-model`、恢复 active story repair payload、恢复 quality
+  metrics、把 `target_word_count = 0` 规范化为 `1`、只调度失败章节 `chapter-2`。
+- batch dispatch plan 现在断言使用 `test_single_generation_resume_gateway` rollback boundary，
+  不依赖 Python resume/status/query 壳提供隐式回退。
+- fixture 的 `compat_options` 已改为完整 JSON，避免 serde 因缺字段丢弃整个 runtime request
+  state 后回退 default。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test should_prepare_db_backed_owned_resume_launch_from_rust_owner --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-resume-db-smoke" -- --nocapture`
+  -> 1 passed。
+- `cargo test chapter_batch_generation_resume_task_command_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-resume-db-smoke" -- --nocapture`
+  -> 64 passed。
+- `cargo test chapter_batch_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-resume-db-smoke" -- --nocapture`
+  -> 76 passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-resume-db-smoke" -- --nocapture`
+  -> 48 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-resume-db-smoke" -- --nocapture`
+  -> 5 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-resume-db-smoke" -- --nocapture`
+  -> 4 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-resume-db-smoke"`
+  -> passed。
+
+后续规划调整：
+
+1. DB-backed resume prepare 现在视为
+   `chapter_batch_generation_resume_task_command_service` 的 Rust-owned command owner。
+2. `python-fallback = 0` 仍不能代表迁移完成；Python resume/status/query shells 只有在同轮完成
+   import/bootstrap rollback boundary 后才能删除、repoint 或正式冻结。
+3. 下一步按整模块推进：优先做 batch query/status/resume Python import-edge freeze/delete
+   boundary；如果仍有高风险，则补 DB-backed create route-facing smoke，把 write owner 的 create
+   路径也收成真实 DB 证据。
+
+### 2026-06-10：chapter_batch_generation DB-backed create write-owner 收口
+
+本轮选择 `chapter_batch_generation_write_workflow_service` 的 create 路径作为整 owner 收口。
+这不是继续改 Python 兼容壳，而是把 batch create 的真实 route-facing 写路径补成 DB-backed
+Rust 证据，与前面的 cancel / resume / read owner 形成一条完整 batch write/read 证据链。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/services/batch_generation/create_service.py`
+2. `backend/app/api/chapter_batch_generation_routes.py`
+3. `backend/app/api/chapters.py`
+4. `backend/app/services/batch_generation_query_service.py`
+5. `backend/app/services/batch_generation/status_response_builder.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+5. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 新增 DB-backed create smoke：
+  `should_persist_db_backed_created_batch_generation_from_rust_write_owner`。
+- write-owner SQLite fixture 扩展为 create 路径所需的真实依赖表：project、chapters、
+  settings、project default styles、generation history、batch task、batch snapshot。
+- 测试从 `start_owned_batch_generation_write_workflow(...)` 进入 Rust write owner，使用
+  route-shaped request，而不是只测 helper/persistence plan。
+- fixture 种入 owned project、completed prerequisite chapter、draft target chapters 和可用
+  settings，覆盖 project access、章节范围选择、前置条件校验、settings/execution config、
+  startup snapshot、task insert 与 runtime dispatch input materialization。
+- 测试重新读取 DB task / snapshot，确认 pending task、chapter ids、target word count、
+  max retries、queued runtime state、model override、web research default、active story repair
+  payload 都由 Rust owner 持久化。
+- 响应断言保持既有 create payload shape；没有为了测试新增顶层 `target_word_count` 字段。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test should_persist_db_backed_created_batch_generation_from_rust_write_owner --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-write-create-db-smoke" -- --nocapture`
+  -> 1 passed。
+- `cargo test chapter_batch_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-write-create-db-smoke" -- --nocapture`
+  -> 77 passed。
+- `cargo test chapter_batch_generation_resume_task_command_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-write-create-db-smoke" -- --nocapture`
+  -> 64 passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-write-create-db-smoke" -- --nocapture`
+  -> 48 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-write-create-db-smoke" -- --nocapture`
+  -> 5 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-write-create-db-smoke" -- --nocapture`
+  -> 4 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-write-create-db-smoke"`
+  -> passed。
+
+后续规划调整：
+
+1. DB-backed create / cancel persistence 现在视为
+   `chapter_batch_generation_write_workflow_service` 的 Rust-owned write owner。
+2. batch create、cancel、resume、read、stream、active project、active list 都已有 DB-backed 或
+   focused Rust owner 证据；下一步不应继续加 helper 小测试，而应整轮审计 Python
+   create/query/status/resume import-edge freeze/delete boundary。
+3. `python-fallback = 0` 仍只是 manifest 信号；真正完成需要 Python source-map shells 被删除、
+   repoint，或以明确 rollback policy 冻结。
+
+### 2026-06-10：chapter_batch_generation status import-edge repoint 收口
+
+本轮选择 batch status response import-edge 作为收口边界。前序 create / cancel / resume /
+read / stream / active gateway 的 Rust owner 证据已经足够强，因此这次不再补 helper 小测试，
+而是把生产 Python 路由从 root status shim 直接指向真实 status response owner。
+
+Python source map：
+
+1. `backend/app/services/batch_generation_status_service.py`
+2. `backend/app/services/batch_generation/status_response_builder.py`
+3. `backend/app/api/chapter_batch_generation_routes.py`
+4. `backend/app/api/chapters.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+5. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- `chapter_batch_generation_routes.py` 已从
+  `app.services.batch_generation_status_service` 改为直接导入
+  `app.services.batch_generation.status_response_builder`。
+- `chapters.py` 已同步指向同一个真实 owner，避免 active batch status payload 继续经过
+  root 兼容 shim。
+- `batch_generation_status_service.py` 现在没有生产 Python import edge；只剩
+  `backend/app/services/CLAUDE.md` 文档提及。
+- 本轮没有删除 shim：删除文件属于破坏性操作，且需要同轮明确 rollback/source-map 移除策略。
+  当前状态是 retired / frozen rollback-only。
+
+验证：
+
+- `rg -n "from app\.services\.batch_generation_status_service|batch_generation_status_service" "backend/app"`
+  -> 只剩 `backend/app/services/CLAUDE.md:67`。
+- `python -m py_compile "backend/app/api/chapter_batch_generation_routes.py" "backend/app/api/chapters.py" "backend/app/services/batch_generation/status_response_builder.py" "backend/app/services/batch_generation_status_service.py"`
+  -> passed。
+- `cargo test chapter_batch_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-status-import-repoint" -- --nocapture`
+  -> 77 passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-status-import-repoint" -- --nocapture`
+  -> 48 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-status-import-repoint" -- --nocapture`
+  -> 5 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-status-import-repoint" -- --nocapture`
+  -> 4 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-status-import-repoint"`
+  -> passed。
+
+后续规划调整：
+
+1. `batch_generation_status_service.py` 作为 retired/frozen rollback-only shim 处理；若要删除，
+   需要用户明确确认并在同轮记录 rollback/source-map 删除策略。
+2. 下一轮不要再围绕 status shim 做微切；应按整文件/整模块处理 create/resume 纯 shim
+   freeze/delete boundary，或进入更难的 `batch_generation_query_service.py` whole-file owner 迁移。
+3. `python-fallback = 0` 继续只作为 gateway manifest 信号；真正完成仍取决于 Python source-map
+   shells 是否被删除、repoint 或带 rollback policy 冻结。
+
+### 2026-06-10：chapter_batch_generation query import-edge repoint 收口
+
+本轮选择 batch query import-edge 作为下一个整文件 source-map 收口边界。root
+`batch_generation_query_service.py` 不是纯 shim，它复制了一份 query/view-context 逻辑；
+真实 owner `app.services.batch_generation.query_service` 已经包含 stale task recovery，并由
+Rust read-context owner 的 DB-backed active/status/list 测试覆盖。
+
+Python source map：
+
+1. `backend/app/services/batch_generation_query_service.py`
+2. `backend/app/services/batch_generation/query_service.py`
+3. `backend/app/api/chapter_batch_generation_routes.py`
+4. `backend/app/api/chapters.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+5. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- `chapter_batch_generation_routes.py` 已从
+  `app.services.batch_generation_query_service` 改为直接导入
+  `app.services.batch_generation.query_service`。
+- `chapters.py` 已同步指向同一个真实 query owner，覆盖 batch status、active project task、
+  active user task list 和 workflow snapshot query context 的 Python rollback 路由调用面。
+- 生产 Python import 已不再引用 root `batch_generation_query_service.py`。
+- 本轮没有删除 root query 文件：它仍包含复制的 Python rollback/source-map 逻辑，删除文件也属于
+  破坏性操作。当前状态是 retired / frozen rollback-only。
+
+验证：
+
+- `rg -n "from app\.services\.batch_generation_query_service|import app\.services\.batch_generation_query_service|batch_generation_query_service" "backend/app"`
+  -> no matches。
+- `python -m py_compile "backend/app/api/chapter_batch_generation_routes.py" "backend/app/api/chapters.py" "backend/app/services/batch_generation/query_service.py" "backend/app/services/batch_generation_query_service.py"`
+  -> passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-query-import-repoint" -- --nocapture`
+  -> 48 passed。
+- `cargo test chapter_batch_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-query-import-repoint" -- --nocapture`
+  -> 77 passed。
+- `cargo test chapter_batch_generation_resume_task_command_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-query-import-repoint" -- --nocapture`
+  -> 64 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-query-import-repoint" -- --nocapture`
+  -> 5 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-query-import-repoint" -- --nocapture`
+  -> 4 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-query-import-repoint"`
+  -> passed。
+
+后续规划调整：
+
+1. `batch_generation_query_service.py` 作为 retired/frozen rollback-only shim 处理；若要删除，
+   需要用户明确确认，并同轮记录 rollback/source-map 删除策略。
+2. 下一步应整组处理 remaining pure shims：
+   `batch_generation_create_service.py`、`batch_generation_resume_service.py`、以及已 retired 的
+   `batch_generation_status_service.py`。
+3. `python-fallback = 0` 仍不是完成条件；真正完成需要这些 Python source-map shells 被删除、
+   repoint，或带清晰 rollback policy 冻结。
+
+### 2026-06-10：chapter_batch_generation pure shim freeze 收口
+
+本轮选择 remaining pure root batch compatibility shims 作为整组收口边界。这里没有继续改业务
+代码，因为 `batch_generation_create_service.py` 和 `batch_generation_resume_service.py` 已经没有
+生产 import edge；生产 orchestration 也已经直接导入真实 owner。
+
+Python source map：
+
+1. `backend/app/services/batch_generation_create_service.py`
+2. `backend/app/services/batch_generation_resume_service.py`
+3. `backend/app/services/batch_generation_status_service.py`
+4. `backend/app/services/batch_generation_query_service.py`
+5. `backend/app/services/batch_generation/create_service.py`
+6. `backend/app/services/batch_generation/resume_service.py`
+7. `backend/app/services/batch_generation/status_response_builder.py`
+8. `backend/app/services/batch_generation/query_service.py`
+9. `backend/app/services/batch_generation_orchestration_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+5. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- `batch_generation_create_service.py` 与 `batch_generation_resume_service.py` 确认为纯 re-export
+  compatibility shim。
+- 生产 Python import 已不再引用 create/resume root shim；只有 `backend/app/services/CLAUDE.md`
+  文档仍提及 create/status/resume root shim。
+- `batch_generation_orchestration_service.py` 已直接导入
+  `app.services.batch_generation.create_service` 和
+  `app.services.batch_generation.resume_service`。
+- retired root create/resume/status/query 文件现在作为一组 frozen rollback/source-map，而不是继续
+  记作 active 迁移 backlog。
+- 本轮没有删除文件：删除属于破坏性操作，需要用户明确确认，并同轮补 rollback/source-map 删除说明。
+
+验证：
+
+- `python -m py_compile "backend/app/services/batch_generation_create_service.py" "backend/app/services/batch_generation_resume_service.py" "backend/app/services/batch_generation/create_service.py" "backend/app/services/batch_generation/resume_service.py" "backend/app/services/batch_generation_orchestration_service.py" "backend/app/api/chapter_batch_generation_routes.py" "backend/app/api/chapters.py"`
+  -> passed。
+- `rg -n "from app\.services\.batch_generation_(create|resume|status|query)_service|import app\.services\.batch_generation_(create|resume|status|query)_service|batch_generation_(create|resume|status|query)_service" "backend/app"`
+  -> 只剩 create/status/resume 文档提及；query 已无匹配。
+- `cargo test chapter_batch_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-pure-shim-freeze" -- --nocapture`
+  -> 77 passed。
+- `cargo test chapter_batch_generation_resume_task_command_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-pure-shim-freeze" -- --nocapture`
+  -> 64 passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-pure-shim-freeze" -- --nocapture`
+  -> 48 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-pure-shim-freeze" -- --nocapture`
+  -> 5 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-pure-shim-freeze" -- --nocapture`
+  -> 4 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-pure-shim-freeze"`
+  -> passed。
+
+后续规划调整：
+
+1. create/resume/status/query root shims 从生产依赖视角已经 retired/frozen；后续不要再重复审计这些
+   import-edge。
+2. 如果下一步要物理删除 retired root shims，需要先获得删除确认；否则保持 rollback source map。
+3. 若不删除文件，下一轮应切到新的整模块 owner，而不是继续围绕这些 batch root shim 微切。
+
+### 2026-06-10：chapter_single_generation stream success owner 收口
+
+本轮从已冻结的 batch root shim 切回 Rust-first 迁移，选择
+`chapter_single_generation_stream_workflow_service` 的 stream success response / emission owner
+作为整函数组收口边界。目标是加强 active stream route 的 Rust cutover 证据，而不是继续修改
+Python 兼容 source-map。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/api/chapter_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+4. `backend/app/services/chapter_generation/stream/entry_service.py`
+5. `backend/app/services/chapter_generation/stream/candidate_service.py`
+6. `backend/app/services/chapter_generation/stream/finalize_service.py`
+7. `backend/app/services/chapter_generation/stream/wiring_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+2. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+3. `backend-rs/src/api/chapter_generation_routes.rs`
+4. `backend-rs/src/api/health.rs`
+5. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 扩展现有 `should_build_single_generation_stream_terminal_success_payload`，让它成为 stream
+  success artifact owner 的整组 contract test。
+- response payload 现在明确断言 `candidate_gateway.execution_path`、`fallback_applied` 和
+  `rollback_boundary` 来自 active route gateway result。
+- 同一测试断言 stream success payload batch 的顺序：quality metrics event、result payload、
+  analysis-started event。
+- 同一测试断言 emission plan 以 Python-compatible completion message 开始，并以 `Done` 结束，
+  避免 stream 事件顺序重新漂回 Python finalize/service source-map。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_single_generation_stream_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-stream-owner-contract" -- --nocapture`
+  -> 17 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-stream-owner-contract" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_generation_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-stream-owner-contract" -- --nocapture`
+  -> 11 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-stream-owner-contract" -- --nocapture`
+  -> 4 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-stream-owner-contract"`
+  -> passed。
+
+后续规划调整：
+
+1. 下一轮继续在 `chapter_single_generation` 包内按整 owner 推进，优先 background write workflow
+   response projection 或 runtime-state terminal persistence。
+2. 不再回到 batch root shim，除非用户明确批准删除 retired Python 文件。
+
+### 2026-06-10：chapter_single_generation runtime terminal checkpoint owner 收口
+
+本轮继续执行 Rust-first 迁移，不再回到已冻结的 batch root shim。选定
+`chapter_single_generation_runtime_state_service` 的 runtime terminal checkpoint projection
+作为整函数组 owner，目标是让 finalizing、completed、failed/quality-gate 三类终态
+checkpoint 都由同一个 Rust owner 构造和验证。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/api/chapter_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+4. `backend/app/services/chapter_generation/stream/finalize_service.py`
+5. `backend/app/services/chapter_generation/stream/candidate_service.py`
+6. `backend/app/services/chapter_generation/stream/wiring_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+2. `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+3. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+4. `backend-rs/src/api/chapter_generation_routes.rs`
+5. `backend-rs/src/api/health.rs`
+6. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 新增 `build_single_generation_runtime_terminal_checkpoint_projection`，集中负责终态
+  checkpoint 的基础阶段字段、额外 payload merge、candidate gateway metadata 注入。
+- failed/quality-gate 持久化路径改为通过该 owner 构造 failed checkpoint，不再在持久化
+  函数里分散拼装 base checkpoint、quality gate patch 和 gateway metadata。
+- completed 持久化路径的 finalizing 与 completed checkpoint 也改为通过同一 owner 构造，
+  让成功与失败终态共享同一 Rust 投影边界。
+- 新增 `should_project_single_generation_terminal_checkpoint_owner_contract`，同时断言
+  completed 与 failed/quality-gate 终态的 phase/status/progress、word_count、rollback
+  boundary、`candidate_gateway.execution_path` 和 `fallback_applied`。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_single_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-runtime-terminal-owner" -- --nocapture`
+  -> 22 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-runtime-terminal-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_generation_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-runtime-terminal-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-runtime-terminal-owner" -- --nocapture`
+  -> 4 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-runtime-terminal-owner"`
+  -> passed。
+
+残留风险：
+
+- 仍有既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports。
+- Python single-generation route/service 文件仍在磁盘上，当前仅作为 rollback/source-map；删除需要
+  单独确认破坏性操作。
+
+后续规划调整：
+
+1. 下一轮继续 `chapter_single_generation`，优先收口 background write workflow response
+   projection / existing-task payload owner。
+2. 不再把“改 Python 兼容 shell”作为迁移主进度；只有 Rust owner 强化、fallback freeze/delete、
+   route smoke 或 rollback 边界收口才计入主进度。
+
+### 2026-06-10：chapter_single_generation background response owner 收口
+
+本轮继续 `chapter_single_generation` 包，不回到 Python 兼容壳。选定
+`chapter_single_generation_write_workflow_service` 的 existing-background-task response
+projection 作为整函数组 owner，目标是让已有后台任务响应的 task-view 字段、quality/runtime
+上下文、route-facing override 字段由 Rust 写 workflow 明确拥有。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/api/chapter_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+4. `backend/app/services/chapter_generation/stream/entry_service.py`
+5. `backend/app/services/chapter_generation/stream/candidate_service.py`
+6. `backend/app/services/chapter_generation/stream/finalize_service.py`
+7. `backend/app/services/chapter_generation/stream/wiring_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+2. `backend-rs/src/services/chapter_single_generation_prepare_service.rs`
+3. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+4. `backend-rs/src/api/chapter_generation_routes.rs`
+5. `backend-rs/src/api/health.rs`
+6. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 新增 `build_single_generation_existing_background_response_payload`，作为已有后台任务响应
+  投影的 Rust owner。
+- 新增 `insert_single_generation_existing_background_response_fields`，集中写入 `task_id`、
+  `chapter_id`、`status`、中文 message、`estimated_time_minutes` 等 route-facing 字段。
+- 保持 quality/runtime context 插入在同一个 owner 中，确保 latest metrics、quality history、
+  summary state、active story repair payload、candidate gateway metadata 继续随 existing-task
+  payload 一起返回。
+- 新增 `should_project_existing_background_response_payload_as_write_owner_contract`，覆盖
+  task-view 字段、route response 字段、checkpoint progress、quality/runtime 字段、candidate
+  gateway rollback metadata。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-background-response-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-background-response-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_generation_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-background-response-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-background-response-owner" -- --nocapture`
+  -> 4 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-background-response-owner"`
+  -> passed。
+
+残留风险：
+
+- 仍有既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports。
+- Python single-generation route/service 文件仍只是 rollback/source-map；是否删除需单独确认。
+
+后续规划调整：
+
+1. 下一轮继续 `chapter_single_generation`，优先收口 background launch persistence / dispatch
+   owner，因为 launch parts 已经拥有 task seed、startup snapshot、runtime input、response payload。
+2. 不再把“拆 helper 但不强化 Rust owner”的工作计为主迁移进度。
+
+### 2026-06-10：chapter_single_generation background launch dispatch owner 收口
+
+本轮继续 `chapter_single_generation` 包，选定 background launch persistence / dispatch
+作为整函数组 owner。目标是把 task insert、startup snapshot persistence、runtime launch
+spawn、response payload return 收成一个可命名、可测试的 Rust owner，而不是继续内联在
+`PreparedSingleGenerationBackgroundLaunchParts::persist_and_dispatch` 里。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/api/chapter_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+4. `backend/app/services/chapter_generation/stream/entry_service.py`
+5. `backend/app/services/chapter_generation/stream/candidate_service.py`
+6. `backend/app/services/chapter_generation/stream/finalize_service.py`
+7. `backend/app/services/chapter_generation/stream/wiring_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+2. `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+3. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+4. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+5. `backend-rs/src/api/chapter_generation_routes.rs`
+6. `backend-rs/src/api/health.rs`
+7. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 新增 `SingleGenerationBackgroundLaunchPersistenceDispatchPlan`，作为 background launch
+  persistence + dispatch owner。
+- `PreparedSingleGenerationBackgroundLaunchParts::persist_and_dispatch` 改为只构造并执行该
+  plan，外部 response payload 不变。
+- plan 统一拥有 task active model、task id、startup snapshot plan、response payload、runtime
+  launch input。
+- 新增 `should_project_background_launch_persistence_dispatch_plan_from_launch_parts_owner`，
+  在 DB 副作用前验证 plan 投影契约。
+- 既有 DB-backed smoke
+  `should_persist_db_backed_single_generation_background_task_and_snapshot_from_rust_owner`
+  继续验证真实 task insert 与 snapshot persistence 走同一路径。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_single_generation_runtime_restore_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-background-launch-dispatch-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-background-launch-dispatch-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-background-launch-dispatch-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_generation_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-background-launch-dispatch-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-background-launch-dispatch-owner" -- --nocapture`
+  -> 4 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-background-launch-dispatch-owner"`
+  -> passed。
+
+残留风险：
+
+- 仍有既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports。
+- Python single-generation route/service 文件仍只是 rollback/source-map；是否删除需单独确认。
+
+后续规划调整：
+
+1. 下一轮先审计 `chapter_single_generation` package-level source-map freeze readiness：
+   prepare、write、runtime-restore、runtime-state、stream owner 是否已足够覆盖当前 Python
+   source map。
+2. 若仍不足，继续补 prepare/task-model owner 缺口；若足够，再进入明确的 Python source-map
+   freeze/delete 决策，而不是继续做小 helper 微切。
+
+### 2026-06-10：chapter_single_generation package readiness owner 收口
+
+本轮继续 `chapter_single_generation` 包，选定 active gateway readiness / source-map freeze
+evidence 作为整包 owner 边界。审计发现 active smoke 已经实际走到
+`chapter_single_generation_prepare_service`，但 readiness evidence 的 `covered_rust_owners`
+没有显式命名 prepare owner，导致 route payload normalization / request preparation 这一层在
+包级迁移证据中不够闭环。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/api/chapter_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+4. `backend/app/services/chapter_generation/stream/entry_service.py`
+5. `backend/app/services/chapter_generation/stream/candidate_service.py`
+6. `backend/app/services/chapter_generation/stream/finalize_service.py`
+7. `backend/app/services/chapter_generation/stream/wiring_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_single_generation_prepare_service.rs`
+2. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+3. `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+4. `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+5. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+6. `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+7. `backend-rs/src/api/chapter_generation_routes.rs`
+8. `backend-rs/src/api/health.rs`
+9. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- `chapter_single_generation_prepare_service` 进入 active gateway `covered_rust_owners`。
+- `runtime_owner_chain.prepare_request` 现在显式记录
+  `prepare_single_chapter_generation_request_from_route_payload`。
+- active gateway smoke / health 测试同步断言 prepare owner，避免 readiness map 只覆盖
+  stream/write/runtime/restore 而漏掉 route-payload preparation。
+- `deploy/strangler-gateway-probes.json` 的主 single-generation gateway probe 同步记录 prepare
+  owner 与 runtime owner chain。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-package-freeze-readiness" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_single_generation_prepare_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-package-freeze-readiness" -- --nocapture`
+  -> 28 passed。
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-package-freeze-readiness" -- --nocapture`
+  -> 11 passed。
+- `cargo test chapter_generation_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-package-freeze-readiness" -- --nocapture`
+  -> 11 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-package-freeze-readiness" -- --nocapture`
+  -> 4 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-package-freeze-readiness"`
+  -> passed。
+
+残留风险：
+
+- Python single-generation route/service 文件仍只是 rollback/source-map；物理删除需要单独确认。
+- 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；本轮未触碰。
+
+后续规划调整：
+
+1. `chapter_single_generation` package readiness 现在可按 prepare/write/stream/runtime/restore
+   owner 覆盖来评估，不再把 prepare owner 当作缺口。
+2. 下一步不要再做同包 helper 微切；要么进入明确的 Python source-map freeze/delete policy
+   轮次，要么切到下一个整模块 owner package。
+
+### 2026-06-10：chapter_generation shared candidate gateway readiness owner 收口
+
+本轮从 `chapter_single_generation` 切到 `chapter_generation` shared candidate gateway 包，
+不继续做单章 helper 微切。选定边界是 candidate executor route-gateway readiness projection。
+Rust 侧已经有完整的
+`chapter_candidate_executor_default_dependency_service::wiring_readiness` 计划，但
+route gateway smoke / health readiness 之前只暴露浅层 owner list，未把 generation、
+word-budget repair、targeted final repair、finalize、rerank、runtime-state、output 等真实
+Rust owner 一起作为 active gateway 证据输出。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/api/chapters.py`
+2. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+3. `backend/app/services/chapter_generation/stream/candidate_service.py`
+4. `backend/app/services/batch_generation_candidate_service.py`
+5. `backend/app/services/chapter_candidate_executor_wiring_service.py`
+6. `backend/app/services/chapter_candidate_executor_service.py`
+7. `backend/app/services/chapter_candidate_rerank_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_route_gateway_service.rs`
+2. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+3. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service/wiring_readiness.rs`
+4. `backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs`
+5. `backend-rs/src/services/chapter_candidate_executor_service.rs`
+6. `backend-rs/src/services/chapter_candidate_generation_service.rs`
+7. `backend-rs/src/services/chapter_candidate_word_budget_repair_service.rs`
+8. `backend-rs/src/services/chapter_candidate_targeted_final_repair_service.rs`
+9. `backend-rs/src/services/chapter_candidate_finalize_service.rs`
+10. `backend-rs/src/services/chapter_candidate_rerank_service.rs`
+11. `backend-rs/src/services/chapter_candidate_runtime_state_service.rs`
+12. `backend-rs/src/services/chapter_candidate_output_service.rs`
+13. `backend-rs/src/api/health.rs`
+14. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- `wiring_readiness` 从 test-only 提升为 crate 内可见证据，供 route gateway readiness 复用。
+- `chapter_candidate_route_gateway_service` 现在复用
+  `build_default_chapter_candidate_executor_wiring_plan`、
+  `validate_candidate_executor_wiring_plan` 和
+  `resolve_candidate_executor_wiring_readiness`。
+- candidate route gateway `covered_rust_owners` 扩展为完整共享 candidate owner 集合：
+  executor、generation、word-budget repair、targeted final repair、finalize、rerank、
+  runtime-state、output owner。
+- active smoke / health 输出新增 `wiring_readiness`：
+  `stage_count = 9`、`external_formula_dependency_count = 0`、无 cutover blockers，并携带
+  Rust target / Python source map。
+- `deploy/strangler-gateway-probes.json` 的
+  `chapter-candidate-route-gateway-smoke-rust` expected JSON 同步记录 deeper owner chain。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_route_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-gateway-readiness-owner" -- --nocapture`
+  -> 9 passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-gateway-readiness-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-gateway-readiness-owner" -- --nocapture`
+  -> 4 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，readiness
+  owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-gateway-readiness-owner"`
+  -> passed。
+
+残留风险：
+
+- Python candidate executor / stream candidate 文件仍只是 rollback/source-map；本轮未删除。
+- `python_fallback_removal_ready` 对 candidate gateway 仍保持 false，直到 active route
+  freeze/delete policy 明确执行。
+- 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；本轮未触碰。
+
+后续规划调整：
+
+1. candidate package 后续不再手写浅层 readiness list，默认以 default dependency wiring plan
+   作为单一真实 owner map。
+2. 下一步应选择另一个可消费真实 Python source map 的 shared `chapter_generation`
+   runtime/prompt/candidate owner，或在用户确认后进入 Python source-map freeze/delete 轮次。
+
+### 2026-06-10：chapter_generation shared candidate runtime wiring-readiness 收口
+
+本轮继续走 Rust-first，不改 Python 源码。选定边界是
+`chapter_generation_runtime_service` 中的 shared single-generation candidate runtime owner
+contract，以及消费该 contract 的 single/batch active gateway smoke。目标不是再增加浅层 owner
+list，而是让 runtime freeze/source-map 证据直接消费上一轮建立的 default dependency
+wiring-readiness 计划。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+2. `backend/app/services/chapter_generation/stream/candidate_service.py`
+3. `backend/app/services/batch_generation_candidate_service.py`
+4. `backend/app/services/batch_generation_execution_service.py`
+5. `backend/app/services/chapter_candidate_executor_wiring_service.py`
+6. `backend/app/services/chapter_candidate_executor_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_generation_runtime_service.rs`
+2. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+3. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service/wiring_readiness.rs`
+4. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+5. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- `build_single_generation_candidate_runtime_owner_contract` 现在构建并校验
+  `build_default_chapter_candidate_executor_wiring_plan`，不再只输出静态 runtime helper
+  列表。
+- runtime owner contract 新增 `candidate_executor_wiring_readiness`，包含
+  `stage_count = 9`、`external_formula_dependency_count = 0`、无 cutover blockers、
+  Rust-owned dependency count、Rust target files 和 Python source files。
+- runtime owner 测试断言 current default dependency / generation / finalize Rust targets，
+  并拒绝 retired forwarding-only `chapter_candidate_executor_runtime_adapter_service.rs`。
+- single-generation 与 batch-generation active gateway smoke 测试同步断言嵌入的
+  shared runtime contract 已消费 default dependency wiring-readiness owner。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_generation_runtime_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/shared-runtime-owner" -- --nocapture`
+  -> 20 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/shared-runtime-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/shared-runtime-owner" -- --nocapture`
+  -> 5 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/shared-runtime-owner"`
+  -> passed。
+
+残留风险：
+
+- Python candidate/compat/batch 文件仍保留为 source map / rollback reference；本轮未删除。
+- 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；本轮未触碰。
+
+后续规划调整：
+
+1. 不再对 candidate runtime/gateway 追加浅层 readiness-list 编辑；runtime contract 和 default
+   dependency wiring plan 已形成真实 Rust owner evidence 链。
+2. 下一轮优先选择 shared `chapter_generation` prompt/research/quality runtime owner 做整函数组迁移，
+   或在明确确认后执行 Python source-map 物理 freeze/delete 轮次。
+
+### 2026-06-10：chapter_generation research payload owner readiness 收口
+
+本轮选定 `chapter_generation_research_payload_service` 的 single-chapter research provider
+payload 函数组，不继续重扫已多轮收口的 prompt/quality owner。这个 owner 直接消费
+`SingleChapterGenerationCompatOptions`，负责 web research query、Grok query、
+generation-memory query、相关记忆选择、research memory replacement，并被 single /
+batch / regeneration 运行时准备路径消费。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/services/chapter_web_research_service.py`
+2. `backend/app/services/batch_generation_single_chapter_service.py`
+3. `backend/app/services/batch_generation_single_chapter_wiring_service.py`
+4. `backend/app/services/partial_regeneration_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_generation_research_payload_service.rs`
+2. `backend-rs/src/services/chapter_single_generation_prepare_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+4. `backend-rs/src/services/chapter_regeneration_prepare_service.rs`
+5. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+6. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_single_chapter_research_payload_owner_contract`，显式记录 research provider
+  payload 的 Rust owner 合同。
+- 合同覆盖 Python source map、Rust owner functions、`SingleChapterGenerationCompatOptions`
+  消费字段、provider payload 字段、custom query 优先级、asset limit、active consumers、
+  validation boundary 与 rollback boundary。
+- `chapter_generation_research_payload_service` 单测新增 owner contract 断言，保留原有
+  query/assets/memory prompt 行为覆盖。
+- single-generation 与 batch-generation active gateway smoke readiness 均嵌入
+  `research_payload_owner_contract`，让 active gateway evidence 能直接证明 research payload
+  Rust owner，而不是只靠 Python `chapter_web_research_service.py` 的历史知识。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_generation_research_payload_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/research-payload-owner" -- --nocapture`
+  -> 14 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/research-payload-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/research-payload-owner" -- --nocapture`
+  -> 5 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/research-payload-owner"`
+  -> passed。
+
+残留风险：
+
+- Python web research / batch single-chapter / partial regeneration 文件仍保留为 source map /
+  rollback reference；本轮未删除或 repoint Python 文件。
+- 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；本轮未触碰。
+
+后续规划调整：
+
+1. 下一轮继续选能绑定 active readiness evidence 的 shared `chapter_generation`
+   quality/runtime/prompt-provider owner。
+2. 物理删除 Python source-map 文件必须单独确认，不在普通加速轮里隐式执行。
+
+### 2026-06-10：chapter_generation quality runtime owner readiness 收口
+
+本轮选定 `chapter_generation_quality_runtime_context_service` 作为 shared quality runtime
+owner，不再重复 prompt/research owner 的历史 checkpoint。这个 owner 覆盖 current quality、
+seed、persisted sources、snapshot/runtime-state、batch quality state，以及 terminal
+quality-gate normalization。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/services/chapter_generation/stream/quality_context_service.py`
+2. `backend/app/services/chapter_quality_metrics_service.py`
+3. `backend/app/services/batch_generation_quality_status_service.py`
+4. `backend/app/services/chapter_generation_quality_context_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_generation_quality_runtime_context_service.rs`
+2. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+3. `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+5. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+6. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+7. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_generation_quality_runtime_owner_contract`，显式发布 shared quality runtime
+  context 的 Rust owner 合同。
+- 合同记录 Python source map、Rust owner functions、质量运行时字段、source modes、
+  batch history limit、terminal manual-review 归一化、active consumers、validation
+  boundary 与 rollback boundary。
+- `chapter_generation_quality_runtime_context_service` 单测新增 owner contract 断言，并保留
+  current/persisted/summary-only/terminal normalization 行为覆盖。
+- single-generation 与 batch-generation active gateway smoke readiness 均嵌入
+  `quality_runtime_owner_contract`，让 active readiness evidence 覆盖 quality runtime
+  persistence/projection owner。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_generation_quality_runtime_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/quality-runtime-owner" -- --nocapture`
+  -> 14 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/quality-runtime-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/quality-runtime-owner" -- --nocapture`
+  -> 5 passed。
+- `python -m json.tool "deploy/strangler-gateway-probes.json"` -> passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/quality-runtime-owner"`
+  -> passed。
+
+残留风险：
+
+- Python quality-context/metrics/status 文件仍保留为 source map / rollback reference；本轮未删除。
+- 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；本轮未触碰。
+
+后续规划调整：
+
+1. 下一轮只继续做能挂到 active readiness evidence 的 shared `chapter_generation`
+   prompt-provider / runtime persistence owner。
+2. 不把 `python-fallback = 0` 当最终完成；完成迁移仍需要 source-map freeze/delete policy 和
+   完成审计。
+
+### 2026-06-10：chapter_generation prompt context provider owner readiness 收口
+
+本轮选定 `chapter_generation_prompt_context_provider_service` 作为 shared prompt provider
+payload bridge owner。这个 owner 覆盖 provider payload 的 11 个稳定字段、placeholder
+默认值、prompt-param 转换、external/reference/MCP 资产可见性，以及 single/batch active
+gateway readiness 的消费证据。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/api/chapters.py`
+2. `backend/app/services/batch_generation_prompt_service.py`
+3. `backend/app/services/chapter_generation/runtime/service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_generation_prompt_context_provider_service.rs`
+2. `backend-rs/src/services/chapter_generation_prompt_service.rs`
+3. `backend-rs/src/services/chapter_generation_execution_config_service.rs`
+4. `backend-rs/src/services/chapter_generation_research_payload_service.rs`
+5. `backend-rs/src/services/chapter_generation_context_compaction_service.rs`
+6. `backend-rs/src/services/chapter_single_generation_prepare_service.rs`
+7. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+8. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+9. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_prompt_context_provider_owner_contract`，显式发布 prompt provider payload
+  bridge 的 Rust owner 合同。
+- 合同记录 Python source map、Rust target map、provider/prompt-param keys、placeholder
+  array/text defaults、asset/MCP prompt visibility、active consumers、validation boundary 与
+  rollback boundary。
+- `chapter_generation_prompt_context_provider_service` 单测新增 owner contract 断言，并保留
+  placeholder 与 `into_prompt_params` 行为覆盖。
+- single-generation 与 batch-generation active gateway smoke readiness 均嵌入
+  `prompt_context_provider_owner_contract`，让 active readiness evidence 覆盖 prompt
+  provider bridge，而不是继续依赖旧 Python prompt builder 认知。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_generation_prompt_context_provider_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/prompt-provider-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo test chapter_generation_prompt_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/prompt-provider-owner" -- --nocapture`
+  -> 15 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/prompt-provider-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/prompt-provider-owner" -- --nocapture`
+  -> 5 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/prompt-provider-owner"`
+  -> passed。
+
+残留风险：
+
+- Python prompt/batch/runtime 文件仍保留为 source map / rollback reference；本轮未删除或
+  repoint Python 文件。
+- 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；本轮未触碰。
+
+后续规划调整：
+
+1. shared `chapter_generation` 的 prompt-provider/runtime/research/quality owner evidence 已经
+   挂到 active smoke，可进入 source-map freeze/delete 决策轮，或继续选择能消除真实
+   fallback/rollback ambiguity 的整 owner。
+2. 物理删除 Python source-map 文件仍需显式确认，并且必须与 rollback policy 同轮完成。
+
+### 2026-06-10：chapter_generation context compaction owner readiness 收口
+
+本轮选定 `chapter_generation_context_compaction_service` 作为 shared context compaction
+整函数组 owner。这个 owner 覆盖 prompt provider payload 与 previous-chapter prompt context
+的压缩逻辑：one-to-one / one-to-many profile、recent chapter 裁剪、entity/reference block
+裁剪、tail preservation，以及 prompt-visible 字段保持不变。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/services/chapter_context_service.py`
+2. `backend/app/services/chapter_generation/stream/execution_service.py`
+3. `backend/app/services/chapter_regeneration_context_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_generation_context_compaction_service.rs`
+2. `backend-rs/src/services/chapter_generation_runtime_service.rs`
+3. `backend-rs/src/services/chapter_generation_prompt_service.rs`
+4. `backend-rs/src/services/chapter_regeneration_prepare_service.rs`
+5. `backend-rs/src/services/chapter_generation_prompt_context_provider_service.rs`
+6. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+7. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_generation_context_compaction_owner_contract`，显式发布 shared generation
+  context compaction 的 Rust owner 合同。
+- 合同记录 Python source map、Rust target map、owner functions、one-to-one / one-to-many
+  行为、被压缩的 provider fields、被压缩的 previous-context fields、必须保留的
+  prompt-visible fields、active consumers、validation boundary 与 rollback boundary。
+- `chapter_generation_context_compaction_service` 单测新增 owner contract 断言，并保留
+  one-to-many / one-to-one 压缩行为覆盖。
+- `build_single_generation_candidate_runtime_owner_contract` 现在嵌入
+  `context_compaction_owner_contract`，让 single-generation 与 batch-generation active gateway
+  smoke readiness 通过 shared runtime contract 看见 context compaction owner。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_generation_context_compaction_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/context-compaction-owner" -- --nocapture`
+  -> 3 passed。
+- `cargo test chapter_generation_runtime_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/context-compaction-owner" -- --nocapture`
+  -> 20 passed。
+- `cargo test chapter_regeneration_prepare_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/context-compaction-owner" -- --nocapture`
+  -> 22 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/context-compaction-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/context-compaction-owner" -- --nocapture`
+  -> 5 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/context-compaction-owner"`
+  -> passed。
+
+残留风险：
+
+- Python context compaction 文件仍保留为 source map / rollback reference；本轮未删除或
+  repoint Python 文件。
+- 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；本轮未触碰。
+
+后续规划调整：
+
+1. 优先进入已 active-smoke 可见 shared owners 的 source-map freeze/delete 决策轮，或继续选择
+   能消除真实 fallback/rollback ambiguity 的整 owner。
+2. 仍不能把 `python-fallback = 0` 当最终完成；完成迁移需要 source-map freeze/delete policy
+   和最终完成审计。
+
+### 2026-06-10：chapter_generation execution config owner readiness 收口
+
+本轮选定 `chapter_generation_execution_config_service` 作为 shared execution config 整文件
+owner。这个 owner 覆盖执行配置物化：`SettingsService::build_ai_config`、`model_override`
+透传、provider payload passthrough、placeholder payload 默认值，以及 single/batch runtime
+消费的 `PreparedGenerationExecutionConfig`。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/services/chapter_generation/stream/execution_service.py`
+2. `backend/app/services/chapter_generation/stream/service.py`
+3. `backend/app/services/batch_generation_execution_service.py`
+4. `backend/app/services/ai_config.py`
+5. `backend/app/services/ai_gateway/ai_config.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_generation_execution_config_service.rs`
+2. `backend-rs/src/services/settings_service.rs`
+3. `backend-rs/src/services/chapter_single_generation_prepare_service.rs`
+4. `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+5. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+6. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+7. `backend-rs/src/services/chapter_generation_execution_contract_service.rs`
+8. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+9. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_generation_execution_config_owner_contract`，显式发布 shared execution config
+  materialization 的 Rust owner 合同。
+- 合同记录 Python source map、Rust target map、owner functions、`SettingsService::build_ai_config`
+  所有权、`model_override` 透传、provider payload passthrough、default placeholder payload、
+  active consumers、validation boundary 与 rollback boundary。
+- `chapter_generation_execution_config_service` 单测新增 owner contract 断言。
+- single-generation 与 batch-generation active gateway smoke readiness 均嵌入
+  `execution_config_owner_contract`，让 shared execution config bridge active-route 可见。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_generation_execution_config_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-config-owner" -- --nocapture`
+  -> 1 passed。
+- `cargo test chapter_single_generation_prepare_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-config-owner" -- --nocapture`
+  -> 28 passed。
+- `cargo test chapter_batch_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-config-owner" -- --nocapture`
+  -> 111 passed。
+- `cargo test chapter_batch_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-config-owner" -- --nocapture`
+  -> 77 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-config-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-config-owner" -- --nocapture`
+  -> 5 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-config-owner"`
+  -> passed。
+
+残留风险：
+
+- Python execution config / AI config 文件仍保留为 source map / rollback reference；本轮未删除或
+  repoint Python 文件。
+- 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；本轮未触碰。
+
+后续规划调整：
+
+1. 优先进入已 active-smoke 可见 shared owners 的 source-map freeze/delete 决策轮，或继续选择
+   能消除真实 fallback/rollback ambiguity 的整 owner。
+2. 迁移完成仍需要 source-map freeze/delete policy 和最终完成审计，不以
+   `python-fallback = 0` 作为完成条件。
+
+### 2026-06-10：chapter_generation execution contract owner readiness 补强
+
+本轮再次选定 `chapter_generation_execution_contract_service`，但边界不是 6 月 9 日的
+warning-reduction 收口，而是把 shared execution input / compat-options contract 显式挂到
+single-generation 与 batch-generation active smoke readiness 中。这样 active route evidence
+可以直接证明 Python 兼容请求字段、prompt override、web research 和 story repair 数组由 Rust
+owner 承载。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/api/chapters.py`
+2. `backend/app/api/chapter_generation_routes.py`
+3. `backend/app/services/chapter_generation/stream/execution_service.py`
+4. `backend/app/services/batch_generation/create_service.py`
+5. `backend/app/services/batch_generation_orchestration_service.py`
+6. `backend/app/services/story_repair_payload_service.py`
+7. `backend/app/services/prompt_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_generation_execution_contract_service.rs`
+2. `backend-rs/src/services/chapter_single_generation_prepare_service.rs`
+3. `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+4. `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+5. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+6. `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+7. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+8. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+9. `backend-rs/src/services/chapter_generation_research_payload_service.rs`
+10. `backend-rs/src/services/chapter_story_repair_quality_context_service.rs`
+11. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+12. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_single_generation_execution_contract_owner_contract`，显式发布 shared
+  single-generation execution input 与 compatibility options 的 Rust owner 合同。
+- 合同记录 Python source map、Rust target map、15 个 compatibility option fields、3 个
+  execution input fields、`build_prompt_overrides_from_compat_options` 所有权、空字符串
+  prompt override 跳过、web research 字段保持、story repair 数组保持、active consumers、
+  validation boundary 与 rollback boundary。
+- `chapter_generation_execution_contract_service` 单测新增 owner contract 断言，并补充 story
+  repair arrays preservation 覆盖。
+- single-generation 与 batch-generation active gateway smoke readiness 均嵌入
+  `execution_contract_owner_contract`，让 execution contract 与 execution config、prompt
+  provider、context compaction、research payload、quality runtime 一起出现在 active-route
+  cutover evidence 中。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_generation_execution_contract_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-contract-owner" -- --nocapture`
+  -> 4 passed。
+- `cargo test chapter_single_generation_prepare_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-contract-owner" -- --nocapture`
+  -> 28 passed。
+- `cargo test chapter_single_generation_stream_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-contract-owner" -- --nocapture`
+  -> 17 passed。
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-contract-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo test chapter_batch_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-contract-owner" -- --nocapture`
+  -> 77 passed。
+- `cargo test chapter_batch_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-contract-owner" -- --nocapture`
+  -> 111 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-contract-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-contract-owner" -- --nocapture`
+  -> 5 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 为 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/execution-contract-owner"`
+  -> passed。
+
+残留风险：
+
+- Python route/request/story repair/prompt 文件仍保留为 source map / rollback reference；本轮未删除或
+  repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；本轮未触碰。
+
+后续规划调整：
+
+1. shared `chapter_generation` 的 prompt/context/config/execution-contract owner evidence 已经
+   active-smoke 可见，下一步最有价值的是 source-map freeze/delete 决策轮；但物理删除 Python
+   文件仍需显式确认，并且必须同轮写清 rollback policy。
+2. 如果暂不删除 Python source-map，则继续选择能消除真实 rollback ambiguity 的整 owner，不再编辑
+   Python compatibility shell 当作迁移进度。
+
+### 2026-06-10：chapter_story_repair quality context owner readiness 收口
+
+本轮选定 `chapter_story_repair_quality_context_service` 作为整函数组 owner。这个 owner 覆盖
+story repair payload 与 quality context 的恢复/合并链路：显式请求优先级、active snapshot
+恢复、quality-derived repair guidance、resume runtime payload 选择、recent-history quality
+summary 聚合，以及 quality gate reconciliation。
+
+Python source map 保持 frozen rollback-only：
+
+1. `backend/app/services/story_repair_payload_service.py`
+2. `backend/app/services/chapter_quality_context_service.py`
+3. `backend/app/services/chapter_generation/stream/execution_service.py`
+4. `backend/app/services/batch_generation_orchestration_service.py`
+5. `backend/app/services/task_workflow_runtime_service.py`
+6. `backend/app/api/chapters.py`
+7. `backend/app/api/chapter_batch_generation_routes.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_story_repair_quality_context_service.rs`
+2. `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+3. `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+4. `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+5. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+6. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+7. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+8. `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+9. `backend-rs/src/services/chapter_generation_terminal_runtime_patch_service.rs`
+10. `backend-rs/src/services/chapter_query_service.rs`
+11. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+12. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_story_repair_quality_context_owner_contract`，显式发布 story repair payload
+  restoration 与 quality context aggregation 的 Rust owner 合同。
+- 合同记录 Python source map、Rust target map、active payload fields、restore/merge limits、
+  resume precedence、quality gate reconciliation、recent-history summary behavior、active
+  consumers、validation boundary 与 rollback boundary。
+- `chapter_story_repair_quality_context_service` 单测新增 owner boundary 断言，并继续覆盖
+  merge、restore、aggregation、runtime pressure 行为。
+- single-generation 与 batch-generation active gateway smoke readiness 均嵌入
+  `story_repair_quality_context_owner_contract`，让 story repair quality-context ownership 与
+  execution、prompt、research、quality runtime、candidate runtime owner contracts 一起出现在
+  active-route evidence 中。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_story_repair_quality_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/story-repair-quality-owner" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_stream_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/story-repair-quality-owner" -- --nocapture`
+  -> 17 passed。
+- `cargo test chapter_single_generation_runtime_restore_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/story-repair-quality-owner" -- --nocapture`
+  -> 11 passed。
+- `cargo test chapter_batch_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/story-repair-quality-owner" -- --nocapture`
+  -> 77 passed。
+- `cargo test chapter_batch_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/story-repair-quality-owner" -- --nocapture`
+  -> 111 passed。
+- `cargo test chapter_batch_generation_resume_task_command_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/story-repair-quality-owner" -- --nocapture`
+  -> 64 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/story-repair-quality-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/story-repair-quality-owner" -- --nocapture`
+  -> 5 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/story-repair-quality-owner"`
+  -> passed。
+
+残留风险：
+
+- Python story repair / quality context 文件仍保留为 source map / rollback reference；本轮未删除或
+  repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；`cargo check` 通过。
+
+后续规划调整：
+
+1. shared `chapter_generation` 的 prompt/context/config/execution/story-repair quality owner
+   evidence 已经 active-smoke 可见；下一步如果要真正减少 Python 残留，应进入 source-map
+   freeze/delete 决策轮，但需要显式确认。
+2. 如果暂不删除 Python source-map，则继续选择能减少 rollback ambiguity 或物理 Python 依赖的整
+   Rust owner。
+
+### 2026-06-10 terminal runtime patch owner 收口
+
+本轮按整函数组推进 `chapter_generation_terminal_runtime_patch_service`，目标不是修改 Python
+兼容壳，而是在 Rust 中显式接管 terminal quality runtime patch 行为，并让该 owner 出现在
+single/batch active gateway smoke readiness 中。
+
+覆盖边界：
+
+1. manual-review terminal patch：`analysis_task_message`、`analysis_task_progress`、
+   `analysis_last_error`、`quality_gate_decision`、`quality_gate_label`、`phase`。
+2. retry terminal patch：`auto_repair` decision、`repair_pending` phase，以及 retry label
+   回写。
+3. active story repair payload：manual-review 与 retry 两类 terminal 状态均由 Rust
+   normalization 负责。
+4. quality runtime payload：`quality_metrics_summary`、`latest_quality_metrics`、
+   `quality_metrics_history`、`quality_metrics_summary_state`、`quality_history_context`。
+5. scope inference：优先读取 summary state、history context、active repair payload、summary
+   runtime context，最后根据 `batch_request_runtime_state` 回退到 batch/chapter。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/services/batch_generation_chapter_failure_state_service.py`
+2. `backend/app/services/batch_generation_chapter_success_state_service.py`
+3. `backend/app/services/batch_generation_orchestration_service.py`
+4. `backend/app/services/story_repair_payload_service.py`
+5. `backend/app/services/task_workflow_runtime_service.py`
+6. `backend/app/api/chapters.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_generation_terminal_runtime_patch_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+4. `backend-rs/src/services/chapter_generation_quality_runtime_context_service.rs`
+5. `backend-rs/src/services/chapter_story_repair_quality_context_service.rs`
+6. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+7. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_generation_terminal_runtime_patch_owner_contract`，记录 source map、Rust owner
+  map、manual/retry 行为合同、active consumers、validation boundary 与 rollback boundary。
+- `chapter_generation_terminal_runtime_patch_service` 新增 owner contract 断言，原有
+  manual-review / retry runtime patch 测试继续通过。
+- single-generation 与 batch-generation active gateway smoke readiness 均嵌入
+  `terminal_runtime_patch_owner_contract`，让 terminal runtime patch ownership 与
+  execution、prompt、research、quality runtime、story repair quality、candidate runtime
+  contracts 一起可见。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_generation_terminal_runtime_patch_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/terminal-runtime-patch-owner" -- --nocapture`
+  -> 5 passed。
+- `cargo test chapter_batch_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/terminal-runtime-patch-owner" -- --nocapture`
+  -> 111 passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/terminal-runtime-patch-owner" -- --nocapture`
+  -> 48 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/terminal-runtime-patch-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/terminal-runtime-patch-owner" -- --nocapture`
+  -> 5 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/terminal-runtime-patch-owner"`
+  -> passed。
+
+残留风险：
+
+- Python terminal failure/success/story repair/task runtime 文件仍是 source map / rollback
+  reference；本轮未删除或 repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；`cargo check` 通过。
+
+后续规划调整：
+
+1. terminal runtime patch owner 已 active-smoke 可见；下一步优先处理已获证据 owner 的
+   source-map freeze/delete 决策，或者继续挑选能减少 rollback ambiguity 的整 Rust owner。
+2. 不再用 `python-fallback = 0` 作为完成判断；必须完成 source-map freeze/delete policy 与
+   final completion audit 后才能认为 Python 到 Rust 迁移完成。
+
+### 2026-06-10 candidate event readiness owner 收口
+
+本轮按整文件 owner 推进 `chapter_candidate_event_service`。这块行为此前已经迁到 Rust，
+但在 active gateway smoke readiness 中还是隐式依赖；本轮把它提升为显式
+`candidate_event_owner_contract`，让 batch active route 的 selected-candidate stream
+事件投影有可审计 Rust owner evidence。
+
+覆盖边界：
+
+1. batch stream progress event：运行状态、阶段、进度、retry 计数。
+2. start/candidate progress event：candidate index/count、generation path、attempt kind、
+   rerank/word-budget repair 状态。
+3. selected-candidate progress event：winner candidate、word count、context compaction stats。
+4. chunk event：仅在 `stream_chunks = true` 且 quality gate action 允许继续时投影。
+5. selected-candidate view snapshot：保留 Python truthy、integer coercion、trimmed path 与
+   fallback action 兼容行为。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/services/chapter_candidate_event_service.py`
+2. `backend/app/services/chapter_candidate_view_service.py`
+3. `backend/app/services/batch_generation_candidate_service.py`
+4. `backend/app/services/batch_generation_status_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_event_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_chapter_candidate_event_owner_contract`，记录 source map、Rust owner map、
+  event builders、selected-candidate view fields、selected-candidate batch contract、
+  Python compatibility helpers、active consumers、validation boundary 与 rollback boundary。
+- `chapter_candidate_event_service` 新增 owner contract 断言，原有 progress/chunk/
+  selected-candidate projection 测试继续通过。
+- batch active gateway smoke readiness 嵌入 `candidate_event_owner_contract`，让
+  selected-candidate stream event projection 与 execution、runtime、prompt、research、
+  quality、story repair、terminal runtime contracts 一起可见。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_event_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-event-readiness-owner" -- --nocapture`
+  -> 12 passed。
+- `cargo test chapter_batch_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-event-readiness-owner" -- --nocapture`
+  -> 111 passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-event-readiness-owner" -- --nocapture`
+  -> 48 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-event-readiness-owner" -- --nocapture`
+  -> 5 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-event-readiness-owner"`
+  -> passed。
+
+残留风险：
+
+- Python candidate event/view/status 文件仍是 source map / rollback reference；本轮未删除或
+  repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；`cargo check` 通过。
+
+后续规划调整：
+
+1. candidate selected-event projection 已 active-smoke 可见；下一步优先处理已获证据 owner 的
+   source-map freeze/delete 决策，或者继续挑选仍是隐式 evidence 的整 Rust owner。
+2. 继续避免小块 helper 开发；每轮必须落在整文件、整函数组或整模块 owner 上。
+
+### 2026-06-10 batch read-context owner 收口
+
+本轮按整文件 read-model owner 推进
+`chapter_batch_generation_read_context_service`。这块 Rust 代码已经承接 batch
+status、stream、active project query、active user task list 与 owned runtime read
+state；本轮把它提升为显式 `batch_read_context_owner_contract`，让 batch active route
+的查询/状态/流式读模型 owner evidence 可审计。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/services/batch_generation/query_service.py`
+2. `backend/app/services/batch_generation/status_response_builder.py`
+3. `backend/app/services/batch_generation_query_service.py`
+4. `backend/app/services/batch_generation_status_service.py`
+5. `backend/app/api/chapter_batch_generation_routes.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+3. `backend-rs/src/services/chapter_generation_snapshot_service.rs`
+4. `backend-rs/src/services/chapter_generation_task_recovery_service.rs`
+5. `backend-rs/src/services/chapter_candidate_event_service.rs`
+6. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+7. `backend-rs/src/api/chapter_batch_generation.rs`
+
+收口结果：
+
+- 新增 `build_batch_generation_read_context_owner_contract`，记录 source map、Rust
+  owner map、owned read-state loaders、active query loaders、stream-state owner、
+  route payloads、stream transport events、active consumers、validation boundary 与
+  rollback boundary。
+- `chapter_batch_generation_read_context_service` 新增 owner contract 断言，原有
+  status/stream/read-state 测试继续通过。
+- batch active gateway smoke readiness 嵌入
+  `batch_read_context_owner_contract`，让 batch status/stream/list read-model 与
+  execution、runtime、prompt、research、quality、story repair、terminal runtime、
+  candidate event contracts 一起可见。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_batch_generation_read_context_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-read-context-owner" -- --nocapture`
+  -> 49 passed。
+- `cargo test chapter_batch_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-read-context-owner" -- --nocapture`
+  -> 111 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-read-context-owner" -- --nocapture`
+  -> 5 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-read-context-owner"`
+  -> passed。
+
+残留风险：
+
+- Python batch query/status route 文件仍是 source map / rollback reference；本轮未删除或
+  repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；`cargo check` 通过。
+
+后续规划调整：
+
+1. batch status/stream/list read-model 已 active-smoke 可见；下一步优先处理已获证据
+   owner 的 source-map freeze/delete 决策，或继续挑选仍是隐式 evidence 的整 Rust
+   owner。
+2. 继续按整文件、整函数组、整模块 owner 推进，避免小块 helper-only 开发。
+
+### 2026-06-10 candidate route-gateway owner 收口
+
+本轮按整模块 owner 推进 `chapter_candidate_route_gateway_service`。这块 Rust 代码已经负责
+AppConfig 到 gateway config 的转换、Rust executor / Python fallback 分支选择、
+production adapter dispatch、route gateway smoke readiness、fallback-freeze candidate
+证据，以及 `python_candidate_executor_fallback` rollback 边界；本轮把这些证据提升为显式
+`candidate_route_gateway_owner_contract`。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/services/chapter_candidate_executor_wiring_service.py`
+2. `backend/app/services/chapter_candidate_executor_service.py`
+3. `backend/app/services/chapter_generation/stream/candidate_service.py`
+4. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_route_gateway_service.rs`
+2. `backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs`
+3. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+4. `backend-rs/src/services/chapter_candidate_executor_service.rs`
+5. `backend-rs/src/services/chapter_candidate_generation_service.rs`
+6. `backend-rs/src/services/chapter_candidate_word_budget_repair_service.rs`
+7. `backend-rs/src/services/chapter_candidate_targeted_final_repair_service.rs`
+8. `backend-rs/src/services/chapter_candidate_finalize_service.rs`
+9. `backend-rs/src/services/chapter_candidate_provider_stream_service.rs`
+10. `backend-rs/src/services/chapter_candidate_quality_adapter_service.rs`
+11. `backend-rs/src/services/chapter_candidate_record_service.rs`
+12. `backend-rs/src/services/chapter_candidate_rerank_service.rs`
+13. `backend-rs/src/services/chapter_candidate_runtime_state_service.rs`
+14. `backend-rs/src/services/chapter_candidate_output_service.rs`
+15. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+16. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_chapter_candidate_route_gateway_owner_contract`，记录 source map、Rust
+  owner map、gateway entrypoints、smoke entrypoints、runtime owner chain、
+  fallback fields、active consumers、validation boundary 与 rollback boundary。
+- `chapter_candidate_route_gateway_service` 自身 readiness evidence 嵌入
+  `candidate_route_gateway_owner_contract`，并新增 focused owner contract 断言。
+- single-generation 与 batch-generation active gateway smoke readiness 均嵌入同一个
+  `candidate_route_gateway_owner_contract`，让 active route smoke 直接消费 candidate
+  gateway owner contract，而不是从分散字段重新拼装迁移证据。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_route_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-route-gateway-owner" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-route-gateway-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-route-gateway-owner" -- --nocapture`
+  -> 5 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-route-gateway-owner"`
+  -> passed。
+
+残留风险：
+
+- Python candidate executor / stream compatibility 文件仍是 source map / rollback
+  reference；本轮未删除或 repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；`cargo check` 通过。
+
+后续规划调整：
+
+1. candidate route gateway 已 active-smoke 可见并有显式 owner contract；下一步优先处理
+   已获证据 owner 的 source-map freeze/delete 决策，或继续挑选仍是隐式 evidence 的整
+   Rust owner。
+2. 继续按整文件、整函数组、整模块 owner 推进；不能把 `python-fallback = 0` 当作最终完成。
+
+### 2026-06-10 candidate executor default-dependency wiring owner 收口
+
+本轮按整模块 owner 推进
+`chapter_candidate_executor_default_dependency_service::wiring_readiness`。这块 Rust
+代码对应 Python candidate executor wiring/source-map，负责把 candidate executor
+默认依赖图显式化：route gateway smoke、route gateway config、production adapter、
+quality adapter、generation、word-budget repair、targeted final repair、finalize 与
+executor stages。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/api/chapters.py`
+2. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+3. `backend/app/services/chapter_generation/stream/candidate_service.py`
+4. `backend/app/services/batch_generation_candidate_service.py`
+5. `backend/app/services/chapter_candidate_executor_wiring_service.py`
+6. `backend/app/services/chapter_candidate_executor_service.py`
+7. `backend/app/services/chapter_candidate_rerank_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`
+2. `backend-rs/src/services/chapter_candidate_executor_default_dependency_service/wiring_readiness.rs`
+3. `backend-rs/src/services/chapter_candidate_route_gateway_service.rs`
+4. `backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs`
+5. `backend-rs/src/services/chapter_candidate_executor_service.rs`
+6. `backend-rs/src/services/chapter_candidate_generation_service.rs`
+7. `backend-rs/src/services/chapter_candidate_word_budget_repair_service.rs`
+8. `backend-rs/src/services/chapter_candidate_targeted_final_repair_service.rs`
+9. `backend-rs/src/services/chapter_candidate_finalize_service.rs`
+10. `backend-rs/src/services/chapter_candidate_provider_stream_service.rs`
+11. `backend-rs/src/services/chapter_candidate_quality_adapter_service.rs`
+12. `backend-rs/src/services/chapter_candidate_record_service.rs`
+13. `backend-rs/src/services/chapter_candidate_rerank_service.rs`
+14. `backend-rs/src/services/chapter_candidate_runtime_state_service.rs`
+15. `backend-rs/src/services/chapter_candidate_output_service.rs`
+
+收口结果：
+
+- 新增 `build_candidate_executor_wiring_owner_contract`，发布 Rust 默认依赖图 owner
+  contract。
+- contract 在发布前验证 default wiring plan，并记录 source map、Rust target files、
+  required stages、retired target files、dependency-count evidence、active consumers、
+  validation boundary 与 rollback boundary。
+- `chapter_candidate_executor_default_dependency_service` re-export 该 owner contract。
+- `build_chapter_candidate_route_gateway_owner_contract` 嵌入
+  `candidate_executor_wiring_owner_contract`，让 route gateway readiness 携带下游默认
+  依赖图 owner evidence。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_candidate_executor_default_dependency_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-wiring-owner" -- --nocapture`
+  -> 16 passed。
+- `cargo test chapter_candidate_route_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-wiring-owner" -- --nocapture`
+  -> 10 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-wiring-owner" -- --nocapture`
+  -> 6 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-wiring-owner" -- --nocapture`
+  -> 5 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-wiring-owner"`
+  -> passed。
+
+残留风险：
+
+- Python candidate executor wiring / executor / rerank / stream 文件仍是 source map /
+  rollback reference；本轮未删除或 repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；`cargo check` 通过。
+
+后续规划调整：
+
+1. candidate gateway 与 default dependency graph owner contract 已通过 route gateway
+   owner active-smoke 可见；如用户批准，下一步优先做 candidate executor source-map
+   freeze/delete 决策轮次。
+2. 若不做删除，则继续挑选仍有物理 Python 依赖或 rollback 歧义的整 Rust owner。
+
+### 2026-06-10 chapter draft route owner 收口
+
+本轮按整文件 route-facing owner 推进 `chapter_draft_route_service`。这块 Rust 代码负责
+draft route access、route selector normalization、latest/explicit draft selection、
+auto-revision load/apply、candidate draft load/apply、route readiness probes，以及
+`python_chapter_draft_routes_fallback` rollback 边界。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/api/chapter_draft_routes.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/api/chapter_draft_routes.rs`
+2. `backend-rs/src/services/chapter_draft_route_service.rs`
+3. `backend-rs/src/services/chapter_draft_detail_service.rs`
+4. `backend-rs/src/services/chapter_draft_apply_service.rs`
+5. `backend-rs/src/services/chapter_access_service.rs`
+6. `backend-rs/src/services/chapter_analysis_service.rs`
+
+收口结果：
+
+- 新增 `build_chapter_draft_route_owner_contract`，发布 Rust draft route owner
+  contract。
+- contract 在发布前验证 route readiness，并记录 source map、Rust owner files、
+  route paths、request builders、selection modes、payload entrypoints、readiness
+  entrypoints、active consumers、validation boundary 与 rollback boundary。
+- 新增 focused owner contract 断言，明确 `python_fallback_removal_ready = false`，
+  避免把 Python fallback shell 误判为已删除。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_draft_route_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/draft-route-owner" -- --nocapture`
+  -> 13 passed。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/draft-route-owner"`
+  -> passed。
+
+残留风险：
+
+- Python `chapter_draft_routes.py` 仍是 source map / rollback reference；本轮未删除或
+  repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs` 中
+  `organization` / `organization_member` unused imports；`cargo check` 通过。
+
+后续规划调整：
+
+1. 已有 contract-backed route owner 的 Python source map 可以进入 freeze/delete 决策轮次，
+   但需要显式批准。
+2. 若不做删除，继续选择仍有真实 Python source-map 或 rollback 边界的整 Rust owner，
+   不回到 helper-only 微切片。
+
+### 2026-06-10 batch resume command owner 收口
+
+本轮按整文件 owner 推进 `chapter_batch_generation_resume_task_command_service`。
+这块 Rust owner 负责 batch resume 的 owned task/snapshot lookup、resume eligibility、
+access/prerequisite validation、restored runtime state projection、reset persistence、
+single-vs-batch dispatch、story repair / quality restore，以及
+`python_candidate_executor_fallback` rollback 边界。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/services/batch_generation/resume_service.py`
+2. `backend/app/services/batch_generation_resume_service.py`
+3. `backend/app/services/batch_generation/query_service.py`
+4. `backend/app/services/batch_generation/status_response_builder.py`
+5. `backend/app/services/batch_generation_status_service.py`
+6. `backend/app/api/chapter_batch_generation_routes.py`
+7. `backend/app/services/chapter_generation/stream/candidate_service.py`
+8. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+2. `backend-rs/src/api/chapter_batch_generation.rs`
+3. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+5. `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+6. `backend-rs/src/services/chapter_candidate_route_gateway_service.rs`
+7. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+8. `backend-rs/src/services/chapter_story_repair_quality_context_service.rs`
+9. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_batch_generation_resume_task_command_owner_contract`，发布 Rust batch
+  resume command owner contract。
+- contract 记录 source map、Rust target files、command entrypoints、execution
+  selection、reset/persistence、runtime restore、story repair / quality restore、
+  gateway config、domain errors、active consumers、validation boundary 与 rollback
+  boundary。
+- 新增 focused owner contract 断言，明确 `python_fallback_removal_ready = false`。
+- `chapter_batch_generation_active_gateway_smoke_service` 嵌入
+  `batch_resume_task_command_owner_contract`，让 resume command owner evidence 进入
+  active-route readiness。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_batch_generation_resume_task_command_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-resume-command-owner" -- --nocapture`
+  -> 65 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-resume-command-owner" -- --nocapture`
+  -> 5 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-resume-command-owner"`
+  -> passed。
+
+残留风险：
+
+- Python batch resume / query / status / route 文件仍是 source map / rollback
+  reference；本轮未删除或 repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs`
+  中 `organization` / `organization_member` unused imports；`cargo check` 通过。
+
+后续规划调整：
+
+1. batch resume command owner 已 active-smoke 可见；下一步若要真正减少剩余 Python
+   文件，应进入 batch generation Python route/service shell 的 freeze/delete 决策轮次。
+2. 删除或冻结 Python source-map 文件属于高风险操作，需要显式确认；未确认前继续选择
+   有真实 rollback/source-map 边界的整 Rust owner，而不是改 Python 壳。
+
+### 2026-06-10 single generation prepare owner 收口
+
+本轮按整文件 owner 推进 `chapter_single_generation_prepare_service`。这块 Rust owner
+负责 single-generation route request parsing、request normalization、Python-parity
+bounds/choice validation、compat options、accessible target loading、prerequisite
+checks、execution config materialization，以及 single task view payload projection。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/api/chapter_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/schemas/chapter.py`
+4. `backend/app/services/chapter_generation/stream/entry_service.py`
+5. `backend/app/services/chapter_generation/stream/service.py`
+6. `backend/app/services/chapter_generation/stream/execution_service.py`
+7. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_single_generation_prepare_service.rs`
+2. `backend-rs/src/api/chapter_generation_routes.rs`
+3. `backend-rs/src/services/chapter_generation_access_service.rs`
+4. `backend-rs/src/services/chapter_generation_prerequisite_service.rs`
+5. `backend-rs/src/services/chapter_generation_request_runtime_state_service.rs`
+6. `backend-rs/src/services/chapter_generation_execution_config_service.rs`
+7. `backend-rs/src/services/chapter_generation_research_payload_service.rs`
+8. `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+9. `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+10. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_single_generation_prepare_owner_contract`，发布 Rust single-generation
+  prepare owner contract。
+- contract 记录 source map、Rust target files、request fields、validation bounds、
+  choice-field domains、prepare entrypoints、task-view payload entrypoints、strict
+  schema behavior、active consumers、validation boundary 与 rollback boundary。
+- 新增 focused owner contract 断言，明确 `python_fallback_removal_ready = false`。
+- `chapter_single_generation_active_gateway_smoke_service` 嵌入
+  `single_generation_prepare_owner_contract`，让 prepare owner evidence 进入
+  active-route readiness。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_single_generation_prepare_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-prepare-owner" -- --nocapture`
+  -> 29 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-prepare-owner" -- --nocapture`
+  -> 6 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-prepare-owner"`
+  -> passed。
+
+残留风险：
+
+- Python single-generation route/schema/stream 文件仍是 source map / rollback
+  reference；本轮未删除或 repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs`
+  中 `organization` / `organization_member` unused imports；`cargo check` 通过。
+
+后续规划调整：
+
+1. single-generation prepare owner 已 active-smoke 可见；如果要继续减少实际 Python
+   文件，应进入 single-generation route/schema/stream shell 的 freeze/delete 决策轮次。
+2. 未批准删除前，继续选择仍有 source-map/rollback 边界的整 Rust owner，而不是改 Python
+   兼容壳。
+
+### 2026-06-10 single generation stream workflow owner 收口
+
+本轮按整文件 owner 推进 `chapter_single_generation_stream_workflow_service`。这块
+Rust owner 负责 single-generation SSE stream creation、lifecycle launch with explicit
+gateway config、candidate gateway runtime execution、success event ordering、quality
+metrics / quality-gate events、response payload shaping、story runtime contract
+attachment、follow-up analysis，以及 candidate gateway metadata projection。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/api/chapter_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/chapter_generation/stream/entry_service.py`
+4. `backend/app/services/chapter_generation/stream/service.py`
+5. `backend/app/services/chapter_generation/stream/execution_service.py`
+6. `backend/app/services/chapter_generation/stream/finalize_service.py`
+7. `backend/app/services/chapter_generation/stream/candidate_service.py`
+8. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+2. `backend-rs/src/api/chapter_generation_routes.rs`
+3. `backend-rs/src/services/chapter_single_generation_prepare_service.rs`
+4. `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+5. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+6. `backend-rs/src/services/chapter_generation_runtime_service.rs`
+7. `backend-rs/src/services/chapter_generation_quality_runtime_context_service.rs`
+8. `backend-rs/src/services/chapter_story_repair_quality_context_service.rs`
+9. `backend-rs/src/services/chapter_analysis_runtime_service.rs`
+10. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_single_generation_stream_workflow_owner_contract`，发布 Rust
+  single-generation stream workflow owner contract。
+- contract 记录 source map、Rust target files、stream entrypoints、runtime gateway
+  path、SSE success event order、response payload fields、quality gate actions、
+  story runtime contract、analysis follow-up、active consumers、validation boundary
+  与 rollback boundary。
+- 新增 focused owner contract 断言，明确 `python_fallback_removal_ready = false`。
+- `chapter_single_generation_active_gateway_smoke_service` 嵌入
+  `single_generation_stream_workflow_owner_contract`，让 stream workflow owner evidence
+  进入 active-route readiness。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_single_generation_stream_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-stream-owner" -- --nocapture`
+  -> 18 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-stream-owner" -- --nocapture`
+  -> 6 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-stream-owner"`
+  -> passed。
+
+残留风险：
+
+- Python single-generation stream route/service 文件仍是 source map / rollback
+  reference；本轮未删除或 repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs`
+  中 `organization` / `organization_member` unused imports；`cargo check` 通过。
+
+后续规划调整：
+
+1. single-generation stream workflow owner 已 active-smoke 可见；若要继续减少实际
+   Python 文件，应进入 single-generation route/schema/stream shell 的 freeze/delete 决策。
+2. 未批准删除前，继续选择 background write workflow 或其他仍有 source-map/rollback
+   边界的整 Rust owner。
+
+### 2026-06-10 single generation write workflow owner 收口
+
+本轮按整文件 owner 推进 `chapter_single_generation_write_workflow_service`。这块
+Rust owner 负责 single-generation background route 的 existing active task 复用、
+recovered read-state loading、startup snapshot materialization、restored-launch
+background launch parts、`PreparedSingleGenerationBackgroundLaunchParts::persist_and_dispatch`、
+route/AppConfig candidate gateway config handoff，以及 background response payload
+projection。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/api/chapter_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/chapter_generation/stream/entry_service.py`
+4. `backend/app/services/chapter_generation/stream/service.py`
+5. `backend/app/services/chapter_generation/stream/execution_service.py`
+6. `backend/app/services/chapter_generation/stream/wiring_service.py`
+7. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+2. `backend-rs/src/api/chapter_generation_routes.rs`
+3. `backend-rs/src/services/chapter_single_generation_prepare_service.rs`
+4. `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+5. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+6. `backend-rs/src/services/chapter_generation_snapshot_service.rs`
+7. `backend-rs/src/services/chapter_generation_task_recovery_service.rs`
+8. `backend-rs/src/services/chapter_generation_quality_runtime_context_service.rs`
+9. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_single_generation_write_workflow_owner_contract`，发布 Rust
+  single-generation background write workflow owner contract。
+- contract 记录 source map、Rust target files、background entrypoints、
+  existing-task read path、launch path、response payload fields、gateway config、
+  validation boundary 与 rollback boundary。
+- 新增 focused owner contract 断言，明确 `python_fallback_removal_ready = false`。
+- `chapter_single_generation_active_gateway_smoke_service` 嵌入
+  `single_generation_write_workflow_owner_contract`，让 background write workflow
+  owner evidence 进入 active-route readiness。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-write-owner" -- --nocapture`
+  -> 12 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-write-owner" -- --nocapture`
+  -> 6 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-write-owner"`
+  -> passed。
+
+残留风险：
+
+- Python single-generation route/stream 文件仍是 source map / rollback reference；
+  本轮未删除或 repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs`
+  中 `organization` / `organization_member` unused imports。
+
+后续规划调整：
+
+1. single-generation prepare、stream workflow、background write workflow owner 均已
+   active-smoke 可见；下一步如果要真正减少 Python 存量，应进入 single-generation
+   route/schema/stream shell 的 freeze/delete 决策轮次。
+2. 未批准删除前，继续选择能减少 rollback ambiguity 或把 source-map 假设显式化的
+   整 Rust owner，而不是修改 Python compatibility shell。
+
+### 2026-06-10 single generation runtime restore owner 收口
+
+本轮按整文件 owner 推进 `chapter_single_generation_runtime_restore_service`。这块
+Rust owner 负责 single-generation runtime launch input materialization、task
+persistence seed、pending checkpoint、startup snapshot plan、restored quality runtime
+seed、story-repair compatibility restore、background launch parts、task/snapshot
+persistence、runtime dispatch，以及 background response payload。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/api/chapter_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/chapter_generation/stream/entry_service.py`
+4. `backend/app/services/chapter_generation/stream/service.py`
+5. `backend/app/services/chapter_generation/stream/wiring_service.py`
+6. `backend/app/services/chapter_generation/stream/execution_service.py`
+7. `backend/app/services/story_repair_payload_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+2. `backend-rs/src/services/chapter_single_generation_prepare_service.rs`
+3. `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+4. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+5. `backend-rs/src/services/chapter_generation_snapshot_service.rs`
+6. `backend-rs/src/services/chapter_generation_quality_runtime_context_service.rs`
+7. `backend-rs/src/services/chapter_story_repair_quality_context_service.rs`
+8. `backend-rs/src/services/chapter_quality_metrics_query_service.rs`
+9. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_single_generation_runtime_restore_owner_contract`，发布 Rust
+  single-generation runtime restore / startup snapshot / background seed owner
+  contract。
+- contract 记录 source map、Rust target files、runtime restore entrypoints、
+  startup snapshot entrypoints、background launch entrypoints、persistence
+  payloads、runtime-state fields、response payload fields、validation boundary
+  与 rollback boundary。
+- 新增 focused owner contract 断言，明确 `python_fallback_removal_ready = false`。
+- `chapter_single_generation_active_gateway_smoke_service` 嵌入
+  `single_generation_runtime_restore_owner_contract`，让 DB-backed business
+  smoke 对应到可复用的整文件 owner contract。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_single_generation_runtime_restore_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-runtime-restore-owner" -- --nocapture`
+  -> 12 passed。
+- `cargo test chapter_single_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-runtime-restore-owner" -- --nocapture`
+  -> 12 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-runtime-restore-owner" -- --nocapture`
+  -> 6 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-runtime-restore-owner"`
+  -> passed。
+
+残留风险：
+
+- Python single-generation route/stream/story-repair 文件仍是 source map /
+  rollback reference；本轮未删除或 repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs`
+  中 `organization` / `organization_member` unused imports。
+
+后续规划调整：
+
+1. single-generation prepare、stream workflow、write workflow、runtime restore owner
+   均已 active-smoke 可见；如果要真正减少 Python 存量，应进入 single-generation
+   route/schema/stream shell 的 freeze/delete 决策轮次。
+2. 未批准删除前，下一块优先选择
+   `chapter_single_generation_runtime_state_service`，因为它仍拥有 terminal state、
+   runtime-generation lifecycle、checkpoint patch 和 follow-up analysis 的整文件边界。
+
+### 2026-06-10 single generation runtime state owner 收口
+
+本轮按整文件 owner 推进 `chapter_single_generation_runtime_state_service`。这块
+Rust owner 负责 single-generation runtime lifecycle、route/AppConfig candidate
+gateway config、runtime generation dispatch、task stage persistence、checkpoint
+projection、candidate gateway checkpoint metadata、quality-gate terminal states、
+runtime failure terminal states、failed-chapter entries，以及 follow-up analysis
+decision。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/api/chapter_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/chapter_generation/stream/service.py`
+4. `backend/app/services/chapter_generation/stream/execution_service.py`
+5. `backend/app/services/chapter_generation/stream/finalize_service.py`
+6. `backend/app/services/chapter_generation/stream/candidate_service.py`
+7. `backend/app/services/chapter_analysis_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+2. `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+3. `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+4. `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+5. `backend-rs/src/services/chapter_generation_runtime_service.rs`
+6. `backend-rs/src/services/chapter_generation_snapshot_service.rs`
+7. `backend-rs/src/services/chapter_analysis_runtime_service.rs`
+8. `backend-rs/src/services/chapter_generation_terminal_runtime_patch_service.rs`
+9. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_single_generation_runtime_state_owner_contract`，发布 Rust
+  single-generation runtime lifecycle / terminal state owner contract。
+- contract 记录 source map、Rust target files、runtime lifecycle entrypoints、
+  generation entrypoints、checkpoint entrypoints、terminal-state entrypoints、
+  follow-up analysis entrypoints、gateway config policy、task stage statuses、
+  terminal phases、validation boundary 与 rollback boundary。
+- 新增 focused owner contract 断言，明确 `python_fallback_removal_ready = false`。
+- `chapter_single_generation_active_gateway_smoke_service` 嵌入
+  `single_generation_runtime_state_owner_contract`，让 runtime lifecycle 和
+  terminal-state owner evidence 进入 active-route readiness。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_single_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-runtime-state-owner" -- --nocapture`
+  -> 23 passed。
+- `cargo test chapter_single_generation_runtime_restore_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-runtime-state-owner" -- --nocapture`
+  -> 12 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-runtime-state-owner" -- --nocapture`
+  -> 6 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-runtime-state-owner"`
+  -> passed。
+
+残留风险：
+
+- Python single-generation route/stream/analysis 文件仍是 source map /
+  rollback reference；本轮未删除或 repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs`
+  中 `organization` / `organization_member` unused imports。
+
+后续规划调整：
+
+1. single-generation active-route Rust owner chain 的 prepare、stream workflow、
+   write workflow、runtime restore、runtime state 均已 active-smoke 可见。下一步若要
+   真正减少 Python 存量，应进入 single-generation Python route/stream shell 的
+   freeze/delete 决策轮次。
+2. 若暂不批准删除，应切换到另一条仍有实际 rollback ambiguity 的整模块 owner；
+   不建议继续在 single-generation 链里做更小的证据切片。
+
+### 2026-06-10 batch generation runtime state owner 收口
+
+本轮从已经 active-smoke 可见的 single-generation owner 链切换到
+`chapter_batch_generation_runtime_state_service` 整文件 owner。该 Rust owner 负责
+batch-generation runtime lifecycle、execution input materialization、route/AppConfig
+candidate gateway config、runtime dispatch、runtime checkpoint projection、selected
+candidate event snapshots、retry routing、terminal persistence、post-analysis terminal
+decisions、follow-up analysis，以及 task/snapshot persistence。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/api/chapter_batch_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/batch_generation_execution_service.py`
+4. `backend/app/services/batch_generation_orchestration_service.py`
+5. `backend/app/services/batch_generation_candidate_service.py`
+6. `backend/app/services/batch_generation_progress_service.py`
+7. `backend/app/services/chapter_analysis_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+2. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+5. `backend-rs/src/services/chapter_candidate_event_service.rs`
+6. `backend-rs/src/services/chapter_generation_runtime_service.rs`
+7. `backend-rs/src/services/chapter_generation_snapshot_service.rs`
+8. `backend-rs/src/services/chapter_generation_terminal_runtime_patch_service.rs`
+9. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_batch_generation_runtime_state_owner_contract`，发布 Rust
+  batch-generation runtime lifecycle / retry / terminal / analysis owner contract。
+- contract 记录 source map、Rust target files、runtime entrypoints、candidate gateway
+  entrypoints、checkpoint entrypoints、retry/terminal entrypoints、follow-up analysis
+  entrypoints、runtime-state keys、gateway config policy、validation boundary 与
+  rollback boundary。
+- 新增 focused owner contract 断言，明确 `python_fallback_removal_ready = false`。
+- `chapter_batch_generation_active_gateway_smoke_service` 嵌入
+  `batch_runtime_state_owner_contract`，让真实 batch runtime owner evidence 进入
+  active-route readiness。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_batch_generation_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-runtime-state-owner" -- --nocapture`
+  -> 112 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-runtime-state-owner" -- --nocapture`
+  -> 5 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-runtime-state-owner"`
+  -> passed。
+
+残留风险：
+
+- Python batch route/orchestration/candidate/progress 文件仍是 source map /
+  rollback reference；本轮未删除或 repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs`
+  中 `organization` / `organization_member` unused imports。
+
+后续规划调整：
+
+1. 若批准删除，优先进入 batch 或 single-generation Python route shell 的
+   source-map freeze/delete 决策轮次，并同轮补 rollback policy。
+2. 未批准删除前，可以继续选择 `chapter_batch_generation_write_workflow_service`
+   这类整文件 owner，但必须能减少 rollback ambiguity 或让 create/cancel/resume
+   workflow ownership 更明确地 active-smoke-visible，避免回到小证据切片。
+
+### 2026-06-10 batch generation write workflow owner 收口
+
+本轮选择 `chapter_batch_generation_write_workflow_service` 整文件 owner，继续按
+整块迁移推进，而不是继续拆小证据切片。该 owner 覆盖 batch create/resume/cancel
+写入工作流：route payload normalization、create task persistence、queued startup
+snapshot、runtime dispatch handoff、resume persistence/dispatch、cancel terminal
+persistence、response payload projection、candidate gateway config propagation，以及
+rollback/source-map policy。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/api/chapter_batch_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/batch_generation/create_service.py`
+4. `backend/app/services/batch_generation/resume_service.py`
+5. `backend/app/services/batch_generation/status_response_builder.py`
+6. `backend/app/services/batch_generation_create_service.py`
+7. `backend/app/services/batch_generation_resume_service.py`
+8. `backend/app/services/batch_generation_status_service.py`
+9. `backend/app/services/batch_generation_candidate_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/api/chapter_batch_generation.rs`
+2. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+5. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+6. `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+7. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_batch_generation_write_workflow_owner_contract`，发布 Rust batch
+  create/resume/cancel write workflow owner contract。
+- contract 明确 create/resume/cancel entrypoints、persistence contract、runtime
+  dispatch、response payload fields、gateway config policy、active consumers、
+  validation boundary 与 rollback boundary。
+- 新增 focused owner-contract 测试，明确
+  `python_fallback_removal_ready = false`，防止把 manifest fallback-free 误判为
+  迁移完成。
+- `chapter_batch_generation_active_gateway_smoke_service` 嵌入
+  `batch_write_workflow_owner_contract`，active-route readiness 现在能直接验证
+  batch write workflow 的 create/resume/cancel Rust owner。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test chapter_batch_generation_write_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-write-workflow-owner" -- --nocapture`
+  -> 78 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-write-workflow-owner" -- --nocapture`
+  -> 5 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-write-workflow-owner"`
+  -> passed。
+
+残留风险：
+
+- Python batch route/create/resume/status/candidate 文件仍是 source map /
+  rollback reference；本轮未删除或 repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs`
+  中 `organization` / `organization_member` unused imports。
+
+后续规划调整：
+
+1. 若批准删除，优先进行 batch-generation Python source-map freeze/delete 决策轮次，
+   并在同轮补显式 rollback policy。
+2. 未批准删除前，下一轮应继续选整 owner：优先 batch route shell freeze evidence
+   或 DB-backed business smoke owner，不再做小块 helper/证据切片。
+
+### 2026-06-10 batch generation route owner 收口
+
+本轮选择 `backend-rs/src/api/chapter_batch_generation.rs` 作为 batch generation
+整路由模块 owner。该 owner 覆盖 create/status/stream/active-project/
+active-user-task/cancel/resume 七个 HTTP 路由入口，以及 write workflow handoff、
+read-context handoff、route error mapping、AppConfig candidate-gateway config
+propagation 和 source-map / rollback policy。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/api/chapter_batch_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/batch_generation/create_service.py`
+4. `backend/app/services/batch_generation/query_service.py`
+5. `backend/app/services/batch_generation/resume_service.py`
+6. `backend/app/services/batch_generation/status_response_builder.py`
+7. `backend/app/services/batch_generation_create_service.py`
+8. `backend/app/services/batch_generation_query_service.py`
+9. `backend/app/services/batch_generation_resume_service.py`
+10. `backend/app/services/batch_generation_status_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/api/chapter_batch_generation.rs`
+2. `backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs`
+3. `backend-rs/src/services/chapter_batch_generation_read_context_service.rs`
+4. `backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs`
+5. `backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs`
+6. `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+7. `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_chapter_batch_generation_route_owner_contract`，直接放在真实 Rust
+  route owner 中，避免再拆一个 forwarding-only readiness 文件。
+- contract 明确七个 route entrypoints、route path constants、write workflow
+  consumers、read-context consumers、error mapping functions、AppConfig candidate
+  gateway policy、active consumers、validation boundary 与 rollback boundary。
+- 新增 focused route-owner contract 测试，锁住 create/status/stream/cancel/resume
+  路由路径和 owner contract。
+- `chapter_batch_generation_active_gateway_smoke_service` 嵌入
+  `batch_route_owner_contract`，active-route readiness 现在直接验证 batch 路由模块
+  owner，而不只是记录 `rust_route_owner` 字符串。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test api::chapter_batch_generation --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-route-owner" -- --nocapture`
+  -> 34 passed。
+- `cargo test chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-route-owner" -- --nocapture`
+  -> 5 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/batch-route-owner"`
+  -> passed。
+
+残留风险：
+
+- Python batch route/service 文件仍是 source map / rollback reference；本轮未删除或
+  repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs`
+  中 `organization` / `organization_member` unused imports。
+
+后续规划调整：
+
+1. batch route、write workflow、read context、resume command、runtime state 已经
+   active-smoke 可见。下一步最高收益是 batch-generation Python source-map
+   freeze/delete 决策轮次，并在同轮补显式 rollback policy。
+2. 若暂不批准删除，不要继续做 batch 小证据切片；改选另一条仍有真实 fallback
+   ambiguity 的整路由或整服务 owner。
+
+### 2026-06-10 single generation route owner 收口
+
+本轮选择 `backend-rs/src/api/chapter_generation_routes.rs` 作为
+single-generation 整路由模块 owner。该 owner 覆盖 stream/background 两个 HTTP
+路由入口、route payload intake、route error mapping、AppConfig candidate-gateway
+config propagation、stream workflow handoff、background write workflow handoff，以及
+source-map / rollback policy。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/api/chapter_generation_routes.py`
+2. `backend/app/api/chapters.py`
+3. `backend/app/services/chapter_generation/stream/entry_service.py`
+4. `backend/app/services/chapter_generation/stream/service.py`
+5. `backend/app/services/chapter_generation/stream/execution_service.py`
+6. `backend/app/services/chapter_generation/stream/wiring_service.py`
+7. `backend/app/services/compat/chapter_generation_route_compat_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/api/chapter_generation_routes.rs`
+2. `backend-rs/src/services/chapter_single_generation_prepare_service.rs`
+3. `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`
+4. `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`
+5. `backend-rs/src/services/chapter_single_generation_runtime_restore_service.rs`
+6. `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`
+7. `backend-rs/src/services/chapter_single_generation_active_gateway_smoke_service.rs`
+
+收口结果：
+
+- 新增 `build_chapter_single_generation_route_owner_contract`，直接放在真实 Rust
+  route owner 中，避免再拆 forwarding-only readiness 文件。
+- contract 明确 stream/background routes、route entrypoints、workflow consumers、
+  route error mapping functions、AppConfig candidate-gateway policy、response modes、
+  active consumers、validation boundary 与 rollback boundary。
+- 新增 focused route-owner contract 测试，锁住 stream/background route path 与
+  owner contract。
+- `chapter_single_generation_active_gateway_smoke_service` 嵌入
+  `single_generation_route_owner_contract`，active-route readiness 现在直接验证
+  single-generation Rust 路由模块 owner。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test api::chapter_generation_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-route-owner" -- --nocapture`
+  -> 12 passed。
+- `cargo test chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-route-owner" -- --nocapture`
+  -> 6 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/single-route-owner"`
+  -> passed。
+
+残留风险：
+
+- Python single-generation route/stream compatibility 文件仍是 source map /
+  rollback reference；本轮未删除或 repoint Python 文件。
+- Rust 测试编译仍报告既有无关 warning：`project_export_payload_adapter_service.rs`
+  中 `organization` / `organization_member` unused imports。
+
+后续规划调整：
+
+1. single-generation route、prepare、stream workflow、write workflow、runtime
+   restore、runtime state 已经 active-smoke 可见。下一步最高收益是
+   single-generation Python source-map freeze/delete 决策轮次，并在同轮补显式
+   rollback policy。
+2. 若暂不批准删除，不要继续做 single-generation 小证据切片；改选另一条仍有真实
+   fallback ambiguity 的整路由或整服务 owner。
+
+### 2026-06-10 users route owner 收口
+
+本轮选择 `backend-rs/src/api/users.rs` 作为 users 整路由模块 owner。该 owner 覆盖
+current user、admin list/detail、set-admin、delete-user、reset-password、admin guard、
+request payload ownership、password reset workflow handoff，以及 source-map /
+rollback policy。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/api/users.py`
+2. `backend/app/models/user.py`
+3. `backend/app/schemas/user.py`
+4. `backend/app/services/user_service.py`
+5. `backend/app/services/password_service.py`
+
+Rust owner / consumer：
+
+1. `backend-rs/src/api/users.rs`
+2. `backend-rs/src/services/user_admin_route_service.rs`
+3. `backend-rs/src/services/user_admin_set_admin_route_service.rs`
+4. `backend-rs/src/services/user_admin_delete_user_route_service.rs`
+5. `backend-rs/src/services/user_admin_password_reset_workflow_service.rs`
+6. `backend-rs/src/services/user_password_reset_request_service.rs`
+7. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 将 users route path 提升为常量，让 router 与 focused tests 共用同一来源。
+- 新增 test-visible `build_users_route_owner_contract`，直接放在真实 Rust route owner
+  中，记录 Python source-map、Rust owner files、list/current/detail/delete/
+  set-admin/reset-password routes、admin guard coverage、service consumers、
+  request contracts、readiness probes、validation boundary 与 rollback boundary。
+- 新增 focused tests，锁住 route owner contract 和 route path stability。
+- contract builder 限定在测试构建中，避免生产 `cargo check` 产生 dead-code warning；
+  users 的 Rust auth-guard readiness 已由 manifest probes 覆盖。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test api::users --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/users-route-owner" -- --nocapture`
+  -> 2 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/users-route-owner"`
+  -> passed。
+
+残留风险：
+
+- Python users route/model/schema/service 文件仍是 source map / rollback reference；本轮未删除或
+  repoint Python 文件。
+- Rust test builds 仍报告既有无关 warning：`project_export_payload_adapter_service.rs`
+  中 `organization` / `organization_member` unused imports。
+
+后续规划调整：
+
+1. 若批准删除/freeze，users 是小型候选，可进入同轮 Python source-map freeze/delete
+   决策并补显式 rollback policy。
+2. 若仍不批准删除，继续选择已有 Rust readiness probes 且仍有 source-map ambiguity 的
+   compact whole route owner，例如 `auth`、`characters`、`outlines` 或 `book_import`。
+
+### 2026-06-10 auth route owner contract 收口
+
+本轮选择 `backend-rs/src/api/auth.rs` 作为 auth 整路由模块 owner。该 route group
+此前已经在 manifest readiness 中成为 Rust-only；本轮不再编辑 Python compatibility
+shell，而是把 auth route owner contract、route path stability 和 rollback/source-map
+边界直接固化到真实 Rust route owner 文件中。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/api/auth.py`
+2. `backend/app/middleware/auth_middleware.py`
+3. `backend/app/user_manager.py`
+4. `backend/app/user_password.py`
+5. `backend/app/services/oauth_service.py`
+6. `backend/app/services/integrations/oauth_service.py`
+
+Rust owner / support：
+
+1. `backend-rs/src/api/auth.rs`
+2. `backend-rs/src/middleware/auth.rs`
+3. `backend-rs/src/services/auth.rs`
+4. `backend-rs/src/services/auth_password_workflow_service.rs`
+5. `backend-rs/src/models/user.rs`
+6. `backend-rs/src/models/user_password.rs`
+7. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 将 auth route path 提升为文件级常量，让 router、owner contract 和 focused tests
+  共用同一来源。
+- 新增 test-only `build_auth_route_owner_contract`，记录 login/local-login/bind-login、
+  refresh、LinuxDo OAuth URL/callback、register/logout/config/current-user、password
+  status/set/initialize route group。
+- contract 同时记录 session cookie contract、OAuth state TTL/signature/retention
+  policy、password workflow handoff、11 个 Rust readiness probes、retired
+  `auth-*python-fallback` probes，以及 rollback/source-map policy。
+- 新增 focused tests，锁住 auth owner contract 和 route path stability。
+- 生产行为不变；Python 文件未删除、未 repoint，仍只作为 source map / rollback
+  reference。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test api::auth --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/auth-route-owner" -- --nocapture`
+  -> 5 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`；`auth` route group
+  保持 `owner_counts = {'rust': 11}`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/auth-route-owner"`
+  -> passed。
+
+残留风险：
+
+- Python auth route/middleware/user/password/OAuth 文件仍是 source map / rollback
+  reference；删除或 freeze 仍需要同轮显式 rollback policy。
+- Rust test builds 仍报告既有无关 warning：`project_export_payload_adapter_service.rs`
+  中 `organization` / `organization_member` unused imports。
+
+后续规划调整：
+
+1. 若批准 source-map freeze/delete，优先选 `auth` 或 `users` 这种 compact route group，
+   在同轮补 rollback policy 后执行 freeze/delete/repoint。
+2. 若仍不删除 Python source-map，下一轮应继续整 route owner：`characters`、`outlines`
+   或 `book_import`，不要继续做 auth 小切片，除非它能关闭真实 rollback/source-map
+   ambiguity。
+
+### 2026-06-10 book_import route owner contract 收口
+
+本轮选择 `backend-rs/src/api/book_import.rs` 作为 `book_import` 整路由模块 owner。
+该 route group 此前已经在 manifest readiness 中成为 Rust-only；本轮不编辑 Python
+compatibility shell，而是把 create/status/preview/cancel/apply/retry-stream/apply-stream
+的 route owner contract 和 route path stability 固化到真实 Rust route owner 文件中。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/api/book_import.py`
+2. `backend/app/services/book_import_service.py`
+3. `backend/app/schemas/book_import.py`
+
+Rust owner / support：
+
+1. `backend-rs/src/api/book_import.rs`
+2. `backend-rs/src/services/book_import_service.rs`
+3. `backend-rs/src/services/book_import_request_service.rs`
+4. `backend-rs/src/services/book_import_apply_execution_service.rs`
+5. `backend-rs/src/services/book_import_ai_generation_service.rs`
+6. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 将 `book_import` route path 提升为文件级常量，让 router、owner contract 和
+  focused tests 共用同一来源。
+- 新增 test-only `build_book_import_route_owner_contract`，记录 create-task、
+  task-status、preview、cancel、apply、apply-stream、retry-stream route group。
+- contract 同时记录 request owners、service handoffs、stream route ownership、
+  create-task 文件类型/大小/import_mode policy、error mapping、7 个 Rust readiness
+  probes、retired `book-import-*python-fallback` probes，以及 rollback/source-map
+  policy。
+- 新增 focused tests，锁住 `book_import` owner contract 和 route path stability。
+- 生产行为不变；Python 文件未删除、未 repoint，仍只作为 source map / rollback
+  reference。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test api::book_import --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/book-import-route-owner" -- --nocapture`
+  -> 2 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`；`book_import`
+  route group 保持 `owner_counts = {'rust': 7}`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/book-import-route-owner"`
+  -> passed。
+
+残留风险：
+
+- Python book import route/service/schema 文件仍是 source map / rollback reference；
+  删除或 freeze 仍需要同轮显式 rollback policy。
+- Rust test builds 仍报告既有无关 warning：`project_export_payload_adapter_service.rs`
+  中 `organization` / `organization_member` unused imports。
+
+后续规划调整：
+
+1. 若批准 source-map freeze/delete，`book_import`、`auth` 或 `users` 是 compact
+   route group 候选，可在同轮补 rollback policy 后执行 freeze/delete/repoint。
+2. 若仍不删除 Python source-map，下一轮应继续整 route owner：`characters` 或
+   `outlines`；不要继续做 `book_import` 小切片，除非它能关闭真实 rollback/source-map
+   ambiguity。
+
+### 2026-06-10 outlines route owner contract 收口
+
+本轮选择 `backend-rs/src/api/outlines.rs` 作为 `outlines` 整路由模块 owner。该
+route group 此前已经在 manifest readiness 中成为 Rust-only；本轮不编辑 Python
+compatibility shell，而是把 outlines CRUD、project-list、generation、batch-expand、
+expand、chapter creation 的 route owner contract 和 route path stability 固化到真实
+Rust route owner 文件中。
+
+Python source map 保持 rollback-only：
+
+1. `backend/app/api/outlines.py`
+2. `backend/app/models/outline.py`
+3. `backend/app/schemas/outline.py`
+4. `backend/app/services/outline_requirement_service.py`
+5. `backend/app/services/outline_runtime_source_service.py`
+6. `backend/app/services/outline_quality_summary_snapshot_store.py`
+
+Rust owner / support：
+
+1. `backend-rs/src/api/outlines.rs`
+2. `backend-rs/src/services/outline_service.rs`
+3. `backend-rs/src/services/outline_generation_request_service.rs`
+4. `backend-rs/src/services/outline_expansion_request_service.rs`
+5. `backend-rs/src/services/outline_requirement_service.rs`
+6. `backend-rs/src/services/outline_runtime_system_prompt_service.rs`
+7. `backend-rs/src/services/outline_quality_summary_snapshot_service.rs`
+8. `backend-rs/src/services/outline_continue_context_service.rs`
+9. `deploy/strangler-gateway-probes.json`
+
+收口结果：
+
+- 将 `outlines` route path 提升为文件级常量，让 router、owner contract 和 focused
+  tests 共用同一来源。
+- 新增 test-only `build_outlines_route_owner_contract`，记录 project-list、generate、
+  generate-stream、reorder、batch-expand、batch-expand-stream、list/create、detail/
+  update/delete、expand/expand-stream、create-single-chapter、chapters、
+  create-chapters-from-plans route group。
+- contract 同时记录 service handoffs、stream route ownership、chapter-creation
+  policy、compat payload policy、5 个 Rust readiness probes、retired
+  `outlines-*python-fallback` probes，以及 rollback/source-map policy。
+- 新增 focused tests，锁住 `outlines` owner contract 和 route path stability。
+- 生产行为不变；Python 文件未删除、未 repoint，仍只作为 source map / rollback
+  reference。
+
+验证：
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` -> passed。
+- `cargo test api::outlines --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/outlines-route-owner" -- --nocapture`
+  -> 2 passed。
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only` -> passed，
+  readiness owner count 保持 `rust = 132`、`python-fallback = 0`；`outlines`
+  route group 保持 `owner_counts = {'rust': 5}`。
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/outlines-route-owner"`
+  -> passed。
+
+残留风险：
+
+- Python outlines route/model/schema/service 文件仍是 source map / rollback reference；
+  删除或 freeze 仍需要同轮显式 rollback policy。
+- Rust test builds 仍报告既有无关 warning：`project_export_payload_adapter_service.rs`
+  中 `organization` / `organization_member` unused imports。
+
+后续规划调整：
+
+1. 若批准 source-map freeze/delete，`outlines`、`book_import`、`auth` 或 `users`
+   是 compact route group 候选，可在同轮补 rollback policy 后执行
+   freeze/delete/repoint。
+2. 若仍不删除 Python source-map，下一轮应继续最后一个 compact route owner：
+   `characters`；不要继续做已覆盖 owner 的小切片，除非它能关闭真实
+   rollback/source-map ambiguity。
+## 2026-06-10 characters route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/characters.rs` now owns a whole route-group contract for
+  characters project-list, list/create, generate, generate-stream, detail
+  update/delete, validate-import, export, and import routes.
+- The contract names the Rust owner, service consumers, regular authenticated
+  readiness scope, public asymmetric `validate-import` policy, import/export
+  payload contract, generation handoff, Python source-map files, and rollback
+  boundary.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without treating the Python route file as an
+  active implementation owner.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/characters.py`, `backend/app/models/character.py`,
+  `backend/app/schemas/character.py`,
+  `backend/app/services/auto_character_service.py`,
+  `backend/app/services/character_context_service.py`, and
+  `backend/app/services/character_state_update_service.py`.
+- Retired regular characters fallback probes must not be restored unless the
+  Rust characters route owner or matching readiness probes are rolled back in
+  the same change.
+- `characters-validate-import` stays an explicit public asymmetric route policy;
+  do not use that exception to keep the regular Python fallback path alive.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::characters --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/characters-route-owner" -- --nocapture` passed: 2 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 132`, `python-fallback = 0`, and
+  `characters owner_counts = {'rust': 6}`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/characters-route-owner"` passed.
+
+### Next acceleration rule
+
+- The migration metric after `python-fallback = 0` is not fallback count. Count
+  whole-owner closeout, explicit source-map freeze/delete/repoint evidence,
+  business smoke coverage, and rollback policy.
+- Next rounds should either batch-freeze/delete approved Python source-map
+  groups for contracted route owners, or migrate one larger remaining
+  module/file owner end-to-end instead of adding tiny seam checkpoints.
+## 2026-06-10 memories route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/memories.rs` now owns a whole route-group contract for
+  memories analyze-chapter, list, chapter-analysis read, search, foreshadows,
+  stats, and delete-chapter routes.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without relying on the Python route file as an
+  implementation owner.
+- The contract names the Rust API owner, memories query/write workflow owners,
+  private route error mapper, chapter-analysis task error handoff, request
+  normalization behavior, readiness probes, Python source-map files, and
+  rollback policy.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/memories.py`, `backend/app/models/memory.py`,
+  `backend/app/services/memory_service.py`, and
+  `backend/app/services/memory_ranking.py`.
+- The Rust manifest currently proves memories auth-guard ownership for stats,
+  list, analysis, foreshadows, search, and delete-chapter. Analyze-chapter is
+  covered by the Rust route contract and focused API tests, but final physical
+  closeout still needs explicit source-map freeze/delete/repoint evidence or a
+  logged-in business smoke that exercises the write workflow.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::memories --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/memories-route-owner" -- --nocapture` passed: 18 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 132`, `python-fallback = 0`, and
+  `memories owner_counts = {'rust': 6}`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/memories-route-owner"` passed.
+- Known unrelated warning during focused test remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark memories complete from auth-guard probes alone. Completion needs
+  source-map freeze/delete/repoint evidence, or logged-in business smoke plus
+  rollback policy for analyze/list/search/foreshadows/stats/delete.
+- Avoid more memories micro-slices. If deletion is approved, handle the Python
+  route/model/service/ranking source-map group together; otherwise pick another
+  whole Rust owner package and close its route/service contract in one round.
+## 2026-06-10 settings route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/settings.rs` now owns a whole route-group contract for
+  settings CRUD, stored API key, models, connection test, fetch-models,
+  web-research test, function-calling check, presets CRUD,
+  create-from-current, activate, and preset test routes.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without relying on the Python route file as an
+  implementation owner.
+- The contract names the Rust API owner, method matrix, settings CRUD owner,
+  API-key/model/preset/runtime/update request service owners, 27 readiness
+  probes, Python source-map files, and rollback policy.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/settings.py`, `backend/app/models/settings.py`, and
+  `backend/app/schemas/settings.py`.
+- The Rust manifest currently proves settings auth-guard and business
+  readiness with 27 Rust probes. This is strong owner evidence, but final
+  physical closeout still needs explicit source-map freeze/delete/repoint
+  evidence or a logged-in business smoke plus rollback policy for the settings
+  route/model/schema group.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::settings --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/settings-route-owner" -- --nocapture` passed: 33 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 132`, `python-fallback = 0`, and
+  `settings owner_counts = {'rust': 27}`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/settings-route-owner"` passed.
+- Known unrelated warning during focused test remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark settings complete from probes alone. Completion needs source-map
+  freeze/delete/repoint evidence, or logged-in business smoke plus rollback
+  policy for CRUD, presets, model fetch, API probe, and function-calling
+  behavior.
+- Avoid more settings micro-slices. If deletion is approved, handle the Python
+  route/model/schema source-map group together; otherwise pick another whole
+  Rust owner package and close its route/service contract in one round.
+## 2026-06-10 projects route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/projects.rs` now owns a whole route-group contract for
+  projects list/create, detail read/update/delete, TXT export, JSON
+  export-data, consistency check, fix-organizations, fix-member-counts,
+  validate-import, and import routes.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without relying on the Python route file as an
+  implementation owner.
+- The contract names the Rust API owner, method matrix, project CRUD owner,
+  export/import/consistency workflow owners, 12 readiness probes, Python
+  source-map files, and rollback policy.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/projects.py`, `backend/app/models/project.py`,
+  `backend/app/models/project_default_style.py`, and
+  `backend/app/schemas/project.py`.
+- The Rust manifest currently proves projects auth-guard and public
+  validate-import readiness with 12 Rust probes. This is strong owner evidence,
+  but final physical closeout still needs explicit source-map
+  freeze/delete/repoint evidence or a logged-in business smoke plus rollback
+  policy for the projects route/model/schema group.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::projects --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/projects-route-owner" -- --nocapture` passed: 30 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 132`, `python-fallback = 0`, and
+  `projects owner_counts = {'rust': 12}`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/projects-route-owner"` passed.
+- Known unrelated warning during focused test remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark projects complete from probes alone. Completion needs source-map
+  freeze/delete/repoint evidence, or logged-in business smoke plus rollback
+  policy for CRUD, export/import, consistency, organization fix, and
+  member-count fix behavior.
+- Avoid more projects micro-slices. If deletion is approved, handle the Python
+  route/model/schema source-map group together; otherwise pick another whole
+  Rust owner package and close its route/service contract in one round.
+## 2026-06-10 wizard-stream route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/wizard.rs` now owns a whole route-file contract for
+  wizard-stream world-building, world-building by project, regenerate
+  world-building, career-system, characters, outline, and cleanup routes.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without relying on the Python route file as an
+  implementation owner.
+- The contract names the Rust API owner, method matrix, wizard request service
+  owner, project cleanup handoff, SSE transport owner, 6 readiness probes,
+  Python source-map files, and rollback policy.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/wizard_stream.py` and
+  `backend/app/services/background_task_wizard_executor.py`.
+- The Rust manifest currently proves wizard-stream auth-guard readiness with 6
+  Rust probes. This is route-owner evidence, but final physical closeout still
+  needs explicit source-map freeze/delete/repoint evidence or SSE business
+  smoke plus rollback policy for the wizard-stream route/executor group.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::wizard --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/wizard-stream-route-owner" -- --nocapture` passed: 2 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 132`, `python-fallback = 0`, and
+  `wizard-stream owner_counts = {'rust': 6}`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/wizard-stream-route-owner"` passed.
+- Known unrelated warning during focused test remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark wizard-stream complete from probes alone. Completion needs
+  source-map freeze/delete/repoint evidence, or SSE business smoke plus
+  rollback policy for world-building, regenerate, career-system, characters,
+  outline, and cleanup behavior.
+- Avoid more wizard-stream micro-slices. If deletion is approved, handle the
+  Python route/executor source-map group together; otherwise pick another whole
+  Rust owner package and close its route/service contract in one round.
+## 2026-06-10 relationships + foreshadows route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/relationships.rs` now owns a whole route-file contract
+  for relationships list/create, trailing-slash create, relationship types,
+  project list, graph, detail, update, and delete routes.
+- `backend-rs/src/api/foreshadows.rs` now owns a whole route-file contract for
+  foreshadows project list, stats, context, pending-resolve,
+  sync-from-analysis, create, detail, update, delete, plant, resolve, and
+  abandon routes.
+- Route path constants are shared by route registration and focused tests in
+  both owners, so path drift is detected in Rust without relying on Python
+  route files as implementation owners.
+- The foreshadows route owner tests were folded into the existing test module,
+  removing the duplicate `mod tests` compile blocker while preserving the
+  existing query-bound parity test.
+
+### Source-map / rollback state
+
+- Kept as relationships source maps / rollback references only:
+  `backend/app/api/relationships.py`,
+  `backend/app/models/relationship.py`,
+  `backend/app/schemas/relationship.py`, and
+  `backend/app/init_relationship_types.py`.
+- Kept as foreshadows source maps / rollback references only:
+  `backend/app/api/foreshadows.py`, `backend/app/models/foreshadow.py`,
+  `backend/app/schemas/foreshadow.py`, and
+  `backend/app/services/foreshadow_service.py`.
+- The Rust manifest currently proves relationships and foreshadows auth-guard
+  readiness with 2 Rust probes each. This is route-owner evidence, but final
+  physical closeout still needs explicit source-map freeze/delete/repoint
+  evidence or logged-in business smoke plus rollback policy.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::relationships --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/relationships-route-owner" -- --nocapture` passed: 2 tests.
+- `cargo test api::foreshadows --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/foreshadows-route-owner" -- --nocapture` passed: 3 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 132`, `python-fallback = 0`,
+  `relationships owner_counts = {'rust': 2}`, and
+  `foreshadows owner_counts = {'rust': 2}`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/relationships-foreshadows-route-owner"` passed.
+- Known unrelated warning during focused tests remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark relationships or foreshadows complete from probes alone.
+  Completion needs source-map freeze/delete/repoint evidence, or logged-in
+  business smoke plus rollback policy for the route groups.
+- Keep the accelerated migration unit at whole owner package size. The next
+  round should select another full route group with existing Rust probes, then
+  close its route contract, tests, manifest evidence, and rollback note in one
+  pass.
+## 2026-06-10 writing_styles route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/writing_styles.rs` now owns a whole route-file contract
+  for writing-styles presets, user styles, project styles, project initialize,
+  project init-defaults, create, detail, update, delete, and set-default
+  routes.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without relying on the Python route file as
+  an implementation owner.
+- The contract names the Rust API owner, method matrix, writing style
+  service/request/model owners, 2 readiness probes, Python source-map files,
+  and rollback policy.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/writing_styles.py`,
+  `backend/app/models/writing_style.py`,
+  `backend/app/models/project_default_style.py`,
+  `backend/app/schemas/writing_style.py`, and
+  `backend/app/services/writing_style_sync_service.py`.
+- The Rust manifest currently proves writing-styles auth-guard readiness with
+  2 Rust probes. This is route-owner evidence, but final physical closeout
+  still needs explicit source-map freeze/delete/repoint evidence or logged-in
+  business smoke plus rollback policy for presets, user/project styles,
+  create/update/delete, initialize, and set-default behavior.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::writing_styles --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/writing-styles-route-owner" -- --nocapture` passed: 2 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 132`, `python-fallback = 0`, and
+  `writing_styles owner_counts = {'rust': 2}`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/writing-styles-route-owner"` passed.
+- Known unrelated warning during focused tests remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark writing-styles complete from probes alone. Completion needs
+  source-map freeze/delete/repoint evidence, or logged-in business smoke plus
+  rollback policy for the route group.
+- Keep the next migration round at whole owner package size. Prefer another
+  small route group with existing Rust probes, then close route contract,
+  focused tests, manifest evidence, and rollback note in one pass.
+## 2026-06-10 mcp_plugins route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/mcp_plugins.rs` now owns a whole route-file contract for
+  MCP plugin list/create, simple create, tool call plus alias, metrics, cache
+  stats/clear, session stats, detail/update/delete, toggle, status, tools, and
+  test routes.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without relying on the Python route file as
+  an implementation owner.
+- The contract names the Rust API owner, method matrix, MCP plugin
+  service/request/deserialization/runtime/model owners, 2 readiness probes,
+  Python source-map files, and rollback policy.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/mcp_plugins.py`, `backend/app/models/mcp_plugin.py`,
+  `backend/app/schemas/mcp_plugin.py`,
+  `backend/app/services/mcp_test_service.py`, and
+  `backend/app/mcp/__init__.py`.
+- The Rust manifest currently proves MCP plugin auth-guard readiness with 2
+  Rust probes. This is route-owner evidence, but final physical closeout still
+  needs explicit source-map freeze/delete/repoint evidence or logged-in MCP
+  plugin business smoke plus rollback policy for CRUD, simple-create, tool
+  calls, runtime metrics/cache/session status, and plugin test behavior.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::mcp_plugins --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mcp-plugins-route-owner" -- --nocapture` passed: 20 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 132`, `python-fallback = 0`, and
+  `mcp_plugins owner_counts = {'rust': 2}`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/mcp-plugins-route-owner"` passed.
+- Known unrelated warning during focused tests remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark MCP plugins complete from probes alone. Completion needs
+  source-map freeze/delete/repoint evidence, or logged-in business smoke plus
+  rollback policy for the route group.
+- Keep the next migration round at whole owner package size. Prefer
+  `prompt_templates`, `background_tasks`, `prompt_workshop`, `polish`, or
+  `ai_test`, then close route contract, focused tests, manifest evidence, and
+  rollback note in one pass.
+## 2026-06-10 prompt_templates route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/prompt_templates.rs` now owns a whole route-file
+  contract for prompt templates list/create-or-update, categories,
+  system-defaults, sync-status, sync-to-default, detail/update/delete, reset,
+  export, import, and preview routes.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without relying on the Python route file as
+  an implementation owner.
+- The contract names the Rust API owner, method matrix, prompt template
+  service/request/sync-status/payload/model owners, 2 readiness probes, Python
+  source-map files, and rollback policy.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/prompt_templates.py`,
+  `backend/app/models/prompt_template.py`,
+  `backend/app/schemas/prompt_template.py`,
+  `backend/app/services/prompt_template_sync_service.py`, and
+  `backend/app/services/prompt_service.py`.
+- The Rust manifest currently proves prompt templates auth-guard readiness
+  with 2 Rust probes. This is route-owner evidence, but final physical
+  closeout still needs explicit source-map freeze/delete/repoint evidence or
+  logged-in prompt templates business smoke plus rollback policy for CRUD,
+  categories, system-defaults, sync-status/sync-to-default, export/import, and
+  preview behavior.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::prompt_templates --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/prompt-templates-route-owner" -- --nocapture` passed: 2 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 132`, `python-fallback = 0`, and
+  `prompt_templates owner_counts = {'rust': 2}`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/prompt-templates-route-owner"` passed.
+- Known unrelated warning during focused tests remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark prompt templates complete from probes alone. Completion needs
+  source-map freeze/delete/repoint evidence, or logged-in business smoke plus
+  rollback policy for the route group.
+- Keep the next migration round at whole owner package size. Prefer
+  `background_tasks`, `prompt_workshop`, `polish`, or `ai_test`, then close
+  route contract, focused tests, manifest evidence, and rollback note in one
+  pass.
+## 2026-06-10 background_tasks route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/background_tasks.rs` now owns a whole route-file
+  contract for background task create, list, detail, stream, cancel, and
+  workflow-state update routes.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without relying on the Python route file as
+  an implementation owner.
+- The contract names the Rust API owner, method matrix, background task
+  payload/request/generation/wizard/task-registry owners, 2 readiness probes,
+  Python source-map files, and rollback policy.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/background_tasks.py`,
+  `backend/app/services/background_task_manager.py`,
+  `backend/app/services/background_task_wizard_executor.py`,
+  `backend/app/api/settings.py`, and `backend/app/schemas/outline.py`.
+- The Rust manifest currently proves background task auth-guard readiness with
+  2 Rust probes. This is route-owner evidence, but final physical closeout
+  still needs explicit source-map freeze/delete/repoint evidence or logged-in
+  background task business/SSE smoke plus rollback policy for create/list,
+  task detail, stream, cancel, workflow-state update, and wizard/outline
+  execution behavior.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::background_tasks --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/background-tasks-route-owner" -- --nocapture` passed: 3 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 132`, `python-fallback = 0`, and
+  `background_tasks owner_counts = {'rust': 2}`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/background-tasks-route-owner"` passed.
+- Known unrelated warning during focused tests remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark background tasks complete from probes alone. Completion needs
+  source-map freeze/delete/repoint evidence, or logged-in business/SSE smoke
+  plus rollback policy for the route group.
+- Keep the next migration round at whole owner package size. Prefer
+  `prompt_workshop`, `polish`, or `ai_test`, then close route contract,
+  focused tests, manifest evidence, and rollback note in one pass.
+## 2026-06-10 inspiration route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/inspiration.rs` now owns a whole route-file contract for
+  inspiration generate-options, refine-options, and quick-generate routes.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without relying on the Python route file as
+  an implementation owner.
+- The contract names the Rust API owner, method matrix, inspiration service
+  owner, prompt-template/settings/AI service owners, 2 readiness probes,
+  Python source-map files, and rollback policy.
+- The route owner now has a focused error-mapping regression test proving
+  configuration/authentication failures remain `400 Bad Request` instead of
+  broad `500` responses.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/inspiration.py`,
+  `backend/app/services/prompt_service.py`, and
+  `backend/app/services/chapter_web_research_service.py`.
+- The Rust manifest currently proves inspiration auth-guard readiness with 2
+  Rust probes. This is route-owner evidence, but final physical closeout still
+  needs explicit source-map freeze/delete/repoint evidence or logged-in
+  inspiration business smoke plus rollback policy for generate-options,
+  refine-options, quick-generate, and web-research-enriched inspiration flows.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::inspiration --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/inspiration-route-owner" -- --nocapture` passed: 3 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 132`, `python-fallback = 0`, and
+  `inspiration owner_counts = {'rust': 2}`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/inspiration-route-owner"` passed.
+- Known unrelated warning during focused tests remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark inspiration complete from probes alone. Completion needs
+  source-map freeze/delete/repoint evidence, or logged-in business smoke plus
+  rollback policy for the route group.
+- Keep the next migration round at whole owner package size. Prefer another
+  small route group with existing Rust probes, then close route contract,
+  focused tests, manifest evidence, and rollback note in one pass.
+## 2026-06-10 careers route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/careers.rs` now owns a whole route-file contract for
+  careers list/create, generate-system, detail, update, delete, character
+  career list, set main career, add sub career, update career stage, and
+  remove sub career routes.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without relying on the Python route file as
+  an implementation owner.
+- The contract names the Rust API owner, method matrix, career service owner,
+  wizard request/SSE generation owner, career/character-career model owners,
+  2 readiness probes, Python source-map files, and rollback policy.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/careers.py`, `backend/app/models/career.py`,
+  `backend/app/schemas/career.py`, and
+  `backend/app/api/background_tasks.py`.
+- The Rust manifest currently proves careers auth-guard readiness with 2 Rust
+  probes. This is route-owner evidence, but final physical closeout still
+  needs explicit source-map freeze/delete/repoint evidence or logged-in
+  careers business/SSE smoke plus rollback policy for career CRUD,
+  character-career assignment, stage updates, and generate-system behavior.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::careers --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/careers-route-owner" -- --nocapture` passed: 2 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 132`, `python-fallback = 0`, and
+  `careers owner_counts = {'rust': 2}`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/careers-route-owner"` passed.
+- Known unrelated warning during focused tests remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark careers complete from probes alone. Completion needs source-map
+  freeze/delete/repoint evidence, or logged-in business/SSE smoke plus
+  rollback policy for the route group.
+- Keep the next migration round at whole owner package size. Prefer another
+  small route group with existing Rust probes, then close route contract,
+  focused tests, manifest evidence, and rollback note in one pass.
+## 2026-06-10 organizations route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/organizations.rs` now owns a whole route-file contract
+  for organizations list/create, generate-stream, project list, member
+  detail/update/delete, members list/create, detail, update, and delete
+  routes.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without relying on the Python route file as
+  an implementation owner.
+- The contract names the Rust API owner, method matrix, organization service
+  owner, background-task handoff, organization/member/character model owners,
+  2 readiness probes, Python source-map files, and rollback policy.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/organizations.py`, `backend/app/models/relationship.py`,
+  `backend/app/schemas/relationship.py`, and
+  `backend/app/services/auto_organization_service.py`.
+- The Rust manifest currently proves organizations auth-guard readiness with
+  2 Rust probes. This is route-owner evidence, but final physical closeout
+  still needs explicit source-map freeze/delete/repoint evidence or logged-in
+  organizations business/SSE smoke plus rollback policy for organization CRUD,
+  members, project list, and generate-stream behavior.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::organizations --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/organizations-route-owner" -- --nocapture` passed: 4 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 132`, `python-fallback = 0`, and
+  `organizations owner_counts = {'rust': 2}`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/organizations-route-owner"` passed.
+- Known unrelated warning during focused tests remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark organizations complete from probes alone. Completion needs
+  source-map freeze/delete/repoint evidence, or logged-in business/SSE smoke
+  plus rollback policy for the route group.
+- Keep the next migration round at whole owner package size. Prefer another
+  small route group with existing Rust probes, then close route contract,
+  focused tests, manifest evidence, and rollback note in one pass.
+## 2026-06-10 prompt_workshop route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/prompt_workshop.rs` now owns a whole route-file contract
+  for prompt workshop status, items, detail, import, like, download, submit,
+  my submissions, withdraw, admin submissions/review, admin item
+  create/update/delete, and admin stats routes.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without relying on the Python route file as
+  an implementation owner.
+- The contract names the Rust API owner, method matrix, prompt workshop
+  service/request owners, prompt workshop item/submission/like model owners,
+  config owner, 2 readiness probes, Python source-map files, and rollback
+  policy.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/prompt_workshop.py`,
+  `backend/app/models/prompt_workshop.py`,
+  `backend/app/schemas/prompt_workshop.py`,
+  `backend/app/services/workshop_client.py`, and
+  `backend/app/constants/prompt_categories.py`.
+- The Rust manifest currently proves prompt workshop auth-guard readiness with
+  2 Rust probes. This is route-owner evidence, but final physical closeout
+  still needs explicit source-map freeze/delete/repoint evidence or logged-in
+  prompt workshop business smoke plus rollback policy for browse/detail,
+  import/like/download, submit/withdraw, and admin moderation/stat behavior.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::prompt_workshop --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/prompt-workshop-route-owner" -- --nocapture` passed: 2 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 132`, `python-fallback = 0`, and
+  `prompt_workshop owner_counts = {'rust': 2}`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/prompt-workshop-route-owner"` passed.
+- Known unrelated warning during focused tests remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark prompt workshop complete from probes alone. Completion needs
+  source-map freeze/delete/repoint evidence, or logged-in business smoke plus
+  rollback policy for the route group.
+- Keep the next migration round at whole owner package size. Prefer `polish`
+  or `ai_test`, then close route contract, focused tests, manifest evidence,
+  and rollback note in one pass.
+## 2026-06-10 polish route owner contract and history parity checkpoint
+
+### Delta
+
+- `backend-rs/src/api/polish.rs` now owns a whole route-file contract for the
+  polish single text and batch routes.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without relying on the Python route file as
+  an implementation owner.
+- `backend-rs/src/services/polish_service.rs` now preserves the Python
+  single-polish `project_id` history behavior by inserting a
+  `generation_history` row after successful single-text polish when
+  `project_id` is present.
+- The contract names the Rust API owner, polish service, prompt template
+  service, settings service, AI service/config owners, generation history
+  model, 2 readiness probes, Python source-map files, behavior contract, and
+  rollback policy.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/polish.py`, `backend/app/schemas/polish.py`,
+  `backend/app/services/prompt_service.py`,
+  `backend/app/services/ai_service.py`, and
+  `backend/app/models/generation_history.py`.
+- The Rust manifest currently proves polish auth-guard readiness with 2 Rust
+  probes. This is route-owner evidence, and the Rust service now also closes
+  the single-polish project history parity gap. Final physical closeout still
+  needs explicit source-map freeze/delete/repoint evidence or logged-in polish
+  business smoke plus rollback policy for text aliasing, empty-input errors,
+  prompt formatting, AI override behavior, batch behavior, and history writes.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::polish --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/polish-route-owner" -- --nocapture` passed: 2 tests.
+- `cargo test services::polish_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/polish-route-owner" -- --nocapture` passed: 2 tests.
+- `cargo test polish --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/polish-route-owner" -- --nocapture` passed: 5 tests, including the focused polish tests plus one existing narrative cleaner test that matches the `polish` filter.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 132`, `python-fallback = 0`, and
+  `polish owner_counts = {'rust': 2}`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/polish-route-owner"` passed.
+- Known unrelated warning during focused tests remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark polish complete from probes alone. Completion needs source-map
+  freeze/delete/repoint evidence, or logged-in business smoke plus rollback
+  policy for the route group.
+- Keep the next migration round at whole owner package size. Prefer `ai_test`,
+  then close route contract, focused tests, manifest evidence, and any real
+  Python/Rust behavior parity gaps in one pass.
+## 2026-06-10 ai_test route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/ai_test.rs` now owns a whole route-file contract for
+  `/ai-test`, `/ai-test-stream`, `/ai/test`, and `/ai/test-stream`.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without relying on Python settings/AI files
+  as implementation owners.
+- AI test probe token limits now use named constants and a tested
+  `probe_max_tokens()` helper, preserving the 4096 default and 1..=64 clamp
+  across non-stream and stream calls.
+- The contract names the Rust API owner, AI service/config/types/client
+  owners, 4 readiness probes, Python source-map files, behavior contract, and
+  rollback policy. The readiness evidence now covers both canonical routes and
+  legacy aliases, including `/ai-test-stream` and `/ai/test-stream`.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/settings.py`, `backend/app/schemas/settings.py`,
+  `backend/app/services/ai_service.py`, `backend/app/services/ai_config.py`,
+  `backend/app/services/ai_gateway/ai_service.py`, and
+  `backend/app/services/ai_gateway/ai_config.py`.
+- The Rust manifest currently proves AI test auth-guard readiness with 4 Rust
+  probes. This is route-owner evidence, but final physical closeout still
+  needs explicit source-map freeze/delete/repoint evidence or logged-in AI
+  test business/SSE smoke plus rollback policy for both canonical and alias
+  test routes, provider payloads, streaming chunks, and token clamp behavior.
+
+### Validation
+
+- `rustfmt --edition 2021 "backend-rs/src/api/ai_test.rs"` passed.
+- `cargo test api::ai_test --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/ai-test-route-owner-stream" -- --nocapture` passed: 3 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 150`, `python-fallback = 0`, and
+  `ai_test owner_counts = {'rust': 4}`.
+- `pytest "backend/tests/test_tools/test_run_strangler_gateway_smoke.py" -q`
+  passed: 46 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/ai-test-route-owner-stream"` passed.
+- Known unrelated warning during focused Rust tests remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark AI test complete from probes alone. Completion needs source-map
+  freeze/delete/repoint evidence, or logged-in business/SSE smoke plus
+  rollback policy for the route group.
+- The fast small-route contract queue is now closed for `prompt_workshop`,
+  `polish`, and `ai_test`. Continue with a larger whole owner package where
+  source-map freeze/delete/repoint or logged-in business smoke can remove real
+  rollback ambiguity instead of adding more probe-only evidence.
+## 2026-06-10 chapter_regeneration route owner contract checkpoint
+
+### Delta
+
+- `backend-rs/src/api/chapter_regeneration_routes.rs` now owns a whole
+  route-file contract for full regeneration stream, partial regeneration
+  stream, apply partial regenerate, and regeneration task list.
+- Route path constants are shared by route registration and focused tests, so
+  path drift is detected in Rust without relying on Python regeneration files
+  as implementation owners.
+- `deploy/strangler-gateway-probes.json` now covers all 4 regeneration routes
+  with Rust auth-guard probes, adding full stream, partial stream, and apply
+  partial probes beside the existing task-list probe.
+- `backend-rs/src/services/chapter_regeneration_stream_workflow_service.rs`
+  now publishes a test-only full/partial SSE workflow owner contract. The
+  contract maps regeneration Python route/schema/service source files to the
+  Rust API, prepare, stream workflow, launch, text-finalize, research payload,
+  and prompt-context owners.
+- `backend-rs/src/api/health.rs` now exposes
+  `/health/chapter-regeneration-stream-workflow-smoke`, backed by the Rust
+  workflow owner smoke suite. `deploy/strangler-gateway-probes.json` tracks it
+  as `chapter-regeneration-stream-workflow-smoke-rust` under `business` and
+  `phase5-chapter-regeneration-owner`.
+- `deploy/strangler-gateway-probes.json` also adds 4 logged-in not-found
+  business probes for the real regeneration routes: full stream, partial
+  stream, apply partial, and task list. These probes require local auth
+  credentials when executed and validate the Rust access/error boundary without
+  depending on pre-seeded chapter data.
+- The contract names the Rust API owner, prepare/workflow/apply/query/launch
+  service owners, regeneration task model owner, 4 readiness probes, Python
+  source-map files, behavior contract, smoke gap, and rollback policy.
+
+### Source-map / rollback state
+
+- Kept as source maps / rollback references only:
+  `backend/app/api/chapter_regeneration_routes.py`,
+  `backend/app/api/chapter_partial_regeneration_routes.py`,
+  `backend/app/schemas/regeneration.py`,
+  `backend/app/services/regeneration_task_service.py`,
+  `backend/app/services/partial_regeneration_service.py`,
+  `backend/app/services/chapter_regeneration_stream_service.py`,
+  `backend/app/services/chapter_regeneration_query_service.py`, and
+  `backend/app/services/chapter_regeneration_context_service.py`.
+- The Rust manifest currently proves all 4 regeneration route auth guards
+  with Rust probes and the chapters owner count remains Rust-only. This is
+  route-owner evidence, but final physical closeout still needs explicit
+  source-map freeze/delete/repoint evidence or logged-in regeneration
+  business/SSE smoke plus rollback policy for full/partial SSE routes, apply
+  partial regenerate, task list, payload range semantics, SSE chunk shapes, and
+  task lifecycle visibility.
+- The workflow owner contract records `full_module_freeze_ready = false` with
+  blockers for logged-in full SSE smoke, logged-in partial SSE smoke,
+  logged-in apply-partial business smoke, and explicit source-map
+  freeze/delete/repoint approval.
+- The new health smoke is active Rust readiness evidence for the full/partial
+  SSE workflow owner and source-map policy. It is not logged-in route success
+  smoke and must not be used alone to approve Python source-map deletion.
+- The logged-in not-found probes are stronger than auth-guard probes because
+  they exercise authenticated route entry, request payload validation, chapter
+  access loading, and the Rust `Chapter not found or access denied` error
+  shell. They still are not successful regeneration SSE smoke.
+
+### Validation
+
+- `cargo fmt --manifest-path "backend-rs/Cargo.toml"` passed.
+- `cargo test api::health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-route-owner" -- --nocapture` passed: 5 tests.
+- `cargo test services::chapter_regeneration_stream_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-route-owner" -- --nocapture` passed: 7 tests.
+- `cargo test api::chapter_regeneration_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-route-owner" -- --nocapture` passed: 7 tests.
+- `cargo test chapter_regeneration --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-route-owner" -- --nocapture` passed: 64 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 140`, `python-fallback = 0`,
+  `chapters owner_counts = {'rust': 18}`, and
+  `chapter_regeneration owner_counts = {'rust': 5}`.
+- `pytest "backend/tests/test_tools/test_run_strangler_gateway_smoke.py" -q`
+  passed: 43 tests. The single-generation covered-owner assertion now checks
+  required owner membership instead of a brittle exact prefix after the
+  existing prepare owner entered the manifest owner list.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-route-owner"` passed.
+- Known unrelated warning during focused tests remains in
+  `backend-rs/src/services/project_export_payload_adapter_service.rs` for
+  unused `organization` / `organization_member` imports.
+
+### Next acceleration rule
+
+- Do not mark `chapter_regeneration` complete from probes alone. Completion
+  needs source-map freeze/delete/repoint evidence, or logged-in business/SSE
+  smoke plus rollback policy for the route group.
+- The route group now has manifest auth-guard evidence for all 4 regeneration
+  endpoints: full stream, partial stream, apply partial, and task list.
+- The `chapter_regeneration` workflow now has a dedicated active readiness
+  probe plus 4 logged-in not-found route probes, but final closeout still
+  needs successful logged-in full/partial SSE and apply partial business smoke
+  or explicit source-map freeze/delete/repoint approval.
+- Stop spending additional rounds on duplicate route contracts. The next
+  acceleration round should target logged-in regeneration business/SSE smoke,
+  source-map freeze/delete/repoint planning, or an explicitly approved
+  physical closeout of Python source-map files.
+
+## 2026-06-10 chapter_regeneration logged-in business fixture smoke checkpoint
+
+### Delta
+
+- `deploy/strangler-gateway-probes.json` now extends the
+  `phase5-chapter-regeneration-owner` profile with a logged-in fixture chain:
+  project import, chapter list/extract, successful apply partial regenerate,
+  successful regeneration task query, and project cleanup.
+- `chapter_regeneration` readiness now records 10 Rust-owned probes instead
+  of 5. The new evidence is stronger than not-found smoke for apply/query
+  behavior because it uses a real authenticated imported chapter and exercises
+  the Rust access, write, query, and cleanup paths.
+- `backend/tests/test_tools/test_run_strangler_gateway_smoke.py` now pins the
+  new probe names and updated owner count so the fixture chain cannot silently
+  drift out of the dedicated owner profile.
+
+### Source-map / rollback state
+
+- No Python source-map file was deleted, repointed, or frozen. Regeneration
+  Python files remain rollback/source-map references only.
+- This checkpoint closes the logged-in apply/query business gap, but it does
+  not close full/partial SSE success. Those routes still need a deterministic
+  local AI/mock provider path before source-map freeze/delete/repoint can be
+  treated as physically ready.
+
+### Validation
+
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 145`, `python-fallback = 0`,
+  `chapters owner_counts = {'rust': 18}`, and
+  `chapter_regeneration owner_counts = {'rust': 10}`.
+- `pytest "backend/tests/test_tools/test_run_strangler_gateway_smoke.py" -q`
+  passed: 43 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-business-smoke"`
+  passed.
+- `git diff --check -- "deploy/strangler-gateway-probes.json" "backend/tests/test_tools/test_run_strangler_gateway_smoke.py" ".trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md" "docs/architecture/rust-strangler-refactor-plan-2026-05-17.zh-CN.md"`
+  passed.
+
+### Next acceleration rule
+
+- Do not add more `chapter_regeneration` contract-only probes. Next work
+  should either add deterministic full/partial SSE success smoke, execute an
+  approved source-map freeze/delete/repoint round, or move to another whole
+  owner package with a real rollback/source-map closeout path.
+
+## 2026-06-10 chapter_regeneration deterministic SSE success smoke checkpoint
+
+### Delta
+
+- `backend/tools/run_strangler_gateway_smoke.py` now provides a deterministic
+  OpenAI-compatible mock provider for gateway smoke execution. The mock server
+  is started only when the selected manifest probes reference
+  `{{mock_openai_base_url}}`, so ordinary deploy/readiness runs do not carry a
+  mock dependency.
+- `deploy/strangler-gateway-probes.json` now extends
+  `phase5-chapter-regeneration-owner` from apply/query fixture success to
+  full route-group SSE success. The fixture chain imports a project, extracts
+  the chapter id, configures mock OpenAI settings, runs full regeneration SSE,
+  runs partial regeneration SSE, validates apply/query, and deletes the
+  temporary project.
+- The new full/partial SSE probes assert `text/event-stream`, streamed mock
+  content, `chunk`, `result`, and `done` payloads. This makes the Rust
+  `chapter_regeneration` route/service owner measurable without depending on
+  external AI credentials or network.
+- `backend/tests/test_tools/test_run_strangler_gateway_smoke.py` now pins the
+  mock provider behavior, placeholder injection, and updated readiness counts.
+
+### Progress accounting
+
+- Manifest readiness now reports `rust = 148`, `python-fallback = 0`, and
+  `chapter_regeneration owner_counts = {'rust': 13}`.
+- This checkpoint closes the successful logged-in full/partial SSE smoke gap
+  that previously blocked `chapter_regeneration` cutover evaluation.
+- This is still not final physical migration completion. Python regeneration
+  files remain source maps / rollback references until a separate,
+  explicitly approved freeze, repoint, or delete round.
+
+### Validation
+
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed.
+- `pytest "backend/tests/test_tools/test_run_strangler_gateway_smoke.py" -q`
+  passed: 46 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-sse-smoke"`
+  passed with build artifacts on E drive.
+
+### Next acceleration rule
+
+- Stop adding more `chapter_regeneration` route-contract probes. The remaining
+  work is either live owner smoke with local auth/backend, an explicit
+  source-map freeze/delete/repoint decision, or moving to the next whole owner
+  package.
+- Do not mark the Python-to-Rust migration complete solely from
+  `python-fallback = 0`; completion needs source-map closeout evidence mapped
+  to the actual files and rollback policy.
+
+## 2026-06-10 chapter_regeneration Rust owner contract closeout checkpoint
+
+### Delta
+
+- `backend-rs/src/api/chapter_regeneration_routes.rs` now records the
+  deterministic logged-in success probes as part of the route owner contract:
+  mock OpenAI setup, full regeneration SSE, partial regeneration SSE, apply
+  partial regenerate, and regeneration task-list query.
+- `backend-rs/src/services/chapter_regeneration_stream_workflow_service.rs`
+  now marks `deterministic_business_sse_smoke = true` in the workflow owner
+  contract and runtime smoke state. The previous full/partial SSE business
+  smoke blockers are no longer listed as missing.
+- `/health/chapter-regeneration-stream-workflow-smoke` and
+  `deploy/strangler-gateway-probes.json` now assert the same readiness payload,
+  including the deterministic business SSE evidence and the remaining
+  cutover gate.
+- A Python runtime registration check confirmed
+  `backend/app/api/chapter_regeneration_routes.py` and
+  `backend/app/api/chapter_partial_regeneration_routes.py` are still included
+  by `backend/app/bootstrap/router_registry.py`; therefore no Python route
+  file was frozen, repointed, or deleted in this checkpoint.
+
+### Progress accounting
+
+- `chapter_regeneration` no longer has a deterministic logged-in full/partial
+  SSE smoke evidence gap.
+- Physical migration completion is still blocked by Python source-map
+  handling. Those files remain active Python app routes plus rollback/source
+  maps until an explicit freeze/delete/repoint round is approved and verified.
+- `python-fallback = 0` remains a useful manifest signal but is not completion
+  evidence by itself.
+
+### Validation
+
+- `cargo test api::chapter_regeneration_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-contract-closeout" -- --nocapture`
+  passed: 7 tests.
+- `cargo test services::chapter_regeneration_stream_workflow_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-contract-closeout" -- --nocapture`
+  passed: 7 tests.
+- `cargo test api::health --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-contract-closeout" -- --nocapture`
+  passed: 5 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 148`, `python-fallback = 0`, and
+  `chapter_regeneration owner_counts = {'rust': 13}`.
+- `pytest "backend/tests/test_tools/test_run_strangler_gateway_smoke.py" -q`
+  passed: 46 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-contract-check"`
+  passed with build artifacts on E drive.
+
+### Next acceleration rule
+
+- Do not add more `chapter_regeneration` contract probes. The next useful
+  action is either live `phase5-chapter-regeneration-owner` smoke plus an
+  approved source-map freeze/delete/repoint round, or moving to another whole
+  owner package.
+
+## 2026-06-10 chapter_candidate_event production source owner chain checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_candidate_event_service` plus its production
+source/consumer chain as one Rust owner package. The migration unit is the
+candidate gateway output -> selected-candidate event source -> batch stream
+projection path, not another small helper extraction.
+
+### Source-map state
+
+Python rollback/source-map files are still present:
+
+- `backend/app/services/chapter_candidate_event_service.py`
+- `backend/app/services/chapter_candidate_view_service.py`
+- `backend/app/services/batch_generation_candidate_service.py`
+- `backend/app/services/batch_generation_status_service.py`
+
+No Python source-map file was frozen, repointed, deleted, or removed from the
+Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_generation_runtime_service.rs` preserves the
+  selected candidate payload in `GeneratedChapterResult.selected_candidate_event_source`.
+- `backend-rs/src/services/chapter_candidate_event_service.rs` publishes
+  `build_chapter_candidate_event_owner_contract()` with
+  `chapter_generation_runtime_service.rs` in the Rust owner map.
+- `chapter_generation_runtime_service` is now the first active consumer in the
+  candidate event owner contract, followed by batch runtime/read-context and
+  active gateway smoke consumers.
+- `backend-rs/src/services/chapter_batch_generation_active_gateway_smoke_service.rs`
+  embeds and asserts the candidate event owner contract, making selected-candidate
+  stream event readiness traceable to the real Rust owner chain.
+
+### Behavior contract
+
+- Selected-candidate progress remains emitted before chunk events.
+- Candidate chunk events remain gated by `stream_chunks = true` and quality
+  gate action `continue`.
+- Batch read-context/status stream projects `selected_candidate_events` from
+  Rust runtime state.
+- Python event/view/status files remain rollback references only; they are not
+  completion evidence.
+
+### Validation
+
+- `cargo test services::chapter_candidate_event_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-event-source-owner" -- --nocapture`
+  passed: 12 tests.
+- `cargo test services::chapter_generation_runtime_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-event-source-owner" -- --nocapture`
+  passed: 21 tests.
+- `cargo test services::chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-event-source-owner" -- --nocapture`
+  passed: 5 tests.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with `rust = 150` and `python-fallback = 0`.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/candidate-event-source-owner"`
+  passed with build artifacts on E drive.
+
+### Next acceleration rule
+
+- Treat candidate event selected-source ownership as closed for Rust owner
+  evidence. Do not spend another round on helper-only candidate event edits.
+- The next useful action is either an explicitly approved source-map
+  freeze/delete/repoint round for the listed Python files, or another whole
+  owner package with production Rust consumers.
+
+## 2026-06-10 chapter_draft route transport owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_draft_routes.rs` as the whole Rust route
+transport owner for draft load/apply behavior. The route file already owns the
+private draft-specific error mapper; this round makes the ownership explicit
+with route constants, owner contract evidence, and focused tests.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/api/chapter_draft_routes.py`
+- `backend/app/services/chapter_draft_service.py`
+- `backend/app/services/chapter_draft_view_service.py`
+- `backend/app/services/chapter_draft_apply_service.py`
+
+No Python draft route/service file was frozen, repointed, deleted, or removed
+from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/api/chapter_draft_routes.rs` now uses file-level constants
+  for all four draft route paths.
+- The route owner publishes `build_chapter_draft_route_owner_contract()` with
+  route paths, request contracts, service handoffs, private error mapper
+  ownership, Python source-map files, rollback boundary, and migration policy.
+- Focused tests assert the owner contract and route path stability, so the Rust
+  route shell is no longer only implicitly covered by request-builder tests.
+- Draft-specific error mapping stays private to `chapter_draft_routes.rs`; no
+  standalone forwarding-only draft error mapper is restored.
+
+### Validation
+
+- `cargo test api::chapter_draft_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-draft-route-owner" -- --nocapture`
+  passed: 10 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-draft-route-owner"`
+  passed with no production warnings and build artifacts on E drive.
+
+### Next acceleration rule
+
+- Treat draft route transport/error shell ownership as closed for Rust owner
+  evidence.
+- Remaining draft completion work is either an explicitly approved
+  source-map freeze/delete/repoint round, or active logged-in route smoke that
+  covers auto-revision and candidate draft load/apply behavior.
+
+## 2026-06-10 chapter_crud route owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_crud_routes.rs` as the whole Rust route owner
+for chapter CRUD and query-adjacent route transport. The standalone CRUD error
+mapper has already collapsed into the route file; this round makes that
+ownership explicit and test-covered.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/api/chapters.py`
+- `backend/app/services/chapter_service.py`
+- `backend/app/services/chapter_query_service.py`
+- `backend/app/schemas/chapter.py`
+
+No Python chapter CRUD route/service/schema file was frozen, repointed,
+deleted, or removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/api/chapter_crud_routes.rs` now uses file-level constants for
+  project list, quality trend, navigation, expansion-plan, annotations,
+  can-generate, list/create, and detail/update/delete paths.
+- The route owner publishes `build_chapter_crud_route_owner_contract()` with
+  route paths, methods, workflow/query handoffs, private error mapper
+  ownership, readiness probes, Python source-map files, rollback boundary, and
+  migration policy.
+- Focused tests assert the owner contract and route path stability.
+- CRUD-specific success-message error mapping stays private to
+  `chapter_crud_routes.rs`; no forwarding-only `chapter_crud_error_mapper.rs`
+  owner is restored.
+
+### Validation
+
+- `cargo test api::chapter_crud_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-crud-route-owner" -- --nocapture`
+  passed: 12 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-crud-route-owner"`
+  passed with no production warnings and build artifacts on E drive.
+
+### Next acceleration rule
+
+- Treat chapter CRUD route transport/error shell ownership as closed for Rust
+  owner evidence.
+- Remaining chapter CRUD completion work is either an explicitly approved
+  source-map freeze/delete/repoint round, or logged-in CRUD/query business
+  smoke for create/list/get/update/delete/project-path behavior.
+
+## 2026-06-10 chapter_analysis route owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_analysis_routes.rs` as the whole Rust route
+owner for analysis view, quality metrics, single-task status, batch-task
+status, and trigger-analysis transport. The analysis query/view error mapper
+has already collapsed into this route file; this round makes that ownership
+explicit and test-covered.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/api/chapters.py`
+- `backend/app/api/chapter_analysis_routes.py`
+- `backend/app/api/chapter_analysis_task_routes.py`
+- `backend/app/services/manual_chapter_analysis_service.py`
+- `backend/app/services/manual_chapter_analysis_execution_service.py`
+- `backend/app/services/chapter_analysis_support_service.py`
+- `backend/app/services/chapter_analysis_response_service.py`
+
+No Python analysis route/service file was frozen, repointed, deleted, or
+removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/api/chapter_analysis_routes.rs` now uses file-level constants
+  for quality-metrics, analysis view, single status, batch status, and trigger
+  analysis route paths.
+- The route owner publishes `build_chapter_analysis_route_owner_contract()`
+  with route paths, methods, service handoffs, private error mapper ownership,
+  readiness probes, real Python source-map files, rollback boundary, and
+  migration policy.
+- Focused tests assert the owner contract and route path stability.
+- Analysis query/view error mapping stays private to
+  `chapter_analysis_routes.rs`; no forwarding-only
+  `chapter_analysis_query_error_mapper.rs` owner is restored.
+
+### Validation
+
+- `cargo test api::chapter_analysis_routes --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-analysis-route-owner" -- --nocapture`
+  passed: 11 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-analysis-route-owner"`
+  passed with no production warnings and build artifacts on E drive.
+
+### Next acceleration rule
+
+- Treat chapter analysis route transport/error shell ownership as closed for
+  Rust owner evidence.
+- Remaining chapter analysis completion work is either an explicitly approved
+  source-map freeze/delete/repoint round, or logged-in analysis/query business
+  smoke.
+
+## 2026-06-10 chapter_generation snapshot service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_generation_snapshot_service.rs` as the whole
+Rust service owner for chapter-generation runtime snapshot persistence. The
+owner covers persisted snapshot loading, bulk snapshot map loading, runtime
+state merge/replace semantics, and quality metrics field backfill used by
+batch and single-generation recovery paths.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/task_workflow_runtime_service.py`
+- `backend/app/models/batch_generation_snapshot.py`
+- `backend/app/api/chapters.py`
+- `backend/app/services/batch_generation/query_service.py`
+- `backend/app/services/batch_generation/resume_service.py`
+
+No Python workflow-runtime or snapshot file was frozen, repointed, deleted, or
+removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_generation_snapshot_service.rs` now
+  publishes a focused test-only owner contract covering Python source-map
+  files, Rust consumer files, read/write functions, write modes, quality
+  fields, runtime-state policy, validation boundary, and rollback boundary.
+- Focused tests assert the owner contract and preserve the existing merge,
+  replace, optional quality-field, and quality backfill behavior.
+- The owner is consumed by batch runtime-state/read-context services and
+  single-generation runtime-state/restore/write workflow services; no Python
+  compatibility file was modified in this checkpoint.
+
+### Validation
+
+- `cargo test services::chapter_generation_snapshot_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-snapshot-owner" -- --nocapture`
+  passed: 7 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-snapshot-owner"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat chapter-generation runtime snapshot persistence as having explicit
+  Rust owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round, or logged-in resume/status recovery smoke that
+  proves persisted snapshots are consumed end-to-end without relying on the
+  Python workflow-runtime fallback.
+
+## 2026-06-10 chapter_generation task recovery service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_generation_task_recovery_service.rs` as the
+whole Rust service owner for stale chapter-generation task auto-recovery. The
+owner covers pending task startup timeout, running task execution timeout, and
+the failed-task mutation shape shared by batch read-context and
+single-generation write workflow consumers.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/batch_generation/query_service.py`
+- `backend/app/services/batch_generation_query_service.py`
+- `backend/app/services/batch_generation_orchestration_service.py`
+- `backend/app/models/batch_generation_task.py`
+
+No Python batch query/orchestration/model file was frozen, repointed, deleted,
+or removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_generation_task_recovery_service.rs` now
+  uses named timeout constants for running and pending stale-task recovery.
+- The service publishes a focused test-only owner contract covering Python
+  source-map files, Rust consumers, recovery entrypoints, timeout values,
+  failed-task mutation fields, validation boundary, and rollback boundary.
+- Focused tests assert the owner contract and preserve the existing running,
+  pending, and within-budget recovery behavior.
+
+### Validation
+
+- `cargo test services::chapter_generation_task_recovery_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-task-recovery-owner" -- --nocapture`
+  passed: 4 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-task-recovery-owner"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat stale generation task recovery as having explicit Rust owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round, or logged-in stale-task recovery smoke proving
+  batch read-context and single-generation write workflow consume the Rust
+  recovery owner end-to-end.
+
+## 2026-06-10 chapter_generation task semantics service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_generation_task_semantics_service.rs` as the
+whole Rust service owner for active batch-generation status semantics and
+single-vs-batch task type resolution. The owner is shared by batch read
+context, payload base, runtime state, write workflow, and resume command
+consumers.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/batch_generation/status_response_builder.py`
+- `backend/app/services/batch_generation/query_service.py`
+- `backend/app/services/batch_generation_query_service.py`
+- `backend/app/services/batch_generation/resume_service.py`
+- `backend/app/models/batch_generation_task.py`
+
+No Python batch status/query/resume/model file was frozen, repointed, deleted,
+or removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_generation_task_semantics_service.rs` now
+  uses named task type constants for `chapter_single_generate` and
+  `chapters_batch_generate`.
+- The service publishes a focused test-only owner contract covering Python
+  source-map files, Rust consumers, active statuses, task type strings,
+  single-chapter rule, malformed/empty `chapter_ids` fallback rule,
+  validation boundary, and rollback boundary.
+- Focused tests assert the owner contract and preserve the existing Python
+  status response builder parity for single, batch, empty, and malformed
+  `chapter_ids` shapes.
+
+### Validation
+
+- `cargo test services::chapter_generation_task_semantics_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-task-semantics-owner" -- --nocapture`
+  passed: 4 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-task-semantics-owner"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat active status and task type semantics as having explicit Rust owner
+  evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round, or logged-in batch status/resume smoke proving
+  the Rust task semantics owner is consumed end-to-end.
+
+## 2026-06-10 chapter_generation prerequisite service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_generation_prerequisite_service.rs` as the
+whole Rust service owner for previous-chapter prerequisite checks. The owner is
+shared by single-generation prepare, batch write workflow, batch runtime state,
+resume command validation, and can-generate query payloads.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_generation/prerequisite_service.py`
+- `backend/app/api/chapter_analysis_task_routes.py`
+- `backend/app/api/chapter_batch_generation_routes.py`
+- `backend/app/services/compat/chapter_generation_route_compat_service.py`
+- `backend/app/services/batch_generation_retry_service.py`
+- `backend/app/models/chapter.py`
+
+No Python prerequisite, route, retry, compat, or model file was frozen,
+repointed, deleted, or removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_generation_prerequisite_service.rs` now
+  publishes a focused test-only owner contract covering Python source-map
+  files, Rust consumers, first-chapter behavior, previous-chapter query shape,
+  incomplete-content blocking, route payload consumers, validation boundary,
+  and rollback boundary.
+- Focused tests assert the owner contract and preserve the existing first
+  chapter allow behavior plus the Python-compatible incomplete previous
+  chapter error message.
+- Production prerequisite behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_generation_prerequisite_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-prerequisite-owner" -- --nocapture`
+  passed: 3 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-prerequisite-owner"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat previous-chapter prerequisite behavior as having explicit Rust owner
+  evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round, or logged-in can-generate / generation-start
+  smoke proving the Rust prerequisite owner is consumed end-to-end.
+
+## 2026-06-10 chapter_generation access service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_generation_access_service.rs` as the whole
+Rust service owner for chapter lookup plus project ownership access checks.
+The owner is shared by single-generation prepare/runtime/stream flows and
+batch resume dispatch before they consume chapter state.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/api/chapter_route_helpers.py`
+- `backend/app/api/common.py`
+- `backend/app/api/chapter_generation_routes.py`
+- `backend/app/services/chapter_generation/background_entry_service.py`
+- `backend/app/services/compat/chapter_generation_route_compat_service.py`
+- `backend/app/models/chapter.py`
+- `backend/app/models/project.py`
+
+No Python route helper, common access helper, generation route, compat
+service, chapter model, or project model file was frozen, repointed, deleted,
+or removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_generation_access_service.rs` now publishes
+  a focused test-only owner contract covering Python source-map files, Rust
+  consumers, access entrypoints, chapter lookup shape, project ownership query
+  shape, error contract, bulk loading policy, validation boundary, and
+  rollback boundary.
+- Focused tests assert the owner contract and preserve the existing
+  single-chapter and bulk-loading access boundary shape.
+- Production access behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_generation_access_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-access-owner" -- --nocapture`
+  passed: 1 test.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-access-owner"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat chapter/project access lookup as having explicit Rust owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round, or logged-in generation / batch-resume smoke
+  proving the Rust access owner is consumed end-to-end.
+
+## 2026-06-10 chapter_generation target word count service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_generation_target_word_count_service.rs` as
+the whole Rust service owner for shared target-word-count normalization. The
+owner is consumed by single-generation prepare/runtime restore and
+batch-generation create/resume command paths before prompt/runtime inputs are
+materialized.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_generation/stream/entry_service.py`
+- `backend/app/services/single_chapter_background_context_service.py`
+- `backend/app/services/batch_generation_orchestration_service.py`
+- `backend/app/services/compat/chapter_generation_route_compat_service.py`
+- `backend/app/models/batch_generation_task.py`
+
+No Python stream entry, background context, batch orchestration, compat
+service, or task model file was frozen, repointed, deleted, or removed from
+the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_generation_target_word_count_service.rs`
+  now publishes a focused test-only owner contract covering Python source-map
+  files, Rust consumers, default target value, minimum target value, Python
+  default policy, Rust lower-bound policy, validation boundary, and rollback
+  boundary.
+- Focused tests assert the owner contract and preserve the existing
+  normalization behavior: missing target defaults to `3000`, values below `1`
+  normalize to `1`, and positive values pass through unchanged.
+- Production normalization behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_generation_target_word_count_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-target-word-count-owner" -- --nocapture`
+  passed: 2 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-target-word-count-owner"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat target-word-count normalization as having explicit Rust owner
+  evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round, or logged-in generation / batch-create /
+  batch-resume smoke proving the Rust normalization owner is consumed
+  end-to-end.
+
+## 2026-06-10 chapter_generation quality gate semantics service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_generation_quality_gate_semantics_service.rs`
+as the whole Rust service owner for shared quality-gate terminal and retry
+semantics. The owner is consumed by single-generation runtime state, batch task
+payload projection, batch resume command validation, and story repair
+quality-context projection.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/story_repair_payload_service.py`
+- `backend/app/services/quality_domain/story_quality_feedback_service.py`
+- `backend/app/services/batch_generation/status_response_builder.py`
+- `backend/app/services/batch_generation_chapter_failure_state_service.py`
+- `backend/app/services/batch_generation_chapter_success_state_service.py`
+- `backend/app/services/chapter_generation/stream/finalize_service.py`
+
+No Python story repair, quality feedback, batch status, batch failure/success
+state, or stream finalize file was frozen, repointed, deleted, or removed from
+the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_generation_quality_gate_semantics_service.rs`
+  now publishes a focused test-only owner contract covering Python source-map
+  files, Rust consumers, semantic entrypoints, manual-review decisions,
+  `quality_blocked` phase handling, retryable decisions, default labels,
+  quality-context lookup order, retry budget policy, validation boundary, and
+  rollback boundary.
+- Focused tests assert the owner contract and preserve existing manual review,
+  latest failed-chapter selection, quality-context lookup, retryable repair,
+  and exhausted retry-budget behavior.
+- Production quality-gate semantic behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_generation_quality_gate_semantics_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-quality-gate-semantics-owner" -- --nocapture`
+  passed: 7 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-quality-gate-semantics-owner"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat shared quality-gate terminal/retry semantics as having explicit Rust
+  owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round, or logged-in generation / batch status / batch
+  resume smoke proving the Rust quality-gate semantics owner is consumed
+  end-to-end.
+
+## 2026-06-10 chapter_generation request runtime state service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_generation_request_runtime_state_service.rs`
+as the whole Rust service owner for request runtime-state payload ownership.
+The owner is consumed by single-generation prepare/runtime restore/write
+workflow and batch-generation write/runtime/resume paths.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/schemas/chapter.py`
+- `backend/app/api/chapters.py`
+- `backend/app/services/batch_generation_orchestration_service.py`
+- `backend/app/services/batch_generation/create_service.py`
+- `backend/app/services/batch_generation/resume_service.py`
+- `backend/app/services/chapter_generation/runtime/service.py`
+- `backend/app/services/task_workflow_runtime_service.py`
+- `backend/app/services/story_repair_payload_service.py`
+
+No Python schema, chapter route, batch orchestration/create/resume, runtime
+service, workflow runtime, or story repair payload file was frozen, repointed,
+deleted, or removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_generation_request_runtime_state_service.rs`
+  now publishes a focused test-only owner contract covering Python source-map
+  files, Rust consumers, runtime-state key, owned entrypoints, owned fields,
+  active story-repair payload fields, empty payload policy, parse fallback
+  policy, extraction policy, validation boundary, and rollback boundary.
+- Focused tests assert the owner contract and preserve existing payload build,
+  parse, and active story-repair extraction behavior.
+- Production request runtime-state behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_generation_request_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-request-runtime-state-owner" -- --nocapture`
+  passed: 4 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-request-runtime-state-owner"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat request runtime-state payload ownership as having explicit Rust owner
+  evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round, or logged-in generation / batch create / batch
+  resume smoke proving the Rust request runtime-state owner is consumed
+  end-to-end.
+
+## 2026-06-10 chapter_generation prompt service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_generation_prompt_service.rs` as the whole
+Rust service owner for shared generation prompt template selection and runtime
+prompt block assembly. The owner is consumed by single-generation prepare,
+runtime restore, stream workflow, shared execution-contract, prompt-context
+provider, and batch-generation runtime paths.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/prompt_service.py`
+- `backend/app/services/batch_generation_prompt_service.py`
+- `backend/app/services/chapter_generation/runtime/prompt_service.py`
+- `backend/app/services/chapter_generation/stream/execution_service.py`
+- `backend/app/services/chapter_generation/stream/entry_service.py`
+- `backend/app/services/chapter_generation/stream/wiring_service.py`
+
+No Python prompt, batch prompt, runtime prompt, stream execution, stream entry,
+or stream wiring file was frozen, repointed, deleted, or removed from the
+Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_generation_prompt_service.rs` now publishes
+  a focused test-only owner contract covering Python source-map files, Rust
+  consumers, template key policy, owned prompt inputs, default policy, runtime
+  blocks, quality-contract injection policy, provider-payload merge policy,
+  validation boundary, and rollback boundary.
+- Focused tests assert the owner contract and preserve existing template key,
+  default injection, provider payload, previous-chapter context, web-research,
+  repair block, quality runtime contract, and rendered prompt injection
+  behavior.
+- Production prompt behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_generation_prompt_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-prompt-owner" -- --nocapture`
+  passed: 16 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-generation-prompt-owner"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat shared generation prompt template/runtime block ownership as having
+  explicit Rust owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round, or logged-in generation / batch generation smoke
+  proving the Rust prompt owner is consumed end-to-end.
+
+## 2026-06-10 chapter_batch_generation task payload base owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_batch_generation_task_payload_base_service.rs`
+as the whole Rust service owner for batch task payload, checkpoint, and
+terminal status projection. The owner is consumed by batch read context,
+runtime state, write workflow, resume command, quality runtime context,
+quality-gate semantics, and candidate runtime-state projection paths.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/models/batch_generation_task.py`
+- `backend/app/models/batch_generation_snapshot.py`
+- `backend/app/services/batch_generation/status_response_builder.py`
+- `backend/app/services/batch_generation/status_models.py`
+- `backend/app/services/batch_generation_status_service.py`
+- `backend/app/services/batch_generation/create_service.py`
+- `backend/app/services/batch_generation/resume_service.py`
+
+No Python batch task model, snapshot model, status response builder, status
+model, status service, create service, or resume service file was frozen,
+repointed, deleted, or removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs`
+  now publishes a focused test-only owner contract covering Python source-map
+  files, Rust consumers, payload entrypoints, checkpoint fields, task payload
+  fields, terminal status policy, quality-context policy, candidate-gateway
+  projection policy, Python-compatible snapshot policy, validation boundary,
+  and rollback boundary.
+- Focused tests assert the owner contract and preserve existing checkpoint,
+  runtime payload, task response payload, status task payload, quality context,
+  candidate-gateway projection, and terminal semantics behavior.
+- Production batch task payload behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_batch_generation_task_payload_base_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-batch-task-payload-base-owner" -- --nocapture`
+  passed: 35 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-batch-task-payload-base-owner"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat batch task payload/checkpoint/terminal status projection as having
+  explicit Rust owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round, or logged-in batch status / batch stream / batch
+  resume smoke proving the Rust task payload base owner is consumed
+  end-to-end.
+
+## 2026-06-10 chapter_single_generation candidate quality service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects
+`chapter_single_generation_candidate_quality_service.rs` as the whole Rust
+service owner for single-generation candidate quality metrics and quality gate
+planning. The owner is consumed by the candidate quality adapter, production
+candidate executor adapter, candidate generation flow, and story repair quality
+context normalization path.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_generation/stream/candidate_service.py`
+- `backend/app/services/batch_generation_candidate_service.py`
+- `backend/app/services/story_quality_feedback_service.py`
+- `backend/app/services/story_quality_repair_effectiveness_service.py`
+- `backend/app/services/story_repair_payload_service.py`
+- `backend/app/services/quality_domain/story_quality_feedback_service.py`
+- `backend/app/services/quality_domain/story_quality_repair_effectiveness_service.py`
+
+No Python candidate service, story quality feedback, quality repair
+effectiveness, story repair payload, or quality-domain service file was
+frozen, repointed, deleted, or removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_single_generation_candidate_quality_service.rs`
+  now publishes a focused test-only owner contract covering Python source-map
+  files, Rust consumers, quality entrypoints, metric fields, runtime-context
+  fields, quality gate policy, continuity-preflight policy, normalization
+  policy, validation boundary, and rollback boundary.
+- Focused tests assert the owner contract and preserve existing quality
+  metrics, low-score gate, continuity preflight warning/ok, runtime-context
+  projection, retry gate, and exhausted retry-budget behavior.
+- Production single-generation candidate quality behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_single_generation_candidate_quality_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-single-candidate-quality-owner" -- --nocapture`
+  passed: 8 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-single-candidate-quality-owner"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat single-generation candidate quality metrics/gate planning as having
+  explicit Rust owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round, or logged-in single-generation candidate / batch
+  candidate smoke proving the Rust quality owner is consumed end-to-end.
+
+## 2026-06-10 chapter_regeneration apply service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_regeneration_apply_service.rs` as the whole
+Rust service owner for partial-regeneration apply. The owner covers route
+payload coercion, accessible chapter loading, generated narrative cleanup,
+character-index range replacement, persistence through `ChapterService::update`,
+and route-facing success/error payload shape.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/api/chapter_partial_regeneration_routes.py`
+- `backend/app/services/chapter_content_apply_service.py`
+- `backend/app/services/partial_regeneration_service.py`
+- `backend/app/models/chapter.py`
+
+No Python partial regeneration route, content apply service, partial
+regeneration service, or chapter model file was frozen, repointed, deleted, or
+removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_regeneration_apply_service.rs` now
+  publishes a focused test-only owner contract covering Python source-map
+  files, Rust consumers, route payload fields, payload coercion rules, apply
+  policy, success payload fields, error contract, validation boundary, active
+  consumers, and rollback boundary.
+- Focused tests assert the owner contract and preserve existing request
+  defaults, JSON coercion, narrative cleanup, invalid-range rejection, access
+  error aliasing, and character-index replacement behavior.
+- Production partial-regeneration apply behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_regeneration_apply_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-apply-owner" -- --nocapture`
+  passed: 11 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-apply-owner"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat partial-regeneration apply payload/persistence as having explicit Rust
+  owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round, or live owner-profile execution proving the
+  regeneration apply owner is consumed end-to-end.
+
+## 2026-06-10 chapter_regeneration query service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_regeneration_query_service.rs` as the whole
+Rust service owner for regeneration task list/query. The owner covers route
+query normalization, limit validation, accessible chapter gating, regeneration
+task ordering, task payload projection, datetime formatting, and access/internal
+error aliasing.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/api/chapter_regeneration_routes.py`
+- `backend/app/services/chapter_regeneration_query_service.py`
+- `backend/app/services/regeneration_task_service.py`
+- `backend/app/models/regeneration_task.py`
+- `backend/app/models/chapter.py`
+
+No Python regeneration route, regeneration query service, regeneration task
+service, regeneration task model, or chapter model file was frozen, repointed,
+deleted, or removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_regeneration_query_service.rs` now
+  publishes a focused test-only owner contract covering Python source-map
+  files, Rust consumers, route query fields, limit policy, query policy, task
+  item fields, payload fields, datetime format, error contract, validation
+  boundary, active consumers, and rollback boundary.
+- Focused tests assert the owner contract and preserve existing datetime
+  formatting, access error aliasing, default limit, lower/upper limit
+  rejection, and explicit in-range limit behavior.
+- Production regeneration task list/query behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_regeneration_query_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-query-owner" -- --nocapture`
+  passed: 5 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-query-owner"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat regeneration task list/query payload as having explicit Rust owner
+  evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round, or live owner-profile execution proving the
+  regeneration query owner is consumed end-to-end.
+
+## 2026-06-10 chapter_regeneration text service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_regeneration_text_service.rs` as the whole
+Rust service owner for full/partial regeneration text finalization. The owner
+covers partial output normalization, known prefix/quote stripping, generated
+narrative cleanup, partial-vs-full payload shape differences, word-count
+projection, and empty/meta-text rejection.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/api/chapter_partial_regeneration_routes.py`
+- `backend/app/services/chapter_regeneration_stream_service.py`
+- `backend/app/schemas/generation_payload.py`
+- `backend/app/schemas/chapter.py`
+- `backend/app/services/prompt_service.py`
+
+No Python partial regeneration route, regeneration stream service, schema, or
+prompt service file was frozen, repointed, deleted, or removed from the Python
+app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_regeneration_text_service.rs` now publishes
+  a focused test-only owner contract covering Python source-map files, Rust
+  consumers, entrypoints, stripped prefixes, stripped quote pairs, cleanup
+  policy, partial payload fields, chapter payload fields, payload difference
+  policy, error contract, validation boundary, active consumers, and rollback
+  boundary.
+- Focused tests assert the owner contract and preserve existing prefix/quote
+  normalization, partial payload, chapter payload, meta-only rejection, and
+  partial-vs-full payload shape differences.
+- Production regeneration text finalization behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_regeneration_text_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-text-owner" -- --nocapture`
+  passed: 7 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-text-owner"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat regeneration text finalization as having explicit Rust owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round, or live owner-profile execution proving the
+  regeneration text owner is consumed end-to-end.
+
+## 2026-06-10 chapter_regeneration stream launch service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_regeneration_stream_launch_service.rs` as the
+whole Rust service owner for regeneration SSE stream launch. The owner covers
+initial progress event application, candidate output stream collection,
+chunk/progress fan-out, finalize error translation, result/complete/done
+ordering, and candidate-output request defaults.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_regeneration_stream_service.py`
+- `backend/app/api/chapter_regeneration_routes.py`
+- `backend/app/api/chapter_partial_regeneration_routes.py`
+- `backend/app/services/chapter_generation/stream/candidate_service.py`
+- `backend/app/services/ai_service.py`
+
+No Python regeneration stream service, regeneration route, partial
+regeneration route, candidate stream service, or AI service file was frozen,
+repointed, deleted, or removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_regeneration_stream_launch_service.rs` now
+  publishes a focused test-only owner contract covering Python source-map
+  files, Rust consumers, entrypoints, input fields, candidate output request
+  defaults, SSE event order, initial event policy, finalize error messages,
+  error policy, validation boundary, active consumers, and rollback boundary.
+- Focused tests assert the owner contract and preserve existing preparing /
+  generating progress advancement plus finalize error message semantics.
+- Production regeneration SSE launch and candidate output collection behavior
+  remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_regeneration_stream_launch_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-stream-launch-owner" -- --nocapture`
+  passed: 4 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-stream-launch-owner"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat regeneration stream launch/SSE as having explicit Rust owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round, or live owner-profile execution proving the
+  regeneration stream launch owner is consumed end-to-end.
+
+## 2026-06-10 chapter_regeneration prepare service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_regeneration_prepare_service.rs` as the whole
+Rust prepare owner for full and partial regeneration. The owner covers route
+request normalization, full/partial bounds validation, prompt construction,
+prompt context and research payload consumption, partial length planning,
+optional writing style loading, AI service construction, and stream input
+materialization.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/api/chapter_regeneration_routes.py`
+- `backend/app/api/chapter_partial_regeneration_routes.py`
+- `backend/app/services/chapter_regeneration_stream_service.py`
+- `backend/app/services/partial_regeneration_service.py`
+- `backend/app/services/prompt_service.py`
+- `backend/app/services/chapter_web_research_service.py`
+- `backend/app/schemas/regeneration.py`
+
+No Python regeneration route, partial regeneration route, stream service,
+partial service, prompt service, research service, or schema file was frozen,
+repointed, deleted, or removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_regeneration_prepare_service.rs` now
+  publishes a focused test-only owner contract covering Python source-map
+  files, Rust consumers, entrypoints, full/partial request fields, bounds,
+  choice fields, prompt inputs, partial prepare policy, stream prepare policy,
+  error contract, validation boundary, active consumers, and rollback
+  boundary.
+- Focused tests assert the owner contract and preserve existing request
+  coercion, bounds constants, choice defaults, partial planning, and active
+  route consumer evidence.
+- Production full/partial regeneration prepare behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_regeneration_prepare_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-prepare-owner-contract" -- --nocapture`
+  passed: 23 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-prepare-owner-contract"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat full/partial regeneration prepare as having explicit Rust owner
+  evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round or live owner-profile execution proving the
+  regeneration prepare owner is consumed end-to-end.
+
+## 2026-06-10 chapter_candidate generation service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_candidate_generation_service.rs` as the whole
+Rust candidate-pool generation owner. The owner covers default dependency
+wiring, candidate-pool workflow execution, max-candidate normalization,
+runtime-state attempt synchronization, retry prompt/strategy suffixes, retry
+temperature override, record-build dispatch, selected-candidate fallback, and
+zero-candidate error behavior.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_candidate_generation_service.py`
+- `backend/app/services/chapter_generation/stream/candidate_service.py`
+- `backend/app/services/batch_generation_candidate_service.py`
+- `backend/tests/test_services/test_chapter_candidate_generation_service.py`
+
+No Python candidate generation, stream candidate, batch candidate, or Python
+test source file was frozen, repointed, deleted, or removed from the Python app
+in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_candidate_generation_service.rs` now
+  publishes a focused test-only owner contract covering Python source-map
+  files, Rust owners/consumers, entrypoints, request fields, output collection
+  fields, record-build fields, workflow policy, error contract, validation
+  boundary, active consumers, and rollback boundary.
+- Focused tests assert the owner contract and preserve existing initial
+  candidate generation, retry candidate generation, default dependency wiring,
+  empty retry suffix stop, max-candidate normalization, and Rust candidate
+  record-owner composition behavior.
+- Production candidate-pool generation behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_candidate_generation_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-generation-owner-contract" -- --nocapture`
+  passed: 7 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-generation-owner-contract"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat candidate-pool generation as having explicit Rust owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round or live owner-profile execution proving the
+  candidate generation owner is consumed end-to-end.
+
+## 2026-06-10 chapter_candidate rerank service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_candidate_rerank_service.rs` as the whole
+Rust rerank/retry/repair formula owner. The owner covers quality-gate
+normalization, selection metadata, candidate-pool summary projection, winner
+ranking, additional-candidate pressure, retry prompt/strategy suffixes, retry
+temperature policy, word-budget repair formulas, targeted final repair
+formulas, and repair seed selection.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_candidate_rerank_service.py`
+- `backend/app/services/chapter_candidate_generation_service.py`
+- `backend/app/services/chapter_candidate_finalize_service.py`
+- `backend/app/services/chapter_candidate_word_budget_repair_service.py`
+- `backend/app/services/chapter_candidate_targeted_final_repair_service.py`
+
+No Python rerank, generation, finalize, word-budget repair, or targeted final
+repair file was frozen, repointed, deleted, or removed from the Python app in
+this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_candidate_rerank_service.rs` now publishes
+  a focused test-only owner contract covering Python source-map files, Rust
+  owner/consumer files, entrypoints, formula groups, ranking policy, repair
+  policy, error contract, validation boundary, active consumers, and rollback
+  boundary.
+- Focused tests assert the owner contract and preserve existing quality-gate
+  normalization, selection metadata, winner ranking, additional-candidate
+  pressure, word-budget repair, targeted final repair, prompt suffixes,
+  candidate-pool summary, and retry temperature behavior.
+- Production rerank, retry, word-budget repair, and targeted final repair
+  formula behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_candidate_rerank_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-rerank-owner-contract" -- --nocapture`
+  passed: 11 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-rerank-owner-contract"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat rerank/retry/repair formulas as having explicit Rust owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round or live owner-profile execution proving the
+  rerank owner is consumed end-to-end.
+
+## 2026-06-10 chapter_candidate production adapter owner contract checkpoint
+
+### Scope
+
+This checkpoint selects
+`chapter_candidate_executor_production_adapter_service.rs` as the whole Rust
+production cutover and rollback owner. The owner covers Rust-vs-Python
+execution decisioning, disabled-cutover fallback, Rust-error fallback,
+rollback-disabled error propagation, runtime quality adapter bridging, provider
+stream collection, default candidate record wiring, and route-gateway rollback
+metadata.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/api/chapters.py`
+- `backend/app/services/chapter_candidate_executor_service.py`
+- `backend/app/services/chapter_candidate_generation_service.py`
+- `backend/app/services/chapter_candidate_output_service.py`
+- `backend/app/services/chapter_candidate_record_service.py`
+- `backend/app/services/chapter_candidate_quality_adapter_service.py`
+
+No Python chapter route, candidate executor, generation, output, record, or
+quality adapter file was frozen, repointed, deleted, or removed from the
+Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs`
+  now publishes a focused test-only owner contract covering Python source-map
+  files, Rust owner/consumer files, entrypoints, config fields, decision
+  paths, output fields, runtime adapter policy, rollback policy, validation
+  boundary, active consumers, and rollback boundary.
+- Focused tests assert the owner contract and preserve existing disabled Rust
+  fallback, Rust execution, Rust-error fallback, rollback-disabled error
+  propagation, runtime quality bridge, and provider request owner routing.
+- Production candidate executor adapter behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_candidate_executor_production_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-production-adapter-owner-contract" -- --nocapture`
+  passed: 8 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-production-adapter-owner-contract"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat candidate executor production adapter cutover/rollback as having
+  explicit Rust owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round or live owner-profile execution proving the
+  production adapter owner is consumed end-to-end.
+
+## 2026-06-10 chapter_candidate record service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_candidate_record_service.rs` as the whole
+Rust candidate record owner. The owner covers generated narrative
+sanitization, workflow/meta text rejection, quality evaluation input,
+quality-gate plan normalization, enriched candidate-selection metadata, record
+field projection, summary preview projection, candidate chunk projection, and
+record-level error messages.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_candidate_record_service.py`
+- `backend/app/services/chapter_candidate_generation_service.py`
+- `backend/app/services/chapter_candidate_finalize_service.py`
+- `backend/app/services/chapter_candidate_executor_service.py`
+- `backend/tests/test_services/test_chapter_candidate_record_service.py`
+
+No Python candidate record, generation, finalize, executor, or Python record
+test file was frozen, repointed, deleted, or removed from the Python app in
+this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_candidate_record_service.rs` now publishes
+  a focused test-only owner contract covering Python source-map files, Rust
+  owner/consumer files, entrypoints, request fields, record fields, record
+  policy, quality-gate policy, selection metadata policy, error contract,
+  validation boundary, active consumers, and rollback boundary.
+- Focused tests assert the owner contract and preserve existing enriched
+  selection metadata, initial-plan fallback, sanitization warning, and empty
+  sanitized candidate rejection behavior.
+- Production candidate record construction behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_candidate_record_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-record-owner-contract" -- --nocapture`
+  passed: 4 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-record-owner-contract"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat candidate record construction as having explicit Rust owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round or live owner-profile execution proving the
+  record owner is consumed end-to-end.
+
+## 2026-06-10 chapter_candidate output service owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_candidate_output_service.rs` as the whole
+Rust candidate provider output owner. The owner covers provider stream
+collection, chunk accumulation, progress callback projection, runtime-state
+sync, provider stream error propagation, max-output stop behavior, and final
+sentence-boundary trimming.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_candidate_output_service.py`
+- `backend/app/services/chapter_candidate_generation_service.py`
+- `backend/app/services/chapter_candidate_executor_service.py`
+- `backend/app/services/chapter_candidate_runtime_state_service.py`
+- `backend/app/services/chapter_generated_text_service.py`
+- `backend/tests/test_services/test_chapter_candidate_output_service.py`
+
+No Python candidate output, generation, executor, runtime-state,
+generated-text, or Python output test file was frozen, repointed, deleted, or
+removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_candidate_output_service.rs` now publishes
+  a focused test-only owner contract covering Python source-map files, Rust
+  owner/consumer files, entrypoints, request fields, output fields, stream
+  policy, runtime-state policy, trimming policy, error contract, validation
+  boundary, active consumers, and rollback boundary.
+- Focused tests assert the owner contract and preserve existing chunk
+  collection, runtime-state sync, sentence-boundary trimming, progress
+  callbacks, stream error propagation, empty state handling, and non-object
+  runtime-state replacement behavior.
+- Production candidate output collection behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_candidate_output_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-output-owner-contract" -- --nocapture`
+  passed: 8 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-output-owner-contract"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat candidate provider output stream collection as having explicit Rust
+  owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round or live owner-profile execution proving the
+  output owner is consumed end-to-end.
+- Prefer `chapter_candidate_quality_adapter_service.rs` or
+  `chapter_candidate_runtime_state_service.rs` next so the candidate executor
+  owner chain keeps closing whole Rust files instead of returning to Python
+  compatibility edits.
+
+## 2026-06-10 chapter_candidate quality adapter owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_candidate_quality_adapter_service.rs` as the
+whole Rust candidate quality callback bridge owner. The owner covers adapter
+construction, runtime-context input projection, story-quality metrics input
+projection, quality-gate plan input projection, runtime executor callback
+bridging, and poisoned callback-lock recovery.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_generation/stream/candidate_service.py`
+- `backend/app/services/batch_generation_candidate_service.py`
+- `backend/app/services/batch_generation_execution_service.py`
+- `backend/app/services/chapter_generation/stream/service.py`
+
+There is no real
+`backend/app/services/chapter_candidate_quality_adapter_service.py` file in
+the current tree. This checkpoint records the actual Python quality hook
+source-map instead of treating the non-existent file as ownership evidence.
+No Python stream, batch-candidate, batch-execution, or stream-service file was
+frozen, repointed, deleted, or removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_candidate_quality_adapter_service.rs` now
+  publishes a focused test-only owner contract covering Python source-map
+  files, Rust owner/consumer files, entrypoints, context fields,
+  runtime-context policy, quality-gate policy, lock policy, validation
+  boundary, active consumers, and rollback boundary.
+- Focused tests assert the owner contract and preserve existing runtime
+  context projection, outline/world-rules extraction, retry/scope/repair
+  payload forwarding, non-object candidate metrics dropping, runtime callback
+  bridging, and poisoned lock recovery behavior.
+- Production quality adapter behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_candidate_quality_adapter_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-quality-adapter-owner-contract" -- --nocapture`
+  passed: 6 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-quality-adapter-owner-contract"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat candidate quality callback bridging as having explicit Rust owner
+  evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round or live owner-profile execution proving the
+  quality adapter owner is consumed end-to-end.
+- Prefer `chapter_candidate_runtime_state_service.rs` next because the
+  output, record, quality adapter, and production adapter owners now all
+  depend on runtime-state sync as the next shared whole-file boundary.
+
+## 2026-06-10 chapter_candidate runtime state owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_candidate_runtime_state_service.rs` as the
+whole Rust shared candidate runtime-state owner. The owner covers generation
+attempt labels, initial runtime-state construction, runtime-state snapshot
+normalization, runtime-state sync patching, Python query snapshot field
+projection, and Python-like int/string/truthy compatibility.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_candidate_runtime_state_service.py`
+- `backend/app/services/chapter_candidate_output_service.py`
+- `backend/app/services/chapter_candidate_event_service.py`
+- `backend/app/services/chapter_generation/stream/candidate_service.py`
+- `backend/app/services/batch_generation_candidate_service.py`
+- `backend/app/services/compat/chapter_generation_route_compat_service.py`
+- `backend/tests/test_services/test_chapter_candidate_runtime_state_service.py`
+
+No Python runtime-state, output, event, stream candidate, batch candidate,
+compat route, or Python runtime-state test file was frozen, repointed,
+deleted, or removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_candidate_runtime_state_service.rs` now
+  publishes a focused test-only owner contract covering Python source-map
+  files, Rust owner/consumer files, entrypoints, state fields, attempt-label
+  policy, snapshot policy, sync policy, checkpoint policy, validation
+  boundary, active consumers, and rollback boundary.
+- Focused tests assert the owner contract and preserve existing initial state,
+  label resolution, snapshot defaults, Python-like bool/string/int parsing,
+  sync patching, and Python query snapshot field projection behavior.
+- Production candidate runtime-state behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_candidate_runtime_state_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-runtime-state-owner-contract" -- --nocapture`
+  passed: 6 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-runtime-state-owner-contract"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat shared candidate runtime-state ownership as having explicit Rust owner
+  evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round or live owner-profile execution proving the
+  runtime-state owner is consumed end-to-end.
+- Prefer `chapter_candidate_provider_stream_service.rs` or
+  `chapter_candidate_finalize_service.rs` next because they can now reference
+  the output, runtime-state, record, quality adapter, and production adapter
+  contracts as supporting owners instead of reopening Python compatibility
+  edits.
+
+## 2026-06-10 chapter_candidate provider stream owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_candidate_provider_stream_service.rs` as the
+whole Rust candidate provider request and output collection owner. The owner
+covers default provider request resolution, AI config overrides, prompt and
+system prompt projection, tools payload validation, max-output limit
+normalization, and handoff into the candidate output owner.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_generation/stream/candidate_service.py`
+- `backend/app/services/batch_generation_candidate_service.py`
+- `backend/app/services/chapter_candidate_output_service.py`
+- `backend/app/services/chapter_candidate_executor_service.py`
+- `backend/app/services/compat/chapter_generation_route_compat_service.py`
+
+No Python stream candidate, batch candidate, output, executor, or compat route
+file was frozen, repointed, deleted, or removed from the Python app in this
+checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_candidate_provider_stream_service.rs` now
+  publishes a focused test-only owner contract covering Python source-map
+  files, Rust owner/consumer files, entrypoints, input fields, generate
+  kwargs, provider policy, output collection policy, error contract,
+  validation boundary, active consumers, and rollback boundary.
+- Focused tests assert the owner contract and preserve existing prompt/system
+  prompt projection, temperature and max-token override parsing, invalid
+  provider input rejection, tools payload validation, and max-output limit
+  normalization behavior.
+- Production provider stream behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_candidate_provider_stream_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-provider-stream-owner-contract" -- --nocapture`
+  passed: 7 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-provider-stream-owner-contract"`
+  passed with no production warnings and build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat candidate provider request / output collection as having explicit Rust
+  owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round or live owner-profile execution proving the
+  provider stream owner is consumed end-to-end.
+- Prefer `chapter_candidate_finalize_service.rs` next because the output,
+  runtime-state, record, quality adapter, provider stream, and production
+  adapter owners now expose the supporting contracts needed for a whole-file
+  finalize closeout.
+
+## 2026-06-10 chapter_candidate finalize owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_candidate_finalize_service.rs` as the whole
+Rust candidate final-selection owner. The owner covers default finalize
+dependency construction, final candidate-state resolution, quality-gate
+normalization, word-budget repair promotion preference, final result
+projection, candidate pool summary attachment, and runtime-state sync.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_candidate_finalize_service.py`
+- `backend/app/services/chapter_candidate_executor_service.py`
+- `backend/app/services/chapter_candidate_executor_wiring_service.py`
+- `backend/app/services/chapter_candidate_view_service.py`
+- `backend/app/services/chapter_candidate_classification_service.py`
+
+No Python finalize, executor, wiring, view, or classification file was
+frozen, repointed, deleted, or removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_candidate_finalize_service.rs` now
+  publishes a focused test-only owner contract covering Python source-map
+  files, Rust owner/consumer files, entrypoints, metadata policy,
+  quality-gate policy, word-budget repair promotion policy, result projection
+  policy, runtime-state policy, validation boundary, active consumers, and
+  rollback boundary.
+- Focused tests assert the owner contract and preserve existing final-state
+  resolution, final result projection, runtime-state sync, word-budget repair
+  promotion, and default finalize dependency behavior.
+- Production finalize behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_candidate_finalize_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-finalize-owner-contract" -- --nocapture`
+  passed: 5 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-finalize-owner-contract"`
+  passed with build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat candidate final-selection ownership as having explicit Rust owner
+  evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round or live owner-profile execution proving the
+  finalize owner is consumed end-to-end.
+- Prefer `chapter_candidate_word_budget_repair_service.rs` or
+  `chapter_candidate_targeted_final_repair_service.rs` next because they can
+  now reference output, generation, runtime-state, rerank, record, provider
+  stream, and finalize owner contracts as supporting evidence.
+
+## 2026-06-10 chapter_candidate word-budget repair owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_candidate_word_budget_repair_service.rs` as
+the whole Rust candidate word-budget repair owner. The owner covers default
+repair dependency construction, repair applicability, suffix-driven repair
+prompt construction, relaxed budget and token limits, provider output
+collection, repair record construction, repair-seed metadata, keep/select/prefer
+policy, and runtime-state sync.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_candidate_word_budget_repair_service.py`
+- `backend/app/services/chapter_candidate_executor_service.py`
+- `backend/app/services/chapter_candidate_executor_wiring_service.py`
+- `backend/app/services/chapter_candidate_selection_metadata_service.py`
+- `backend/app/services/chapter_candidate_classification_service.py`
+
+No Python word-budget repair, executor, wiring, selection metadata, or
+classification file was frozen, repointed, deleted, or removed from the
+Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_candidate_word_budget_repair_service.rs`
+  now publishes a focused test-only owner contract covering Python source-map
+  files, Rust owner/consumer files, entrypoints, request fields, repair
+  policy, prompt/limit policy, runtime-state policy, record policy,
+  validation boundary, active consumers, and rollback boundary.
+- Focused tests assert the owner contract and preserve existing skip,
+  prompt-build, repair collection failure, repair-seed metadata, default
+  dependency, and runtime-state sync behavior.
+- Production word-budget repair behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_candidate_word_budget_repair_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-word-budget-repair-owner-contract" -- --nocapture`
+  passed: 5 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-word-budget-repair-owner-contract"`
+  passed with build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat candidate word-budget repair ownership as having explicit Rust owner
+  evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round or live owner-profile execution proving the
+  word-budget repair owner is consumed end-to-end.
+- Prefer `chapter_candidate_targeted_final_repair_service.rs` next because it
+  is the remaining repair-stage owner contract gap before the broader
+  `chapter_candidate_executor_service.rs` owner closeout.
+
+## 2026-06-10 chapter_candidate targeted final repair owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_candidate_targeted_final_repair_service.rs`
+as the whole Rust candidate targeted-final-repair owner. The owner covers
+default targeted repair dependency construction, suffix-driven repair prompt
+construction, temperature/token/char-limit resolution, provider output
+collection, repair record construction, repair-seed metadata, keep/adopt/prefer
+policy, optional follow-up seed deferral, and runtime-state sync.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_candidate_targeted_final_repair_service.py`
+- `backend/app/services/chapter_candidate_executor_service.py`
+- `backend/app/services/chapter_candidate_executor_wiring_service.py`
+- `backend/app/services/chapter_candidate_selection_metadata_service.py`
+- `backend/app/services/chapter_candidate_classification_service.py`
+
+No Python targeted final repair, executor, wiring, selection metadata, or
+classification file was frozen, repointed, deleted, or removed from the
+Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_candidate_targeted_final_repair_service.rs`
+  now publishes a focused test-only owner contract covering Python source-map
+  files, Rust owner/consumer files, entrypoints, request fields, repair
+  policy, prompt/limit policy, runtime-state policy, record policy,
+  validation boundary, active consumers, and rollback boundary.
+- Focused tests assert the owner contract and preserve existing adopt,
+  deferred follow-up seed, failure fallback, repair-seed metadata, default
+  dependency, and runtime-state sync behavior.
+- Production targeted-final-repair behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_candidate_targeted_final_repair_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-targeted-final-repair-owner-contract" -- --nocapture`
+  passed: 5 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-targeted-final-repair-owner-contract"`
+  passed with build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat candidate targeted-final-repair ownership as having explicit Rust
+  owner evidence.
+- Remaining completion work is either an explicitly approved source-map
+  freeze/delete/repoint round or live owner-profile execution proving the
+  targeted-final-repair owner is consumed end-to-end.
+- Prefer `chapter_candidate_executor_service.rs` next because generation,
+  word-budget repair, targeted final repair, finalize, event, record, output,
+  provider stream, runtime-state, and production adapter owner contracts are
+  now available as supporting evidence for a broader executor owner closeout.
+
+## 2026-06-10 chapter_candidate executor owner contract checkpoint
+
+### Scope
+
+This checkpoint selects `chapter_candidate_executor_service.rs` as the whole
+Rust candidate executor orchestration owner. The owner covers the generation
+-> word-budget repair -> pre-finalize targeted repair -> finalize ->
+post-finalize targeted repair -> follow-up targeted repair -> final projection
+stage order, while keeping stage dependencies injectable for focused tests,
+default wiring, production adapter, route gateway, and rollback boundaries.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_candidate_executor_service.py`
+- `backend/app/services/chapter_candidate_executor_wiring_service.py`
+- `backend/app/services/chapter_candidate_generation_service.py`
+- `backend/app/services/chapter_candidate_word_budget_repair_service.py`
+- `backend/app/services/chapter_candidate_targeted_final_repair_service.py`
+- `backend/app/services/chapter_candidate_finalize_service.py`
+
+No Python executor, wiring, generation, repair, or finalize file was frozen,
+repointed, deleted, or removed from the Python app in this checkpoint.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_candidate_executor_service.rs` now
+  publishes a focused test-only owner contract covering Python source-map
+  files, Rust owner/consumer files, entrypoints, full stage order, request
+  fields, runtime-state policy, targeted-repair policy, finalize policy,
+  dependency policy, validation boundary, active consumers, and rollback
+  boundary.
+- Focused tests assert the owner contract and preserve existing executor chain,
+  deferred post-finalize seed preference, and targeted-winner post-finalize
+  skip behavior.
+- Production executor orchestration behavior remains unchanged.
+
+### Validation
+
+- `cargo test services::chapter_candidate_executor_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-executor-owner-contract" -- --nocapture`
+  passed: 4 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-executor-owner-contract"`
+  passed with build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+
+### Next acceleration rule
+
+- Treat candidate executor orchestration as having explicit Rust owner
+  evidence.
+- Remaining completion work must move beyond manifest-only readiness and
+  owner-contract hardening: either add active-route/live owner-profile evidence
+  that consumes the candidate executor chain end-to-end, or perform an
+  explicitly approved Python source-map freeze/delete/repoint round.
+- Do not mark the migration goal complete solely because manifest readiness is
+  `python-fallback = 0`; source-map closeout and live owner-profile evidence
+  remain separate gates.
+
+## 2026-06-10 chapter_candidate active-route closeout audit
+
+### Scope
+
+This checkpoint selects `chapter_candidate_route_gateway_service.rs` as the
+candidate route-gateway closeout owner. It moves the candidate package beyond
+standalone owner-contract hardening by recording aggregate active-route
+evidence for the single-generation and batch-generation fallback-freeze smoke
+paths.
+
+### Source-map state
+
+Python rollback/source-map files remain present:
+
+- `backend/app/services/chapter_candidate_executor_wiring_service.py`
+- `backend/app/services/chapter_candidate_executor_service.py`
+- `backend/app/services/chapter_generation/stream/candidate_service.py`
+- `backend/app/services/compat/chapter_generation_route_compat_service.py`
+
+No Python source-map file was frozen, repointed, deleted, or removed in this
+checkpoint. Physical source-map closeout still requires explicit approval and
+a same-round rollback policy.
+
+### Rust owner evidence
+
+- `backend-rs/src/services/chapter_candidate_route_gateway_service.rs` now
+  publishes `active_route_closeout_evidence` in its owner contract.
+- The evidence names
+  `chapter-single-generation-active-gateway-fallback-freeze-candidate` and
+  `chapter-batch-generation-active-gateway-fallback-freeze-candidate` as the
+  active-route consumers of the candidate fallback-freeze path.
+- `physical_python_closeout_completed = false` remains part of the Rust
+  contract, so `python-fallback = 0` readiness is not treated as final
+  completion.
+- Production gateway behavior is unchanged.
+
+### Validation
+
+- `cargo test services::chapter_candidate_route_gateway_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-live-owner-audit" -- --nocapture`
+  passed: 10 tests.
+- `cargo test services::chapter_single_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-live-owner-audit" -- --nocapture`
+  passed: 6 tests.
+- `cargo test services::chapter_batch_generation_active_gateway_smoke_service --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-live-owner-audit" -- --nocapture`
+  passed: 5 tests.
+- `cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-candidate-live-owner-audit"`
+  passed with build artifacts on E drive.
+- `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
+  passed with readiness `rust = 150`, `python-fallback = 0`.
+- `python backend/tools/run_strangler_gateway_smoke.py --profile phase5-chapters-candidate-gateway-owner --http-timeout 3`
+  failed because `127.0.0.1:8005` was not running. Treat this as the remaining
+  live HTTP owner-profile blocker, not as a Rust owner failure.
+
+### Next acceleration rule
+
+- Treat candidate route-gateway active-route evidence as present at Rust
+  focused-test level.
+- Do not add more candidate helper contracts unless a concrete owner gap
+  appears.
+- The next meaningful acceleration step is either starting the Rust backend and
+  running the dedicated HTTP owner profiles, or performing the explicitly
+  approved Python source-map freeze/repoint/delete closeout.
+
+## 2026-06-10 chapter_candidate live owner-profile closeout
+
+### Scope
+
+This checkpoint closes the previous live HTTP evidence gap for the candidate
+route gateway package. The Rust owner chain was already present at focused-test
+and manifest-only level; this round made the dedicated owner profiles pass
+against a running Rust backend on `127.0.0.1:8005`.
+
+### Delta
+
+- `backend-rs/src/middleware/auth.rs` now allows the registered Rust health
+  smoke endpoints as public readiness probes, including the batch active
+  gateway and regeneration stream workflow smoke paths.
+- `deploy/strangler-gateway-probes.json` now validates the live batch active
+  gateway owner chain instead of the older shortened owner list.
+- The batch profile failure sequence is now resolved:
+  first the endpoint was blocked by auth `401`, then manifest expected JSON
+  lagged behind the Rust readiness payload, and finally the profile passed
+  with HTTP 200 after both boundaries were aligned.
+
+### Evidence
+
+- Focused Rust tests passed for `middleware::auth`, `api::health`, and
+  `services::chapter_batch_generation_active_gateway_smoke_service`.
+- `cargo check` passed with target artifacts under
+  `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-batch-live-owner-profile`.
+- Live owner profiles passed:
+  `phase5-batch-generation-owner`,
+  `phase5-chapters-candidate-gateway-owner`, and
+  `phase5-single-generation-owner`.
+- Manifest-only validation still reports readiness `rust = 150`,
+  `python-fallback = 0`.
+
+### Planning impact
+
+- Treat candidate route-gateway active-route evidence as live HTTP verified,
+  not merely focused-test verified.
+- Do not spend the next migration round adding more smoke/readiness helper
+  contracts for this same owner unless a new live gap appears.
+- The remaining meaningful closeout gate is physical Python source-map
+  freeze/repoint/delete, or an explicit planning decision to defer that
+  source-map cleanup while Rust remains the active traffic owner.
+
+## 2026-06-10 chapter_regeneration live owner-profile closeout
+
+### Scope
+
+This checkpoint closes a whole `chapter_regeneration` live owner profile. It
+validates Rust-owned full regeneration stream, partial regeneration stream,
+apply partial regeneration, regeneration tasks, logged-in not-found shells,
+fixture import/list/delete, and settings configuration through the dedicated
+`phase5-chapter-regeneration-owner` profile.
+
+### Delta
+
+- The previous blocker was environment/schema setup, not a Rust regeneration
+  route failure: with no `DATABASE_URL`, the Rust dev backend falls back to
+  `sqlite::memory:` and has no `user_passwords` table for local auth.
+- A temporary SQLite smoke DB was migrated with Alembic and reused by the Rust
+  backend through `DATABASE_URL=sqlite://...`.
+- `PYTHONIOENCODING=utf-8` is required for this migration path on Windows
+  because SQLite seed migrations print Unicode output.
+- The manifest body for
+  `chapter-regeneration-partial-stream-logged-in-not-found-rust` now includes
+  the required partial-regeneration request fields, so the probe validates the
+  Rust not-found access boundary instead of Axum JSON deserialization.
+
+### Evidence
+
+- Live profile `phase5-chapter-regeneration-owner` passed: 13/13 Rust probes.
+- Focused Rust tests passed:
+  `api::chapter_regeneration_routes` -> 7 tests,
+  `services::chapter_regeneration` -> 57 tests.
+- `cargo check` passed with build artifacts under
+  `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/chapter-regeneration-live-owner-profile`.
+- Manifest-only validation still reports readiness `rust = 150`,
+  `python-fallback = 0`.
+
+### Planning impact
+
+- Treat `chapter_regeneration` as live HTTP verified for active Rust route
+  ownership.
+- Do not count this as physical Python source deletion. Python regeneration
+  source-map files remain present for rollback/reference until an explicit
+  freeze/repoint/delete round is approved.
+- Future logged-in live owner profiles should use an explicit migrated DB and
+  E-drive target dir by default to avoid repeating schema and C-drive storage
+  blockers.
+
+## 2026-06-10 settings business live owner-profile closeout
+
+### Scope
+
+This checkpoint closes the `settings` logged-in business owner profile. It
+validates Rust-owned settings and preset workflows through
+`phase5-settings-business-owner`, including state-changing preset operations
+and API probe failure shells.
+
+### Evidence
+
+- Live profile `phase5-settings-business-owner` passed: 14/14 Rust probes.
+- The profile validates settings get, presets list, settings test,
+  function-calling check, preset create/update/test/activate/delete,
+  active-preset deactivation through settings update, list-after-deactivate,
+  create-from-current, and cleanup delete.
+- Focused Rust tests passed:
+  `api::settings` -> 33 tests,
+  `services::settings` -> 37 tests.
+- `cargo check` passed with build artifacts under
+  `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/settings-business-owner-profile`.
+- Manifest-only validation still reports readiness `rust = 150`,
+  `python-fallback = 0`.
+
+### Planning impact
+
+- Treat `settings` as live HTTP verified for logged-in Rust business
+  ownership, not merely auth-guard manifest coverage.
+- No source-map physical closeout happened in this checkpoint. Python settings
+  files remain rollback/reference material until an explicit
+  freeze/repoint/delete round is approved.
+- Future acceleration should move to the next whole business owner profile or
+  source-map closeout gate instead of adding more settings-only helper
+  contracts.
+
+## 2026-06-10 projects business live owner-profile closeout
+
+### Scope
+
+This checkpoint closes the `projects` logged-in business owner profile. It
+upgrades projects evidence from mostly auth-guard/public validation probes to a
+dedicated logged-in business flow through `phase5-projects-business-owner`.
+
+### Evidence
+
+- Added 9 Rust business probes to `deploy/strangler-gateway-probes.json`:
+  create, list, detail, update, JSON export, consistency check, organization
+  fix, member-count fix, and delete.
+- Live profile `phase5-projects-business-owner` passed: 9/9 Rust probes.
+- Focused Rust tests passed:
+  `api::projects` -> 30 tests,
+  `services::project` -> 36 tests.
+- `cargo check` passed with build artifacts under
+  `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/projects-business-owner-profile`.
+- Manifest-only validation passed with readiness `rust = 159`,
+  `python-fallback = 0`, and `projects` route group probe count at 21.
+
+### Planning impact
+
+- Treat `projects` as live HTTP verified for logged-in Rust business
+  ownership, not merely route/auth-guard ownership.
+- No source-map physical closeout happened in this checkpoint. Python projects
+  files remain rollback/reference material until an explicit
+  freeze/repoint/delete round is approved.
+- Do not add more projects smoke-only helper contracts unless a new business
+  gap appears. Future acceleration should move to the next whole business
+  owner profile or the explicit source-map closeout gate.
+
+## 2026-06-11 memories business live owner-profile closeout
+
+### Scope
+
+本检查点关闭 `memories` 登录态 business owner profile。它把 `memories`
+从“只有 Rust owner/auth-guard probe”推进到“Rust API owner 已通过真实业务流
+验证”：导入 fixture 项目与章节，读取章节 memory，执行 SQL fallback search，
+读取 analysis，验证 stats / foreshadows / delete side effect，并清理项目。
+
+本轮没有冻结、改指向或删除 Python source-map 文件：
+
+- `backend/app/api/memories.py`
+- `backend/app/models/memory.py`
+- `backend/app/services/memory_service.py`
+- `backend/app/services/memory_ranking.py`
+
+### Evidence
+
+- `deploy/strangler-gateway-probes.json` 新增
+  `phase5-memories-business-owner`，包含 10 条 Rust business probes。
+- Live profile `phase5-memories-business-owner` passed: 10/10 Rust probes。
+- Focused Rust tests passed:
+  `api::memories` -> 18 tests，
+  `services::memories` -> 6 tests。
+- `cargo check` passed with build artifacts under
+  `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/memories-business-owner-profile`。
+- Manifest-only validation passed with readiness `rust = 169`、
+  `python-fallback = 0`；`memories` 现在共有 16 条 probes，其中 10 条为
+  business owner probes。
+- Smoke DB 使用 `tmp/smoke/memories-business-owner-runtime/` 下的迁移后
+  SQLite；Rust backend smoke 后已停止，`127.0.0.1:8005` 无残留 listener。
+
+### Planning impact
+
+- `memories` 现在按 `/api/memories/*` Rust API owner 口径视为登录态业务流
+  已验证，不再安排更多 micro-smoke 或 helper seam。
+- `/memories/` 仍是独立非 API Python 页面边界，后续应单独评估
+  deprecation / redirect / page fallback 策略，不能与 `/api/memories/*`
+  source-map closeout 混在一轮。
+- 空 query + type / importance filter 是普通 route-owner smoke 的推荐路径；
+  非空 query 会进入 vector/embedding/settings 依赖，应作为 AI/vector 集成
+  smoke 单独规划。
+- 下一步迁移提速应选择：显式 source-map freeze/repoint/delete 审批收口，
+  或切到下一个整块 business owner profile。
+
+## 2026-06-11 users business live owner-profile closeout
+
+### Scope
+
+本检查点关闭 `users` 登录态 business owner profile。它把 `users` 从
+“整路由 Rust owner contract + auth-guard probes”推进到“Rust API owner 已
+通过真实登录态用户管理业务流验证”：当前用户、用户列表、用户详情、授予/撤销
+管理员、重置密码、删除用户。
+
+本轮没有冻结、改指向或删除 Python source-map 文件：
+
+- `backend/app/api/users.py`
+- `backend/app/models/user.py`
+- `backend/app/schemas/user.py`
+- `backend/app/services/user_service.py`
+- `backend/app/services/password_service.py`
+
+### Evidence
+
+- `deploy/strangler-gateway-probes.json` 新增
+  `phase5-users-business-owner`。该 profile 包含 1 条 Rust
+  `/api/auth/register` fixture probe 和 7 条 Rust `/api/users/*` business
+  probes。
+- Live profile `phase5-users-business-owner` passed: 8/8 probes。真正计入
+  `users` route group 的 business probes 为 7 条。
+- Focused Rust tests passed:
+  `api::users` -> 2 tests，
+  `services::user_` -> 37 tests。
+- `cargo check` passed with build artifacts under
+  `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/users-business-owner-profile`。
+- Manifest-only validation passed with readiness `rust = 177`、
+  `python-fallback = 0`；`users` 现在共有 11 条 probes，其中 7 条为
+  business owner probes，并具备 dedicated owner profile。
+- Smoke DB 使用
+  `tmp/smoke/users-business-owner-runtime/users-business-owner-20260611-012312.sqlite`；
+  Rust backend smoke 后已停止，`127.0.0.1:8005` 无残留 listener。
+
+### Planning impact
+
+- `users` 现在按 `/api/users/*` Rust API owner 口径视为登录态业务流已验证，
+  不再安排更多 users micro-smoke 或 helper seam。
+- `auth/register` fixture probe 仅用于构造目标用户，不计入 users route group
+  owner 进度；真正 owner 证据来自 `/api/users/*` 7 条业务 probes。
+- Python users source-map 文件仍保留为 rollback/reference。后续若要物理收口，
+  需要显式审批 source-map freeze/repoint/delete。
+- 下一步迁移提速应选择：users source-map closeout 审批、`auth` 独立业务
+  owner profile，或切到 `background_tasks` / `wizard-stream` 等整块 owner。
+
+## 2026-06-11 background_tasks business live owner-profile closeout
+
+### Scope
+
+本检查点关闭 `background_tasks` 登录态 business owner profile。它把
+`background_tasks` 从“Rust route owner + auth-guard probes”推进到“Rust
+API/runtime owner 已通过真实登录态任务生命周期边界验证”：创建任务、列表、
+详情、workflow-state 更新、缺失任务详情、缺失任务取消、缺失任务
+workflow-state 更新。
+
+本轮没有冻结、改指向或删除 Python source-map 文件：
+
+- `backend/app/api/background_tasks.py`
+- `backend/app/services/task_service.py`
+- `backend/app/services/chapter_generation/*`
+
+### Evidence
+
+- `deploy/strangler-gateway-probes.json` 新增
+  `phase5-background-tasks-business-owner`，包含 7 条 Rust business probes。
+- Live profile `phase5-background-tasks-business-owner` passed: 7/7 Rust
+  probes。
+- Focused Rust tests passed:
+  `api::background_tasks` -> 3 tests，
+  `services::background_task` -> 9 tests。
+- `cargo check` passed with build artifacts under
+  `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/background-tasks-business-owner-profile`。
+- Manifest-only validation passed with readiness `rust = 184`、
+  `python-fallback = 0`；`background_tasks` 现在共有 9 条 probes，其中 7 条为
+  business owner probes，并具备 dedicated owner profile。
+- Smoke DB 使用
+  `tmp/smoke/background-tasks-business-owner-runtime/background-tasks-business-owner-20260611-013518.sqlite`；
+  Rust backend smoke 后已停止，`127.0.0.1:8005` 无残留 listener。
+
+### Planning impact
+
+- `background_tasks` 现在按 `/api/background-tasks*` Rust route/runtime owner
+  口径视为登录态业务流已验证，不再安排更多 create/list/detail/workflow-state
+  micro-smoke。
+- 该 profile 故意创建不受支持的 task type，以避免 AI/provider 成功依赖；
+  异步失败不影响本 owner closeout，因为 smoke 目标是 route/registry/
+  checkpoint/error-shell 边界。
+- SSE stream content 尚未作为本轮 owner 证据关闭。后续如需更强证明，应作为
+  `background_tasks` SSE 专项 stronger smoke，而不是回到 same-path Python
+  fallback 统计。
+- Python background task source-map 文件仍保留为 rollback/reference。后续若要
+  物理收口，需要显式审批 source-map freeze/repoint/delete。
+- 下一步迁移提速应选择：`background_tasks` source-map closeout 审批、SSE
+  stream 专项 smoke，或切到 `wizard-stream` / `book_import` / `characters`
+  等整块 business owner profile。
+
+## 2026-06-11 book_import business live owner-profile closeout
+
+### Scope
+
+本检查点关闭 `book_import` 登录态 business owner profile。它把
+`book_import` 从“Rust route owner + auth-guard probes”推进到“Rust
+API/service owner 已通过登录态拆书导入边界验证”：真实 TXT multipart 创建任务、
+任务状态读取、终态取消壳、缺失任务 status / preview / apply JSON 错误壳，以及
+retry-stream / apply-stream SSE 错误壳。
+
+本轮没有冻结、改指向或删除 Python source-map 文件：
+
+- `backend/app/api/book_import.py`
+- `backend/app/services/book_import_service.py`
+- `backend/app/schemas/book_import.py`
+
+### Evidence
+
+- `deploy/strangler-gateway-probes.json` 新增
+  `phase5-book-import-business-owner`，包含 8 条 Rust business probes。
+- Live profile `phase5-book-import-business-owner` passed: 8/8 Rust probes。
+- Focused Rust tests passed:
+  `api::book_import` -> 2 tests，
+  `services::book_import` -> 19 tests。
+- `cargo check` passed with build artifacts under
+  `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/book-import-business-owner-profile`。
+- Manifest-only validation passed with readiness `rust = 192`、
+  `python-fallback = 0`；`book_import` 现在共有 15 条 probes，其中 8 条为
+  business owner probes，并具备 dedicated owner profile。
+- Smoke DB 使用
+  `tmp/smoke/book-import-business-owner-runtime/book-import-business-owner-20260611-015423.sqlite`；
+  Rust backend smoke 后已停止，`127.0.0.1:8005` 无残留 listener。
+
+### Planning impact
+
+- `book_import` 现在按 `/api/book-import*` Rust route/service owner 口径视为
+  登录态业务边界已验证，不再安排更多 create/status/cancel/missing/stream-error
+  micro-smoke。
+- 本轮 intentionally 不把 provider-backed apply/apply-stream 成功导入链算入普通
+  owner closeout，因为该路径依赖 settings / AI provider。后续如需更强证明，应作为
+  provider-backed integration smoke 单独规划。
+- Python book_import source-map 文件仍保留为 rollback/reference。后续若要物理
+  收口，需要显式审批 source-map freeze/repoint/delete。
+- 下一步迁移提速应选择：`book_import` source-map closeout 审批、provider-backed
+  import success smoke，或切到 `wizard-stream` / `characters` / `outlines`
+  等整块 business owner profile。
+
+## 2026-06-11 characters business live owner-profile closeout
+
+### Scope
+
+本检查点关闭 `characters` 登录态 business owner profile。它把
+`characters` 从“Rust route owner + auth-guard / public validation probes”
+推进到“Rust API/service owner 已通过登录态 CRUD、列表、导入导出和缺失资源
+错误壳验证”。
+
+本轮没有冻结、改指向或删除 Python source-map 文件：
+
+- `backend/app/api/characters.py`
+- `backend/app/models/character.py`
+- `backend/app/schemas/character.py`
+- `backend/app/services/auto_character_service.py`
+- `backend/app/services/character_context_service.py`
+- `backend/app/services/character_state_update_service.py`
+
+### Evidence
+
+- `deploy/strangler-gateway-probes.json` 新增
+  `phase5-characters-business-owner`，包含 12 条 Rust probes。
+- Live profile `phase5-characters-business-owner` passed: 12/12 Rust probes；
+  其中 11 条为 `/api/characters/*` business probes，1 条 `/api/projects`
+  probe 只用于构造项目 fixture，不计入 `characters` business owner 证据。
+- 该 profile 覆盖 create、query list、project-path list、detail、update、
+  export、validate-import、import、delete、missing detail、missing
+  import-project。
+- Focused Rust tests passed:
+  `api::characters` -> 2 tests，
+  `services::character` -> 0 matching tests。
+- `cargo check` passed with build artifacts under
+  `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/characters-business-owner-profile`。
+- Manifest-only validation passed with readiness `rust = 204`、
+  `python-fallback = 0`；`characters` 现在共有 18 条 probes，其中 11 条为
+  business owner probes，并具备 dedicated owner profile。
+- Smoke DB 使用
+  `tmp/smoke/characters-business-owner-runtime/characters-business-owner-20260611-021535.sqlite`；
+  Rust backend smoke 后已停止，`127.0.0.1:8005` 无残留 listener。
+
+### Planning impact
+
+- `characters` 现在按 `/api/characters*` Rust route/service owner 口径视为
+  登录态业务边界已验证，不再安排更多 CRUD/list/import/export/delete
+  micro-smoke。
+- 本轮 intentionally 不把 provider-backed `generate` / `generate-stream` 成功
+  路径算入普通 owner closeout，因为该路径依赖 settings / AI provider。后续如需
+  更强证明，应作为 provider-backed integration smoke 单独规划。
+- Python characters source-map 文件仍保留为 rollback/reference。后续若要物理
+  收口，需要显式审批 source-map freeze/repoint/delete。
+- 下一步迁移提速应选择：`characters` source-map closeout 审批、
+  provider-backed generation success smoke，或切到 `wizard-stream` /
+  `outlines` / `auth` 等整块 business owner profile。
+
+## 2026-06-11 auth business live owner-profile closeout
+
+### Scope
+
+本检查点关闭 `auth` 登录态 business owner profile。它把 `auth` 从
+“Rust route owner + public/failure/auth-boundary probes”推进到“Rust
+API/middleware/service owner 已通过登录态注册、登录、cookie/JWT、当前用户、
+密码生命周期、refresh 与 logout 业务边界验证”。
+
+本轮没有冻结、改指向或删除 Python source-map 文件：
+
+- `backend/app/api/auth.py`
+- `backend/app/middleware/auth_middleware.py`
+- `backend/app/user_manager.py`
+- `backend/app/user_password.py`
+- `backend/app/services/oauth_service.py`
+- `backend/app/services/integrations/oauth_service.py`
+
+### Evidence
+
+- `deploy/strangler-gateway-probes.json` 已为 `auth` 增加并标记
+  `phase5-auth-business-owner`，覆盖 16 条 Rust business probes。
+- Live profile `phase5-auth-business-owner` passed: 16/16 Rust probes。
+- 该 profile 覆盖 public config/logout、LinuxDo URL misconfig、callback
+  missing-code、invalid local/bind login shell，以及 register、local-login
+  success、bind-login success、current-user、password status、set-password、
+  status-after-set、initialize-existing error shell、refresh、logout。
+- local/bind login 成功 probes 验证自身响应与 `Set-Cookie: token=`；
+  `requires_login` probes 仍使用 smoke runner 的 bootstrap local-auth cookie。
+- Focused Rust tests passed:
+  `api::auth` -> 5 tests，
+  `services::auth` -> 4 tests，
+  `auth_password_workflow_service` -> 4 tests。
+- `cargo check` passed with build artifacts under
+  `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/auth-business-owner-profile`。
+- Manifest-only validation passed with readiness `rust = 228`、
+  `python-fallback = 0`；`auth` 现在共有 21 条 probes，其中 16 条为
+  business owner probes，并具备 dedicated owner profile。
+- Smoke DB 使用
+  `tmp/smoke/auth-business-owner-runtime/auth-business-owner-20260611-024405.sqlite`；
+  Rust backend smoke 后已停止，`127.0.0.1:8005` 无残留 listener。
+
+### Planning impact
+
+- `auth` 现在按 `/api/auth/*` Rust route/middleware/service owner 口径视为
+  登录态业务边界已验证，不再安排更多 public/failure/auth-guard micro-smoke。
+- 本轮 intentionally 不把 provider-backed LinuxDo OAuth callback success 算入普通
+  owner closeout，因为该路径依赖外部 provider/config。后续如需更强证明，应作为
+  provider-backed OAuth integration smoke 单独规划。
+- Python auth source-map 文件仍保留为 rollback/reference。后续若要物理收口，
+  需要显式审批 source-map freeze/repoint/delete。
+- 下一步迁移提速应选择：`auth` source-map closeout 审批、
+  provider-backed OAuth success smoke，或切到 `wizard-stream` /
+  `organizations` / `relationships` / `foreshadows` 等整块 business owner
+  profile。
+
+## 2026-06-11 wizard-stream business live owner-profile closeout
+
+### Scope
+
+本检查点关闭 `wizard-stream` 登录态 SSE business owner profile。它把
+`wizard-stream` 从“Rust route owner + auth-guard probes”推进到“Rust
+API/service/SSE owner 已通过登录态 world-building、regenerate、
+career-system、characters、outline、cleanup 路由入口验证”。
+
+本轮没有冻结、改指向或删除 Python source-map 文件：
+
+- `backend/app/api/wizard_stream.py`
+- `backend/app/services/background_task_wizard_executor.py`
+
+### Evidence
+
+- `deploy/strangler-gateway-probes.json` 新增
+  `phase5-wizard-stream-business-owner`，包含 7 条 Rust probes。
+- Live profile `phase5-wizard-stream-business-owner` passed: 7/7 Rust probes；
+  其中 6 条为 `/api/wizard-stream/*` business probes，1 条 `/api/projects`
+  probe 只用于构造项目 fixture，不计入 `wizard-stream` business owner 证据。
+- 该 profile 覆盖 world-building、world-building regenerate、
+  career-system、characters、outline、cleanup 六个 SSE route entry。
+- 生成类 probes 验证无 settings/provider config 时的稳定 `AI配置失败` SSE
+  error shell；cleanup probe 验证真实项目上的成功 `result` / `done` SSE path。
+- Focused Rust tests passed:
+  `api::wizard` -> 2 tests，
+  `services::wizard` -> 10 tests。
+- `cargo check` passed with build artifacts under
+  `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/wizard-stream-business-owner-profile`。
+- Manifest-only validation passed with readiness `rust = 235`、
+  `python-fallback = 0`；`wizard-stream` 现在共有 13 条 probes，其中 6 条为
+  business owner probes，并具备 dedicated owner profile。
+- Smoke DB 使用
+  `tmp/smoke/wizard-stream-business-owner-runtime/wizard-stream-business-owner-20260611-030111.sqlite`；
+  Rust backend smoke 后已停止，`127.0.0.1:8005` 无残留 listener。
+
+### Planning impact
+
+- `wizard-stream` 现在按 `/api/wizard-stream/*` Rust route/service/SSE owner
+  口径视为登录态 SSE 边界已验证，不再安排更多 auth-guard 或 error-shell
+  micro-smoke。
+- 本轮 intentionally 不把 provider-backed wizard generation success 算入普通
+  owner closeout，因为该路径依赖 settings / AI provider。后续如需更强证明，应作为
+  provider-backed wizard integration smoke 单独规划。
+- Python wizard source-map 文件仍保留为 rollback/reference。后续若要物理收口，
+  需要显式审批 source-map freeze/repoint/delete。
+- 下一步迁移提速应选择：`wizard-stream` source-map closeout 审批、
+  provider-backed wizard success smoke，或切到 `organizations` /
+  `relationships` / `foreshadows` / `writing_styles` 等整块 business owner
+  profile。
+
+## 2026-06-11 writing_styles business live owner-profile closeout
+
+### Scope
+
+本检查点关闭 `writing_styles` 登录态 business owner profile。它把
+`writing_styles` 从“Rust route owner + auth-guard probes”推进到“Rust
+API/service/model owner 已通过登录态写作风格业务流验证”：preset 同步、
+user/project 列表、项目默认风格初始化、自定义风格 CRUD、默认风格切换、
+删除和缺失风格错误壳。
+
+本轮没有冻结、改指向或删除 Python source-map 文件：
+
+- `backend/app/api/writing_styles.py`
+- `backend/app/models/writing_style.py`
+- `backend/app/models/project_default_style.py`
+- `backend/app/schemas/writing_style.py`
+- `backend/app/services/writing_style_sync_service.py`
+
+### Evidence
+
+- `deploy/strangler-gateway-probes.json` 新增并修正
+  `phase5-writing-styles-business-owner`，包含 13 条 Rust probes。
+- Live profile `phase5-writing-styles-business-owner` passed: 13/13 Rust
+  probes；其中 12 条为 `/api/writing-styles*` business probes，1 条
+  `/api/projects` probe 只用于构造项目 fixture，不计入 `writing_styles`
+  business owner 证据。
+- 该 profile 覆盖 presets list、user list、project list、project
+  initialize、create、detail、update、set-default custom、project list after
+  default、reset default to preset、delete、missing detail。
+- presets list probe 使用登录态，因为当前 Rust 部署栈在进入 handler 前已应用
+  `/api` auth boundary；这与 route handler 不消费 claims 不冲突。
+- Focused Rust tests passed:
+  `api::writing_styles` -> 2 tests，
+  `services::writing_style` -> 8 tests。
+- `cargo check` passed with build artifacts under
+  `E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/writing-styles-business-owner-profile`。
+- Manifest-only validation passed with readiness `rust = 248`、
+  `python-fallback = 0`；`writing_styles` 现在共有 15 条 probes，其中 12 条为
+  business owner probes，并具备 dedicated owner profile。
+- Smoke DB 使用
+  `tmp/smoke/writing-styles-business-owner-runtime/writing-styles-business-owner-20260611-040705.sqlite`；
+  Rust backend smoke 后已停止，`127.0.0.1:8005` 无残留 listener。
+
+### Planning impact
+
+- `writing_styles` 现在按 `/api/writing-styles*` Rust route/service/model
+  owner 口径视为登录态业务边界已验证，不再安排更多 list/default/CRUD
+  micro-smoke。
+- 本轮 intentionally 不把 AI/provider 生成消费链算入 writing_styles 普通 owner
+  closeout；写作风格自身的 owner 证据来自数据库 CRUD/default 语义，provider-backed
+  消费应由对应 generation route group 单独验证。
+- Python writing style source-map 文件仍保留为 rollback/reference。后续若要物理
+  收口，需要显式审批 source-map freeze/repoint/delete。
+- 下一步迁移提速应选择：`writing_styles` source-map closeout 审批，或切到
+  `relationships` / `foreshadows` / `organizations` / `careers` 等整块
+  business owner profile。

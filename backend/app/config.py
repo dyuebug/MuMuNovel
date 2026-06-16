@@ -112,6 +112,31 @@ class Settings(BaseSettings):
     pre_generation_web_research_exa_enabled: bool = True
     pre_generation_web_research_grok_enabled: bool = True
     pre_generation_web_research_grok_search_enabled: bool = False
+
+    # 单章生成 Python 路由回滚开关
+    # 默认关闭：活跃流量由 Rust gateway owner 承接。
+    # 仅在显式回滚/对照验证时开启 Python 路由注册。
+    legacy_single_generation_python_routes_enabled: bool = False
+
+    # 批量生成 Python 路由回滚开关
+    # 默认关闭：批量生成活跃流量由 Rust route group 承接。
+    # 仅在显式回滚/对照验证时开启 Python 路由注册。
+    legacy_batch_generation_python_routes_enabled: bool = False
+
+    # 草稿 Python 路由回滚开关
+    # 默认关闭：Batch B 已 repoint，活跃流量由 Rust route group 承接。
+    # 仅在显式回滚/对照验证时开启 Python 路由注册。
+    legacy_chapter_draft_python_routes_enabled: bool = False
+
+    # 章节分析 Python 路由回滚开关
+    # 默认关闭：Batch B 已 repoint，活跃流量由 Rust route group 承接。
+    # 仅在显式回滚/对照验证时开启 Python 路由注册。
+    legacy_chapter_analysis_python_routes_enabled: bool = False
+
+    # 章节重写 Python 路由回滚开关
+    # 默认关闭：Batch B 已 repoint，活跃流量由 Rust route group 承接。
+    # 仅在显式回滚/对照验证时开启 Python 路由注册。
+    legacy_chapter_regeneration_python_routes_enabled: bool = False
     
     # LinuxDO OAuth2 配置
     LINUXDO_CLIENT_ID: Optional[str] = None

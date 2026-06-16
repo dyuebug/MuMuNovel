@@ -141,3 +141,4 @@ backend/.instance_id
 # Rust
 backend-rs/target/
 backend-rs/data/runtime/
+.codex-targets/

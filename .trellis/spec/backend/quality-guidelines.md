@@ -54,6 +54,277 @@ freezes a Python dependency, shrinks a fallback shell, clarifies Rust owner
 cutover, improves smoke coverage, clarifies rollback, or moves a schema
 assumption toward an explicit migration owner.
 
+### Fast-Execution Protocol for Rust Migration Rounds
+
+When the user asks to accelerate Python-to-Rust migration, do not spend a new
+round re-explaining the whole migration history. Use the latest task
+checkpoint as the source of truth and keep analysis bounded.
+
+Required round shape:
+
+1. State the selected package in one sentence.
+2. Confirm the Python source map and Rust owner map in at most five bullets.
+3. Edit the Rust owner as a whole file, function group, or module package.
+4. Run focused tests plus `cargo check` with an explicit non-`C:` target dir
+   when requested by the user or environment constraints.
+5. Record only the new delta, validation result, next owner boundary, and
+   rollback note.
+
+Analysis budget:
+
+- Do not re-read or restate old checkpoints unless a referenced file moved.
+- Do not enumerate every migrated Python route in normal implementation
+  rounds; use the migration table instead.
+- Do not do exploratory whole-backend scans when the active package is already
+  named and the owner files are known.
+- Use micro-analysis only to verify a concrete boundary, not to delay editing.
+
+Progress accounting:
+
+- Count as progress: a Rust route/service owner becomes more complete, a
+  Python fallback can be frozen/repointed/removed, a smoke/rollback gap closes,
+  or schema/startup assumptions move into an explicit Rust owner.
+- After manifest readiness reaches `python-fallback = 0`, do not use fallback
+  count as the primary progress metric. Count whole-module Rust owner closeout,
+  logged-in business smoke, rollback/freeze policy, and explicit source-map
+  deletion/freeze evidence instead.
+- Do not count as progress: renaming wrappers, moving a trivial helper, adding
+  tests with no owner change, or editing Python compatibility shells before
+  Rust owner validation.
+- If a runtime helper bridge is collapsed into a stronger Rust owner, update
+  the related wiring/readiness owner in the same migration lane. The readiness
+  map must name the real Rust owner files and must not keep deleted
+  forwarding-only bridge modules as target files.
+- If background task launch parts own task seed, startup snapshot, and runtime
+  input materialization, they should also own persistence/dispatch unless a
+  route or workflow file adds a real branch, validation boundary, or transport
+  contract. Do not leave task insert plus runtime spawn split across a weaker
+  write shell when the launch-parts owner is already the coherent Rust
+  production owner.
+- If a response projection module has only one production/smoke consumer and
+  does not own transport shaping, error translation, branch selection, or a
+  rollback knob, collapse it into the runtime/launch owner that already owns
+  the restored state and payload contract. Do not keep forwarding-only
+  response shells as migrated Rust target files.
+- If a terminal-state module only computes checkpoint patches, failed-chapter
+  entries, or quality-gate terminal labels for one runtime-state persistence
+  owner, collapse it into that runtime-state owner. Terminal persistence,
+  checkpoint merge, failed-chapter append, and smoke readiness labels should
+  name the real runtime owner instead of a forwarding-only terminal shell.
+- If a batch status stream only consumes owned read-state and emits the
+  route-facing SSE stream projection, collapse it into
+  `chapter_batch_generation_read_context_service.rs`. Do not recreate
+  `chapter_batch_generation_status_stream_service.rs`; read-state loading,
+  stream-state projection, cursor resolution, and SSE event materialization
+  are one read-context/status owner boundary unless a new transport, fallback,
+  rollback, or route branch appears.
+- If a batch owned-task query module only loads the owned task, snapshot, and
+  recovered read-state used by status, stream, resume, cancel, and route error
+  mapping, collapse it into `chapter_batch_generation_read_context_service.rs`.
+  Do not recreate `chapter_batch_generation_owned_task_query_service.rs`; the
+  shared task lookup/source/read-state error contract belongs with the
+  read-context owner unless it gains a separate schema, fallback, or transport
+  boundary.
+- If active single-generation smoke/readiness evidence is used for deploy or
+  fallback-shrink decisions, its manifest expectation must name the real Rust
+  route/workflow/runtime owner chain, not deleted projection shells. Do not keep
+  `chapter_single_generation_stream_success_response_service`,
+  `chapter_single_generation_background_response_service`, or
+  `chapter_single_generation_terminal_state_service` in
+  `deploy/strangler-gateway-probes.json` after those contracts have collapsed
+  into `chapter_single_generation_stream_workflow_service`,
+  `chapter_single_generation_runtime_restore_service`, and
+  `chapter_single_generation_runtime_state_service`.
+- If the shared candidate executor wiring plan is used for cutover readiness,
+  validation must reject retired Rust target files as well as missing current
+  owners. Do not keep `chapter_candidate_route_gateway_smoke_service.rs` after
+  smoke/readiness probes move into `chapter_candidate_route_gateway_service.rs`,
+  and do not keep `chapter_candidate_executor_runtime_adapter_service.rs` after
+  runtime quality/provider/record bridges collapse into the production adapter,
+  default dependency, quality adapter, provider stream, and record owners.
+- The `chapter-candidate-route-gateway-smoke-rust` manifest probe is the
+  measurable `chapters` candidate gateway business/cutover readiness signal.
+  Keep its `business` profile, dedicated
+  `phase5-chapters-candidate-gateway-owner` profile, Rust owner path, Python
+  fallback path, fallback-freeze candidate path, and
+  `python_candidate_executor_fallback` rollback boundary together unless a
+  stronger real route smoke replaces it. Do not downgrade it back to
+  deploy-only evidence while the active route still depends on this
+  gateway/fallback decision. The fallback-freeze candidate must validate
+  `rust_executor_enabled = true` and `fallback_on_rust_error = false`, but
+  `python_fallback_removal_ready` must stay false until the active route smoke
+  consumes that configuration and the Python compatibility shell is explicitly
+  frozen, repointed, or removed.
+- The `chapter-single-generation-active-gateway-smoke-rust` manifest probe is
+  the measurable active-route consumer for the single-generation gateway
+  cutover chain. Once the active-route smoke validates both
+  `chapter-single-generation-active-gateway-rust-owner` and
+  `chapter-single-generation-active-gateway-fallback-freeze-candidate`, do not
+  restore `chapter-single-generation-active-gateway-direct-fallback` as
+  readiness evidence. Rollback stays available through deployment/AppConfig
+  gateway configuration, not through a health/readiness probe that still
+  exercises the Python direct fallback path. The fallback-freeze probe must
+  validate the active route consuming `rust_executor_enabled = true`,
+  `fallback_on_rust_error = false`, and
+  `python_fallback_removal_ready = true`.
+- Once active-route fallback-freeze smoke exists, do not keep auth-guard-only
+  Python fallback manifest probes for the same single-generation stream and
+  background routes. `chapters-generate-background-auth-guard-python-fallback`
+  and `chapters-generate-stream-auth-guard-python-fallback` are retired
+  route-level fallback probes; the Rust `chapters-generate-background-*` and
+  `chapters-generate-stream-*` probes plus
+  `chapter-single-generation-active-gateway-smoke-rust` are the active cutover
+  evidence. The Python compatibility source file may remain as a rollback
+  source map, but the retired probes must not be reintroduced unless the Rust
+  route owner or active-route freeze smoke is rolled back in the same change.
+- Once single-generation active-route fallback-freeze is the production
+  readiness boundary, batch resume single-chapter dispatch must pass an
+  explicit `ChapterCandidateRouteGatewayConfig` from the route/AppConfig layer
+  into
+  `SingleGenerationRuntimeLifecyclePlan::from_runtime_launch_with_gateway_config`.
+  Do not use the default single-generation direct-fallback config in
+  production resume dispatch. The convenience
+  `default_single_generation_candidate_gateway_config` and
+  `SingleGenerationRuntimeLifecyclePlan::from_runtime_launch` helpers are
+  test-only rollback/source-map helpers unless a deliberate rollback changes
+  the production route config in the same change.
+- Once the single-generation stream route consumes
+  `ChapterCandidateRouteGatewayConfig`, the stream lifecycle owner must expose
+  only `SingleGenerationStreamLifecyclePlan::from_runtime_launch_with_gateway_config`.
+  Do not reintroduce a stream-side default `from_runtime_launch` constructor or
+  test helper that reaches `default_single_generation_candidate_gateway_config`;
+  stream tests should pass an explicit fallback-disabled gateway config so the
+  production route/AppConfig boundary stays visible.
+- Once batch active/stream/resume Rust auth-guard probes and the
+  `chapter_batch_generation` Rust route owner are validated, do not keep
+  auth-guard-only Python fallback manifest probes for that same route function
+  group. `chapters-batch-active-tasks-auth-guard-python-fallback`,
+  `chapters-batch-stream-auth-guard-python-fallback`, and
+  `chapters-batch-resume-auth-guard-python-fallback` are retired route-level
+  fallback probes; the Rust `chapters-batch-active-tasks-*`,
+  `chapters-batch-stream-*`, and `chapters-batch-resume-*` probes plus focused
+  `chapter_batch_generation` tests are the cutover evidence. The Python batch
+  route source may remain as a rollback/source map, but these retired probes
+  must not be reintroduced unless the Rust batch route owner or matching
+  focused tests are rolled back in the same change.
+- Once the regeneration tasks Rust auth-guard probe and focused
+  `chapter_regeneration` route/query tests are validated, do not keep the
+  auth-guard-only Python fallback manifest probe for
+  `/chapters/{chapter_id}/regeneration/tasks`.
+  `chapters-regeneration-tasks-auth-guard-python-fallback` is a retired
+  route-level fallback probe; `chapters-regeneration-tasks-auth-guard-rust`
+  plus the Rust `chapter_regeneration_routes` / `chapter_regeneration_query`
+  owner tests are the cutover evidence. Python regeneration route source may
+  remain as a rollback/source map, but this retired probe must not be
+  reintroduced unless the Rust regeneration route/query owner or matching
+  focused tests are rolled back in the same change.
+- Once the users route group Rust auth-guard probes cover current user, users
+  list, set-admin, and reset-password, do not keep auth-guard-only Python
+  fallback manifest probes for those same route functions.
+  `users-current-auth-guard-python-fallback`,
+  `users-list-auth-guard-python-fallback`,
+  `users-set-admin-auth-guard-python-fallback`, and
+  `users-reset-password-auth-guard-python-fallback` are retired route-group
+  fallback probes; `backend-rs/src/api/users.rs` plus the Rust
+  `users-current/list/set-admin/reset-password` probes are the readiness
+  evidence. `backend/app/api/users.py` may remain as a rollback/source map,
+  but these retired probes must not be reintroduced unless the Rust users route
+  owner or matching readiness probes are rolled back in the same change.
+- Once the book import route group Rust auth-guard probes cover create-task,
+  task-status, preview, cancel, apply, retry-stream, and apply-stream, do not
+  keep auth-guard-only Python fallback manifest probes for those same route
+  functions. `book-import-create-task-auth-guard-python-fallback`,
+  `book-import-task-status-auth-guard-python-fallback`,
+  `book-import-preview-auth-guard-python-fallback`,
+  `book-import-cancel-auth-guard-python-fallback`,
+  `book-import-apply-auth-guard-python-fallback`,
+  `book-import-retry-stream-auth-guard-python-fallback`, and
+  `book-import-apply-stream-auth-guard-python-fallback` are retired
+  route-group fallback probes; `backend-rs/src/api/book_import.rs` plus the
+  Rust `book-import-*` probes are the readiness evidence. Python book import
+  route/service/schema files may remain as rollback/source maps, but these
+  retired probes must not be reintroduced unless the Rust book import route
+  owner or matching readiness probes are rolled back in the same change.
+- Once the outlines route group Rust auth-guard probes cover project-list,
+  list, generate-stream, batch-expand-stream, and create-chapters-from-plans,
+  do not keep auth-guard-only Python fallback manifest probes for those same
+  route functions. `outlines-project-list-auth-guard-python-fallback`,
+  `outlines-list-auth-guard-python-fallback`,
+  `outlines-generate-stream-auth-guard-python-fallback`,
+  `outlines-batch-expand-stream-auth-guard-python-fallback`, and
+  `outlines-create-chapters-from-plans-auth-guard-python-fallback` are retired
+  route-group fallback probes; `backend-rs/src/api/outlines.rs` plus the Rust
+  `outlines-*` probes are the readiness evidence. Python outlines
+  route/model/schema/service files may remain as rollback/source maps, but
+  these retired probes must not be reintroduced unless the Rust outlines route
+  owner or matching readiness probes are rolled back in the same change.
+- Once the characters route group Rust auth-guard probes cover project-list,
+  list, generate-stream, export, and import, do not keep auth-guard-only Python
+  fallback manifest probes for those same regular route functions.
+  `characters-project-list-auth-guard-python-fallback`,
+  `characters-list-auth-guard-python-fallback`,
+  `characters-generate-stream-auth-guard-python-fallback`,
+  `characters-export-auth-guard-python-fallback`, and
+  `characters-import-auth-guard-python-fallback` are retired regular fallback
+  probes; `backend-rs/src/api/characters.rs` plus the Rust `characters-*`
+  regular route probes are the readiness evidence. Do not remove or count
+  `characters-validate-import-auth-guard-python-fallback` under this regular
+  fallback rule: it is asymmetric evidence paired with
+  `characters-validate-import-public-rust` for the public validation route
+  policy. Python characters route/model/schema/service files may remain as
+  rollback/source maps, but the retired regular probes must not be reintroduced
+  unless the Rust characters route owner or matching readiness probes are
+  rolled back in the same change.
+- Once the auth route group Rust probes cover config, logout, LinuxDo URL
+  misconfiguration, current user, password status/set/initialize, refresh,
+  callback missing-code, and invalid local/bind login, do not keep Python
+  fallback manifest probes for those same auth route functions.
+  `auth-logout-public-python-fallback`,
+  `auth-user-auth-guard-python-fallback`,
+  `auth-password-status-auth-guard-python-fallback`,
+  `auth-password-set-auth-guard-python-fallback`,
+  `auth-password-initialize-auth-guard-python-fallback`,
+  `auth-refresh-auth-guard-python-fallback`,
+  `auth-callback-missing-code-python-fallback`,
+  `auth-local-login-invalid-credentials-python-fallback`, and
+  `auth-bind-login-invalid-credentials-python-fallback` are retired auth
+  fallback probes; `backend-rs/src/api/auth.rs`,
+  `backend-rs/src/middleware/auth.rs`, and the Rust auth/password service
+  owners are the readiness evidence. Python auth route, middleware, user, and
+  password files may remain as rollback/source maps, but the retired auth
+  probes must not be reintroduced unless the Rust auth route/middleware owner
+  or matching readiness probes are rolled back in the same change.
+- Once the Rust public `characters-validate-import-public-rust` probe is the
+  accepted route policy for `/api/characters/validate-import`, do not restore
+  `characters-validate-import-auth-guard-python-fallback` unless that public
+  route policy or the Rust characters route owner is rolled back in the same
+  change. The Python characters files remain source maps / rollback
+  references; they are not active fallback readiness owners.
+- Once `backend-rs/src/api/router.rs` serves static assets and the SPA fallback
+  through `rust-spa-root`, do not restore `python-fallback-root` as a deploy,
+  route-groups, or business readiness owner unless the Rust static/SPA
+  fallback route is rolled back in the same change. The root path `/` is
+  deployment surface, not a business route group; it should not be counted as
+  route-group migration backlog after Rust owns the SPA root probe.
+- Once the analysis view and batch-analysis-status Rust auth-guard probes plus
+  focused `chapter_analysis` tests are validated, do not keep auth-guard-only
+  Python fallback manifest probes for those same analysis/query route function
+  groups. `chapters-analysis-auth-guard-python-fallback` and
+  `chapters-batch-analysis-status-auth-guard-python-fallback` are retired
+  route-level fallback probes; `chapters-analysis-auth-guard-rust`,
+  `chapters-batch-analysis-status-auth-guard-rust`, and focused
+  `chapter_analysis` tests are the cutover evidence. Python analysis route
+  source may remain as a rollback/source map, but these retired probes must
+  not be reintroduced unless the Rust analysis route/query owners or matching
+  focused tests are rolled back in the same change.
+
+Default validation target:
+
+```powershell
+cargo test <owner_filter> --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/<package-slug>" -- --nocapture
+cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/<package-slug>"
+```
+
 ## Scenario: Rust generated narrative cleaner owner
 
 ### 1. Scope / Trigger
@@ -180,7 +451,8 @@ fn build_generated_result(&self, response: AIResponse) -> Result<GeneratedChapte
   `ChapterCandidateOutputRequest { ai_service, prompt, system_prompt, tools,
   candidate_index, max_output_chars, runtime_state }`.
 - Expected output struct fields:
-  `ChapterCandidateOutput { full_content: String, chunks: Vec<String> }`.
+  `ChapterCandidateOutput { full_content: String, chunks: Vec<String>,
+  runtime_state: Option<Value> }`.
 - Expected progress callback payload:
   `ChapterCandidateOutputProgress { current_chars: usize, chunk_count: usize }`.
 - Required production consumer:
@@ -194,6 +466,16 @@ fn build_generated_result(&self, response: AIResponse) -> Result<GeneratedChapte
   `candidate_index`, `candidate_total`, `candidate_count`, `current_chars`,
   `word_count`, and `chunk_count` through
   `chapter_candidate_runtime_state_service.rs`.
+- The output owner must return the updated `runtime_state` snapshot with
+  `ChapterCandidateOutput` so generation, word-budget repair, targeted repair,
+  default dependency, and provider-stream owners can write provider progress
+  back to the active stage request instead of relying on Python polling or
+  heartbeat side effects.
+- Later record/finalize owners may legitimately overwrite final-progress fields
+  such as `current_chars` and `chunk_count` from the selected candidate record.
+  Tests that need provider-output pass-through evidence should assert a stable
+  provider field or a lower-level generation/repair handoff, not the final
+  record-synchronized value.
 - Stream chunks must be appended in order, preserving the returned chunk list
   unless final max-output truncation replaces the list with the trimmed full
   content.
@@ -240,6 +522,10 @@ fn build_generated_result(&self, response: AIResponse) -> Result<GeneratedChapte
   callback progress, runtime-state sync, non-object runtime-state replacement,
   stream error propagation, empty stream, and Unicode sentence-boundary
   truncation.
+- Focused generation, word-budget repair, targeted repair, provider stream, and
+  default dependency tests should cover `runtime_state` pass-through from
+  provider output back into the active request. Executor-level tests should also
+  cover the final record/finalize sync overwriting final-progress fields.
 - Unit tests in `chapter_narrative_cleaner_service.rs` for the trimming helper
   that stream-output uses.
 - Focused tests for the consuming stream owner, for example
@@ -1028,6 +1314,14 @@ fn insert_python_query_snapshot_runtime_fields(checkpoint: &mut Map<String, Valu
   neighboring `SingleGenerationStreamCompletionProjection` owner that only
   replays `analysis outcome -> completion/result/event emission` through one
   more file-local hop; collapse that empty seam back into the analysis owner.
+- Single-stream success-response file-collapse contract: if a standalone
+  stream success response module is consumed only by the single-chapter stream
+  workflow and active smoke readiness evidence, and it does not own route
+  normalization, transport branching, error mapping, feature flags, or a
+  rollback knob, collapse it back into the stream workflow owner. Keep focused
+  tests for quality metrics events, quality-gate events, result payload shape,
+  analysis-started event order, story-runtime contract attachment, and
+  complete/result/done emission beside the stream workflow owner.
 - Single-stream prepare-owner contract: if a single-chapter stream lane only
   needs the runtime launch input produced by the single-generation prepare
   boundary, it should consume that prepare owner directly instead of routing
@@ -2488,6 +2782,11 @@ fn insert_python_query_snapshot_runtime_fields(checkpoint: &mut Map<String, Valu
   - shell-level keys such as `success`, `message`, `error`, `error_type`,
     `suggestions`, `details`
   instead of requiring a real upstream provider success result
+- `memories` route-owner business smoke should use an empty search query plus
+  memory-type / importance filters when the goal is to prove the SQL fallback
+  business path without AI settings. A non-empty query enters the
+  vector/embedding path and must be treated as a separate settings/vector
+  integration smoke with explicit provider/settings setup.
 - Targeted validation commands:
   - `cargo test settings --manifest-path "backend-rs/Cargo.toml" -- --nocapture`
   - `cargo test settings_test_preset_request_service --manifest-path "backend-rs/Cargo.toml" -- --nocapture`
@@ -3194,25 +3493,46 @@ assert_eq!(readiness.external_formula_dependency_count, 0);
 ### 2. Signatures
 - Rust owner file:
   `backend-rs/src/services/chapter_candidate_executor_runtime_adapter_service.rs`.
+- Rust provider stream owner file:
+  `backend-rs/src/services/chapter_candidate_provider_stream_service.rs`.
+- Rust quality adapter and runtime callback owner file:
+  `backend-rs/src/services/chapter_candidate_quality_adapter_service.rs`.
+- Rust default dependency record mapping owner file:
+  `backend-rs/src/services/chapter_candidate_executor_default_dependency_service.rs`.
 - Expected owner functions:
   `generate_best_ranked_candidate_with_runtime_adapters(...)`.
 - Expected owner functions:
-  `resolve_default_candidate_provider_stream_request(...)`.
+  `collect_default_generation_candidate_output(...)` and
+  `resolve_default_candidate_provider_stream_request(...)` in the provider
+  stream owner.
 - Expected owner functions:
-  `build_default_generation_candidate_record(...)`.
+  `build_default_generation_candidate_record(...)` in the default dependency
+  owner.
 - Expected owner functions:
   `generate_best_ranked_candidate_with_runtime_quality_adapters(...)`.
 - Expected owner functions:
-  `build_runtime_quality_adapter_callbacks(...)`.
+  `build_runtime_quality_adapter_callbacks(...)` and
+  `with_locked_callback(...)` in the shared quality adapter owner.
 
 ### 3. Contracts
 - Runtime adapter must consume the Rust default dependency owner instead of
   reassembling generation, repair, finalize, or rerank dependencies.
 - Provider request resolution must preserve prompt, optional system prompt,
   tools payload, temperature override, max-token override, candidate index, and
-  max-output character limit.
-- Candidate record construction must call
-  `chapter_candidate_record_service.rs` and propagate record owner errors.
+  max-output character limit. This logic belongs in
+  `chapter_candidate_provider_stream_service.rs`, not in the runtime adapter.
+- Provider request resolution must reject non-finite temperature values before
+  constructing `AIService`. The error string must remain
+  `candidate provider temperature must be a finite number`.
+- `temperature` and `max_tokens` overrides may arrive as JSON numbers or
+  strings. `temperature` must parse to a finite `f64`; `max_tokens` must parse
+  to a positive `u32`.
+- Candidate record construction must call `chapter_candidate_record_service.rs`
+  through the default dependency owner and propagate record owner errors.
+- Default dependency record input mapping belongs beside
+  `ChapterCandidateDefaultRecordBuildInput` in
+  `chapter_candidate_executor_default_dependency_service.rs`, not in the
+  executor runtime adapter or a forwarding-only record bridge module.
 - Generation, word-budget repair, targeted repair, and default dependency
   owners must treat record callbacks as `Result<Value, String>` so sanitized
   empty content or workflow/meta text can stop the executor instead of being
@@ -3221,6 +3541,10 @@ assert_eq!(readiness.external_formula_dependency_count, 0);
   low-level tests, but production-oriented runtime wiring should prefer
   `ChapterCandidateQualityAdapter` through
   `generate_best_ranked_candidate_with_runtime_quality_adapters(...)`.
+- Runtime quality callback materialization and poisoned callback-lock recovery
+  belong in `chapter_candidate_quality_adapter_service.rs`; do not rebuild
+  those closures in routes, compat shells, production adapter, the executor
+  runtime adapter, or a forwarding-only bridge module.
 - This owner is still staged until a route/production adapter consumes it.
   Do not report Python candidate executor active path as retired solely
   because runtime adapters exist.
@@ -3228,6 +3552,10 @@ assert_eq!(readiness.external_formula_dependency_count, 0);
 ### 4. Validation & Error Matrix
 - Provider kwargs with prompt/system prompt/tools/temperature/max_tokens ->
   Rust provider request resolves those values and overrides `AIConfig` safely.
+- String temperature/max_tokens overrides -> Rust provider request parses them
+  and applies them before streaming.
+- Non-finite temperature override -> returns an adapter error before provider
+  streaming.
 - Invalid tools payload -> returns an adapter error before provider streaming.
 - Normal candidate record input -> Rust record owner returns enriched
   selection metadata.
@@ -3236,25 +3564,48 @@ assert_eq!(readiness.external_formula_dependency_count, 0);
 - Quality adapter input -> runtime adapter builds evaluator and gate-plan
   callbacks from `ChapterCandidateQualityAdapter` rather than requiring route
   or compat code to assemble two Python-style closures.
+- Poisoned callback lock -> `with_locked_callback(...)` recovers through the
+  shared quality adapter owner and continues invoking the callback.
 - Existing generation, word-budget repair, targeted repair, default dependency,
   wiring, and record owner tests remain green.
 
 ### 5. Good/Base/Bad Cases
-- Good: runtime adapter consumes default dependency owner, output owner, and
-  record owner, while validation proves record errors now propagate.
+- Good: runtime adapter consumes default dependency owner, provider stream
+  owner, shared quality adapter/callback owner, and record owner, while
+  validation proves record errors and callback behavior remain stable.
 - Base: staged runtime adapter exists but active Python route still calls the
   Python executor until a rollback-aware production adapter lands.
 - Bad: parse provider kwargs in a route or compat shell and call the Rust
   executor with ad-hoc closures.
+- Bad: move provider request parsing or runtime quality callback materialization
+  back into `chapter_candidate_executor_runtime_adapter_service.rs` after
+  dedicated Rust owners exist.
+- Bad: reintroduce `chapter_candidate_runtime_callback_bridge_service.rs` as a
+  forwarding-only module after the callback contract has been absorbed into
+  `chapter_candidate_quality_adapter_service.rs`.
+- Bad: move default record input mapping back into
+  `chapter_candidate_executor_runtime_adapter_service.rs` after the default
+  dependency owner owns the mapping.
+- Bad: reintroduce `chapter_candidate_runtime_record_bridge_service.rs` as a
+  forwarding-only module after the default record mapping has been absorbed
+  into `chapter_candidate_executor_default_dependency_service.rs`.
 - Bad: keep record callbacks infallible and unwrap record errors in tests.
 
 ### 6. Tests Required
 - Unit tests in
-  `chapter_candidate_executor_runtime_adapter_service.rs` for provider request
-  resolution, default record building, record error propagation, and
-  quality-adapter callback bridging.
+  `chapter_candidate_provider_stream_service.rs` for provider request
+  resolution, finite temperature validation, max-token validation, tools
+  parsing, and max-output conversion.
+- Unit tests in `chapter_candidate_quality_adapter_service.rs` for
+  quality-adapter callback bridging and poisoned-lock recovery.
+- Unit tests in `chapter_candidate_executor_default_dependency_service.rs` for
+  default record building and record error propagation.
 - Regression tests in generation, word-budget repair, targeted repair, default
   dependency, wiring, and record services after changing callback contracts.
+- Unit tests in `chapter_candidate_executor_wiring_service.rs` must prove that
+  provider stream, quality callback, and default record dependencies point to
+  their real Rust owner files. They should also keep deleted forwarding-only
+  bridge files out of the Rust target map.
 - `cargo check --manifest-path "backend-rs/Cargo.toml"` with a dedicated
   target dir when build artifacts must stay out of the workspace.
 
@@ -3461,9 +3812,16 @@ assert_eq!(readiness.external_formula_dependency_count, 0);
 - Smoke result metadata -> probe name, owner, route group, rollback boundary,
   Rust error, result payload, and runtime state remain available to a future
   deployment manifest or endpoint.
+- Smoke result readiness evidence -> covered Rust owners, Python source map,
+  gateway enablement/fallback flags, runtime owner chain, fallback metadata
+  fields, and next cutover gate remain observable from the service result.
 - Deployment endpoint -> returns status `ok`, owner `rust`, route group
   `chapters`, two probe results, and rollback boundary
   `python_candidate_executor_fallback`.
+- Deployment endpoint -> includes each probe's `readiness_evidence` so
+  deployment smoke can verify the provider stream, quality adapter, default
+  dependency, record owner, route gateway, production adapter, and runtime
+  adapter chain without calling the real provider.
 - Wiring readiness -> candidate executor wiring plan includes
   `route_gateway_smoke` before `route_gateway`.
 
@@ -3482,13 +3840,14 @@ assert_eq!(readiness.external_formula_dependency_count, 0);
 ### 6. Tests Required
 - Unit tests in `chapter_candidate_route_gateway_smoke_service.rs` for default
   probe construction, Rust-path smoke execution, Python-fallback smoke
-  execution, runtime-state updates, and metadata preservation.
+  execution, runtime-state updates, readiness evidence, and metadata
+  preservation.
 - Unit tests in `chapter_candidate_route_gateway_service.rs` must remain green
   because the smoke owner consumes the gateway contract.
 - Unit tests in `chapter_candidate_executor_wiring_service.rs` proving the
   `route_gateway_smoke` stage and target owner are part of the Rust package.
 - Unit tests in `health.rs` proving the endpoint exposes both smoke paths
-  without requiring a real provider.
+  and readiness evidence without requiring a real provider.
 - `deploy/strangler-gateway-probes.json` should include a `chapters` probe for
   `GET /health/chapter-candidate-route-gateway-smoke`.
 - `cargo check --manifest-path "backend-rs/Cargo.toml"` with a dedicated
@@ -3609,6 +3968,14 @@ assert_eq!(readiness.external_formula_dependency_count, 0);
   `project.world_rules`, and the computed quality runtime context.
 - Quality gate plan resolution remains injectable, but the Rust adapter must
   preserve retry count, max retries, current story repair payload, and scope.
+- The shared adapter must preserve the Python
+  `quality_gate_plan_builder(candidate_metrics, attempt_offset)` callback
+  contract by carrying `attempt_offset` through
+  `CandidateQualityGatePlanInput`. Do not drop this field in the Rust adapter
+  even if the current gate-plan logic does not use it for retry budgeting.
+- `attempt_offset` is contract/debug/readiness evidence, not retry budget.
+  Do not add it to `retry_count` unless the behavior change is deliberately
+  reviewed with route parity tests.
 - Non-object candidate metrics must be converted to `None` before gate-plan
   resolution, matching Python's `candidate_metrics if isinstance(..., dict)
   else None` behavior.
@@ -3975,7 +4342,6 @@ for step in success_artifacts.build_success_emission_plan(result) {
 - Runtime owner:
   `backend-rs/src/services/chapter_generation_runtime_service.rs`.
 - Stream/background owners:
-  `backend-rs/src/services/chapter_single_generation_stream_entry_service.rs`,
   `backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs`,
   `backend-rs/src/services/chapter_single_generation_write_workflow_service.rs`,
   and `backend-rs/src/services/chapter_single_generation_runtime_state_service.rs`.
@@ -3990,6 +4356,9 @@ for step in success_artifacts.build_success_emission_plan(result) {
 - Route handlers must stay transport-thin: extract `AppConfig`, build the
   candidate route-gateway config through the existing route gateway owner, and
   pass it to stream/background service owners.
+- Route-local wrappers around the route-gateway config builder are acceptable
+  only when they stay transport-thin and make `AppConfig` -> gateway config
+  parity testable inside `chapter_generation_routes.rs`.
 - Default behavior must remain direct single-generation fallback while
   `CHAPTER_CANDIDATE_RUST_EXECUTOR_ENABLED` is false.
 - When the Rust candidate executor is enabled, active Rust stream/background
@@ -4013,10 +4382,31 @@ for step in success_artifacts.build_success_emission_plan(result) {
   builder and candidate/fallback content extractor. It must use fake Rust
   executor and fake direct-generation fallback payloads so the smoke proves the
   route-group boundary without calling a real provider.
+- Active-route smoke readiness evidence must expose the route/workflow/runtime
+  owner chain, including `chapter_generation_routes`,
+  `chapter_single_generation_stream_workflow_service`,
+  `chapter_single_generation_write_workflow_service`,
+  `chapter_single_generation_runtime_state_service`,
+  `chapter_generation_runtime_service`, and the shared candidate executor
+  provider/quality/record owners. The single-generation candidate request,
+  quality adapter, direct fallback candidate, metadata, and content extraction
+  helpers belong to `chapter_generation_runtime_service` when that is their
+  only production runtime owner; do not keep or recreate a standalone
+  `chapter_single_generation_candidate_gateway_service` helper file just to
+  forward runtime-owned gateway details. This prevents a passing smoke from
+  being mistaken for route cutover readiness when it only exercised a
+  projection helper.
+- Active-route smoke readiness evidence must also expose
+  `active_route_gateway_config` from `AppConfig -> chapter_generation_routes ->
+  stream/write workflow -> runtime lifecycle`, preserving
+  `rust_executor_enabled`, `fallback_on_rust_error`, `disabled_reason`,
+  and `rollback_boundary`. It must not depend on the retired active-route
+  direct-fallback smoke probe for readiness.
 - The active-route smoke rollback boundary is
-  `legacy_single_generation_direct_ai`, because the Rust active route falls
-  back to the existing direct single-generation AI path while Python fallback
-  shells remain frozen source maps.
+  `legacy_single_generation_direct_ai`, but readiness should prove the Rust
+  owner path plus fallback-freeze candidate. The deploy/AppConfig gateway knob,
+  not a health probe that executes Python direct fallback, is the rollback
+  boundary while Python fallback shells remain frozen source maps.
 - Do not report Python FastAPI route retirement solely because the Rust route
   now consumes the gateway. Python route retirement still requires route parity
   and fallback-shell deletion or repoint evidence.
@@ -4034,23 +4424,75 @@ for step in success_artifacts.build_success_emission_plan(result) {
   `rust_candidate_executor`, no fallback, content extracted from
   `full_content`, and runtime state keeps `generation_label =
   single_generation_candidate`.
-- Active-route smoke with `rust_executor_enabled=false` -> execution path
-  `python_fallback`, fallback applied, content extracted from `content`, and
-  `generation_path = direct_generation_fallback`.
+- Active-route fallback-freeze smoke with `rust_executor_enabled=true` and
+  `fallback_on_rust_error=false` -> execution path `rust_candidate_executor`,
+  no fallback, and readiness reports `python_fallback_removal_ready = true`.
+- Active-route smoke readiness evidence -> `owner_scope` is
+  `active_route_gateway_stream_background_runtime_terminal`, covered Rust
+  owners include route/workflow/runtime/candidate/provider/quality/record plus
+  stream/background/terminal projection owners, and `runtime_owner_chain`
+  names `create_owned_single_generation_stream`,
+  `SingleGenerationBackgroundWriteWorkflowEntry::start_from_route_payload`,
+  `SingleGenerationStreamLifecyclePlan::from_runtime_launch_with_gateway_config`,
+  `SingleGenerationRuntimeLifecyclePlan::from_runtime_launch_with_gateway_config`,
+  and `SingleGenerationRuntimeLaunchInput::execute_generation_with_gateway_config`.
+- Active-route smoke health endpoint -> each probe exposes the same
+  `readiness_evidence`, so deployment checks can inspect route config
+  preservation and rollback metadata without calling the real provider.
 - Runtime candidate gateway output -> history payload contains
   `candidate_gateway.execution_path` and `candidate_gateway.rollback_boundary`.
 - Follow-up analysis quality-metrics rewrite -> existing
   `candidate_gateway` metadata remains present in generated history.
 - Stream success result payload -> exposes the same `candidate_gateway` object
   without changing existing event types or success event order.
+- Background runtime completion checkpoints -> expose the same
+  `candidate_gateway` object on finalizing/completed snapshots when the
+  generated result carries gateway metadata. Quality-gate terminal checkpoints
+  must also preserve that object when a generated result exists, while pure
+  provider/runtime failures without a generated result must not invent gateway
+  metadata.
+- Background task read/status projections -> expose an object-shaped snapshot
+  `candidate_gateway` at the route-facing task payload top level while keeping
+  the same object under `checkpoint.candidate_gateway`. Invalid or non-object
+  runtime metadata must remain visible only in the raw checkpoint and must not
+  be promoted as route-facing gateway metadata.
+- Route/status endpoint evidence -> `GET /chapters/batch-generate/{batch_id}/status`,
+  active project batch reads, and active batch task-list reads must all consume
+  the same Rust read-context projection for object-shaped `candidate_gateway`.
+  The route-facing top-level object must equal `checkpoint.candidate_gateway`,
+  and route constants/tests must guard the status endpoint path while the
+  Python compatibility shell remains only a rollback/source-map boundary.
+- Shared candidate quality owner -> `chapter_candidate_quality_adapter_service.rs`
+  owns both quality adapter construction and runtime callback materialization.
+  Do not reintroduce a separate bridge module that only forwards
+  `build_runtime_quality_adapter_callbacks(...)` or poisoned-lock callback
+  handling; runtime/default dependency consumers should reuse this shared owner
+  so single, batch, and route-gateway candidate flows cannot drift.
+- Shared default record owner -> `chapter_candidate_executor_default_dependency_service.rs`
+  owns `ChapterCandidateDefaultRecordBuildInput` and
+  `build_default_generation_candidate_record(...)`. Do not reintroduce a
+  forwarding-only `chapter_candidate_runtime_record_bridge_service.rs`; runtime
+  adapters should call the default dependency owner and let the record owner
+  return errors for sanitized-empty or workflow/meta content.
+- Active-route readiness evidence must cover both the enabled Rust owner path
+  and the fallback-freeze candidate path. It must show stream
+  `candidate_gateway`, background create-response contract, terminal
+  quality-gate projection, rollback boundary, and must explicitly note that
+  background create responses do not attach final `candidate_gateway` metadata
+  before runtime completion.
 - Stream/background lifecycle tests must remain green because they consume the
   same runtime launch owner.
+- Stream/background/runtime lifecycle owners preserve the route-supplied
+  `ChapterCandidateRouteGatewayConfig`; they must not silently fall back to
+  `default_single_generation_candidate_gateway_config()` after route config is
+  already built from `AppConfig`.
 
 ### 5. Good/Base/Bad Cases
 - Good: both stream and background Rust active routes pass gateway config to
   the runtime owner, focused tests cover request shape and payload extraction,
-  the active-route smoke endpoint proves enabled/fallback behavior without a
-  provider call, and `cargo check` passes with only known existing warnings.
+  the active-route smoke endpoint proves enabled/fallback-freeze behavior
+  without a provider call, and `cargo check` passes with only known existing
+  warnings.
 - Base: active Rust route consumes the gateway behind a rollback knob, while
   Python FastAPI route remains frozen as fallback/source map.
 - Bad: add another health or smoke-only gateway consumer and report active-path
@@ -4067,15 +4509,20 @@ for step in success_artifacts.build_success_emission_plan(result) {
   candidate gateway history metadata, and metadata preservation during quality
   history rewrites.
 - Unit tests in `chapter_single_generation_active_gateway_smoke_service.rs`
-  for enabled Rust executor smoke, direct-generation fallback smoke, metadata,
-  runtime state, and content normalization.
+  for enabled Rust executor smoke, fallback-freeze smoke, metadata, runtime
+  state, content normalization, and route-facing readiness evidence across
+  stream/background/terminal owners.
 - Focused tests for `chapter_generation_routes`,
   `chapter_single_generation_stream_workflow_service`,
-  `chapter_single_generation_stream_entry_service`,
   `chapter_single_generation_write_workflow_service`, and
   `chapter_single_generation_runtime_state_service`; stream workflow tests
   must assert that result payloads expose `candidate_gateway` when the runtime
-  result carries it.
+  result carries it, runtime-state tests must assert checkpoint
+  `candidate_gateway` preservation, and stream/runtime lifecycle tests must
+  assert explicit gateway config retention.
+- Route tests in `chapter_generation_routes` must assert that
+  `AppConfig` cutover fields are preserved when building the
+  single-generation route gateway config.
 - Existing route-gateway, health, and auth public-path smoke tests must remain
   green.
 - `python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only`
@@ -4508,6 +4955,172 @@ params.insert(
 
 ## Change Checklist
 
+- Rust migration owner consolidation rule:
+  if a runtime adapter only bridges quality callbacks, default dependency
+  wiring, provider stream collection, or record construction for one
+  production adapter, collapse it into that production adapter instead of
+  preserving a forwarding-only Rust owner. Readiness evidence should name the
+  production adapter plus real supporting owners such as provider stream,
+  quality adapter, default dependency, record, wiring, and gateway smoke files.
+  Do not count a deleted runtime adapter shell as migration progress.
+- Candidate executor owner rule:
+  the default dependency service must only assemble default Rust callbacks,
+  provider/record adapters, and rerank formulas. It must not duplicate the
+  candidate executor stage orchestration. Production wiring should call the
+  boxed executor workflow owner in `chapter_candidate_executor_service.rs`, so
+  generation, word-budget repair, targeted repair, finalize ordering, runtime
+  state handoff, and post-finalize targeted repair selection stay in one
+  executor owner.
+- Candidate generation owner rule:
+  default generation dependency construction belongs to
+  `chapter_candidate_generation_service.rs`, not to executor default wiring.
+  The default dependency service may adapt provider output and record builders
+  into generation callbacks, but retry prompt suffix, retry strategy suffix,
+  retry temperature, additional-candidate policy, best-candidate selection, and
+  generation runtime-state handoff should remain owned by the generation
+  service.
+- Candidate finalize owner rule:
+  default finalize dependency construction belongs to
+  `chapter_candidate_finalize_service.rs`, not to executor default wiring. The
+  default dependency service may call `build_default_finalize_dependencies(...)`
+  while assembling production wiring, but final candidate selection metadata,
+  quality-gate normalization, candidate pool summary, and word-budget repair
+  promotion preference should remain owned by the finalize service.
+- Candidate targeted repair owner rule:
+  default targeted final repair dependency construction belongs to
+  `chapter_candidate_targeted_final_repair_service.rs`, not to executor default
+  wiring. The default dependency service may adapt provider output and record
+  builders into targeted callbacks, but suffix construction,
+  temperature/max-token/char-limit resolution, keep/adopt/prefer/followup
+  policy, runtime-state handoff, and repair seed metadata semantics should
+  remain owned by the targeted repair service.
+- Candidate word-budget repair owner rule:
+  default word-budget repair dependency construction belongs to
+  `chapter_candidate_word_budget_repair_service.rs`, not to executor default
+  wiring. The default dependency service may adapt provider output and record
+  builders into word-budget callbacks, but suffix construction, apply/relax
+  policy, temperature/max-token/char-limit resolution, keep/select/prefer
+  policy, runtime-state handoff, and repair seed metadata semantics should
+  remain owned by the word-budget repair service.
+- Route gateway smoke/readiness consolidation rule:
+  if a smoke/readiness service file only proves one route gateway owner and has
+  no independent transport branch, fallback branch, or deploy contract, move
+  the smoke probes, result projection, and readiness evidence into the route
+  gateway owner. Keep the public health endpoint path stable and update wiring
+  evidence to name the route gateway owner, not the deleted smoke-only file.
+- Batch route error mapper consolidation rule:
+  if a `chapter_batch_generation` API error mapper is consumed only by
+  `chapter_batch_generation.rs`, keep the mapper as a private module inside
+  that route owner instead of a standalone file. Do not restore
+  `chapter_batch_generation_error_mapper.rs` unless multiple real API owners
+  need to share the same mapping boundary; otherwise create/status/stream,
+  active task list, cancel, and resume route parity evidence is split across
+  fake owners.
+- Batch status/cancel task-not-found fallback retirement rule:
+  once `chapter_batch_generation.rs` maps status and cancel
+  `LoadOwnedBatchGenerationTaskError::TaskNotFound` to
+  `404 {"detail": "Batch generation task not found"}` and focused
+  `chapter_batch_generation` tests pass, track both task-not-found probes as
+  Rust `requires_login` asymmetric probes. Do not restore
+  `chapters-batch-status-task-not-found-python-fallback` or
+  `chapters-batch-cancel-task-not-found-python-fallback` unless the same
+  change rolls back the Rust route owner, its error mapper tests, or the
+  authenticated 404 manifest probes.
+- Draft route error mapper consolidation rule:
+  if a `chapter_draft` API error mapper is consumed only by
+  `chapter_draft_routes.rs`, keep the mapper as a private module inside that
+  route owner instead of a standalone file. Do not restore
+  `chapter_draft_error_mapper.rs` unless multiple real API owners need to
+  share the same mapping boundary; otherwise auto-revision, candidate draft
+  load/apply, history, readiness, and selection-mode-sensitive not-found
+  parity evidence is split across fake owners.
+- Chapter analysis query error mapper consolidation rule:
+  if a `chapter_analysis` query API error mapper is consumed only by
+  `chapter_analysis_routes.rs`, keep the mapper as a private module inside that
+  route owner instead of a standalone file. Do not restore
+  `chapter_analysis_query_error_mapper.rs` unless multiple real API owners need
+  to share the same mapping boundary; otherwise owned analysis view, quality
+  metrics, and analysis task status parity evidence is split across fake
+  owners.
+- Chapter CRUD error mapper consolidation rule:
+  if a chapter CRUD API error mapper is consumed only by
+  `chapter_crud_routes.rs`, keep the mapper as a private module inside that
+  route owner instead of a standalone file. Do not restore
+  `chapter_crud_error_mapper.rs` unless multiple real API owners need to share
+  the same mapping boundary; otherwise create/list/get/update/delete and
+  project-path list parity evidence is split across fake owners.
+- Chapter project-list fallback retirement rule:
+  once `chapters-project-list-auth-guard-rust` covers the same path as
+  `GET /api/chapters/project/test-project-id` and focused `chapter_crud` tests
+  pass, do not reintroduce
+  `chapters-project-list-auth-guard-python-fallback` unless the same change
+  rolls back the Rust project-path route owner or its focused tests. The query
+  form `chapters-list-auth-guard-rust` and path form
+  `chapters-project-list-auth-guard-rust` are separate route evidence; do not
+  use one as rollback proof for the other.
+- Memories route error mapper consolidation rule:
+  if a memories API error mapper is consumed only by `memories.rs`, keep the
+  mapper as a private module inside that route owner instead of a standalone
+  file. Do not restore `memories_error_mapper.rs` unless multiple real API
+  owners need to share the same mapping boundary; otherwise project memory
+  query/write, chapter-analysis payload, and analyze-chapter workflow parity
+  evidence is split across fake owners.
+- Single-generation candidate gateway file-collapse rule:
+  if the candidate gateway helpers only support the shared generation runtime
+  owner and active route smoke evidence, collapse request construction,
+  active quality-adapter construction, direct fallback candidate payload,
+  gateway metadata, and candidate/fallback content extraction into
+  `chapter_generation_runtime_service.rs`. Readiness evidence should name
+  `chapter_generation_runtime_service` and shared candidate executor owners,
+  not the deleted `chapter_single_generation_candidate_gateway_service.rs`.
+  Do not count the deleted candidate-gateway helper shell as a Rust target
+  file or recreate it as a forwarding-only owner.
+- Batch status task-view payload owner rule:
+  status task-view payload construction belongs in
+  `chapter_batch_generation_task_payload_base_service.rs` with the other batch
+  task payload contracts. Read/query services should load tasks and snapshots,
+  then call the payload-base owner; runtime-state persistence owners should
+  also call payload-base directly instead of importing a read-context helper.
+  Do not reintroduce a read-context-only status payload builder when the
+  payload shape, terminal fields, quality context, and candidate gateway
+  projection are shared by status, runtime cancellation, and route-facing read
+  projections.
+- Chapter draft route readiness owner rule:
+  draft route readiness probes are evidence for
+  `chapter_draft_route_service.rs`, not a separate production owner. Keep
+  auto-revision/candidate load/apply readiness paths, fallback shell, and
+  rollback boundary beside the route-facing draft payload owner. Do not restore
+  `chapter_draft_route_readiness_service.rs` unless readiness becomes a real
+  shared health/deploy endpoint consumed outside the draft route package.
+- Candidate executor wiring readiness owner rule:
+  candidate executor wiring readiness is evidence for
+  `chapter_candidate_executor_default_dependency_service.rs`, because the
+  default dependency owner composes provider, record, quality, rerank,
+  generation, repair, finalize, and executor callbacks for the Rust candidate
+  package. Do not restore `chapter_candidate_executor_wiring_service.rs` as a
+  standalone Rust target unless production code consumes a separate wiring
+  service again; keep dependency-graph tests in the default dependency owner.
+- Candidate event/progress projection owner rule:
+  batch and candidate generation event payload projection belongs to
+  `chapter_candidate_event_service.rs`. Status/read-context, batch candidate,
+  and single-generation owners should call that Rust owner for progress,
+  selected-candidate, chunk, and single-generation progress kwargs payloads
+  instead of duplicating Python-era JSON construction locally. This owner ports
+  Python `chapter_candidate_event_service.py` and the event-facing subset of
+  `chapter_candidate_view_service.py`; count it as migration progress only
+  when at least one real Rust route/service consumer uses the projection, and
+  count selected-candidate/chunk builders as active-path migration only after a
+  production Rust batch candidate emission path consumes them.
+- Candidate selected-event batch rule:
+  the Python `emit_batch_generation_selected_candidate_events(...)` decision
+  boundary maps to
+  `build_batch_generation_selected_candidate_event_batch(...)` in
+  `chapter_candidate_event_service.rs`. Keep stream-task gating, selected
+  progress emission, `stream_chunks`, and quality-gate action based chunk
+  suppression together in that Rust owner. Do not re-split this logic across a
+  publisher, read-context owner, or batch workflow once the production Rust
+  publisher consumes it; the publisher should only fan out the returned event
+  batch.
 - If you changed a route payload, did you update the related Pydantic schema,
   frontend consumer, and tests?
 - If you changed a model, did you review migration impact, default semantics,
