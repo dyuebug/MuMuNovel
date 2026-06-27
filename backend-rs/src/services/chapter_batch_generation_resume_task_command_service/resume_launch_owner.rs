@@ -37,13 +37,7 @@ pub(crate) fn build_batch_generation_resume_launch_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation_resume_task_command_service::resume_launch_owner",
         "scope": "resume_execution_eligibility_validated_dispatch_plan_reset_persistence_and_response_projection",
-        "python_source_map": [
-            "backend/app/services/batch_generation/resume_service.py",
-            "backend/app/services/batch_generation/query_service.py",
-            "backend/app/services/batch_generation/status_response_builder.py",
-            "backend/app/api/chapter_batch_generation_routes.py",
-            "backend/app/services/compat/chapter_generation_route_compat_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs",
             "backend-rs/src/services/chapter_batch_generation_resume_task_command_service/resume_launch_owner.rs",
@@ -97,7 +91,7 @@ pub(crate) fn build_batch_generation_resume_launch_owner_contract() -> Value {
             "chapter_batch_generation::resume_batch_generation",
             "chapter_batch_generation_runtime_state_service",
             "chapter_single_generation_runtime_state_service",
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         ],
         "validation_boundary": [
             "cargo test chapter_batch_generation_resume_task_command_service",
@@ -106,7 +100,7 @@ pub(crate) fn build_batch_generation_resume_launch_owner_contract() -> Value {
         ],
         "rollback_boundary": {
             "runtime_knob": "python_candidate_executor_fallback",
-            "source_map_policy": "keep_python_resume_dispatch_and_response_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_resume_launch_owner_is_rust_only_and_surviving_resume_dispatch_response_surfaces_are_tracked_by_external_runtime_contracts",
             "runtime_state_keys": [
                 "batch_request_runtime_state",
                 "active_story_repair_payload",

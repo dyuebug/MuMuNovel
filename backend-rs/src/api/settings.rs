@@ -109,11 +109,7 @@ fn build_settings_route_owner_contract() -> Value {
             "settings-presets-from-current-business-rust",
             "settings-presets-delete-current-business-rust"
         ],
-        "source_map_files": [
-            "backend/app/api/settings.py",
-            "backend/app/models/settings.py",
-            "backend/app/schemas/settings.py"
-        ],
+        "source_map_files": [],
         "owner_profile": {
             "name": "phase5-settings-business-owner",
             "business_probes": [
@@ -135,14 +131,19 @@ fn build_settings_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0
         },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_settings_route_model_schema_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "settings_route_source_map_deleted_remaining_python_closeout_is_settings_model_only",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
+            "full_module_freeze_ready": true,
+            "python_bootstrap_status": "settings_route_runtime_registration_deleted_no_python_route_shell_remains",
+            "python_route_files_status": "settings_route_source_map_deleted_no_direct_route_group_python_source_maps_remain",
+            "source_map_freeze_status": "physical_closeout_completed",
+            "source_map_physical_closeout_action": "delete_completed",
+            "python_fallback_removal_ready": true,
             "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
+                "surviving settings.py model source-map still needs its own separate physical closeout review"
             ],
-            "freeze_reason": "Rust settings route group has dedicated phase5-settings-business-owner probes for settings CRUD, presets, API test, function-calling check, and preset lifecycle; final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy."
+            "freeze_reason": "Rust settings route group has dedicated phase5-settings-business-owner probes for settings CRUD, presets, API test, function-calling check, test-web-research, and preset lifecycle; the Python settings route shell, bootstrap rollback registration, detached schema shell, and old runtime-store facade have been removed from the active production route boundary, and the surviving settings.py model now sits outside the direct route-group boundary.",
+            "rollback_files": []
         },
         "business_smoke_status": {
             "owner_profile": "phase5-settings-business-owner",
@@ -150,8 +151,8 @@ fn build_settings_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Settings route business smoke is covered by phase5-settings-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+        "next_cutover_gate": "settings route source-map shell deleted; remaining Python closeout work is limited to backend/migrator_app/models/settings.py",
+        "migration_policy": "Settings route business smoke is covered by phase5-settings-business-owner; the Python settings route shell, its explicit bootstrap rollback registration, the detached schema shell, and the old runtime-store facade have been physically deleted, and the remaining Python closeout work is limited to backend/migrator_app/models/settings.py."
     })
 }
 
@@ -2273,7 +2274,8 @@ mod tests {
             "backend-rs/src/api/settings.rs"
         );
         assert_eq!(contract["readiness_probes"].as_array().unwrap().len(), 27);
-        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 3);
+        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 0);
+        assert!(contract["source_map_files"].get(0).is_none());
         assert_eq!(
             contract["owner_profile"]["name"],
             "phase5-settings-business-owner"
@@ -2289,11 +2291,31 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_bootstrap_status"],
+            "settings_route_runtime_registration_deleted_no_python_route_shell_remains"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "settings_route_source_map_deleted_no_direct_route_group_python_source_maps_remain"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_freeze_status"],
+            "physical_closeout_completed"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_physical_closeout_action"],
+            "delete_completed"
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"][0],
+            "surviving settings.py model source-map still needs its own separate physical closeout review"
         );
         assert_eq!(
             contract["business_smoke_status"]["status"],
@@ -2305,16 +2327,13 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "settings route source-map shell deleted; remaining Python closeout work is limited to backend/migrator_app/models/settings.py"
         );
-        assert!(contract["migration_policy"]
-            .as_str()
-            .expect("migration policy")
-            .contains("business smoke is covered"));
-        assert!(!contract["migration_policy"]
-            .as_str()
-            .expect("migration policy")
-            .contains("requires source-map freeze/delete/repoint evidence or business smoke"));
+        assert_eq!(
+            contract["migration_policy"],
+            "Settings route business smoke is covered by phase5-settings-business-owner; the Python settings route shell, its explicit bootstrap rollback registration, the detached schema shell, and the old runtime-store facade have been physically deleted, and the remaining Python closeout work is limited to backend/migrator_app/models/settings.py."
+        );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
     }
 
     #[test]

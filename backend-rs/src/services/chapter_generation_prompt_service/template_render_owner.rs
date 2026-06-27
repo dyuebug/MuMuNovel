@@ -102,14 +102,7 @@ pub(crate) fn build_chapter_generation_prompt_owner_contract() -> Value {
     serde_json::json!({
         "owner": "chapter_generation_prompt_service",
         "scope": "shared_generation_prompt_template_and_runtime_block_owner",
-        "python_source_map": [
-            "backend/app/services/prompt_service.py",
-            "backend/app/services/batch_generation_prompt_service.py",
-            "backend/app/services/chapter_generation/runtime/prompt_service.py",
-            "backend/app/services/chapter_generation/stream/execution_service.py",
-            "backend/app/services/chapter_generation/stream/entry_service.py",
-            "backend/app/services/chapter_generation/stream/wiring_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_generation_prompt_service.rs",
             "backend-rs/src/services/chapter_generation_prompt_service/provider_payload_owner.rs",
@@ -190,10 +183,21 @@ pub(crate) fn build_chapter_generation_prompt_owner_contract() -> Value {
             "prompt_template_owner": "chapter_generation_prompt_service",
             "quality_profile_owner": "chapter_generation_prompt_service/quality_profile_owner.rs",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit_python_source_map_freeze_delete_or_repoint_approval",
-            "status": "rust_service_runtime_owner_closeout_ready_python_source_map_pending"
+            "physical_python_closeout_completed": true,
+            "python_story_prompt_block_service_deleted": true,
+            "python_prompt_template_facade_lazy_source_map_import": false,
+            "python_prompt_template_facade_service_deleted": true,
+            "python_prompt_service_lazy_source_map_import": false,
+            "python_prompt_service_deleted": true,
+            "python_story_packet_lazy_source_map_import": false,
+            "python_story_packet_service_deleted": true,
+            "python_story_packet_lazy_continuity_ledger_import": false,
+            "python_story_packet_continuity_ledger_proxy_retired": true,
+            "python_story_continuity_ledger_service_deleted": true,
+            "production_promptservice_default_importers_cleared": true,
+            "remaining_cutover_gate": "prompt Python production services physically closed; historical Python prompt fixtures live under backend/tests/test_support",
+            "status": "rust_service_runtime_owner_with_prompt_python_production_services_deleted"
         },
-        "rollback_boundary": "chapter_generation_prompt_python_source_map"
+        "rollback_boundary": "prompt rollback is now Rust owner plus backend/tests/test_support historical fixtures; no backend/app prompt Python service remains"
     })
 }

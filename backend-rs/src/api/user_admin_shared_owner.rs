@@ -397,10 +397,7 @@ fn build_user_admin_shared_owner_contract() -> Value {
             "backend-rs/src/api/admin.rs"
         ],
         "python_source_map": [
-            "backend/app/api/users.py",
-            "backend/app/api/admin.py",
-            "backend/app/models/user.py",
-            "backend/app/services/oauth_service.py"
+            "backend/migrator_app/models/user.py"
         ],
         "shared_behavior_contract": {
             "admin_guard": "check_admin preserves 403 detail for non-admin callers",
@@ -470,8 +467,8 @@ fn build_user_admin_shared_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_shared_rust_owner_profiles"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval across users/admin with same-round rollback policy",
-        "migration_policy": "User/admin shared business smoke is covered by phase5-users-business-owner and phase5-admin-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval across both route groups with same-round rollback policy.",
+        "next_cutover_gate": "explicit user model source-map freeze/delete/repoint approval across users/admin with same-round rollback policy",
+        "migration_policy": "User/admin shared business smoke is covered by phase5-users-business-owner and phase5-admin-business-owner; the Python users/admin route shells and old runtime-store facade have been physically deleted, and final completion now requires explicit user model source-map freeze/delete/repoint approval across both route groups with same-round rollback policy.",
         "validation_boundary": [
             "cargo test api::user_admin_shared_owner",
             "cargo test api::users",
@@ -481,21 +478,13 @@ fn build_user_admin_shared_owner_contract() -> Value {
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_users_admin_user_password_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "users_admin_shared_owner_source_map_deleted_remaining_user_model_only",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "shared owner is consumed by two route groups and must be closed with both route-owner rollback policies",
-                "explicit source-map freeze/delete/repoint approval is still required"
-            ],
-            "freeze_reason": "Rust shared owner now owns admin guard, user projection, password reset, delete, and set-admin behavior consumed by users/admin routes. Final Python source-map closeout must be approved and reviewed across both route groups in the same round.",
-            "rollback_files": [
-                "backend/app/api/users.py",
-                "backend/app/api/admin.py",
-                "backend/app/models/user.py",
-                "backend/app/services/oauth_service.py"
-            ]
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "freeze_reason": "Rust shared owner now owns admin guard, user projection, password reset, delete, and set-admin behavior consumed by users/admin routes; the Python users/admin route shells and old runtime-store facade have been physically deleted, and the remaining shared source map is now limited to the user model definition that must be reviewed across both route groups in the same round.",
+            "rollback_files": []
         }
     })
 }
@@ -814,7 +803,7 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval across users/admin with same-round rollback policy"
+            "explicit user model source-map freeze/delete/repoint approval across users/admin with same-round rollback policy"
         );
         assert!(contract["migration_policy"]
             .as_str()
@@ -826,11 +815,16 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"],
+            json!([])
+        );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
     }
 }

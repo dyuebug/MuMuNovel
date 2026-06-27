@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main as app_main
+from tests.test_support.app_runtime import main as app_main
 
 
 pytestmark = pytest.mark.asyncio

@@ -287,12 +287,7 @@ pub(crate) fn build_single_chapter_research_payload_owner_contract() -> Value {
     json!({
         "owner": "chapter_single_generation_prepare_service::research_payload_owner",
         "scope": "single_chapter_research_provider_payload",
-        "python_source_map": [
-            "backend/app/services/chapter_web_research_service.py",
-            "backend/app/services/batch_generation_single_chapter_service.py",
-            "backend/app/services/batch_generation_single_chapter_wiring_service.py",
-            "backend/app/services/partial_regeneration_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "build_single_chapter_research_provider_payload",
             "compose_single_chapter_research_query",
@@ -336,9 +331,9 @@ pub(crate) fn build_single_chapter_research_payload_owner_contract() -> Value {
             "active_batch_gateway_smoke": "chapter_batch_generation_active_gateway_smoke_service"
         },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_web_research_shell_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "production_python_web_research_shell_removed_test_support_only",
             "runtime_knob": "SingleChapterGenerationCompatOptions.web_research_enabled",
-            "rollback_owner": "legacy_chapter_web_research_service"
+            "rollback_owner": "test_support_chapter_web_research_owner"
         }
     })
 }
@@ -2188,10 +2183,7 @@ mod tests {
             contract["scope"],
             "single_chapter_research_provider_payload"
         );
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/services/chapter_web_research_service.py"
-        );
+        assert_eq!(contract["python_source_map"].as_array().unwrap().len(), 0);
         assert_eq!(
             contract["rust_owner_map"][0],
             "build_single_chapter_research_provider_payload"

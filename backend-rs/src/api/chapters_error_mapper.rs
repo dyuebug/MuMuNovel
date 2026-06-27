@@ -20,7 +20,7 @@ use crate::services::chapter_regeneration_prepare_service::{
 };
 use crate::services::chapter_regeneration_stream_workflow_service::{
     CreateChapterRegenerationStreamWorkflowError, CreatePartialRegenerationStreamWorkflowError,
-    CreateRegenerationStreamWorkflowError,
+    CreateRegenerationStreamWorkflowError, FullRegenerationTaskLifecycleError,
 };
 use crate::services::chapter_single_generation_prepare_service::PrepareSingleChapterGenerationRequestError;
 
@@ -331,6 +331,20 @@ fn map_create_regeneration_stream_workflow_error<TPrepareError>(
             map_load_accessible_chapter_error(error)
         }
         CreateRegenerationStreamWorkflowError::Prepare(error) => prepare_error_mapper(error),
+        CreateRegenerationStreamWorkflowError::TaskLifecycle(error) => {
+            map_full_regeneration_task_lifecycle_error(error)
+        }
+    }
+}
+
+fn map_full_regeneration_task_lifecycle_error(
+    error: FullRegenerationTaskLifecycleError,
+) -> ChapterRouteError {
+    match error {
+        FullRegenerationTaskLifecycleError::AnalysisMissing => {
+            detail_error(StatusCode::NOT_FOUND, "未找到对应的章节分析")
+        }
+        FullRegenerationTaskLifecycleError::Internal(error) => internal_detail_error(error),
     }
 }
 
@@ -338,7 +352,8 @@ fn map_create_regeneration_stream_workflow_error<TPrepareError>(
 mod tests {
     use super::{
         map_build_regeneration_ai_service_error, map_chapter_query_payload_error,
-        map_create_chapter_analysis_task_error, map_load_can_generate_payload_error,
+        map_create_chapter_analysis_task_error,
+        map_create_chapter_regeneration_stream_workflow_error, map_load_can_generate_payload_error,
         map_load_navigation_payload_error, map_prepare_chapter_analysis_trigger_error,
         map_prepare_chapter_regeneration_stream_error,
         map_prepare_partial_regeneration_stream_error, map_quality_trend_query_request_error,
@@ -355,6 +370,9 @@ mod tests {
     use crate::services::chapter_regeneration_prepare_service::{
         BuildRegenerationAiServiceError, PreparePartialRegenerationError,
         PreparePartialRegenerationStreamError,
+    };
+    use crate::services::chapter_regeneration_stream_workflow_service::{
+        CreateRegenerationStreamWorkflowError, FullRegenerationTaskLifecycleError,
     };
     use axum::http::StatusCode;
     use serde_json::json;
@@ -474,6 +492,30 @@ mod tests {
             assert_eq!(response.0, StatusCode::BAD_REQUEST);
             assert_eq!(response.1 .0, json!({ "detail": expected_detail }));
         }
+    }
+
+    #[test]
+    fn chapter_regeneration_analysis_missing_maps_to_not_found() {
+        let response = map_create_chapter_regeneration_stream_workflow_error(
+            CreateRegenerationStreamWorkflowError::TaskLifecycle(
+                FullRegenerationTaskLifecycleError::AnalysisMissing,
+            ),
+        );
+
+        assert_eq!(response.0, StatusCode::NOT_FOUND);
+        assert_eq!(response.1 .0, json!({ "detail": "未找到对应的章节分析" }));
+    }
+
+    #[test]
+    fn chapter_regeneration_task_lifecycle_internal_error_maps_to_internal_server_error() {
+        let response = map_create_chapter_regeneration_stream_workflow_error(
+            CreateRegenerationStreamWorkflowError::TaskLifecycle(
+                FullRegenerationTaskLifecycleError::Internal("boom".to_string()),
+            ),
+        );
+
+        assert_eq!(response.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.1 .0, json!({ "detail": "boom" }));
     }
 
     #[test]

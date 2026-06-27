@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.services.task_system.task_state_store import TaskWorkflowRuntimeStateStore
+from tests.test_support.task_system import TaskWorkflowRuntimeStateStore
 
 
 pytestmark = pytest.mark.asyncio

@@ -4,8 +4,8 @@ from pathlib import Path
 from uuid import uuid4
 from fastapi import HTTPException
 
-from app.services.background_task_manager import BackgroundTaskManager
-from app.utils.exception_message import extract_exception_message
+from tests.test_support.background_task_manager_test_support import BackgroundTaskManager
+from tests.test_support.utils.exception_message import extract_exception_message
 
 pytestmark = pytest.mark.asyncio
 

@@ -496,11 +496,7 @@ fn build_prompt_templates_route_owner_contract() -> Value {
             "prompt-templates-missing-detail-business-rust"
         ],
         "source_map_files": [
-            "backend/app/api/prompt_templates.py",
-            "backend/app/models/prompt_template.py",
-            "backend/app/schemas/prompt_template.py",
-            "backend/app/services/prompt_template_sync_service.py",
-            "backend/app/services/prompt_service.py"
+            "backend/migrator_app/models/prompt_template.py"
         ],
         "owner_profile": {
             "name": "phase5-prompt-templates-business-owner",
@@ -517,14 +513,15 @@ fn build_prompt_templates_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0
         },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_prompt_templates_route_model_schema_sync_prompt_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "prompt_templates_route_source_map_deleted_remaining_prompt_template_model_only",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ],
-            "freeze_reason": "Rust prompt_templates route group has dedicated phase5-prompt-templates-business-owner probes for system defaults, create/list/detail, sync-status, export, delete, and missing-detail behavior; final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy."
+            "full_module_freeze_ready": true,
+            "python_bootstrap_status": "prompt_templates_route_runtime_registration_deleted_no_python_route_shell_remains",
+            "python_route_files_status": "prompt_templates_route_source_map_deleted_remaining_prompt_template_model_only",
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "freeze_reason": "phase5-prompt-templates-business-owner covers system defaults, create, list, detail, sync-status, export, delete, and missing-detail probes with zero Python fallback probes; the Python route shell is no longer registered in app bootstrap, the detached Python prompt template schema file plus the route-facing catalog/access/render and sync-status rule owners have already been rehomed to Rust service owners, and the remaining prompt-template source map is now limited to the dedicated prompt_template model file.",
+            "rollback_files": []
         },
         "business_smoke_status": {
             "owner_profile": "phase5-prompt-templates-business-owner",
@@ -533,8 +530,8 @@ fn build_prompt_templates_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Prompt templates route business smoke is covered by phase5-prompt-templates-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+        "next_cutover_gate": "explicit prompt-template model-definition source-map freeze/delete/repoint approval with same-round rollback policy",
+        "migration_policy": "Prompt templates route business smoke is covered by phase5-prompt-templates-business-owner; the Python route shell is no longer registered in app bootstrap, the detached Python prompt template schema file plus the old route-facing catalog/access/render and sync-status rule engine paths have been rehomed away from the active route owner, and final completion now requires explicit prompt-template model-definition source-map freeze/delete/repoint approval with same-round rollback policy."
     })
 }
 
@@ -1140,7 +1137,11 @@ mod tests {
                 .as_array()
                 .expect("source map files should be present")
                 .len(),
-            5
+            1
+        );
+        assert_eq!(
+            contract["source_map_files"][0],
+            "backend/migrator_app/models/prompt_template.py"
         );
         assert_eq!(
             contract["owner_profile"]["name"],
@@ -1157,11 +1158,19 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_bootstrap_status"],
+            "prompt_templates_route_runtime_registration_deleted_no_python_route_shell_remains"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "prompt_templates_route_source_map_deleted_remaining_prompt_template_model_only"
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["business_smoke_status"]["status"],
@@ -1178,8 +1187,13 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "explicit prompt-template model-definition source-map freeze/delete/repoint approval with same-round rollback policy"
         );
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"],
+            json!([])
+        );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
         assert!(contract["migration_policy"]
             .as_str()
             .expect("prompt templates migration policy should be present")

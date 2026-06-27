@@ -101,36 +101,21 @@ fn build_chapter_analysis_route_owner_contract() -> Value {
             "manifest_profile": "phase5-chapter-analysis-owner",
             "profile_kind": "successful_result_business_readiness"
         },
-        "source_map_files": [
-            "backend/app/api/chapters.py",
-            "backend/app/api/chapter_analysis_routes.py",
-            "backend/app/api/chapter_analysis_task_routes.py",
-            "backend/app/services/manual_chapter_analysis_service.py",
-            "backend/app/services/manual_chapter_analysis_execution_service.py",
-            "backend/app/services/chapter_analysis_support_service.py",
-            "backend/app/services/chapter_analysis_response_service.py"
-        ],
+        "source_map_files": [],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_chapter_analysis_route_service_files_as_source_map_until_explicit_freeze_delete_round",
-            "python_route_files_status": "source_map_only_for_chapter_analysis_route_group",
-            "source_map_freeze_status": "frozen_source_map_rollback_only",
-            "source_map_physical_closeout_action": "repoint",
+            "source_map_policy": "chapter_analysis_route_source_map_deleted_remaining_python_closeout_is_service_only",
+            "python_route_files_status": "chapter_analysis_route_source_map_deleted_after_runtime_closeout",
+            "python_bootstrap_status": "analysis_route_runtime_registration_deleted_no_python_route_shell_remains",
+            "source_map_freeze_status": "physical_closeout_completed",
+            "source_map_physical_closeout_action": "delete_completed",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
             "remaining_blockers": [
-                "explicit delete approval for the repointed source-map shell"
+                "surviving analysis runtime service source-map still needs its own separate physical closeout review"
             ],
-            "freeze_reason": "Rust chapter_analysis route owner covers the analysis view/status/batch-status/quality-metrics/trigger route handlers, runtime query owner, private error mapper, auth-guard manifest probes, logged-in not-found probes, and successful analysis view / quality metrics / status / batch-status business probes; the Python route shells are repointed as rollback/source-map-only material.",
-            "rollback_files": [
-                "backend/app/api/chapters.py",
-                "backend/app/api/chapter_analysis_routes.py",
-                "backend/app/api/chapter_analysis_task_routes.py",
-                "backend/app/services/manual_chapter_analysis_service.py",
-                "backend/app/services/manual_chapter_analysis_execution_service.py",
-                "backend/app/services/chapter_analysis_support_service.py",
-                "backend/app/services/chapter_analysis_response_service.py"
-            ]
+            "freeze_reason": "Rust chapter_analysis route owner covers the analysis view/status/batch-status/quality-metrics/trigger route handlers, runtime query owner, private error mapper, auth-guard manifest probes, logged-in not-found probes, and successful analysis view / quality metrics / status / batch-status business probes while the surviving Python route/service shells remain frozen as explicit bootstrap rollback/source-map-only material.",
+            "rollback_files": []
         },
         "business_smoke_status": {
             "owner_profile": "phase5-chapter-analysis-owner",
@@ -140,8 +125,8 @@ fn build_chapter_analysis_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "source-map has been repointed to the Rust route owner; final physical deletion still requires a separate same-round approval and rollback policy",
-        "migration_policy": "Chapter analysis route business smoke is covered by phase5-chapter-analysis-owner; the Python route shells have been repointed to rollback/source-map-only status, and final physical deletion still requires a separate same-round approval."
+        "next_cutover_gate": "chapter-analysis route source-map shell deleted; remaining Python closeout work is limited to the separate analysis runtime service source-map contract",
+        "migration_policy": "Chapter analysis route business smoke is covered by phase5-chapter-analysis-owner; the Python route shell has been physically deleted, and the remaining Python closeout work is limited to the separate analysis runtime service source-map contract."
     })
 }
 
@@ -446,32 +431,36 @@ mod tests {
             "successful_result_business_readiness"
         );
         assert_eq!(
+            contract["rollback_boundary"]["python_bootstrap_status"],
+            "analysis_route_runtime_registration_deleted_no_python_route_shell_remains"
+        );
+        assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
             true
         );
         assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "chapter_analysis_route_source_map_deleted_after_runtime_closeout"
+        );
+        assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_status"],
-            "frozen_source_map_rollback_only"
+            "physical_closeout_completed"
         );
         assert_eq!(
             contract["rollback_boundary"]["source_map_physical_closeout_action"],
-            "repoint"
+            "delete_completed"
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["rollback_boundary"]["remaining_blockers"][0],
-            "explicit delete approval for the repointed source-map shell"
-        );
-        assert_eq!(
-            contract["source_map_files"][0],
-            "backend/app/api/chapters.py"
+            "surviving analysis runtime service source-map still needs its own separate physical closeout review"
         );
         assert_eq!(
             contract["business_smoke_status"]["status"],
@@ -491,12 +480,16 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "source-map has been repointed to the Rust route owner; final physical deletion still requires a separate same-round approval and rollback policy"
+            "chapter-analysis route source-map shell deleted; remaining Python closeout work is limited to the separate analysis runtime service source-map contract"
         );
         assert!(contract["migration_policy"]
             .as_str()
             .expect("migration policy")
             .contains("business smoke is covered"));
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("migration policy")
+            .contains("Python route shell has been physically deleted"));
         assert!(!contract["migration_policy"]
             .as_str()
             .expect("migration policy")

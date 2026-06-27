@@ -10,11 +10,7 @@ pub(crate) fn build_batch_generation_owned_task_read_state_owner_contract() -> V
     json!({
         "owner": "chapter_batch_generation_read_context_service::owned_task_read_state_owner",
         "scope": "owned_task_sources_read_state_and_status_payload",
-        "python_source_map": [
-            "backend/app/services/batch_generation/query_service.py",
-            "backend/app/services/batch_generation/status_response_builder.py",
-            "backend/app/api/chapter_batch_generation_routes.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_read_context_service.rs",
             "backend-rs/src/services/chapter_batch_generation_read_context_service/owned_task_read_state_owner.rs",
@@ -64,12 +60,12 @@ pub(crate) fn build_batch_generation_owned_task_read_state_owner_contract() -> V
             "owned_read_state_owner": "load_owned_batch_generation_task_read_state",
             "status_payload_owner": "load_owned_batch_generation_status_payload",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_batch_generation_owned_read_state_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "batch-generation read-context source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/projection source-map packages",
+            "status": "rust_batch_generation_owned_read_state_owner_source_map_deleted"
         },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_batch_query_status_route_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_read_context_owner_is_rust_only_and_surviving_python_query_status_surfaces_are_tracked_by_external_shared_runtime_projection_contracts",
             "status_payload_shape": [
                 "batch_id",
                 "checkpoint",

@@ -95,20 +95,15 @@ fn build_memories_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0
         },
         "source_map_files": [
-            "backend/app/api/memories.py",
-            "backend/app/models/memory.py",
-            "backend/app/services/memory_service.py",
-            "backend/app/services/memory_ranking.py"
+            "backend/migrator_app/models/memory_analysis.py"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_memories_route_model_service_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "production_python_memory_analysis_model_source_map_replaced_by_migrator_and_test_support_fixtures",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ],
-            "freeze_reason": "Rust memories route group has dedicated phase5-memories-business-owner probes for fixture setup, list/search/analysis/stats/foreshadows, delete-chapter, stats-after-delete, and cleanup behavior; final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy."
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "freeze_reason": "Rust memories route group has dedicated phase5-memories-business-owner probes for fixture setup, list/search/analysis/stats/foreshadows, delete-chapter, stats-after-delete, and cleanup behavior; the Python route shell has been removed from app bootstrap, the broad memory_service.py surface has already been pushed down to narrower shared/runtime owner contracts, and the remaining persistence source map has now been narrowed to the dedicated memory analysis model file."
         },
         "business_smoke_status": {
             "owner_profile": "phase5-memories-business-owner",
@@ -116,8 +111,8 @@ fn build_memories_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Memories route business smoke is covered by phase5-memories-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+        "next_cutover_gate": "explicit memory analysis model source-map freeze/delete/repoint approval with same-round rollback policy",
+        "migration_policy": "Memories route business smoke is covered by phase5-memories-business-owner; the Python route shell is no longer registered in app bootstrap, the broad memory_service.py surface has already moved to narrower shared/runtime owner contracts, and final completion now requires explicit memory analysis model source-map freeze/delete/repoint approval with same-round rollback policy."
     })
 }
 
@@ -970,7 +965,11 @@ mod tests {
             contract["routes"]["delete_chapter"],
             MEMORIES_DELETE_CHAPTER_ROUTE
         );
-        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 4);
+        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            contract["source_map_files"][0],
+            "backend/migrator_app/models/memory_analysis.py"
+        );
         assert_eq!(contract["readiness_probes"].as_array().unwrap().len(), 16);
         assert_eq!(
             contract["readiness_probes"][15],
@@ -1001,11 +1000,11 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            json!(false)
+            json!(true)
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            json!(false)
+            json!(true)
         );
         assert_eq!(
             contract["business_smoke_status"]["status"],
@@ -1016,13 +1015,25 @@ mod tests {
             json!(10)
         );
         assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "production_python_memory_analysis_model_source_map_replaced_by_migrator_and_test_support_fixtures"
+        );
+        assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "explicit memory analysis model source-map freeze/delete/repoint approval with same-round rollback policy"
         );
         assert!(contract["migration_policy"]
             .as_str()
             .expect("migration policy")
             .contains("business smoke is covered"));
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("migration policy")
+            .contains("memory_service.py surface has already moved"));
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("migration policy")
+            .contains("memory analysis model source-map freeze/delete/repoint approval"));
         assert!(!contract["migration_policy"]
             .as_str()
             .expect("migration policy")

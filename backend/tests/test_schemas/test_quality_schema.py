@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from app.schemas.chapter import BatchGenerateStatusResponse
-from app.schemas.quality import (
+from tests.test_support.chapter_schema_test_support import BatchGenerateStatusResponse
+from tests.test_support.schemas.quality import (
     ActiveStoryRepairPayload,
     ChapterLatestQualityMetrics,
     ChapterQualityMetricsSummary,

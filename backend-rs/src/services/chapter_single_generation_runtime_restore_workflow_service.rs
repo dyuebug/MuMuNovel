@@ -27,16 +27,7 @@ pub(crate) fn build_single_generation_write_workflow_owner_contract() -> Value {
     json!({
         "owner": "chapter_single_generation_runtime_restore_workflow_service",
         "scope": "single_generation_background_write_existing_task_launch_persist_dispatch_and_response_payload",
-        "python_source_map": [
-            "backend/app/api/chapter_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/chapter_generation/route_wiring_service.py",
-            "backend/app/services/chapter_generation/stream/entry_service.py",
-            "backend/app/services/chapter_generation/stream/service.py",
-            "backend/app/services/chapter_generation/stream/execution_service.py",
-            "backend/app/services/chapter_generation/stream/wiring_service.py",
-            "backend/app/services/compat/chapter_generation_route_compat_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_single_generation_runtime_restore_workflow_service.rs",
             "backend-rs/src/api/chapter_generation_routes.rs",
@@ -83,7 +74,7 @@ pub(crate) fn build_single_generation_write_workflow_owner_contract() -> Value {
         },
         "active_consumers": [
             "chapter_generation_routes::generate_chapter_background",
-            "chapter_single_generation_active_gateway_smoke_service",
+            "chapter-single-generation-active-gateway-smoke-rust",
             "chapter_single_generation_runtime_state_service"
         ],
         "write_workflow_runtime_owner_contract": build_single_generation_write_workflow_runtime_owner_contract(),
@@ -106,23 +97,18 @@ pub(crate) fn build_single_generation_write_workflow_owner_contract() -> Value {
             "rust_manifest_probe_count": 6,
             "python_fallback_probe_count": 0,
             "source_map_closeout_ready": true,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_service_runtime_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "single-generation final frozen rollback shell retained; reopen only if bootstrap rollback policy changes",
+            "status": "rust_single_generation_write_workflow_owner_source_map_deleted"
         },
         "rollback_boundary": {
             "runtime_knobs": [
                 "legacy_single_generation_direct_ai",
                 "python_candidate_executor_fallback"
             ],
-            "source_map_policy": "keep_python_single_generation_background_route_and_stream_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "single_generation_write_workflow_owner_is_rust_only_and_background_entry_shell_source_map_is_deleted",
             "python_fallback_removal_ready": true,
-            "rollback_files": [
-                "backend/app/api/chapter_generation_routes.py",
-                "backend/app/api/chapters.py",
-                "backend/app/services/chapter_generation/route_wiring_service.py",
-                "backend/app/services/chapter_generation/stream/entry_service.py",
-                "backend/app/services/chapter_generation/stream/wiring_service.py"
-            ]
+            "rollback_files": []
         }
     })
 }
@@ -131,16 +117,7 @@ pub(crate) fn build_single_generation_runtime_restore_owner_contract() -> Value 
     json!({
         "owner": "chapter_single_generation_runtime_restore_workflow_service",
         "scope": "single_generation_runtime_restore_startup_snapshot_background_seed_persist_dispatch_and_response_payload",
-        "python_source_map": [
-            "backend/app/api/chapter_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/chapter_generation/route_wiring_service.py",
-            "backend/app/services/chapter_generation/stream/entry_service.py",
-            "backend/app/services/chapter_generation/stream/service.py",
-            "backend/app/services/chapter_generation/stream/wiring_service.py",
-            "backend/app/services/chapter_generation/stream/execution_service.py",
-            "backend/app/services/story_repair_payload_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_single_generation_runtime_restore_workflow_service.rs",
             "backend-rs/src/services/chapter_single_generation_prepare_service.rs",
@@ -196,7 +173,7 @@ pub(crate) fn build_single_generation_runtime_restore_owner_contract() -> Value 
         },
         "active_consumers": [
             "chapter_single_generation_stream_workflow_service",
-            "chapter_single_generation_active_gateway_smoke_service",
+            "chapter-single-generation-active-gateway-smoke-rust",
             "chapter_generation_routes::generate_chapter_background"
         ],
         "existing_background_task_owner_contract": build_single_generation_existing_background_task_owner_contract(),
@@ -220,23 +197,18 @@ pub(crate) fn build_single_generation_runtime_restore_owner_contract() -> Value 
             "rust_manifest_probe_count": 6,
             "python_fallback_probe_count": 0,
             "source_map_closeout_ready": true,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_service_runtime_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "single-generation final frozen rollback shell retained; reopen only if bootstrap rollback policy changes",
+            "status": "rust_single_generation_runtime_restore_owner_source_map_deleted"
         },
         "rollback_boundary": {
             "runtime_knobs": [
                 "legacy_single_generation_direct_ai",
                 "python_candidate_executor_fallback"
             ],
-            "source_map_policy": "keep_python_single_generation_runtime_restore_route_and_stream_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "single_generation_runtime_restore_owner_is_rust_only_and_background_entry_shell_source_map_is_deleted",
             "python_fallback_removal_ready": true,
-            "rollback_files": [
-                "backend/app/api/chapter_generation_routes.py",
-                "backend/app/api/chapters.py",
-                "backend/app/services/chapter_generation/route_wiring_service.py",
-                "backend/app/services/chapter_generation/stream/entry_service.py",
-                "backend/app/services/chapter_generation/stream/wiring_service.py"
-            ]
+            "rollback_files": []
         }
     })
 }
@@ -319,10 +291,7 @@ mod tests {
             contract["owner"],
             "chapter_single_generation_runtime_restore_workflow_service"
         );
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/api/chapter_generation_routes.py"
-        );
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/services/chapter_single_generation_runtime_restore_workflow_service.rs"
@@ -341,7 +310,7 @@ mod tests {
         );
         assert_eq!(
             contract["active_consumers"][1],
-            "chapter_single_generation_active_gateway_smoke_service"
+            "chapter-single-generation-active-gateway-smoke-rust"
         );
         assert_eq!(
             contract["existing_background_task_owner_contract"]["owner"],
@@ -396,9 +365,22 @@ mod tests {
             true
         );
         assert_eq!(
-            contract["service_runtime_closeout_status"]["status"],
-            "rust_service_runtime_owner_ready_for_source_map_closeout_review"
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            true
         );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "single-generation final frozen rollback shell retained; reopen only if bootstrap rollback policy changes"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_single_generation_runtime_restore_owner_source_map_deleted"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "single_generation_runtime_restore_owner_is_rust_only_and_background_entry_shell_source_map_is_deleted"
+        );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
     }
 
     #[test]
@@ -417,6 +399,7 @@ mod tests {
             contract["behavior_contract"]["entrypoints"][2],
             "SingleGenerationStartupSnapshotPlan::persist"
         );
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["active_consumers"][2],
             "chapter_single_generation_active_gateway_smoke_service"
@@ -431,10 +414,7 @@ mod tests {
             contract["owner"],
             "chapter_single_generation_runtime_restore_workflow_service"
         );
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/api/chapter_generation_routes.py"
-        );
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/services/chapter_single_generation_runtime_restore_workflow_service.rs"
@@ -453,7 +433,7 @@ mod tests {
         );
         assert_eq!(
             contract["active_consumers"][1],
-            "chapter_single_generation_active_gateway_smoke_service"
+            "chapter-single-generation-active-gateway-smoke-rust"
         );
         assert_eq!(
             contract["existing_background_task_owner_contract"]["owner"],
@@ -504,8 +484,20 @@ mod tests {
             true
         );
         assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "single-generation final frozen rollback shell retained; reopen only if bootstrap rollback policy changes"
+        );
+        assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_service_runtime_owner_ready_for_source_map_closeout_review"
+            "rust_single_generation_write_workflow_owner_source_map_deleted"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "single_generation_write_workflow_owner_is_rust_only_and_background_entry_shell_source_map_is_deleted"
         );
     }
 
@@ -517,6 +509,7 @@ mod tests {
             contract["owner"],
             "chapter_single_generation_background_launch_service::launch_owner"
         );
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["behavior_contract"]["entrypoints"][1],
             "PreparedSingleGenerationBackgroundLaunchParts::persist_and_dispatch"

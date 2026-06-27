@@ -1,4 +1,4 @@
-from app.services.chapter_candidate_runtime_state_service import (
+from tests.test_support.chapter_candidate_runtime_state_test_support import (
     build_chapter_candidate_runtime_state,
     snapshot_chapter_candidate_runtime_state,
     sync_chapter_candidate_runtime_state,

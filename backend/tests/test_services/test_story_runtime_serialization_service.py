@@ -1,4 +1,4 @@
-from app.services.story_runtime_serialization_service import (
+from tests.test_support.schemas.generation_payload import (
     attach_story_runtime_contract,
     attach_story_runtime_result_payload,
     extract_story_runtime_snapshot_from_contract,

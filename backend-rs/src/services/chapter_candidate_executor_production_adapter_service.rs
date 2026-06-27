@@ -28,8 +28,19 @@ pub(crate) struct ChapterCandidateQualityAdapterContext {
     pub(crate) chapter_context: Value,
     pub(crate) target_word_count: i64,
     pub(crate) generation_intent: Value,
+    pub(crate) creative_mode: String,
+    pub(crate) story_focus: String,
+    pub(crate) plot_stage: String,
+    pub(crate) story_creation_brief: String,
+    pub(crate) quality_preset: String,
+    pub(crate) quality_notes: String,
+    pub(crate) chapter_count: Option<i64>,
+    pub(crate) current_chapter_number: Option<i64>,
     pub(crate) retry_count: i64,
     pub(crate) max_retries: i64,
+    pub(crate) story_repair_summary: String,
+    pub(crate) story_repair_targets: Vec<String>,
+    pub(crate) story_preserve_strengths: Vec<String>,
     pub(crate) current_story_repair_payload: Option<Value>,
     pub(crate) scope: String,
     pub(crate) log_prefix: String,
@@ -43,6 +54,18 @@ pub(crate) struct CandidateQualityRuntimeContextBuildInput {
     pub(crate) chapter_context: Value,
     pub(crate) target_word_count: i64,
     pub(crate) generation_intent: Value,
+    pub(crate) creative_mode: String,
+    pub(crate) story_focus: String,
+    pub(crate) plot_stage: String,
+    pub(crate) story_creation_brief: String,
+    pub(crate) quality_preset: String,
+    pub(crate) quality_notes: String,
+    pub(crate) chapter_count: Option<i64>,
+    pub(crate) current_chapter_number: Option<i64>,
+    pub(crate) story_repair_summary: String,
+    pub(crate) story_repair_targets: Vec<String>,
+    pub(crate) story_preserve_strengths: Vec<String>,
+    pub(crate) current_story_repair_payload: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -121,6 +144,18 @@ where
                 chapter_context: self.context.chapter_context.clone(),
                 target_word_count: self.context.target_word_count,
                 generation_intent: self.context.generation_intent.clone(),
+                creative_mode: self.context.creative_mode.clone(),
+                story_focus: self.context.story_focus.clone(),
+                plot_stage: self.context.plot_stage.clone(),
+                story_creation_brief: self.context.story_creation_brief.clone(),
+                quality_preset: self.context.quality_preset.clone(),
+                quality_notes: self.context.quality_notes.clone(),
+                chapter_count: self.context.chapter_count,
+                current_chapter_number: self.context.current_chapter_number,
+                story_repair_summary: self.context.story_repair_summary.clone(),
+                story_repair_targets: self.context.story_repair_targets.clone(),
+                story_preserve_strengths: self.context.story_preserve_strengths.clone(),
+                current_story_repair_payload: self.context.current_story_repair_payload.clone(),
             });
 
         (self.compute_story_quality_metrics_fn)(CandidateStoryQualityMetricsInput {
@@ -631,14 +666,7 @@ pub(crate) fn build_chapter_candidate_production_adapter_owner_contract() -> Val
     serde_json::json!({
         "owner": "chapter_candidate_executor_production_adapter_service",
         "scope": "candidate_executor_production_cutover_and_rollback_owner",
-        "python_source_map": [
-            "backend/app/api/chapters.py",
-            "backend/app/services/chapter_candidate_executor_service.py",
-            "backend/app/services/chapter_candidate_generation_service.py",
-            "backend/app/services/chapter_candidate_output_service.py",
-            "backend/app/services/chapter_candidate_record_service.py",
-            "backend/app/services/chapter_generation/stream/candidate_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs",
             "backend-rs/src/services/chapter_candidate_executor_service.rs",
@@ -685,7 +713,7 @@ pub(crate) fn build_chapter_candidate_production_adapter_owner_contract() -> Val
                 "default rollback boundary is python_candidate_executor_fallback",
                 "disabled Rust cutover preserves configured disabled_reason",
                 "fallback context carries reason, rollback_boundary, and optional rust_error",
-                "python_fallback_removal_ready remains false without explicit source-map freeze"
+                "python_fallback_removal_ready is true; remaining rollback semantics are governed by the explicit route-gateway rollback shell review"
             ]
         },
         "validation_boundary": [
@@ -720,14 +748,14 @@ pub(crate) fn build_chapter_candidate_production_adapter_owner_contract() -> Val
             "runtime_executor_owner": "generate_best_ranked_candidate_with_runtime_quality_adapters",
             "rollback_knob": "ChapterCandidateProductionAdapterConfig",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_chapter_candidate_executor_production_adapter_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "candidate executor production python source-map deleted; this owner is now Rust-only on the active path",
+            "status": "rust_chapter_candidate_executor_production_adapter_owner_executor_source_map_deleted"
         },
         "rollback_boundary": {
             "python_source_map": "chapter_candidate_executor_production_adapter_python_source_map",
             "runtime_rollback_knob": "ChapterCandidateProductionAdapterConfig",
-            "python_fallback_removal_ready": false,
+            "python_fallback_removal_ready": true,
             "approval_required": "explicit source-map freeze/delete/repoint approval"
         }
     })
@@ -753,6 +781,33 @@ mod tests {
         build_chapter_candidate_quality_adapter, ChapterCandidateQualityAdapterContext,
     };
     use crate::services::chapter_candidate_executor_service::ChapterCandidateExecutorRequest;
+
+    fn assert_no_deleted_python_service_source_map(contract: &serde_json::Value) {
+        for key in ["python_source_map", "source_map_files", "rollback_files"] {
+            let Some(items) = contract.get(key).and_then(|value| value.as_array()) else {
+                continue;
+            };
+            assert!(
+                !items.iter().any(|item| item
+                    .as_str()
+                    .is_some_and(|path| path.starts_with("backend/app/services/"))),
+                "{key} must not retain deleted backend/app/services source-map paths"
+            );
+        }
+
+        if let Some(rollback_files) = contract
+            .get("rollback_boundary")
+            .and_then(|value| value.get("rollback_files"))
+            .and_then(|value| value.as_array())
+        {
+            assert!(
+                !rollback_files.iter().any(|item| item
+                    .as_str()
+                    .is_some_and(|path| path.starts_with("backend/app/services/"))),
+                "rollback_boundary.rollback_files must not retain deleted backend/app/services paths"
+            );
+        }
+    }
 
     #[test]
     fn should_resolve_python_fallback_when_rust_adapter_disabled() {
@@ -1155,8 +1210,19 @@ mod tests {
                 chapter_context: json!({"chapter_outline": "outline"}),
                 target_word_count: 1200,
                 generation_intent: json!({"mode": "draft"}),
+                creative_mode: String::new(),
+                story_focus: String::new(),
+                plot_stage: String::new(),
+                story_creation_brief: String::new(),
+                quality_preset: String::new(),
+                quality_notes: String::new(),
+                chapter_count: None,
+                current_chapter_number: None,
                 retry_count: 0,
                 max_retries: 1,
+                story_repair_summary: String::new(),
+                story_repair_targets: Vec::new(),
+                story_preserve_strengths: Vec::new(),
                 current_story_repair_payload: None,
                 scope: "chapter".to_string(),
                 log_prefix: "Chapter".to_string(),
@@ -1170,6 +1236,10 @@ mod tests {
     #[test]
     fn should_publish_chapter_candidate_production_adapter_owner_contract() {
         let contract = build_chapter_candidate_production_adapter_owner_contract();
+        assert_no_deleted_python_service_source_map(&contract);
+        let python_source_map = contract["python_source_map"]
+            .as_array()
+            .expect("python source map");
 
         assert_eq!(
             contract["owner"],
@@ -1179,10 +1249,7 @@ mod tests {
             contract["scope"],
             "candidate_executor_production_cutover_and_rollback_owner"
         );
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/api/chapters.py"
-        );
+        assert_eq!(python_source_map.len(), 0);
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs"
@@ -1209,7 +1276,7 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profiles"][0],
@@ -1242,11 +1309,11 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_chapter_candidate_executor_production_adapter_owner_ready_for_source_map_closeout_review"
+            "rust_chapter_candidate_executor_production_adapter_owner_executor_source_map_deleted"
         );
     }
 }

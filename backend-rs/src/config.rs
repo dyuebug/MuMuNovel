@@ -37,6 +37,7 @@ pub enum ConfigError {
     MissingJwtSecret { mode: AppRuntimeMode },
     MissingDatabaseUrl { mode: AppRuntimeMode },
     StartupSchemaSyncNotAllowed { mode: AppRuntimeMode },
+    RustMigrationNoopExecutorSmokeNotAllowed { mode: AppRuntimeMode },
 }
 
 impl fmt::Display for ConfigError {
@@ -55,6 +56,11 @@ impl fmt::Display for ConfigError {
             Self::StartupSchemaSyncNotAllowed { mode } => write!(
                 f,
                 "ENABLE_STARTUP_SCHEMA_SYNC is not allowed when runtime mode is {}. Use the explicit migration step instead.",
+                mode.as_str()
+            ),
+            Self::RustMigrationNoopExecutorSmokeNotAllowed { mode } => write!(
+                f,
+                "RUST_MIGRATION_NOOP_EXECUTOR_SMOKE_ENABLED is not allowed when runtime mode is {}. Run the smoke in an explicit migration job instead.",
                 mode.as_str()
             ),
         }
@@ -92,6 +98,7 @@ pub struct AppConfig {
     pub chapter_candidate_rust_executor_fallback_on_error: bool,
     pub chapter_candidate_rust_executor_disabled_reason: String,
     pub chapter_candidate_rust_executor_rollback_boundary: String,
+    pub rust_migration_noop_executor_smoke_enabled: bool,
 }
 
 impl AppConfig {
@@ -174,6 +181,24 @@ fn resolve_startup_schema_sync(mode: AppRuntimeMode, enabled: bool) -> Result<bo
     }
 }
 
+fn resolve_rust_migration_noop_executor_smoke(
+    mode: AppRuntimeMode,
+    enabled: bool,
+) -> Result<bool, ConfigError> {
+    if !enabled {
+        return Ok(false);
+    }
+
+    if mode.is_development() {
+        warn!(
+            "RUST_MIGRATION_NOOP_EXECUTOR_SMOKE_ENABLED is enabled in development mode; smoke remains read-only and performs no DDL."
+        );
+        Ok(true)
+    } else {
+        Err(ConfigError::RustMigrationNoopExecutorSmokeNotAllowed { mode })
+    }
+}
+
 pub fn load() -> Result<AppConfig, ConfigError> {
     let _ = dotenvy::from_filename("../backend/.env").ok();
     let _ = dotenvy::from_filename(".env").ok();
@@ -192,6 +217,10 @@ pub fn load() -> Result<AppConfig, ConfigError> {
     let enable_startup_schema_sync = resolve_startup_schema_sync(
         runtime_mode,
         env_or_bool("ENABLE_STARTUP_SCHEMA_SYNC", false),
+    )?;
+    let rust_migration_noop_executor_smoke_enabled = resolve_rust_migration_noop_executor_smoke(
+        runtime_mode,
+        env_or_bool("RUST_MIGRATION_NOOP_EXECUTOR_SMOKE_ENABLED", false),
     )?;
 
     Ok(AppConfig {
@@ -234,14 +263,15 @@ pub fn load() -> Result<AppConfig, ConfigError> {
             "CHAPTER_CANDIDATE_RUST_EXECUTOR_ROLLBACK_BOUNDARY",
             "python_candidate_executor_fallback",
         ),
+        rust_migration_noop_executor_smoke_enabled,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        resolve_database_url, resolve_jwt_secret, resolve_startup_schema_sync, AppRuntimeMode,
-        ConfigError,
+        resolve_database_url, resolve_jwt_secret, resolve_rust_migration_noop_executor_smoke,
+        resolve_startup_schema_sync, AppRuntimeMode, ConfigError,
     };
 
     #[test]
@@ -292,6 +322,25 @@ mod tests {
         assert!(matches!(
             err,
             ConfigError::StartupSchemaSyncNotAllowed { .. }
+        ));
+    }
+
+    #[test]
+    fn development_mode_allows_explicit_rust_migration_noop_executor_smoke() {
+        let enabled = resolve_rust_migration_noop_executor_smoke(AppRuntimeMode::Development, true)
+            .expect("development mode should allow explicit no-op migration executor smoke");
+
+        assert!(enabled);
+    }
+
+    #[test]
+    fn non_development_rejects_rust_migration_noop_executor_smoke_flag() {
+        let err = resolve_rust_migration_noop_executor_smoke(AppRuntimeMode::NonDevelopment, true)
+            .expect_err("non-development mode should reject smoke flag in API runtime");
+
+        assert!(matches!(
+            err,
+            ConfigError::RustMigrationNoopExecutorSmokeNotAllowed { .. }
         ));
     }
 }

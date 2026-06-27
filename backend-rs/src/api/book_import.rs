@@ -250,11 +250,7 @@ fn build_book_import_route_owner_contract() -> Value {
     json!({
         "owner": "book_import",
         "scope": "book_import_create_status_preview_cancel_apply_retry_stream_route_group",
-        "python_source_map": [
-            "backend/app/api/book_import.py",
-            "backend/app/services/book_import_service.py",
-            "backend/app/schemas/book_import.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/api/book_import.rs",
             "backend-rs/src/services/book_import_service.rs",
@@ -352,24 +348,26 @@ fn build_book_import_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Book import route business smoke is covered by phase5-book-import-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy.",
+        "next_cutover_gate": "book-import Python route/service/schema source-map deleted; remaining maturity work is limited to optional provider-backed apply/apply-stream success smoke coverage",
+        "migration_policy": "Book import route business smoke is covered by phase5-book-import-business-owner; the Python route shell, legacy service, and legacy schema source maps are physically deleted, and the remaining route maturity work is limited to optional provider-backed apply/apply-stream success smoke coverage.",
         "validation_boundary": [
             "cargo test api::book_import",
             "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only --profile phase5-book-import-business-owner",
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_book_import_route_service_schema_files_as_source_map_until_explicit_freeze_delete_round",
-            "python_route_files_status": "source_map_only_for_book_import_route_group",
+            "source_map_policy": "book_import_route_service_schema_source_map_deleted_no_python_book_import_shell_remains",
+            "python_route_files_status": "book_import_route_service_schema_source_map_deleted",
+            "python_bootstrap_status": "book_import_route_registration_deleted_no_python_route_service_or_schema_shell_remains",
+            "source_map_freeze_status": "physical_closeout_completed",
+            "source_map_physical_closeout_action": "delete_completed",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
             "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval",
-                "provider-backed apply/apply-stream success smoke if final physical closeout requires AI import success coverage"
+                "optional provider-backed apply/apply-stream success smoke if final active-route maturity coverage needs AI-backed import success evidence"
             ],
-            "freeze_reason": "Rust book_import route group has dedicated phase5-book-import-business-owner probes for task create/status/cancel, logged-in missing-task JSON errors, and missing-task SSE error shells; final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy.",
+            "freeze_reason": "Rust book_import route group has dedicated phase5-book-import-business-owner probes for task create/status/cancel, logged-in missing-task JSON errors, and missing-task SSE error shells, while the detached Python route shell, legacy service, and legacy schema files no longer have any production consumers and are physically deleted.",
             "retired_manifest_fallbacks": [
                 "book-import-create-task-auth-guard-python-fallback",
                 "book-import-task-status-auth-guard-python-fallback",
@@ -379,11 +377,7 @@ fn build_book_import_route_owner_contract() -> Value {
                 "book-import-retry-stream-auth-guard-python-fallback",
                 "book-import-apply-stream-auth-guard-python-fallback"
             ],
-            "rollback_files": [
-                "backend/app/api/book_import.py",
-                "backend/app/services/book_import_service.py",
-                "backend/app/schemas/book_import.py"
-            ]
+            "rollback_files": []
         }
     })
 }
@@ -663,10 +657,7 @@ mod tests {
             contract["scope"],
             "book_import_create_status_preview_cancel_apply_retry_stream_route_group"
         );
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/api/book_import.py"
-        );
+        assert_eq!(contract["python_source_map"].as_array().unwrap().len(), 0);
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/api/book_import.rs"
@@ -730,27 +721,31 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "book-import Python route/service/schema source-map deleted; remaining maturity work is limited to optional provider-backed apply/apply-stream success smoke coverage"
         );
         assert!(contract["migration_policy"]
             .as_str()
             .expect("migration policy should be a string")
             .contains("phase5-book-import-business-owner"));
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("migration policy should be a string")
+            .contains("legacy service, and legacy schema source maps are physically deleted"));
         assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
             true
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["rollback_boundary"]["remaining_blockers"][0],
-            "explicit source-map freeze/delete/repoint approval"
+            "optional provider-backed apply/apply-stream success smoke if final active-route maturity coverage needs AI-backed import success evidence"
         );
     }
 

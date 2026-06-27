@@ -14,14 +14,7 @@ pub(crate) fn build_batch_generation_runtime_snapshot_owner_contract() -> Value 
     json!({
         "owner": "chapter_batch_generation_runtime_state_service::runtime_snapshot_merge_write_projection",
         "scope": "runtime_state_merge_snapshot_upsert_and_runtime_persistence_write_handoff",
-        "python_source_map": [
-            "backend/app/services/batch_generation_orchestration_service.py",
-            "backend/app/services/task_workflow_runtime_service.py",
-            "backend/app/services/batch_generation_resume_service.py",
-            "backend/app/services/batch_generation_query_service.py",
-            "backend/app/api/chapter_batch_generation_routes.py",
-            "backend/app/api/chapters.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service/runtime_snapshot_owner.rs",
@@ -61,7 +54,7 @@ pub(crate) fn build_batch_generation_runtime_snapshot_owner_contract() -> Value 
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_batch_runtime_snapshot_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_runtime_snapshot_owner_is_rust_only_and_surviving_snapshot_runtime_surfaces_are_tracked_by_external_persistence_contracts",
             "runtime_state_keys": [
                 "checkpoint",
                 "candidate_gateway",

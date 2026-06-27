@@ -5,10 +5,11 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api import wizard_stream
-from app.database import Base
-from app.models.project import Project
-from app.models.career import Career
+from tests.test_support.database_test_support import Base
+from migrator_app.models import Career
+from migrator_app.models.project import Project
+from tests.test_support import outlines_route_test_adapter as outlines_test_adapter
+from tests.test_support import wizard_generation_test_support as wizard_generation_test_support
 
 
 pytestmark = pytest.mark.asyncio
@@ -51,9 +52,9 @@ async def test_should_forward_enable_mcp_to_career_system_stream(monkeypatch, wi
     def fake_format_prompt(template, **kwargs):
         return "career prompt"
 
-    monkeypatch.setattr(wizard_stream.chapter_web_research_service, "collect_assets", fake_collect_assets)
-    monkeypatch.setattr(wizard_stream.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(wizard_stream.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(wizard_generation_test_support.chapter_web_research_service, "collect_assets", fake_collect_assets)
+    monkeypatch.setattr(wizard_generation_test_support, "get_template", fake_get_template)
+    monkeypatch.setattr(wizard_generation_test_support, "format_prompt", fake_format_prompt)
 
     project = Project(
         user_id=mock_user.user_id,
@@ -67,7 +68,7 @@ async def test_should_forward_enable_mcp_to_career_system_stream(monkeypatch, wi
     await wizard_stream_db.refresh(project)
 
     chunks = []
-    async for chunk in wizard_stream.career_system_generator(
+    async for chunk in wizard_generation_test_support.career_system_generator(
         {
             "project_id": project.id,
             "provider": "test-provider",
@@ -99,12 +100,12 @@ async def test_should_use_custom_web_research_query_for_world_building(monkeypat
     def fake_format_prompt(template, **kwargs):
         return "world prompt"
 
-    monkeypatch.setattr(wizard_stream.chapter_web_research_service, "collect_assets", fake_collect_assets)
-    monkeypatch.setattr(wizard_stream.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(wizard_stream.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(wizard_generation_test_support.chapter_web_research_service, "collect_assets", fake_collect_assets)
+    monkeypatch.setattr(wizard_generation_test_support, "get_template", fake_get_template)
+    monkeypatch.setattr(wizard_generation_test_support, "format_prompt", fake_format_prompt)
 
     chunks = []
-    async for chunk in wizard_stream.world_building_generator(
+    async for chunk in wizard_generation_test_support.world_building_generator(
         {
             "title": "World Project",
             "description": "seed project",
@@ -142,12 +143,12 @@ async def test_should_forward_openai_compatible_request_options_to_world_buildin
     def fake_format_prompt(template, **kwargs):
         return "world prompt"
 
-    monkeypatch.setattr(wizard_stream.chapter_web_research_service, "collect_assets", fake_collect_assets)
-    monkeypatch.setattr(wizard_stream.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(wizard_stream.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(wizard_generation_test_support.chapter_web_research_service, "collect_assets", fake_collect_assets)
+    monkeypatch.setattr(wizard_generation_test_support, "get_template", fake_get_template)
+    monkeypatch.setattr(wizard_generation_test_support, "format_prompt", fake_format_prompt)
 
     chunks = []
-    async for chunk in wizard_stream.world_building_generator(
+    async for chunk in wizard_generation_test_support.world_building_generator(
         {
             "title": "World Project",
             "description": "seed project",
@@ -191,9 +192,9 @@ async def test_should_use_custom_web_research_query_for_career_system(monkeypatc
     def fake_format_prompt(template, **kwargs):
         return "career prompt"
 
-    monkeypatch.setattr(wizard_stream.chapter_web_research_service, "collect_assets", fake_collect_assets)
-    monkeypatch.setattr(wizard_stream.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(wizard_stream.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(wizard_generation_test_support.chapter_web_research_service, "collect_assets", fake_collect_assets)
+    monkeypatch.setattr(wizard_generation_test_support, "get_template", fake_get_template)
+    monkeypatch.setattr(wizard_generation_test_support, "format_prompt", fake_format_prompt)
 
     project = Project(
         user_id=mock_user.user_id,
@@ -210,7 +211,7 @@ async def test_should_use_custom_web_research_query_for_career_system(monkeypatc
     await wizard_stream_db.refresh(project)
 
     chunks = []
-    async for chunk in wizard_stream.career_system_generator(
+    async for chunk in wizard_generation_test_support.career_system_generator(
         {
             "project_id": project.id,
             "provider": "test-provider",
@@ -272,9 +273,9 @@ async def test_should_use_custom_web_research_query_for_characters(monkeypatch, 
     def fake_format_prompt(template, **kwargs):
         return "character prompt"
 
-    monkeypatch.setattr(wizard_stream.chapter_web_research_service, "collect_assets", fake_collect_assets)
-    monkeypatch.setattr(wizard_stream.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(wizard_stream.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(wizard_generation_test_support.chapter_web_research_service, "collect_assets", fake_collect_assets)
+    monkeypatch.setattr(wizard_generation_test_support, "get_template", fake_get_template)
+    monkeypatch.setattr(wizard_generation_test_support, "format_prompt", fake_format_prompt)
 
     project = Project(
         user_id=mock_user.user_id,
@@ -304,7 +305,7 @@ async def test_should_use_custom_web_research_query_for_characters(monkeypatch, 
     await wizard_stream_db.refresh(main_career)
 
     chunks = []
-    async for chunk in wizard_stream.characters_generator(
+    async for chunk in wizard_generation_test_support.characters_generator(
         {
             "project_id": project.id,
             "count": 1,
@@ -373,15 +374,15 @@ async def test_should_include_research_query_in_outline_result(monkeypatch, wiza
     async def fake_save_project_research_assets(**kwargs):
         return None
 
-    monkeypatch.setattr(wizard_stream.chapter_web_research_service, "collect_assets", fake_collect_assets)
-    monkeypatch.setattr(wizard_stream.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(wizard_stream.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(outlines_test_adapter.chapter_web_research_service, "collect_assets", fake_collect_assets)
+    monkeypatch.setattr(outlines_test_adapter, "get_template", fake_get_template)
+    monkeypatch.setattr(outlines_test_adapter, "format_prompt", fake_format_prompt)
     monkeypatch.setattr(
-        wizard_stream,
+        outlines_test_adapter,
         "build_story_generation_packet_with_project_continuity",
         fake_build_story_packet,
     )
-    monkeypatch.setattr(wizard_stream, "_save_project_research_assets", fake_save_project_research_assets)
+    monkeypatch.setattr(outlines_test_adapter, "_save_project_research_assets", fake_save_project_research_assets)
 
     project = Project(
         user_id=mock_user.user_id,
@@ -396,7 +397,7 @@ async def test_should_include_research_query_in_outline_result(monkeypatch, wiza
     await wizard_stream_db.refresh(project)
 
     chunks = []
-    async for chunk in wizard_stream.outline_generator(
+    async for chunk in outlines_test_adapter.new_outline_generator(
         {
             "project_id": project.id,
             "chapter_count": 3,
@@ -458,13 +459,13 @@ async def test_should_merge_reference_research_assets_into_world_building_prompt
         saved_payload.update(kwargs)
         return None
 
-    monkeypatch.setattr(wizard_stream.chapter_web_research_service, "collect_assets", fake_collect_assets)
-    monkeypatch.setattr(wizard_stream.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(wizard_stream.PromptService, "format_prompt", fake_format_prompt)
-    monkeypatch.setattr(wizard_stream, "_save_project_research_assets", fake_save_project_research_assets)
+    monkeypatch.setattr(wizard_generation_test_support.chapter_web_research_service, "collect_assets", fake_collect_assets)
+    monkeypatch.setattr(wizard_generation_test_support, "get_template", fake_get_template)
+    monkeypatch.setattr(wizard_generation_test_support, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(wizard_generation_test_support, "_save_project_research_assets", fake_save_project_research_assets)
 
     chunks = []
-    async for chunk in wizard_stream.world_building_generator(
+    async for chunk in wizard_generation_test_support.world_building_generator(
         {
             "title": "World Project",
             "description": "seed project",
@@ -559,15 +560,15 @@ async def test_should_merge_reference_research_assets_into_outline_prompt_and_re
         saved_payload.update(kwargs)
         return None
 
-    monkeypatch.setattr(wizard_stream.chapter_web_research_service, "collect_assets", fake_collect_assets)
-    monkeypatch.setattr(wizard_stream.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(wizard_stream.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(outlines_test_adapter.chapter_web_research_service, "collect_assets", fake_collect_assets)
+    monkeypatch.setattr(outlines_test_adapter, "get_template", fake_get_template)
+    monkeypatch.setattr(outlines_test_adapter, "format_prompt", fake_format_prompt)
     monkeypatch.setattr(
-        wizard_stream,
+        outlines_test_adapter,
         "build_story_generation_packet_with_project_continuity",
         fake_build_story_packet,
     )
-    monkeypatch.setattr(wizard_stream, "_save_project_research_assets", fake_save_project_research_assets)
+    monkeypatch.setattr(outlines_test_adapter, "_save_project_research_assets", fake_save_project_research_assets)
 
     project = Project(
         user_id=mock_user.user_id,
@@ -586,7 +587,7 @@ async def test_should_merge_reference_research_assets_into_outline_prompt_and_re
     await wizard_stream_db.refresh(project)
 
     chunks = []
-    async for chunk in wizard_stream.outline_generator(
+    async for chunk in outlines_test_adapter.new_outline_generator(
         {
             "project_id": project.id,
             "chapter_count": 3,

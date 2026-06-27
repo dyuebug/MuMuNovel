@@ -71,6 +71,7 @@ pub(crate) enum PreparePartialRegenerationStreamError {
 
 #[derive(Debug, Clone, Deserialize, Default, PartialEq, Eq)]
 pub(crate) struct FullChapterRegenerationStreamRouteRequest {
+    pub(crate) modification_source: Option<String>,
     pub(crate) target_word_count: Option<i64>,
     pub(crate) custom_instructions: Option<String>,
     #[serde(default)]
@@ -91,10 +92,14 @@ pub(crate) struct FullChapterRegenerationStreamRouteRequest {
     pub(crate) story_repair_targets: Vec<Value>,
     #[serde(default)]
     pub(crate) story_preserve_strengths: Vec<Value>,
+    pub(crate) style_id: Option<i32>,
+    pub(crate) version_note: Option<String>,
+    pub(crate) auto_apply: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct FullChapterRegenerationStreamRequest {
+    pub(crate) modification_source: Option<String>,
     pub(crate) target_word_count: Option<i64>,
     pub(crate) custom_instructions: Option<String>,
     pub(crate) selected_suggestion_indices: Vec<String>,
@@ -114,6 +119,9 @@ pub(crate) struct FullChapterRegenerationStreamRequest {
     pub(crate) preserve_character_traits: bool,
     pub(crate) story_repair_targets: Vec<String>,
     pub(crate) story_preserve_strengths: Vec<String>,
+    pub(crate) style_id: Option<i32>,
+    pub(crate) version_note: Option<String>,
+    pub(crate) auto_apply: bool,
 }
 
 impl FullChapterRegenerationStreamRequest {
@@ -162,8 +170,13 @@ impl FullChapterRegenerationStreamRequest {
         preserve_character_traits: bool,
         story_repair_targets: Vec<String>,
         story_preserve_strengths: Vec<String>,
+        modification_source: Option<String>,
+        style_id: Option<i32>,
+        version_note: Option<String>,
+        auto_apply: bool,
     ) -> Self {
         Self {
+            modification_source,
             target_word_count,
             custom_instructions,
             selected_suggestion_indices,
@@ -183,6 +196,9 @@ impl FullChapterRegenerationStreamRequest {
             preserve_character_traits,
             story_repair_targets,
             story_preserve_strengths,
+            style_id,
+            version_note,
+            auto_apply,
         }
     }
 
@@ -229,7 +245,18 @@ impl FullChapterRegenerationStreamRequest {
                 .into_iter()
                 .filter_map(|value| value.as_str().map(str::to_owned))
                 .collect(),
+            normalize_optional_regeneration_request_string(route_request.modification_source),
+            route_request.style_id,
+            normalize_optional_regeneration_request_string(route_request.version_note),
+            route_request.auto_apply.unwrap_or(false),
         )
+    }
+
+    pub fn modification_source(&self) -> &str {
+        self.modification_source
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or("custom")
     }
 
     pub fn target_word_count(&self) -> i64 {
@@ -364,12 +391,24 @@ impl FullChapterRegenerationStreamRequest {
         &self.story_preserve_strengths
     }
 
+    pub fn style_id(&self) -> Option<i32> {
+        self.style_id
+    }
+
+    pub fn version_note(&self) -> Option<&str> {
+        self.version_note.as_deref()
+    }
+
+    pub fn auto_apply(&self) -> bool {
+        self.auto_apply
+    }
+
     pub fn compat_options_with_web_research_default(
         &self,
         web_research_default: bool,
     ) -> SingleChapterGenerationCompatOptions {
         SingleChapterGenerationCompatOptions {
-            style_id: None,
+            style_id: self.style_id,
             enable_analysis: true,
             enable_mcp: true,
             web_research_enabled: self.enable_web_research.unwrap_or(web_research_default),

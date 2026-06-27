@@ -53,14 +53,7 @@ pub(crate) fn build_chapter_batch_generation_route_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation",
         "scope": "batch_generation_create_status_stream_active_list_cancel_resume_route_group",
-        "python_source_map": [
-            "backend/app/api/chapter_batch_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/batch_generation/create_service.py",
-            "backend/app/services/batch_generation/query_service.py",
-            "backend/app/services/batch_generation/resume_service.py",
-            "backend/app/services/batch_generation/status_response_builder.py",
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/api/chapter_batch_generation.rs",
             "backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs",
@@ -117,7 +110,7 @@ pub(crate) fn build_chapter_batch_generation_route_owner_contract() -> Value {
         "active_consumers": [
             "router::chapters_routes",
             "deploy/strangler-gateway-probes.json",
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         ],
         "write_workflow_owner_contract": build_batch_generation_write_workflow_owner_contract(),
         "read_context_owner_contract": build_batch_generation_read_context_owner_contract(),
@@ -165,8 +158,8 @@ pub(crate) fn build_chapter_batch_generation_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "source-map is frozen; delete/repoint requires a separate same-round approval and rollback policy",
-        "migration_policy": "Batch chapter generation business smoke is covered by phase5-batch-generation-owner; the Python route shell is frozen as rollback-only source-map material, and final physical removal or repoint still requires a separate same-round approval.",
+        "next_cutover_gate": "batch-generation read-context source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/projection source-map packages",
+        "migration_policy": "Batch chapter generation business smoke is covered by phase5-batch-generation-owner; the legacy Python batch-generation route package and the dedicated read-context source-map package have been physically deleted after test-seam migration, and surviving Python closeout work is limited to separate shared runtime/projection source-map contracts.",
         "validation_boundary": [
             "cargo test api::chapter_batch_generation",
             "cargo test api::health",
@@ -178,25 +171,16 @@ pub(crate) fn build_chapter_batch_generation_route_owner_contract() -> Value {
             "runtime_knob": "python_candidate_executor_fallback",
             "python_route_files_status": "source_map_only_for_batch_generation_active_traffic",
             "python_default_import_status": "chapters_py_no_longer_imports_batch_package_source_maps_by_default",
-            "python_bootstrap_status": "lazy_imported_and_registered_for_explicit_gateway_rollback_only",
-            "source_map_freeze_status": "frozen_source_map_rollback_only",
-            "source_map_physical_closeout_action": "freeze",
+            "python_bootstrap_status": "bootstrap_registration_deleted_no_route_wiring_loader_remains",
+            "source_map_freeze_status": "physical_closeout_completed",
+            "source_map_physical_closeout_action": "delete_completed",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
+            "full_module_freeze_ready": true,
             "python_fallback_removal_ready": true,
             "remaining_blockers": [
-                "explicit delete/repoint approval for the frozen source-map shell",
-                "aggregate chapters.py and batch service source-map closeout"
+                "aggregate chapters route shell still needs its own separate source-map closeout package"
             ],
-            "rollback_files": [
-                "backend/app/api/chapter_batch_generation_routes.py",
-                "backend/app/api/chapters.py",
-                "backend/app/services/batch_generation/create_service.py",
-                "backend/app/services/batch_generation/query_service.py",
-                "backend/app/services/batch_generation/task_workflow_snapshot_service.py",
-                "backend/app/services/batch_generation/resume_service.py",
-                "backend/app/services/batch_generation/status_response_builder.py"
-            ]
+            "rollback_files": []
         }
     })
 }
@@ -989,11 +973,24 @@ mod error_mapper {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::{AppConfig, AppRuntimeMode};
+    use crate::models::{
+        batch_generation_snapshot, batch_generation_task, chapter, project, settings,
+    };
+    use crate::services::auth::Claims;
     use crate::services::chapter_batch_generation_read_context_service::active_query_owner::build_active_batch_generation_task_list_query_request_from_route_query;
     use crate::services::chapter_batch_generation_read_context_service::ActiveBatchGenerationTaskListRouteQuery;
+    use axum::extract::{Extension, Path, Query};
+    use axum::http::StatusCode;
+    use chrono::Utc;
+    use sea_orm::{
+        ActiveModelTrait, ConnectionTrait, Database, DatabaseConnection, DbBackend, EntityTrait,
+        IntoActiveModel, Schema, Set,
+    };
     use serde_json::json;
 
     use super::{
+        cancel_batch_generation, get_batch_generation_status, list_active_batch_generation_tasks,
         BatchGenerationCreateRouteRequest, ACTIVE_BATCH_GENERATION_TASKS_ROUTE,
         BATCH_GENERATION_CANCEL_ROUTE, BATCH_GENERATION_CREATE_ROUTE,
         BATCH_GENERATION_RESUME_ROUTE, BATCH_GENERATION_STATUS_ROUTE,
@@ -1010,13 +1007,13 @@ mod tests {
             "batch_generation_create_status_stream_active_list_cancel_resume_route_group"
         );
         assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/api/chapter_batch_generation_routes.py"
-        );
-        assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/api/chapter_batch_generation.rs"
         );
+        assert!(contract["python_source_map"]
+            .as_array()
+            .expect("python source map")
+            .is_empty());
         assert_eq!(
             contract["route_contract"]["create"],
             BATCH_GENERATION_CREATE_ROUTE
@@ -1047,7 +1044,7 @@ mod tests {
         );
         assert_eq!(
             contract["active_consumers"][2],
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         );
         assert_eq!(
             contract["write_workflow_owner_contract"]["owner"],
@@ -1067,7 +1064,7 @@ mod tests {
         );
         assert_eq!(
             contract["resume_task_command_owner_contract"]["owner"],
-            "chapter_batch_generation_resume_task_command_service"
+            "chapter_batch_generation_resume_task_command_service::resume_task_command_owner"
         );
         assert_eq!(
             contract["runtime_state_owner_contract"]["owner"],
@@ -1139,11 +1136,11 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "source-map is frozen; delete/repoint requires a separate same-round approval and rollback policy"
+            "batch-generation read-context source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/projection source-map packages"
         );
         assert_eq!(
             contract["migration_policy"],
-            "Batch chapter generation business smoke is covered by phase5-batch-generation-owner; the Python route shell is frozen as rollback-only source-map material, and final physical removal or repoint still requires a separate same-round approval."
+            "Batch chapter generation business smoke is covered by phase5-batch-generation-owner; the legacy Python batch-generation route package and the dedicated read-context source-map package have been physically deleted after test-seam migration, and surviving Python closeout work is limited to separate shared runtime/projection source-map contracts."
         );
         assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
@@ -1151,7 +1148,7 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            json!(false)
+            json!(true)
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
@@ -1159,16 +1156,20 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["python_bootstrap_status"],
-            "lazy_imported_and_registered_for_explicit_gateway_rollback_only"
+            "bootstrap_registration_deleted_no_route_wiring_loader_remains"
         );
         assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_status"],
-            "frozen_source_map_rollback_only"
+            "physical_closeout_completed"
         );
         assert_eq!(
             contract["rollback_boundary"]["source_map_physical_closeout_action"],
-            "freeze"
+            "delete_completed"
         );
+        assert!(contract["rollback_boundary"]["rollback_files"]
+            .as_array()
+            .expect("rollback files")
+            .is_empty());
     }
 
     #[test]
@@ -1289,5 +1290,461 @@ mod tests {
         assert_eq!(route_request.enable_analysis, None);
         assert_eq!(route_request.max_retries, None);
         assert_eq!(route_request.model.as_deref(), Some("gpt-4.1"));
+    }
+
+    fn app_config() -> AppConfig {
+        AppConfig {
+            app_host: "127.0.0.1".to_string(),
+            app_port: 8001,
+            app_name: "MuMuNovel".to_string(),
+            app_version: "0.1.0-rs".to_string(),
+            database_url: "sqlite::memory:".to_string(),
+            database_pool_size: 50,
+            enable_startup_schema_sync: false,
+            log_level: "info".to_string(),
+            debug: true,
+            runtime_mode: AppRuntimeMode::Development,
+            cors_origins: "*".to_string(),
+            jwt_secret: "secret".to_string(),
+            static_dir: "../backend/static".to_string(),
+            local_auth_enabled: true,
+            local_auth_username: String::new(),
+            local_auth_password: String::new(),
+            local_auth_display_name: "本地管理员".to_string(),
+            linuxdo_client_id: String::new(),
+            linuxdo_client_secret: String::new(),
+            linuxdo_redirect_uri: String::new(),
+            frontend_url: "http://localhost".to_string(),
+            session_expire_minutes: 120,
+            session_refresh_threshold_minutes: 30,
+            chapter_candidate_rust_executor_enabled: false,
+            chapter_candidate_rust_executor_fallback_on_error: true,
+            chapter_candidate_rust_executor_disabled_reason: String::new(),
+            chapter_candidate_rust_executor_rollback_boundary: "python_candidate_executor_fallback"
+                .to_string(),
+            rust_migration_noop_executor_smoke_enabled: false,
+        }
+    }
+
+    fn test_claims() -> Claims {
+        Claims {
+            sub: "user-db-smoke".to_string(),
+            username: "route-smoke".to_string(),
+            is_admin: false,
+            exp: usize::MAX,
+            iat: 0,
+        }
+    }
+
+    async fn setup_batch_generation_route_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite memory db");
+        let builder = DbBackend::Sqlite;
+        let schema = Schema::new(builder);
+
+        db.execute(builder.build(&schema.create_table_from_entity(project::Entity)))
+            .await
+            .expect("create projects table");
+        db.execute(builder.build(&schema.create_table_from_entity(settings::Entity)))
+            .await
+            .expect("create settings table");
+        db.execute(builder.build(&schema.create_table_from_entity(chapter::Entity)))
+            .await
+            .expect("create chapters table");
+        db.execute(builder.build(&schema.create_table_from_entity(batch_generation_task::Entity)))
+            .await
+            .expect("create batch generation tasks table");
+        db.execute(
+            builder.build(&schema.create_table_from_entity(batch_generation_snapshot::Entity)),
+        )
+        .await
+        .expect("create batch generation snapshots table");
+
+        db
+    }
+
+    async fn seed_batch_generation_route_fixture(db: &DatabaseConnection) {
+        let now = Utc::now().naive_utc();
+
+        project::ActiveModel {
+            id: Set("project-db-smoke".to_string()),
+            user_id: Set("user-db-smoke".to_string()),
+            title: Set("DB Smoke Project".to_string()),
+            description: Set(None),
+            theme: Set(None),
+            genre: Set(None),
+            target_words: Set(12_000),
+            current_words: Set(3_000),
+            status: Set("active".to_string()),
+            wizard_status: Set("completed".to_string()),
+            wizard_step: Set(0),
+            outline_mode: Set("simple".to_string()),
+            world_time_period: Set(None),
+            world_location: Set(None),
+            world_atmosphere: Set(None),
+            world_rules: Set(None),
+            chapter_count: Set(Some(3)),
+            narrative_perspective: Set(None),
+            character_count: Set(0),
+            default_creative_mode: Set(None),
+            default_story_focus: Set(None),
+            default_plot_stage: Set(None),
+            default_story_creation_brief: Set(None),
+            default_quality_preset: Set(None),
+            default_quality_notes: Set(None),
+            created_at: Set(now),
+            updated_at: Set(Some(now)),
+        }
+        .insert(db)
+        .await
+        .expect("insert route-smoke project");
+
+        settings::ActiveModel {
+            id: Set("settings-db-smoke".to_string()),
+            user_id: Set("user-db-smoke".to_string()),
+            api_provider: Set("openai".to_string()),
+            api_key: Set("sk-route-smoke".to_string()),
+            api_base_url: Set("https://api.example.com/v1".to_string()),
+            api_backup_urls: Set(None),
+            provider_type: Set("openai".to_string()),
+            fallback_strategy: Set("manual".to_string()),
+            azure_api_version: Set(None),
+            llm_model: Set("route-smoke-model".to_string()),
+            temperature: Set(0.6),
+            max_tokens: Set(2048),
+            system_prompt: Set(Some("route-smoke-prompt".to_string())),
+            preferences: Set(Some("{}".to_string())),
+            created_at: Set(now),
+            updated_at: Set(now),
+        }
+        .insert(db)
+        .await
+        .expect("insert route-smoke settings");
+
+        for (chapter_id, chapter_number, title, status, content, summary, word_count) in [
+            (
+                "chapter-db-2",
+                2,
+                "DB Smoke Chapter 2",
+                "completed",
+                Some("前置章节已完成正文"),
+                Some("前置章节概要"),
+                1000,
+            ),
+            (
+                "chapter-db-3",
+                3,
+                "DB Smoke Chapter 3",
+                "draft",
+                None,
+                None,
+                0,
+            ),
+        ] {
+            chapter::ActiveModel {
+                id: Set(chapter_id.to_string()),
+                project_id: Set("project-db-smoke".to_string()),
+                chapter_number: Set(chapter_number),
+                title: Set(title.to_string()),
+                content: Set(content.map(str::to_string)),
+                summary: Set(summary.map(str::to_string)),
+                word_count: Set(word_count),
+                status: Set(status.to_string()),
+                outline_id: Set(None),
+                sub_index: Set(1),
+                expansion_plan: Set(None),
+                created_at: Set(now),
+                updated_at: Set(Some(now)),
+            }
+            .insert(db)
+            .await
+            .expect("insert route-smoke chapter");
+        }
+
+        batch_generation_task::ActiveModel {
+            id: Set("batch-db-smoke".to_string()),
+            project_id: Set("project-db-smoke".to_string()),
+            user_id: Set("user-db-smoke".to_string()),
+            start_chapter_number: Set(2),
+            chapter_count: Set(2),
+            chapter_ids: Set(json!(["chapter-db-2", "chapter-db-3"])),
+            style_id: Set(None),
+            target_word_count: Set(2800),
+            enable_analysis: Set(true),
+            status: Set("running".to_string()),
+            total_chapters: Set(2),
+            completed_chapters: Set(1),
+            failed_chapters: Set(json!([])),
+            current_chapter_id: Set(Some("chapter-db-3".to_string())),
+            current_chapter_number: Set(Some(3)),
+            current_retry_count: Set(0),
+            max_retries: Set(3),
+            created_at: Set(Some(now)),
+            started_at: Set(Some(now)),
+            completed_at: Set(None),
+            error_message: Set(None),
+        }
+        .insert(db)
+        .await
+        .expect("insert route-smoke batch task");
+
+        batch_generation_snapshot::ActiveModel {
+            id: Set("snapshot-db-smoke".to_string()),
+            batch_task_id: Set("batch-db-smoke".to_string()),
+            latest_quality_metrics: Set(Some(json!({
+                "overall_score": 91.0,
+                "source": "route-smoke",
+            }))),
+            quality_metrics_history: Set(Some(json!([{
+                "overall_score": 90.0,
+                "source": "route-smoke-history",
+            }]))),
+            quality_metrics_summary: Set(Some(json!({
+                "chapter_count": 1,
+                "avg_score": 91.0,
+            }))),
+            workflow_runtime_state: Set(Some(json!({
+                "phase": "generating",
+                "progress": 65,
+                "last_event": "selected_candidate",
+                "last_message": "Rust route smoke selected candidate",
+                "candidate_gateway": {
+                    "execution_path": "rust_candidate_executor",
+                    "fallback_applied": false,
+                    "rollback_boundary": "python_candidate_executor_fallback",
+                    "rust_error": null
+                },
+                "selected_candidate_events": [
+                    {
+                        "type": "progress",
+                        "event": "selected_candidate",
+                        "message": "候选章节已选择"
+                    }
+                ],
+                "active_story_repair_payload": {
+                    "scope": "batch",
+                    "mode": "route-smoke"
+                }
+            }))),
+            created_at: Set(Some(now)),
+            updated_at: Set(Some(now)),
+        }
+        .insert(db)
+        .await
+        .expect("insert route-smoke snapshot");
+    }
+
+    #[tokio::test]
+    async fn should_load_db_backed_batch_generation_status_from_route_handler() {
+        let db = setup_batch_generation_route_db().await;
+        seed_batch_generation_route_fixture(&db).await;
+
+        let response = get_batch_generation_status(
+            Extension(db),
+            Extension(test_claims()),
+            Path("batch-db-smoke".to_string()),
+        )
+        .await
+        .expect("status route should load owned batch payload");
+
+        assert_eq!(response.0["batch_id"], json!("batch-db-smoke"));
+        assert_eq!(response.0["status"], json!("running"));
+        assert_eq!(response.0["stage_code"], json!("6.writing.generating"));
+        assert_eq!(
+            response.0["candidate_gateway"]["execution_path"],
+            json!("rust_candidate_executor")
+        );
+        assert_eq!(response.0["checkpoint"]["current_chapter_number"], json!(3));
+        assert_eq!(
+            response.0["latest_quality_metrics"]["overall_score"],
+            json!(91.0)
+        );
+    }
+
+    #[tokio::test]
+    async fn should_list_db_backed_active_batch_generation_tasks_from_route_handler() {
+        let db = setup_batch_generation_route_db().await;
+        seed_batch_generation_route_fixture(&db).await;
+
+        let response = list_active_batch_generation_tasks(
+            Extension(db),
+            Extension(test_claims()),
+            Query(ActiveBatchGenerationTaskListRouteQuery { limit: Some(10) }),
+        )
+        .await
+        .expect("active task list route should load owned batch items");
+
+        assert_eq!(response.0["total"], json!(1));
+        assert_eq!(response.0["items"][0]["batch_id"], json!("batch-db-smoke"));
+        assert_eq!(
+            response.0["items"][0]["task_type"],
+            json!("chapters_batch_generate")
+        );
+        assert_eq!(
+            response.0["items"][0]["candidate_gateway"]["execution_path"],
+            json!("rust_candidate_executor")
+        );
+    }
+
+    #[tokio::test]
+    async fn should_cancel_running_batch_generation_from_route_handler() {
+        let db = setup_batch_generation_route_db().await;
+        seed_batch_generation_route_fixture(&db).await;
+
+        let response = cancel_batch_generation(
+            Extension(db.clone()),
+            Extension(test_claims()),
+            Path("batch-db-smoke".to_string()),
+        )
+        .await
+        .expect("cancel route should stop running owned batch task");
+
+        assert_eq!(response.0["message"], json!("Batch generation cancelled"));
+        assert_eq!(response.0["batch_id"], json!("batch-db-smoke"));
+        assert_eq!(response.0["completed_chapters"], json!(1));
+        assert_eq!(response.0["total_chapters"], json!(2));
+
+        let persisted = batch_generation_task::Entity::find_by_id("batch-db-smoke")
+            .one(&db)
+            .await
+            .expect("query cancelled task")
+            .expect("cancelled task should persist");
+        assert_eq!(persisted.status, "cancelled");
+        assert!(persisted.completed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn should_return_bad_request_when_cancelling_terminal_batch_task_from_route_handler() {
+        let db = setup_batch_generation_route_db().await;
+        seed_batch_generation_route_fixture(&db).await;
+
+        let mut task = batch_generation_task::Entity::find_by_id("batch-db-smoke")
+            .one(&db)
+            .await
+            .expect("load running task")
+            .expect("running task exists")
+            .into_active_model();
+        task.status = Set("failed".to_string());
+        task.update(&db).await.expect("mark task failed");
+
+        let error = cancel_batch_generation(
+            Extension(db),
+            Extension(test_claims()),
+            Path("batch-db-smoke".to_string()),
+        )
+        .await
+        .expect_err("terminal batch task should reject cancel");
+
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error.1 .0,
+            json!({ "detail": "Cannot cancel task in status failed" })
+        );
+    }
+
+    #[tokio::test]
+    async fn should_resume_failed_batch_generation_from_route_handler() {
+        let db = setup_batch_generation_route_db().await;
+        seed_batch_generation_route_fixture(&db).await;
+
+        let mut task = batch_generation_task::Entity::find_by_id("batch-db-smoke")
+            .one(&db)
+            .await
+            .expect("load running task")
+            .expect("running task exists")
+            .into_active_model();
+        task.status = Set("failed".to_string());
+        task.current_retry_count = Set(1);
+        task.error_message = Set(Some("mock failed".to_string()));
+        task.update(&db).await.expect("mark task failed");
+
+        let response = super::resume_batch_generation(
+            Extension(db.clone()),
+            Extension(app_config()),
+            Extension(test_claims()),
+            Path("batch-db-smoke".to_string()),
+        )
+        .await
+        .expect("failed batch task should resume");
+
+        let resumed_batch_id = response.0["batch_id"]
+            .as_str()
+            .expect("resume response batch id")
+            .to_string();
+        assert_eq!(resumed_batch_id, "batch-db-smoke");
+        assert_eq!(response.0["resumed_from_batch_id"], json!("batch-db-smoke"));
+        assert_eq!(response.0["status"], json!("pending"));
+        assert_eq!(response.0["stage_code"], json!("6.writing.loading"));
+        assert_eq!(
+            response.0["checkpoint"]["resume_from_batch_id"],
+            json!("batch-db-smoke")
+        );
+        assert_eq!(response.0["completed_chapters"], json!(0));
+        assert_eq!(response.0["total_chapters"], json!(2));
+
+        let resumed_task = batch_generation_task::Entity::find_by_id(resumed_batch_id.clone())
+            .one(&db)
+            .await
+            .expect("load resumed task")
+            .expect("resumed task should persist");
+        assert_eq!(resumed_task.status, "pending");
+        assert_eq!(resumed_task.start_chapter_number, 2);
+        assert_eq!(resumed_task.chapter_count, 2);
+        assert_eq!(resumed_task.total_chapters, 2);
+        assert_eq!(resumed_task.completed_chapters, 0);
+        assert_eq!(resumed_task.current_retry_count, 0);
+    }
+
+    #[tokio::test]
+    async fn should_reject_resume_when_batch_task_is_not_terminal_from_route_handler() {
+        let db = setup_batch_generation_route_db().await;
+        seed_batch_generation_route_fixture(&db).await;
+
+        let error = super::resume_batch_generation(
+            Extension(db),
+            Extension(app_config()),
+            Extension(test_claims()),
+            Path("batch-db-smoke".to_string()),
+        )
+        .await
+        .expect_err("running batch task should reject resume");
+
+        assert_eq!(error.0, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            error.1 .0,
+            json!({ "detail": "Only failed or cancelled tasks can be resumed" })
+        );
+    }
+
+    #[tokio::test]
+    async fn should_map_missing_batch_task_to_404_from_status_and_cancel_handlers() {
+        let db = setup_batch_generation_route_db().await;
+
+        let status_error = get_batch_generation_status(
+            Extension(db.clone()),
+            Extension(test_claims()),
+            Path("missing-task".to_string()),
+        )
+        .await
+        .expect_err("missing status task should map to 404");
+        let cancel_error = cancel_batch_generation(
+            Extension(db),
+            Extension(test_claims()),
+            Path("missing-task".to_string()),
+        )
+        .await
+        .expect_err("missing cancel task should map to 404");
+
+        assert_eq!(status_error.0, StatusCode::NOT_FOUND);
+        assert_eq!(
+            status_error.1 .0,
+            json!({ "detail": "Batch generation task not found" })
+        );
+        assert_eq!(cancel_error.0, StatusCode::NOT_FOUND);
+        assert_eq!(
+            cancel_error.1 .0,
+            json!({ "detail": "Batch generation task not found" })
+        );
     }
 }

@@ -3,6 +3,7 @@ import asyncio
 import os
 import sys
 from logging.config import fileConfig
+from pathlib import Path
 
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
@@ -10,34 +11,43 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 from alembic.ddl.impl import DefaultImpl
+from dotenv import load_dotenv
 
-# 添加项目根目录到 Python 路径
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-# 导入应用配置
-from app.config import settings
 from tools.alembic_versioning import (
     ensure_version_table_column_capacity,
     patch_default_impl_version_table,
 )
 
 # 导入 Base 和所有模型
-from app.database import Base
-from app.models import (
-    Project, Outline, Character, Chapter, GenerationHistory,
-    Settings, WritingStyle, ProjectDefaultStyle,
-    RelationshipType, CharacterRelationship, Organization, OrganizationMember,
-    StoryMemory, PlotAnalysis, AnalysisTask, BatchGenerationTask,
-    RegenerationTask, Career, CharacterCareer, User, MCPPlugin, PromptTemplate
-)
+backend_root = Path(__file__).resolve().parents[2]
+repo_root = backend_root.parent
+for dotenv_path in (repo_root / ".env", backend_root / ".env"):
+    load_dotenv(dotenv_path, override=False)
+
+if str(backend_root) not in sys.path:
+    sys.path.insert(0, str(backend_root))
+
+from migrator_app.models import Base, load_all_models
+
+load_all_models()
+
+
+def _build_default_database_url() -> str:
+    postgres_user = os.getenv("POSTGRES_USER", "mumuai")
+    postgres_password = os.getenv("POSTGRES_PASSWORD", "password")
+    postgres_host = os.getenv("POSTGRES_HOST", os.getenv("DB_HOST", "localhost"))
+    postgres_port = os.getenv("POSTGRES_PORT", os.getenv("DB_PORT", "5432"))
+    postgres_db = os.getenv("POSTGRES_DB", "mumuai_novel")
+    return f"postgresql+asyncpg://{postgres_user}:{postgres_password}@{postgres_host}:{postgres_port}/{postgres_db}"
+
+
+DATABASE_URL = os.getenv("DATABASE_URL") or _build_default_database_url()
 
 # Alembic Config 对象
 config = context.config
 
 # 设置数据库连接字符串（从环境变量读取）
-config.set_main_option("sqlalchemy.url", settings.database_url)
+config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 # 配置日志
 if config.config_file_name is not None:
@@ -82,7 +92,7 @@ def do_run_migrations(connection: Connection) -> None:
 async def run_async_migrations() -> None:
     """在'在线'模式下运行异步迁移"""
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = settings.database_url
+    configuration["sqlalchemy.url"] = DATABASE_URL
     
     connectable = async_engine_from_config(
         configuration,

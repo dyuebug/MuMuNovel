@@ -73,14 +73,7 @@ pub(crate) fn build_chapter_batch_generation_task_payload_base_owner_contract() 
     json!({
         "owner": "chapter_batch_generation_task_payload_base_service",
         "scope": "batch_generation_task_view_payload_checkpoint_and_terminal_semantics_owner",
-        "python_source_map": [
-            "backend/app/models/batch_generation_task.py",
-            "backend/app/models/batch_generation_snapshot.py",
-            "backend/app/services/batch_generation/status_response_builder.py",
-            "backend/app/services/batch_generation/status_models.py",
-            "backend/app/services/batch_generation/create_service.py",
-            "backend/app/services/batch_generation/resume_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs",
             "backend-rs/src/services/chapter_batch_generation_task_payload_base_service/task_view_payload_owner.rs",
@@ -164,9 +157,27 @@ pub(crate) fn build_chapter_batch_generation_task_payload_base_owner_contract() 
             "checkpoint_projection_owner": "chapter_batch_generation_task_payload_base_service::task_view_payload_owner",
             "quality_status_projection_owner": "BatchGenerationQualityStatusContext",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit_python_source_map_freeze_delete_or_repoint_approval",
-            "status": "rust_service_runtime_owner_closeout_ready_python_source_map_pending"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "batch-generation task-payload direct source-map deleted; surviving Python closeout work for this aggregate owner is now limited to shared batch-generation-snapshot schema/runtime/database/API-test hold and shared batch-generation-task schema/runtime/API/test-support packages",
+            "status": "rust_batch_generation_task_payload_owner_direct_source_map_deleted"
+        },
+        "shared_schema_hold_status": {
+            "batch_generation_task_model": "shared_python_runtime_api_and_test_support_reference",
+            "default_python_module_consumers": [
+                "backend/tests/test_support/database_test_support.py",
+                "backend/tests/test_support/task_system/snapshot_runtime_persistence.py"
+            ],
+            "dedicated_python_regression_surfaces": [
+                "backend/tests/test_api/test_chapters.py",
+                "backend/tests/test_api/test_chapters_batch_generation.py",
+                "backend/tests/test_api/test_chapters_batch_status_resume.py"
+            ],
+            "test_support_consumers": [
+                "backend/tests/test_support/batch_generation_status_read_owner_test_adapter.py",
+                "backend/tests/test_support/batch_generation_orchestration_test_adapter.py",
+                "backend/tests/test_support/batch_generation_route_test_adapter.py"
+            ],
+            "physical_closeout_ready": false
         },
         "rollback_boundary": "batch_generation_task_payload_python_source_map"
     })
@@ -258,10 +269,7 @@ mod tests {
             contract["scope"],
             "batch_generation_task_view_payload_checkpoint_and_terminal_semantics_owner"
         );
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/models/batch_generation_task.py"
-        );
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs"
@@ -313,11 +321,58 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_batch_generation_task_payload_owner_direct_source_map_deleted"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "batch-generation task-payload direct source-map deleted; surviving Python closeout work for this aggregate owner is now limited to shared batch-generation-snapshot schema/runtime/database/API-test hold and shared batch-generation-task schema/runtime/API/test-support packages"
+        );
+        assert_eq!(
+            contract["shared_schema_hold_status"]["batch_generation_task_model"],
+            "shared_python_runtime_api_and_test_support_reference"
+        );
+        assert_eq!(
+            contract["shared_schema_hold_status"]["default_python_module_consumers"],
+            json!([
+                "backend/tests/test_support/database_test_support.py",
+                "backend/tests/test_support/task_system/snapshot_runtime_persistence.py"
+            ])
+        );
+        assert_eq!(
+            contract["shared_schema_hold_status"]["dedicated_python_regression_surfaces"],
+            json!([
+                "backend/tests/test_api/test_chapters.py",
+                "backend/tests/test_api/test_chapters_batch_generation.py",
+                "backend/tests/test_api/test_chapters_batch_status_resume.py"
+            ])
+        );
+        assert_eq!(
+            contract["shared_schema_hold_status"]["test_support_consumers"],
+            json!([
+                "backend/tests/test_support/batch_generation_status_read_owner_test_adapter.py",
+                "backend/tests/test_support/batch_generation_orchestration_test_adapter.py",
+                "backend/tests/test_support/batch_generation_route_test_adapter.py"
+            ])
+        );
+        assert_eq!(
+            contract["shared_schema_hold_status"]["physical_closeout_ready"],
+            json!(false)
         );
         assert_eq!(
             contract["validation_boundary"][0],
             "cargo test chapter_batch_generation_task_payload_base_service"
+        );
+        assert_eq!(
+            contract["quality_terminal_status_owner_contract"]["python_source_map"],
+            json!([])
+        );
+        assert_eq!(
+            crate::services::chapter_generation_runtime_service::snapshot_persistence_owner::build_chapter_generation_snapshot_owner_contract()["source_map_closeout_status"]["shared_schema_hold_status"]["physical_closeout_ready"],
+            json!(false)
         );
         assert_eq!(contract["validation_boundary"][1], "cargo test api::health");
         assert_eq!(
@@ -337,6 +392,121 @@ mod tests {
             "chapter_candidate_runtime_state_service"
         );
         assert_eq!(
+            contract["metadata_owner_contract"]["python_source_map"],
+            json!([])
+        );
+        assert_eq!(
+            contract["metadata_owner_contract"]["service_runtime_closeout_status"]
+                ["physical_python_closeout_completed"],
+            true
+        );
+        assert_eq!(
+            contract["metadata_owner_contract"]["service_runtime_closeout_status"]["status"],
+            "rust_batch_generation_payload_metadata_owner_source_map_deleted"
+        );
+        assert_eq!(
+            contract["metadata_owner_contract"]["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "batch-generation payload metadata source-map package deleted; surviving Python closeout work is now limited to shared batch-generation-task schema/runtime/API/test-support packages"
+        );
+        assert_eq!(
+            contract["metadata_owner_contract"]["rollback_boundary"]["source_map_policy"],
+            "batch_generation_task_payload_metadata_owner_is_rust_only_and_surviving_python_schema_runtime_surfaces_are_tracked_by_shared_task_contracts"
+        );
+        assert_eq!(
+            contract["metadata_owner_contract"]["shared_schema_hold_status"]
+                ["batch_generation_task_model"],
+            "shared_python_runtime_api_and_test_support_reference"
+        );
+        assert_eq!(
+            contract["metadata_owner_contract"]["shared_schema_hold_status"]
+                ["default_python_module_consumers"],
+            json!([
+                "backend/tests/test_support/database_test_support.py",
+                "backend/tests/test_support/task_system/snapshot_runtime_persistence.py"
+            ])
+        );
+        assert_eq!(
+            contract["metadata_owner_contract"]["shared_schema_hold_status"]
+                ["dedicated_python_regression_surfaces"],
+            json!([
+                "backend/tests/test_api/test_chapters.py",
+                "backend/tests/test_api/test_chapters_batch_generation.py",
+                "backend/tests/test_api/test_chapters_batch_status_resume.py"
+            ])
+        );
+        assert_eq!(
+            contract["metadata_owner_contract"]["shared_schema_hold_status"]
+                ["test_support_consumers"],
+            json!([
+                "backend/tests/test_support/batch_generation_status_read_owner_test_adapter.py",
+                "backend/tests/test_support/batch_generation_orchestration_test_adapter.py",
+                "backend/tests/test_support/batch_generation_route_test_adapter.py"
+            ])
+        );
+        assert_eq!(
+            contract["metadata_owner_contract"]["shared_schema_hold_status"]
+                ["physical_closeout_ready"],
+            false
+        );
+        assert_eq!(
+            contract["task_view_payload_owner_contract"]["python_source_map"],
+            json!([])
+        );
+        assert_eq!(
+            contract["task_view_payload_owner_contract"]["service_runtime_closeout_status"]
+                ["physical_python_closeout_completed"],
+            true
+        );
+        assert_eq!(
+            contract["task_view_payload_owner_contract"]["service_runtime_closeout_status"]
+                ["status"],
+            "rust_batch_generation_task_view_payload_owner_direct_source_map_deleted"
+        );
+        assert_eq!(
+            contract["task_view_payload_owner_contract"]["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "batch-generation task-view payload direct source-map deleted; surviving Python closeout work for this owner is now limited to shared batch-generation-snapshot schema/runtime/database/API-test hold and shared batch-generation-task schema/runtime/API/test-support packages"
+        );
+        assert_eq!(
+            contract["task_view_payload_owner_contract"]["rollback_boundary"]["source_map_policy"],
+            "batch_generation_task_view_payload_owner_is_rust_only_and_surviving_python_schema_runtime_surfaces_are_tracked_by_shared_task_contracts"
+        );
+        assert_eq!(
+            contract["task_view_payload_owner_contract"]["shared_schema_hold_status"]
+                ["batch_generation_task_model"],
+            "shared_python_runtime_api_and_test_support_reference"
+        );
+        assert_eq!(
+            contract["task_view_payload_owner_contract"]["shared_schema_hold_status"]
+                ["default_python_module_consumers"],
+            json!([
+                "backend/tests/test_support/database_test_support.py",
+                "backend/tests/test_support/task_system/snapshot_runtime_persistence.py"
+            ])
+        );
+        assert_eq!(
+            contract["task_view_payload_owner_contract"]["shared_schema_hold_status"]
+                ["dedicated_python_regression_surfaces"],
+            json!([
+                "backend/tests/test_api/test_chapters.py",
+                "backend/tests/test_api/test_chapters_batch_generation.py",
+                "backend/tests/test_api/test_chapters_batch_status_resume.py"
+            ])
+        );
+        assert_eq!(
+            contract["task_view_payload_owner_contract"]["shared_schema_hold_status"]
+                ["test_support_consumers"],
+            json!([
+                "backend/tests/test_support/batch_generation_status_read_owner_test_adapter.py",
+                "backend/tests/test_support/batch_generation_orchestration_test_adapter.py",
+                "backend/tests/test_support/batch_generation_route_test_adapter.py"
+            ])
+        );
+        assert_eq!(
+            contract["task_view_payload_owner_contract"]["shared_schema_hold_status"]
+                ["physical_closeout_ready"],
+            false
+        );
+        assert_eq!(
             contract["rollback_boundary"],
             "batch_generation_task_payload_python_source_map"
         );
@@ -354,10 +524,7 @@ mod tests {
             contract["scope"],
             "batch_generation_quality_status_context_failed_terminal_semantics_and_status_payload_projection"
         );
-        assert_eq!(
-            contract["python_source_map"][2],
-            "backend/app/services/batch_generation/status_response_builder.py"
-        );
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs"
@@ -387,8 +554,51 @@ mod tests {
             "cargo check --manifest-path backend-rs/Cargo.toml"
         );
         assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_batch_generation_quality_terminal_status_owner_direct_source_map_deleted"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "batch-generation quality-terminal-status direct source-map deleted; surviving Python closeout work for this owner is now limited to shared batch-generation-snapshot schema/runtime/database/API-test hold and shared batch-generation-task schema/runtime/API/test-support packages"
+        );
+        assert_eq!(
+            contract["shared_schema_hold_status"]["batch_generation_task_model"],
+            "shared_python_runtime_api_and_test_support_reference"
+        );
+        assert_eq!(
+            contract["shared_schema_hold_status"]["default_python_module_consumers"],
+            json!([
+                "backend/tests/test_support/database_test_support.py",
+                "backend/tests/test_support/task_system/snapshot_runtime_persistence.py"
+            ])
+        );
+        assert_eq!(
+            contract["shared_schema_hold_status"]["dedicated_python_regression_surfaces"],
+            json!([
+                "backend/tests/test_api/test_chapters.py",
+                "backend/tests/test_api/test_chapters_batch_generation.py",
+                "backend/tests/test_api/test_chapters_batch_status_resume.py"
+            ])
+        );
+        assert_eq!(
+            contract["shared_schema_hold_status"]["test_support_consumers"],
+            json!([
+                "backend/tests/test_support/batch_generation_status_read_owner_test_adapter.py",
+                "backend/tests/test_support/batch_generation_orchestration_test_adapter.py",
+                "backend/tests/test_support/batch_generation_route_test_adapter.py"
+            ])
+        );
+        assert_eq!(
+            contract["shared_schema_hold_status"]["physical_closeout_ready"],
+            false
+        );
+        assert_eq!(
             contract["rollback_boundary"]["source_map_policy"],
-            "keep_python_quality_terminal_status_projection_shells_as_source_map_until_explicit_freeze_delete_round"
+            "batch_generation_quality_terminal_status_owner_is_rust_only_and_surviving_python_schema_runtime_surfaces_are_tracked_by_shared_task_contracts"
         );
     }
 

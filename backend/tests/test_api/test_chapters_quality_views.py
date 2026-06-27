@@ -4,9 +4,9 @@ from typing import Any
 
 import pytest
 
-from app.services import project_quality_trend_service
-from app.models.generation_history import GenerationHistory
-from app.models.memory import PlotAnalysis, StoryMemory
+from tests.test_support import project_quality_trend_test_support as project_quality_trend_service
+from migrator_app.models import GenerationHistory
+from migrator_app.models import PlotAnalysis, StoryMemory
 from tests.test_api.chapters_test_support import (
     _build_quality_history_payload,
     chapters_client,

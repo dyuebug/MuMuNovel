@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services import chapter_candidate_executor_service as executor_service
+from tests.test_support import chapter_candidate_executor_test_support as executor_service
 
-from app.services.chapter_candidate_executor_service import (
+from tests.test_support.chapter_candidate_executor_test_support import (
     _resolve_followup_targeted_repair_seed_candidate,
     _select_post_finalize_targeted_repair_seed_candidate,
 )
@@ -118,6 +118,60 @@ async def test_should_delegate_generate_best_ranked_candidate_with_cached_depend
     assert captured["workflow_kwargs"]["base_generate_kwargs"] == {"prompt": "hello"}
 
 
+@pytest.mark.asyncio
+async def test_should_delegate_generate_best_ranked_candidate_with_default_wiring(monkeypatch):
+    captured = {}
+
+    async def fake_generate_best_ranked_candidate(**kwargs):
+        captured.update(kwargs)
+        return {"winner": "default"}
+
+    monkeypatch.setattr(
+        executor_service,
+        "generate_best_ranked_candidate",
+        fake_generate_best_ranked_candidate,
+    )
+
+    result = await executor_service.generate_best_ranked_candidate_with_default_wiring(
+        ai_service="ai",
+        base_generate_kwargs={"prompt": "hello"},
+        target_word_count=888,
+        source="chapter",
+        generation_label="route",
+        quality_evaluator="quality",
+        quality_gate_plan_builder="gate",
+        max_candidates=4,
+        runtime_state={"candidate_total": 4},
+    )
+
+    assert result == {"winner": "default"}
+    assert captured["ai_service"] == "ai"
+    assert captured["base_generate_kwargs"] == {"prompt": "hello"}
+    assert captured["target_word_count"] == 888
+    assert captured["source"] == "chapter"
+    assert captured["generation_label"] == "route"
+    assert captured["quality_evaluator"] == "quality"
+    assert captured["quality_gate_plan_builder"] == "gate"
+    assert captured["max_candidates"] == 4
+    assert captured["runtime_state"] == {"candidate_total": 4}
+    assert (
+        captured["resolve_generation_attempt_labels_fn"]
+        == executor_service.resolve_default_generation_attempt_labels
+    )
+    assert (
+        captured["sync_generation_runtime_state_fn"]
+        == executor_service.sync_default_generation_runtime_state
+    )
+    assert (
+        captured["collect_generation_candidate_output_fn"]
+        == executor_service.collect_default_generation_candidate_output
+    )
+    assert (
+        captured["build_generation_candidate_record_fn"]
+        == executor_service.build_default_generation_candidate_record_with_default_logging
+    )
+
+
 def test_should_cache_candidate_executor_dependencies(monkeypatch):
     calls = []
 
@@ -127,7 +181,8 @@ def test_should_cache_candidate_executor_dependencies(monkeypatch):
 
     executor_service.get_chapter_candidate_executor_dependencies.cache_clear()
     monkeypatch.setattr(
-        "app.services.chapter_candidate_executor_wiring_service.build_default_chapter_candidate_executor_dependencies",
+        executor_service,
+        "build_default_chapter_candidate_executor_dependencies",
         fake_builder,
     )
 

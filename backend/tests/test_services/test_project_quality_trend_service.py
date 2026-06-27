@@ -1,6 +1,6 @@
 import pytest
 
-from app.services import project_quality_trend_service
+from tests.test_support import project_quality_trend_test_support as project_quality_trend_service
 
 
 @pytest.mark.asyncio

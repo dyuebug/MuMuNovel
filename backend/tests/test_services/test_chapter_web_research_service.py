@@ -1,7 +1,7 @@
 import pytest
 
-import app.services.chapter_web_research_service as chapter_web_research_module
-from app.services.chapter_web_research_service import (
+import tests.test_support.chapter_web_research_test_support as chapter_web_research_module
+from tests.test_support.chapter_web_research_test_support import (
     ChapterWebResearchService,
     WebResearchRuntimeConfig,
 )

@@ -1,1 +1,0 @@
-"""Chapter generation domain package."""

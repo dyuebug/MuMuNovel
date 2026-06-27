@@ -188,13 +188,7 @@ pub(crate) fn build_chapter_narrative_cleaner_owner_contract() -> serde_json::Va
     serde_json::json!({
         "owner": "chapter_narrative_cleaner_service",
         "scope": "shared_generated_narrative_meta_line_cleanup_template_polish_and_sentence_boundary_trim",
-        "python_source_map": [
-            "backend/app/api/chapter_draft_routes.py",
-            "backend/app/api/chapter_regeneration_routes.py",
-            "backend/app/services/chapter_generation/stream/finalize_service.py",
-            "backend/app/services/chapter_generation/stream/candidate_service.py",
-            "backend/app/services/chapter_candidate_record_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_narrative_cleaner_service.rs",
             "backend-rs/src/services/chapter_candidate_output_service.rs",
@@ -230,12 +224,12 @@ pub(crate) fn build_chapter_narrative_cleaner_owner_contract() -> serde_json::Va
             "python_fallback_probe_count": 0,
             "narrative_cleanup_owner": "chapter_narrative_cleaner_service",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit_python_source_map_freeze_delete_or_repoint_approval",
-            "status": "rust_service_runtime_owner_closeout_ready_python_source_map_pending"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "generated text production python source-map deleted; this owner is now Rust-only on the active path",
+            "status": "rust_chapter_narrative_cleaner_owner_source_map_deleted"
         },
         "rollback_boundary": {
-            "python_source_map_retained": true,
+            "python_source_map_retained": false,
             "approval_required_before_python_edit": true
         }
     })
@@ -295,7 +289,7 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
     }
 

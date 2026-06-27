@@ -139,8 +139,11 @@ mod tests {
             "shared_generation_prompt_template_and_runtime_block_owner"
         );
         assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/services/prompt_service.py"
+            contract["python_source_map"]
+                .as_array()
+                .expect("python source map")
+                .len(),
+            0
         );
         assert_eq!(
             contract["rust_owner_map"][0],
@@ -197,6 +200,13 @@ mod tests {
             "chapter_generation_prompt_service::quality_profile_owner"
         );
         assert_eq!(
+            contract["behavior_contract"]["quality_profile_owner_contract"]["python_source_map"]
+                .as_array()
+                .expect("quality python source map")
+                .len(),
+            0
+        );
+        assert_eq!(
             contract["behavior_contract"]["quality_profile_owner_contract"]["behavior_contract"]
                 ["entrypoints"][0],
             "build_novel_quality_prompt_blocks"
@@ -205,6 +215,11 @@ mod tests {
             contract["behavior_contract"]["quality_profile_owner_contract"]["behavior_contract"]
                 ["external_asset_policy"][0],
             "summary_only_assets"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["quality_profile_owner_contract"]["rollback_boundary"]
+                ["source_map_policy"],
+            "production_python_quality_profile_source_map_deleted_after_rust_owner_validation"
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profiles"][0],
@@ -232,11 +247,72 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]
+                ["python_story_prompt_block_service_deleted"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]
+                ["python_prompt_template_facade_lazy_source_map_import"],
             false
         );
         assert_eq!(
+            contract["service_runtime_closeout_status"]
+                ["python_prompt_template_facade_service_deleted"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]
+                ["python_prompt_service_lazy_source_map_import"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_prompt_service_deleted"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]
+                ["python_story_packet_lazy_source_map_import"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_story_packet_service_deleted"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]
+                ["python_story_packet_lazy_continuity_ledger_import"],
+            false
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]
+                ["python_story_packet_continuity_ledger_proxy_retired"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]
+                ["python_story_continuity_ledger_service_deleted"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]
+                ["production_promptservice_default_importers_cleared"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "prompt Python production services physically closed; historical Python prompt fixtures live under backend/tests/test_support"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_service_runtime_owner_with_prompt_python_production_services_deleted"
+        );
+        assert_eq!(
             contract["rollback_boundary"],
-            "chapter_generation_prompt_python_source_map"
+            "prompt rollback is now Rust owner plus backend/tests/test_support historical fixtures; no backend/app prompt Python service remains"
         );
     }
 
@@ -281,8 +357,11 @@ mod tests {
         assert_eq!(contract["owner"], "chapter_generation_prompt_service");
         assert_eq!(contract["scope"], "provider_payload_owner");
         assert_eq!(
-            contract["python_source_map"][1],
-            "backend/app/services/batch_generation_prompt_service.py"
+            contract["python_source_map"]
+                .as_array()
+                .expect("python source map")
+                .len(),
+            0
         );
         assert_eq!(
             contract["rust_target_map"][0],
@@ -307,6 +386,11 @@ mod tests {
             contract["behavior_contract"]["asset_prompt_visibility"][2],
             "mcp_references"
         );
+        assert!(!contract["python_source_map"]
+            .as_array()
+            .expect("python source map")
+            .iter()
+            .any(|item| item == "backend/app/api/chapters.py"));
         assert_eq!(
             contract["behavior_contract"]["mcp_references_preserved"],
             true
@@ -317,7 +401,7 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["source_map_policy"],
-            "keep_legacy_python_prompt_builders_as_source_map_until_explicit_freeze_delete_round"
+            "production_python_prompt_builders_deleted_test_fixtures_only"
         );
     }
 

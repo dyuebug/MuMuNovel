@@ -1,6 +1,7 @@
 use std::convert::Infallible;
 
 use axum::response::sse::Event;
+use sea_orm::DatabaseConnection;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -24,7 +25,12 @@ use crate::services::chapter_regeneration_prepare_service::{
     PartialChapterRegenerationStreamInput, PartialRegenerationStreamWorkflowRequest,
     PreparePartialRegenerationStreamError,
 };
-use crate::utils::sse::{sse_chunk, sse_done, sse_error, sse_result, SseProgress};
+use crate::services::chapter_regeneration_task_service::{
+    build_chapter_regeneration_task_owner_contract, build_full_regeneration_task_seed,
+    create_full_regeneration_task, load_latest_chapter_analysis, mark_regeneration_task_completed,
+    mark_regeneration_task_failed,
+};
+use crate::utils::sse::{sse_chunk, sse_done, sse_error, sse_json, sse_result, SseProgress};
 
 const CHAPTER_REGENERATION_STREAM_WORKFLOW_ROUTE_GROUP: &str = "chapter_regeneration";
 const CHAPTER_REGENERATION_STREAM_WORKFLOW_ROLLBACK_BOUNDARY: &str =
@@ -35,6 +41,11 @@ pub type OwnedRegenerationStream = ReceiverStream<Result<Event, Infallible>>;
 pub enum FinalizePartialRegenerationError {
     EmptyContent,
     WorkflowMetaText,
+}
+
+pub enum FullRegenerationTaskLifecycleError {
+    AnalysisMissing,
+    Internal(String),
 }
 
 pub struct RegenerationChunkProgress {
@@ -69,6 +80,7 @@ struct OwnedRegenerationStreamLaunchInput {
     ai_service: AIService,
     initial_events: Vec<OwnedRegenerationInitialEvent>,
     completion_message: String,
+    task_created_event: Option<Value>,
 }
 
 fn normalize_partial_regeneration_output(text: &str) -> String {
@@ -136,7 +148,7 @@ fn finalize_partial_regeneration_result(
 
 fn finalize_chapter_regeneration_result(
     generated_text: &str,
-    chapter_id: &str,
+    task_id: &str,
 ) -> Result<Value, FinalizePartialRegenerationError> {
     let (cleaned_text, _) = sanitize_generated_narrative_text(generated_text);
     if cleaned_text.trim().is_empty() {
@@ -149,12 +161,12 @@ fn finalize_chapter_regeneration_result(
     Ok(json!({
         "content": cleaned_text,
         "word_count": cleaned_text.chars().count(),
-        "generation_task_id": chapter_id,
+        "task_id": task_id,
         "analysis_task_id": Value::Null,
     }))
 }
 
-fn describe_regeneration_finalize_error(error: FinalizePartialRegenerationError) -> &'static str {
+fn describe_regeneration_finalize_error(error: &FinalizePartialRegenerationError) -> &'static str {
     match error {
         FinalizePartialRegenerationError::EmptyContent => {
             "Rewrite result is empty after sanitization"
@@ -171,7 +183,7 @@ async fn emit_regeneration_finalize_error(
 ) {
     let _ = tx
         .send(Ok(sse_error(
-            describe_regeneration_finalize_error(error),
+            describe_regeneration_finalize_error(&error),
             500,
         )))
         .await;
@@ -243,6 +255,8 @@ fn apply_owned_regeneration_initial_event(
 fn build_owned_regeneration_stream<BuildProgress, Finalize>(
     input: OwnedRegenerationStreamLaunchInput,
     mut build_progress_event: BuildProgress,
+    on_failed: Option<Value>,
+    on_succeeded: Option<Value>,
     finalize_payload: Finalize,
 ) -> OwnedRegenerationStream
 where
@@ -259,6 +273,7 @@ where
             ai_service,
             initial_events,
             completion_message,
+            task_created_event,
         } = input;
 
         let mut tracker = SseProgress::new(&task_label);
@@ -266,6 +281,9 @@ where
         for step in &initial_events {
             let event = apply_owned_regeneration_initial_event(&mut tracker, step);
             let _ = tx.send(Ok(event)).await;
+        }
+        if let Some(task_created_event) = task_created_event {
+            let _ = tx.send(Ok(sse_json(&task_created_event))).await;
         }
 
         let full_content =
@@ -275,16 +293,27 @@ where
             .await
             {
                 Ok(full_content) => full_content,
-                Err(()) => return,
+                Err(()) => {
+                    if let Some(failed) = on_failed {
+                        let _ = tx.send(Ok(sse_json(&failed))).await;
+                    }
+                    return;
+                }
             };
 
         let payload = match finalize_payload(&full_content) {
             Ok(payload) => payload,
             Err(error) => {
+                if let Some(failed) = on_failed {
+                    let _ = tx.send(Ok(sse_json(&failed))).await;
+                }
                 emit_regeneration_finalize_error(&tx, error).await;
                 return;
             }
         };
+        if let Some(succeeded) = on_succeeded {
+            let _ = tx.send(Ok(sse_json(&succeeded))).await;
+        }
 
         let _ = tx
             .send(Ok(tracker.complete(Some(&completion_message))))
@@ -294,6 +323,22 @@ where
     });
 
     ReceiverStream::new(rx)
+}
+
+fn build_full_regeneration_task_failed_event(task_id: &str) -> Value {
+    json!({
+        "type": "regeneration_task_state",
+        "task_id": task_id,
+        "status": "failed"
+    })
+}
+
+fn build_full_regeneration_task_completed_event(task_id: &str) -> Value {
+    json!({
+        "type": "regeneration_task_state",
+        "task_id": task_id,
+        "status": "completed"
+    })
 }
 
 pub(crate) struct ChapterRegenerationStreamWorkflowSmokeResult {
@@ -313,19 +358,12 @@ pub(crate) fn build_chapter_regeneration_stream_workflow_owner_contract() -> Val
     json!({
         "owner": "chapter_regeneration_stream_workflow_service",
         "scope": "full_and_partial_chapter_regeneration_sse_workflow_owner",
-        "python_source_map": [
-            "backend/app/api/chapter_regeneration_routes.py",
-            "backend/app/api/chapter_partial_regeneration_routes.py",
-            "backend/app/services/chapter_regeneration_stream_service.py",
-            "backend/app/services/partial_regeneration_service.py",
-            "backend/app/services/chapter_regeneration_context_service.py",
-            "backend/app/services/regeneration_task_service.py",
-            "backend/app/schemas/regeneration.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/api/chapter_regeneration_routes.rs",
             "backend-rs/src/services/chapter_regeneration_stream_workflow_service.rs",
             "backend-rs/src/services/chapter_regeneration_prepare_service.rs",
+            "backend-rs/src/services/chapter_regeneration_task_service.rs",
             "backend-rs/src/services/chapter_candidate_output_service.rs",
             "backend-rs/src/services/chapter_narrative_cleaner_service.rs",
             "backend-rs/src/services/chapter_single_generation_prepare_service/research_payload_owner.rs",
@@ -340,7 +378,10 @@ pub(crate) fn build_chapter_regeneration_stream_workflow_owner_contract() -> Val
                 "execute_regeneration_text_stream",
                 "normalize_partial_regeneration_output",
                 "finalize_chapter_regeneration_result",
-                "finalize_partial_regeneration_result"
+                "finalize_partial_regeneration_result",
+                "create_full_regeneration_task",
+                "mark_regeneration_task_completed",
+                "mark_regeneration_task_failed"
             ],
             "full_sse_initial_events": [
                 "Preparing: Building rewrite prompt...",
@@ -365,9 +406,9 @@ pub(crate) fn build_chapter_regeneration_stream_workflow_owner_contract() -> Val
             "auth_guard_manifest_coverage": "all_regeneration_routes",
             "deterministic_business_sse_smoke": true,
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "freeze_scope": "chapter_regeneration_python_route_schema_and_service_shells",
-            "freeze_reason": "Rust regeneration route group has dedicated owner-profile business probes for full stream, partial stream, apply partial, task list, and cleanup; final source-map action still requires explicit approval.",
+            "full_module_freeze_ready": true,
+            "freeze_scope": "chapter_regeneration_route_package_source_map_surface",
+            "freeze_reason": "Rust regeneration route group has dedicated owner-profile business probes for full stream, partial stream, apply partial, task list, and cleanup; the production chapter_regeneration route shell is now physically deleted, and the surviving Python follow-up work sits outside this direct route/workflow source-map package.",
             "owner_profile_business_probes": [
                 "chapter-regeneration-fixture-import-project-business-rust",
                 "chapter-regeneration-fixture-list-chapter-business-rust",
@@ -378,21 +419,17 @@ pub(crate) fn build_chapter_regeneration_stream_workflow_owner_contract() -> Val
                 "chapter-regeneration-tasks-business-rust",
                 "chapter-regeneration-fixture-delete-project-business-rust"
             ],
-            "python_bootstrap_status": "registered_for_explicit_gateway_rollback_only",
-            "frozen_module_files": [
-                "backend/app/api/chapter_regeneration_routes.py",
-                "backend/app/api/chapter_partial_regeneration_routes.py",
-                "backend/app/services/chapter_regeneration_stream_service.py",
-                "backend/app/services/partial_regeneration_service.py",
-                "backend/app/services/chapter_regeneration_context_service.py",
-                "backend/app/services/regeneration_task_service.py",
-                "backend/app/schemas/regeneration.py"
-            ],
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ]
+            "python_bootstrap_status": "chapter_regeneration_route_runtime_registration_deleted_no_python_route_shell_remains",
+            "stream_orchestration_source_maps": [],
+            "prepare_owner_source_maps": [],
+            "shared_prepare_dependency_source_maps": [],
+            "shared_context_compaction_source_maps": [],
+            "query_owner_source_maps": [],
+            "frozen_module_files": [],
+            "remaining_blockers": []
         },
         "prepare_owner_contract": build_chapter_regeneration_prepare_owner_contract(),
+        "task_owner_contract": build_chapter_regeneration_task_owner_contract(),
         "candidate_output_owner_contract": build_chapter_candidate_output_owner_contract(),
         "service_runtime_closeout_status": {
             "owner_profile": "phase5-chapter-regeneration-owner",
@@ -406,10 +443,10 @@ pub(crate) fn build_chapter_regeneration_stream_workflow_owner_contract() -> Val
             "full_finalize_owner": "finalize_chapter_regeneration_result",
             "partial_finalize_owner": "finalize_partial_regeneration_result",
             "source_map_closeout_ready": true,
-            "full_module_freeze_ready": false,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_chapter_regeneration_stream_workflow_owner_ready_for_source_map_closeout_review"
+            "full_module_freeze_ready": true,
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "separate_model_or_shared_owner_closeout_outside_direct_regeneration_route_package",
+            "status": "rust_chapter_regeneration_stream_workflow_owner_after_route_shell_delete"
         },
         "validation_boundary": [
             "cargo test services::chapter_regeneration_stream_workflow_service",
@@ -417,7 +454,7 @@ pub(crate) fn build_chapter_regeneration_stream_workflow_owner_contract() -> Val
             "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only --profile phase5-chapter-regeneration-owner",
             "cargo check"
         ],
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+        "next_cutover_gate": "chapter-regeneration route/workflow source-map package is physically closed out; any surviving Python work is outside this direct regeneration package"
     })
 }
 
@@ -439,14 +476,14 @@ pub(crate) fn run_chapter_regeneration_stream_workflow_smoke_suite(
             "apply_route_smoke_boundary": "logged_in_fixture_business_smoke",
             "deterministic_business_sse_smoke": true,
             "source_map_freeze_candidate_ready": true,
-            "source_map_freeze_ready": false
+            "source_map_freeze_ready": true
         }),
         runtime_state: json!({
             "auth_guard_manifest_coverage": "all_regeneration_routes",
             "deterministic_business_sse_smoke": true,
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "remaining_cutover_gate": "explicit_source_map_freeze_delete_repoint_approval"
+            "full_module_freeze_ready": true,
+            "remaining_cutover_gate": "separate_model_or_shared_owner_closeout_outside_direct_regeneration_route_package"
         }),
         readiness_evidence,
     }])
@@ -454,46 +491,135 @@ pub(crate) fn run_chapter_regeneration_stream_workflow_smoke_suite(
 
 fn build_full_chapter_regeneration_stream_launch_input(
     input: FullChapterRegenerationStreamInput,
-) -> (OwnedRegenerationStreamLaunchInput, String) {
+) -> OwnedRegenerationStreamLaunchInput {
     let FullChapterRegenerationStreamInput {
-        chapter_id,
         chapter_word_count,
         prompt,
         ai_service,
+        ..
     } = input;
 
-    (
-        OwnedRegenerationStreamLaunchInput {
-            task_label: "Chapter Rewrite".to_string(),
-            prompt,
-            ai_service,
-            initial_events: vec![
-                OwnedRegenerationInitialEvent::Preparing {
-                    message: Some("Building rewrite prompt...".to_string()),
-                },
-                OwnedRegenerationInitialEvent::Generating {
-                    message: Some("Rewriting chapter...".to_string()),
-                    progress_range: (20, 95),
-                    char_count: chapter_word_count,
-                    retry_count: None,
-                },
-            ],
-            completion_message: "Rewrite complete".to_string(),
-        },
-        chapter_id,
-    )
+    OwnedRegenerationStreamLaunchInput {
+        task_label: "Chapter Rewrite".to_string(),
+        prompt,
+        ai_service,
+        initial_events: vec![
+            OwnedRegenerationInitialEvent::Preparing {
+                message: Some("Building rewrite prompt...".to_string()),
+            },
+            OwnedRegenerationInitialEvent::Generating {
+                message: Some("Rewriting chapter...".to_string()),
+                progress_range: (20, 95),
+                char_count: chapter_word_count,
+                retry_count: None,
+            },
+        ],
+        completion_message: "Rewrite complete".to_string(),
+        task_created_event: None,
+    }
 }
 
 fn build_full_chapter_regeneration_stream(
+    db: DatabaseConnection,
     input: FullChapterRegenerationStreamInput,
+    task_id: String,
 ) -> OwnedRegenerationStream {
-    let (launch_input, chapter_id) = build_full_chapter_regeneration_stream_launch_input(input);
+    let mut launch_input = build_full_chapter_regeneration_stream_launch_input(input);
+    launch_input.task_created_event = Some(json!({
+        "type": "task_created",
+        "task_id": task_id.clone(),
+    }));
+    let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(64);
 
-    build_owned_regeneration_stream(
-        launch_input,
-        |_, _| None,
-        move |full_content| finalize_chapter_regeneration_result(full_content, &chapter_id),
-    )
+    tokio::spawn(async move {
+        let OwnedRegenerationStreamLaunchInput {
+            task_label,
+            prompt,
+            ai_service,
+            initial_events,
+            completion_message,
+            task_created_event,
+        } = launch_input;
+
+        let mut tracker = SseProgress::new(&task_label);
+        let _ = tx.send(Ok(tracker.start())).await;
+        for step in &initial_events {
+            let event = apply_owned_regeneration_initial_event(&mut tracker, step);
+            let _ = tx.send(Ok(event)).await;
+        }
+        if let Some(task_created_event) = task_created_event {
+            let _ = tx.send(Ok(sse_json(&task_created_event))).await;
+        }
+
+        let full_content =
+            match execute_regeneration_text_stream(&tx, ai_service, prompt, |_| None).await {
+                Ok(full_content) => full_content,
+                Err(()) => {
+                    let failed = build_full_regeneration_task_failed_event(&task_id);
+                    let _ = tx.send(Ok(sse_json(&failed))).await;
+                    if let Err(error) = mark_regeneration_task_failed(
+                        &db,
+                        &task_id,
+                        "generation stream execution failed",
+                    )
+                    .await
+                    {
+                        let _ = tx
+                            .send(Ok(sse_error(
+                                &format!("Failed to persist regeneration task failure: {error}"),
+                                500,
+                            )))
+                            .await;
+                    }
+                    return;
+                }
+            };
+
+        let payload = match finalize_chapter_regeneration_result(&full_content, &task_id) {
+            Ok(payload) => payload,
+            Err(error) => {
+                let detail = describe_regeneration_finalize_error(&error);
+                let failed = build_full_regeneration_task_failed_event(&task_id);
+                let _ = tx.send(Ok(sse_json(&failed))).await;
+                if let Err(persist_error) =
+                    mark_regeneration_task_failed(&db, &task_id, detail).await
+                {
+                    let _ = tx
+                        .send(Ok(sse_error(
+                            &format!(
+                                "Failed to persist regeneration task failure: {persist_error}"
+                            ),
+                            500,
+                        )))
+                        .await;
+                }
+                emit_regeneration_finalize_error(&tx, error).await;
+                return;
+            }
+        };
+
+        if let Err(error) = mark_regeneration_task_completed(&db, &task_id, &full_content).await {
+            let failed = build_full_regeneration_task_failed_event(&task_id);
+            let _ = tx.send(Ok(sse_json(&failed))).await;
+            let _ = tx
+                .send(Ok(sse_error(
+                    &format!("Failed to persist regeneration task completion: {error}"),
+                    500,
+                )))
+                .await;
+            return;
+        }
+
+        let succeeded = build_full_regeneration_task_completed_event(&task_id);
+        let _ = tx.send(Ok(sse_json(&succeeded))).await;
+        let _ = tx
+            .send(Ok(tracker.complete(Some(&completion_message))))
+            .await;
+        let _ = tx.send(Ok(sse_result(&payload))).await;
+        let _ = tx.send(Ok(sse_done())).await;
+    });
+
+    ReceiverStream::new(rx)
 }
 
 fn build_partial_chapter_regeneration_stream_launch_input(
@@ -528,6 +654,7 @@ fn build_partial_chapter_regeneration_stream_launch_input(
                 },
             ],
             completion_message: "Rewrite complete".to_string(),
+            task_created_event: None,
         },
         target_words,
         original_word_count,
@@ -559,6 +686,8 @@ fn build_partial_chapter_regeneration_stream(
                 None
             }
         },
+        None,
+        None,
         move |full_content| {
             finalize_partial_regeneration_result(
                 full_content,
@@ -573,6 +702,7 @@ fn build_partial_chapter_regeneration_stream(
 pub enum CreateRegenerationStreamWorkflowError<TPrepareError> {
     Chapter(LoadAccessibleChapterError),
     Prepare(TPrepareError),
+    TaskLifecycle(FullRegenerationTaskLifecycleError),
 }
 
 pub type CreateChapterRegenerationStreamWorkflowError =
@@ -593,11 +723,45 @@ pub async fn create_chapter_regeneration_stream_workflow(
     let chapter = load_accessible_chapter(db, chapter_id, user_id)
         .await
         .map_err(CreateChapterRegenerationStreamWorkflowError::Chapter)?;
+    let analysis = load_latest_chapter_analysis(db, chapter_id, request.modification_source())
+        .await
+        .map_err(|error| {
+            CreateChapterRegenerationStreamWorkflowError::TaskLifecycle(
+                FullRegenerationTaskLifecycleError::Internal(error),
+            )
+        })?;
+    if matches!(
+        request.modification_source(),
+        "analysis_suggestions" | "mixed"
+    ) && analysis.is_none()
+    {
+        return Err(CreateChapterRegenerationStreamWorkflowError::TaskLifecycle(
+            FullRegenerationTaskLifecycleError::AnalysisMissing,
+        ));
+    }
     let stream_input = prepare_chapter_regeneration_stream(db, user_id, &chapter, &request)
         .await
         .map_err(CreateChapterRegenerationStreamWorkflowError::Prepare)?;
+    let task_seed = build_full_regeneration_task_seed(
+        &chapter,
+        analysis.as_ref(),
+        user_id,
+        &stream_input.request,
+        stream_input.resolved_style_id,
+    );
+    let task = create_full_regeneration_task(db, task_seed)
+        .await
+        .map_err(|error| {
+            CreateChapterRegenerationStreamWorkflowError::TaskLifecycle(
+                FullRegenerationTaskLifecycleError::Internal(error),
+            )
+        })?;
 
-    Ok(build_full_chapter_regeneration_stream(stream_input))
+    Ok(build_full_chapter_regeneration_stream(
+        db.clone(),
+        stream_input,
+        task.id,
+    ))
 }
 
 pub async fn create_partial_regeneration_stream_workflow(
@@ -686,7 +850,7 @@ mod tests {
 
         assert_eq!(result["content"], "新的章节正文");
         assert_eq!(result["word_count"], 6);
-        assert_eq!(result["generation_task_id"], "chapter-1");
+        assert_eq!(result["task_id"], "chapter-1");
         assert!(result["analysis_task_id"].is_null());
     }
 
@@ -743,7 +907,7 @@ mod tests {
         );
         assert_eq!(
             contract["source_map_policy"]["full_module_freeze_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["source_map_policy"]["owner_profile_business_probes"]
@@ -757,7 +921,7 @@ mod tests {
                 .as_array()
                 .expect("remaining blockers")
                 .len(),
-            1
+            0
         );
         assert_eq!(
             contract["prepare_owner_contract"]["owner"],
@@ -765,7 +929,7 @@ mod tests {
         );
         assert_eq!(
             contract["prepare_owner_contract"]["service_runtime_closeout_status"]["status"],
-            "rust_chapter_regeneration_prepare_owner_ready_for_source_map_closeout_review"
+            "rust_chapter_regeneration_prepare_owner_direct_package_closed_out"
         );
         assert_eq!(
             contract["candidate_output_owner_contract"]["owner"],
@@ -774,7 +938,7 @@ mod tests {
         assert_eq!(
             contract["candidate_output_owner_contract"]["service_runtime_closeout_status"]
                 ["status"],
-            "rust_chapter_candidate_output_owner_ready_for_source_map_closeout_review"
+            "rust_chapter_candidate_output_owner_executor_source_map_deleted"
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profile"],
@@ -806,21 +970,64 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_chapter_regeneration_stream_workflow_owner_ready_for_source_map_closeout_review"
+            "rust_chapter_regeneration_stream_workflow_owner_after_route_shell_delete"
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "chapter-regeneration route/workflow source-map package is physically closed out; any surviving Python work is outside this direct regeneration package"
         );
-        assert_eq!(contract["python_source_map"].as_array().unwrap().len(), 7);
-        assert_eq!(contract["rust_owner_map"].as_array().unwrap().len(), 7);
+        assert_eq!(contract["python_source_map"].as_array().unwrap().len(), 0);
+        assert_eq!(contract["rust_owner_map"].as_array().unwrap().len(), 8);
+        assert_eq!(
+            contract["source_map_policy"]["freeze_scope"],
+            "chapter_regeneration_route_package_source_map_surface"
+        );
+        assert_eq!(
+            contract["source_map_policy"]["stream_orchestration_source_maps"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            contract["source_map_policy"]["prepare_owner_source_maps"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            contract["source_map_policy"]["shared_prepare_dependency_source_maps"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            contract["source_map_policy"]["shared_context_compaction_source_maps"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            contract["source_map_policy"]["query_owner_source_maps"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
         assert_eq!(
             contract["behavior_contract"]["shared_stream_owner_entrypoints"][0],
             "build_owned_regeneration_stream"
+        );
+        assert_eq!(
+            contract["task_owner_contract"]["owner"],
+            "chapter_regeneration_task_service"
         );
     }
 
@@ -863,14 +1070,14 @@ mod tests {
             result.runtime_state["source_map_freeze_candidate_ready"],
             true
         );
-        assert_eq!(result.runtime_state["full_module_freeze_ready"], false);
+        assert_eq!(result.runtime_state["full_module_freeze_ready"], true);
         assert_eq!(
             result.runtime_state["remaining_cutover_gate"],
-            "explicit_source_map_freeze_delete_repoint_approval"
+            "separate_model_or_shared_owner_closeout_outside_direct_regeneration_route_package"
         );
         assert_eq!(
             result.readiness_evidence["source_map_policy"]["full_module_freeze_ready"],
-            false
+            true
         );
         assert_eq!(
             result.readiness_evidence["source_map_policy"]["source_map_freeze_candidate_ready"],
@@ -880,6 +1087,7 @@ mod tests {
             result.readiness_evidence["source_map_policy"]["deterministic_business_sse_smoke"],
             true
         );
+        assert_eq!(result.result["source_map_freeze_ready"], true);
     }
 
     #[test]
@@ -945,8 +1153,26 @@ mod tests {
 
     #[test]
     fn should_build_full_chapter_regeneration_stream_launch_input_contract() {
-        let (launch_input, chapter_id) = build_full_chapter_regeneration_stream_launch_input(
+        let launch_input = build_full_chapter_regeneration_stream_launch_input(
             FullChapterRegenerationStreamInput {
+                chapter: crate::models::chapter::Model {
+                    id: "chapter-1".to_string(),
+                    project_id: "project-1".to_string(),
+                    title: "测试章节".to_string(),
+                    chapter_number: 1,
+                    content: Some("原始内容".to_string()),
+                    summary: None,
+                    word_count: 2400,
+                    status: "draft".to_string(),
+                    outline_id: None,
+                    sub_index: 0,
+                    expansion_plan: None,
+                    created_at: Default::default(),
+                    updated_at: Some(Default::default()),
+                },
+                user_id: "user-1".to_string(),
+                request: crate::services::chapter_regeneration_prepare_service::FullChapterRegenerationStreamRequest::default(),
+                resolved_style_id: None,
                 chapter_id: "chapter-1".to_string(),
                 chapter_word_count: 2400,
                 prompt: "prompt".to_string(),
@@ -954,7 +1180,6 @@ mod tests {
             },
         );
 
-        assert_eq!(chapter_id, "chapter-1");
         assert_eq!(launch_input.task_label, "Chapter Rewrite");
         assert_eq!(launch_input.prompt, "prompt");
         assert_eq!(launch_input.completion_message, "Rewrite complete");
@@ -1047,12 +1272,12 @@ mod tests {
     #[test]
     fn should_describe_regeneration_finalize_errors_with_existing_messages() {
         assert_eq!(
-            describe_regeneration_finalize_error(FinalizePartialRegenerationError::EmptyContent),
+            describe_regeneration_finalize_error(&FinalizePartialRegenerationError::EmptyContent),
             "Rewrite result is empty after sanitization"
         );
         assert_eq!(
             describe_regeneration_finalize_error(
-                FinalizePartialRegenerationError::WorkflowMetaText,
+                &FinalizePartialRegenerationError::WorkflowMetaText,
             ),
             "Rewrite result still contains workflow meta text"
         );

@@ -4,8 +4,8 @@ from fastapi import HTTPException, Request
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api import common as common_api
-from app.models.project import Project
+from migrator_app.models.project import Project
+from tests.test_support import api_common_test_support as common_api
 
 pytestmark = pytest.mark.asyncio
 
@@ -122,7 +122,7 @@ async def test_should_delegate_to_verify_project_access_when_verify_project_acce
     expected_project = Project(id="project-123", user_id="request-user", title="委托项目")
 
     verify_mock = mocker.patch(
-        "app.api.common.verify_project_access",
+        "tests.test_support.api_common_test_support.verify_project_access",
         new=mocker.AsyncMock(return_value=expected_project),
     )
 

@@ -5,9 +5,9 @@ import json
 
 import pytest
 
-from app.services.json_helper import clean_json_response
-from app.services.plot_analyzer import PlotAnalyzer
-from app.services.prompt_service import PromptService
+from tests.test_support.ai_gateway.ai_service import clean_json_response
+from tests.test_support import plot_analyzer_test_support
+from tests.test_support.plot_analyzer_test_support import PlotAnalyzer
 
 pytestmark = pytest.mark.asyncio
 
@@ -56,7 +56,7 @@ async def test_should_retry_plot_analysis_with_stricter_json_mode(monkeypatch):
     async def on_retry(attempt, max_retries, wait_time, error_reason):
         retry_events.append((attempt, max_retries, wait_time, error_reason))
 
-    monkeypatch.setattr(PromptService, "format_prompt", staticmethod(lambda template, **kwargs: "ANALYZE_PROMPT"))
+    monkeypatch.setattr(plot_analyzer_test_support, "format_prompt", lambda template, **kwargs: "ANALYZE_PROMPT")
 
     result = await analyzer.analyze_chapter(
         chapter_number=1,
@@ -81,7 +81,7 @@ async def test_should_set_clear_timeout_message_when_plot_analysis_times_out(mon
     ai_service = FakeAIService([asyncio.TimeoutError()])
     analyzer = PlotAnalyzer(ai_service)
 
-    monkeypatch.setattr(PromptService, "format_prompt", staticmethod(lambda template, **kwargs: "ANALYZE_PROMPT"))
+    monkeypatch.setattr(plot_analyzer_test_support, "format_prompt", lambda template, **kwargs: "ANALYZE_PROMPT")
 
     result = await analyzer.analyze_chapter(
         chapter_number=1,
@@ -102,7 +102,7 @@ async def test_should_set_clear_timeout_message_when_plot_analysis_hits_httpx_ti
     ai_service = FakeAIService([httpx.ReadTimeout("upstream timeout")])
     analyzer = PlotAnalyzer(ai_service)
 
-    monkeypatch.setattr(PromptService, "format_prompt", staticmethod(lambda template, **kwargs: "ANALYZE_PROMPT"))
+    monkeypatch.setattr(plot_analyzer_test_support, "format_prompt", lambda template, **kwargs: "ANALYZE_PROMPT")
 
     result = await analyzer.analyze_chapter(
         chapter_number=1,
@@ -124,7 +124,7 @@ async def test_should_build_heuristic_fallback_analysis_with_readable_summary(mo
     ai_service = FakeAIService([asyncio.TimeoutError()])
     analyzer = PlotAnalyzer(ai_service)
 
-    monkeypatch.setattr(PromptService, "format_prompt", staticmethod(lambda template, **kwargs: "ANALYZE_PROMPT"))
+    monkeypatch.setattr(plot_analyzer_test_support, "format_prompt", lambda template, **kwargs: "ANALYZE_PROMPT")
 
     result = await analyzer.analyze_chapter(
         chapter_number=3,

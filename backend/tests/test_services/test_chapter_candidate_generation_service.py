@@ -1,4 +1,4 @@
-from app.services.chapter_candidate_generation_service import (
+from tests.test_support.chapter_candidate_executor_test_support import (
     resolve_generation_attempt_labels,
 )
 
@@ -16,4 +16,3 @@ def test_should_resolve_generation_attempt_labels_for_word_budget_repair():
         "word_budget_repair",
         "word_budget_repair",
     )
-

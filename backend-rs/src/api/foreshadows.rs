@@ -120,21 +120,18 @@ fn build_foreshadows_route_owner_contract() -> Value {
             ],
             "python_fallback_probe_count": 0
         },
-        "source_map_files": [
-            "backend/app/api/foreshadows.py",
-            "backend/app/models/foreshadow.py",
-            "backend/app/schemas/foreshadow.py",
-            "backend/app/services/foreshadow_service.py"
-        ],
+        "source_map_files": [],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_foreshadows_route_model_schema_service_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "foreshadows_route_model_schema_source_map_deleted_no_python_foreshadow_shell_remains",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
+            "source_map_freeze_status": "physical_closeout_completed",
+            "source_map_physical_closeout_action": "delete_completed",
             "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
+                "optional schema/migration owner follow-up if the Python Alembic metadata surface later needs explicit Rust migration-owner replacement"
             ],
-            "freeze_reason": "Rust foreshadows route group has dedicated phase5-foreshadows-business-owner probes for setup, CRUD, stats, context, pending resolve, plant, resolve, abandon, sync-from-analysis, synced detail, delete, and missing-detail behavior; final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy."
+            "freeze_reason": "phase5-foreshadows-business-owner covers setup, CRUD, stats, context, pending resolve, plant, resolve, abandon, sync-from-analysis, synced detail, delete, and missing-detail probes with zero Python fallback probes, while the detached Python foreshadow model/schema files no longer have any production consumers and are physically deleted."
         },
         "business_smoke_status": {
             "owner_profile": "phase5-foreshadows-business-owner",
@@ -142,8 +139,8 @@ fn build_foreshadows_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Foreshadows route business smoke is covered by phase5-foreshadows-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+        "next_cutover_gate": "foreshadows Python model/schema source-map deleted; remaining maturity work is limited to optional schema/migration owner follow-up outside the active route-group boundary",
+        "migration_policy": "Foreshadows route business smoke is covered by phase5-foreshadows-business-owner; the Python route shell is no longer registered in app bootstrap, the legacy model/schema files are physically deleted, and the remaining maturity work is limited to optional schema/migration owner follow-up outside the active route-group boundary."
     })
 }
 
@@ -381,18 +378,19 @@ mod tests {
             "foreshadows-sync-from-analysis-business-rust"
         );
         assert_eq!(contract["owner_profile"]["python_fallback_probe_count"], 0);
-        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 4);
+        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 0);
+        assert!(contract["source_map_files"].get(0).is_none());
         assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
             true
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["business_smoke_status"]["status"],
@@ -404,16 +402,24 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "foreshadows Python model/schema source-map deleted; remaining maturity work is limited to optional schema/migration owner follow-up outside the active route-group boundary"
         );
         assert!(contract["migration_policy"]
             .as_str()
             .expect("migration policy")
             .contains("business smoke is covered"));
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("migration policy")
+            .contains("legacy model/schema files are physically deleted"));
         assert!(!contract["migration_policy"]
             .as_str()
             .expect("migration policy")
             .contains("logged-in business probes are accepted"));
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"][0],
+            "optional schema/migration owner follow-up if the Python Alembic metadata surface later needs explicit Rust migration-owner replacement"
+        );
     }
 
     #[test]

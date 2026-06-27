@@ -21,6 +21,10 @@ use super::request_prepare_owner::{
 };
 
 pub struct FullChapterRegenerationStreamInput {
+    pub chapter: chapter::Model,
+    pub user_id: String,
+    pub request: FullChapterRegenerationStreamRequest,
+    pub resolved_style_id: Option<i32>,
     pub chapter_id: String,
     pub chapter_word_count: usize,
     pub prompt: String,
@@ -385,6 +389,10 @@ pub async fn prepare_chapter_regeneration_stream(
     let ai_service = build_regeneration_ai_service(db, user_id, None).await?;
 
     Ok(FullChapterRegenerationStreamInput {
+        chapter: chapter.clone(),
+        user_id: user_id.to_string(),
+        request: request.clone(),
+        resolved_style_id: request.style_id(),
         chapter_id: chapter.id.clone(),
         chapter_word_count: chapter.word_count as usize,
         prompt,

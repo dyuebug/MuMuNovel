@@ -1,4 +1,4 @@
-from app.services.novel_quality_profile_service import novel_quality_profile_service
+from tests.test_support.schemas.novel_quality_profile_service import novel_quality_profile_service
 
 
 def test_should_include_new_generation_dimensions_in_quality_profile():

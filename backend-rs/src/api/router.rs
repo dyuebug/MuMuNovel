@@ -374,6 +374,7 @@ mod tests {
             chapter_candidate_rust_executor_disabled_reason: String::new(),
             chapter_candidate_rust_executor_rollback_boundary: "python_candidate_executor_fallback"
                 .to_string(),
+            rust_migration_noop_executor_smoke_enabled: false,
         }
     }
 

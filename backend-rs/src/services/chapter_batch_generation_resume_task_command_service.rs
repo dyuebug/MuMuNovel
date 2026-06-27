@@ -204,8 +204,11 @@ mod tests {
             "chapter_batch_generation_resume_task_command_service::resume_task_command_owner"
         );
         assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/services/batch_generation/resume_service.py"
+            contract["python_source_map"]
+                .as_array()
+                .expect("python source map")
+                .len(),
+            0
         );
         assert_eq!(
             contract["rust_owner_map"][0],
@@ -237,7 +240,11 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_resume_task_command_owner_is_rust_only_and_surviving_resume_route_service_surfaces_are_tracked_by_external_command_contracts"
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profile"],
@@ -280,20 +287,24 @@ mod tests {
             "chapter_batch_generation_resume_task_command_service::resume_launch_owner"
         );
         assert_eq!(
+            contract["resume_launch_owner_contract"]["rollback_boundary"]["source_map_policy"],
+            "batch_generation_resume_launch_owner_is_rust_only_and_surviving_resume_dispatch_response_surfaces_are_tracked_by_external_runtime_contracts"
+        );
+        assert_eq!(
             contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
             true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "batch-generation resume command source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/projection source-map packages"
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_batch_generation_resume_task_command_owner_ready_for_source_map_closeout_review"
+            "rust_batch_generation_resume_task_command_owner_source_map_deleted"
         );
     }
 
@@ -335,11 +346,21 @@ mod tests {
         );
         assert_eq!(
             contract["active_consumers"][4],
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         );
         assert_eq!(
             contract["rollback_boundary"]["runtime_state_keys"][7],
             "candidate_gateway"
+        );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .expect("resume launch python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_resume_launch_owner_is_rust_only_and_surviving_resume_dispatch_response_surfaces_are_tracked_by_external_runtime_contracts"
         );
     }
 

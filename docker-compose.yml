@@ -1,4 +1,20 @@
+# =============================================================================
+# MuMuNovel Strangler Fig — Docker Compose (Rust runtime + Rust migrator)
+# =============================================================================
+# Rust   db-migrator       — one-shot Alembic/schema migration
+# Rust   (mumunovel-rs)    — 127.0.0.1:8001  runtime API + static owner
+# Nginx  (mumunovel-nginx) — 0.0.0.0:80      gateway to Rust runtime
+#
+# 使用方式:
+#   docker compose -f docker-compose.strangler.yml up -d --build
+#   docker compose -f docker-compose.strangler.yml ps
+#   docker compose -f docker-compose.strangler.yml logs -f
+# =============================================================================
+
 services:
+  # ---------------------------------------------------------------------------
+  # 1. PostgreSQL — 共享数据库
+  # ---------------------------------------------------------------------------
   postgres:
     image: postgres:18-alpine
     container_name: mumunovel-postgres-new
@@ -49,94 +65,111 @@ services:
       - -c
       - max_wal_size=${POSTGRES_MAX_WAL_SIZE:-4GB}
 
-  mumunovel:
+  # ---------------------------------------------------------------------------
+  # 1.5 Database migrator — 显式 schema 迁移步骤
+  # ---------------------------------------------------------------------------
+  db-migrator:
     build:
-      context: .
+      context: ./backend-rs
       dockerfile: Dockerfile
-      args:
-        HTTP_PROXY: ${HTTP_PROXY:-}
-        HTTPS_PROXY: ${HTTPS_PROXY:-}
-        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1}
-        http_proxy: ${HTTP_PROXY:-}
-        https_proxy: ${HTTPS_PROXY:-}
-        no_proxy: ${NO_PROXY:-localhost,127.0.0.1}
-    image: mumunovel-local:latest
-    container_name: mumunovel-new
+    image: mumunovel-rust:latest
+    container_name: mumunovel-db-migrator
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      # 端口映射格式：宿主机端口:容器内端口
-      # 例如 .env 中 APP_PORT=8003 时，实际访问 http://localhost:8003，容器内应用仍监听 8000
-      - "${DOCKER_APP_PORT:-8000}:8000"
-    volumes:
-      - ./logs:/app/logs
-      - ./.env:/app/.env:ro
     environment:
-      # 应用配置
       - APP_NAME=${APP_NAME:-MuMuNovel}
-      - APP_VERSION=${APP_VERSION:-1.0.0}
-      - APP_HOST=${APP_HOST:-0.0.0.0}
-      # 容器内应用固定监听 8000；不要和宿主机 APP_PORT（如 8003）混淆
-      - APP_PORT=8000
+      - APP_VERSION=${APP_VERSION:-1.0.0-rs}
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8001
       - DEBUG=${DEBUG:-false}
-      
-      # 数据库配置
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-mumuai}:${POSTGRES_PASSWORD:-123456}@postgres:5432/${POSTGRES_DB:-mumuai_novel}
-      
-      # 数据库连接信息（用于 entrypoint.sh）
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-123456}
-      
-      # PostgreSQL 连接池配置
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-mumuai}:${POSTGRES_PASSWORD:-123456}@postgres:5432/${POSTGRES_DB:-mumuai_novel}
       - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-30}
-      - DATABASE_MAX_OVERFLOW=${DATABASE_MAX_OVERFLOW:-20}
-      - DATABASE_POOL_TIMEOUT=${DATABASE_POOL_TIMEOUT:-60}
-      - DATABASE_POOL_RECYCLE=${DATABASE_POOL_RECYCLE:-1800}
-      - DATABASE_POOL_PRE_PING=${DATABASE_POOL_PRE_PING:-True}
-      - DATABASE_POOL_USE_LIFO=${DATABASE_POOL_USE_LIFO:-True}
-      
-      # 代理配置（可选）
-      - HTTP_PROXY=${HTTP_PROXY:-}
-      - HTTPS_PROXY=${HTTPS_PROXY:-}
-      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
-      
-      # AI 服务配置
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GEMINI_BASE_URL=${GEMINI_BASE_URL:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
-      - DEFAULT_AI_PROVIDER=${DEFAULT_AI_PROVIDER:-openai}
-      - DEFAULT_MODEL=${DEFAULT_MODEL:-gpt-4o-mini}
-      - DEFAULT_TEMPERATURE=${DEFAULT_TEMPERATURE:-0.7}
-      - DEFAULT_MAX_TOKENS=${DEFAULT_MAX_TOKENS:-32000}
-      
-      # LinuxDO OAuth 配置
-      - LINUXDO_CLIENT_ID=${LINUXDO_CLIENT_ID:-11111}
-      - LINUXDO_CLIENT_SECRET=${LINUXDO_CLIENT_SECRET:-11111}
-      - LINUXDO_REDIRECT_URI=${LINUXDO_REDIRECT_URI:-http://localhost:8000/api/auth/linuxdo/callback}
-      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:8000}
-      
-      # 本地账户登录配置
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required for stable Rust migration smoke}
+      - ENABLE_STARTUP_SCHEMA_SYNC=false
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - STATIC_DIR=/app/static
       - LOCAL_AUTH_ENABLED=${LOCAL_AUTH_ENABLED:-true}
       - LOCAL_AUTH_USERNAME=${LOCAL_AUTH_USERNAME:-admin}
       - LOCAL_AUTH_PASSWORD=${LOCAL_AUTH_PASSWORD:-admin123}
       - LOCAL_AUTH_DISPLAY_NAME=${LOCAL_AUTH_DISPLAY_NAME:-本地管理员}
-      
-      # 会话配置
-      - SESSION_EXPIRE_MINUTES=${SESSION_EXPIRE_MINUTES:-120}
-      - SESSION_REFRESH_THRESHOLD_MINUTES=${SESSION_REFRESH_THRESHOLD_MINUTES:-30}
+    restart: "no"
+    entrypoint: ["/app/server"]
+    command: ["migration-executor"]
+    healthcheck:
+      disable: true
+    networks:
+      - ai-story-network
+
+  # ---------------------------------------------------------------------------
+  # 2. Rust 后端 — runtime API + static owner (8001)
+  # ---------------------------------------------------------------------------
+  rust-backend:
+    build:
+      context: ./backend-rs
+      dockerfile: Dockerfile
+    image: mumunovel-rust:latest
+    container_name: mumunovel-rust
+    depends_on:
+      db-migrator:
+        condition: service_completed_successfully
+    environment:
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8001
+      - APP_NAME=${APP_NAME:-MuMuNovel}
+      - APP_VERSION=${APP_VERSION:-1.0.0-rs}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-mumuai}:${POSTGRES_PASSWORD:-123456}@postgres:5432/${POSTGRES_DB:-mumuai_novel}
+      - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-50}
+      - DEBUG=${DEBUG:-false}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required for stable Rust auth}
+      - ENABLE_STARTUP_SCHEMA_SYNC=false
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - STATIC_DIR=/app/static
+      - LOCAL_AUTH_ENABLED=${LOCAL_AUTH_ENABLED:-true}
+      - LOCAL_AUTH_USERNAME=${LOCAL_AUTH_USERNAME:-admin}
+      - LOCAL_AUTH_PASSWORD=${LOCAL_AUTH_PASSWORD:-admin123}
+      - LOCAL_AUTH_DISPLAY_NAME=${LOCAL_AUTH_DISPLAY_NAME:-本地管理员}
+      - LINUXDO_CLIENT_ID=${LINUXDO_CLIENT_ID:-}
+      - LINUXDO_CLIENT_SECRET=${LINUXDO_CLIENT_SECRET:-}
+    volumes:
+      - ./backend/static:/app/static:ro
+      - ./.env:/app/.env:ro
     restart: unless-stopped
     healthcheck:
-      # 这里运行在容器内部，因此检查的是容器内 localhost:8000，而不是宿主机的 8003
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 5s
+    networks:
+      - ai-story-network
+
+  # ---------------------------------------------------------------------------
+  # 3. Nginx 网关 — 统一入口 + Rust runtime
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:alpine
+    container_name: mumunovel-nginx
+    ports:
+      - "8005:80"
+      - "8443:443"
+    volumes:
+      - ./deploy/nginx/mumunovel-docker.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/nginx/conf.d/proxy-common.conf:/etc/nginx/conf.d/proxy-common.conf:ro
+      - ./deploy/nginx/conf.d/sse-common.conf:/etc/nginx/conf.d/sse-common.conf:ro
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      rust-backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     networks:
       - ai-story-network
 
@@ -147,4 +180,3 @@ volumes:
 networks:
   ai-story-network:
     driver: bridge
-

@@ -105,10 +105,8 @@ fn build_projects_route_owner_contract() -> Value {
             "projects-delete-business-rust"
         ],
         "source_map_files": [
-            "backend/app/api/projects.py",
-            "backend/app/models/project.py",
-            "backend/app/models/project_default_style.py",
-            "backend/app/schemas/project.py"
+            "backend/migrator_app/models/project.py",
+            "backend/migrator_app/models/project_default_style.py"
         ],
         "owner_profile": {
             "name": "phase5-projects-business-owner",
@@ -126,14 +124,17 @@ fn build_projects_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0
         },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_projects_route_model_schema_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "projects_route_source_map_deleted_remaining_project_and_story_continuity_source_maps_require_separate_closeout",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
+            "full_module_freeze_ready": true,
+            "python_bootstrap_status": "projects_route_runtime_registration_deleted_no_python_route_shell_remains",
+            "python_route_files_status": "projects_route_source_map_deleted_remaining_project_model_and_project_default_style_model_source_maps_only",
+            "python_fallback_removal_ready": true,
             "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
+                "project model and project default style model source-map contracts still need their own separate closeout review"
             ],
-            "freeze_reason": "Rust projects route group has dedicated phase5-projects-business-owner probes for CRUD, export-data, consistency check, organization/member-count fixes, and delete; final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy."
+            "freeze_reason": "Rust projects route group has dedicated phase5-projects-business-owner probes for CRUD, export-data, consistency check, organization/member-count fixes, and delete; the Python projects route shell has been physically deleted, and the remaining project default style persistence source map now sits in the dedicated project default style model file while the project model source map still requires separate closeout review.",
+            "rollback_files": []
         },
         "business_smoke_status": {
             "owner_profile": "phase5-projects-business-owner",
@@ -141,8 +142,8 @@ fn build_projects_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Projects route business smoke is covered by phase5-projects-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+        "next_cutover_gate": "projects route source-map shell deleted; remaining Python closeout work is limited to the project model and project default style model source-map contracts",
+        "migration_policy": "Projects route business smoke is covered by phase5-projects-business-owner; the Python projects route shell and its explicit bootstrap rollback registration have been physically deleted, and the remaining project default style persistence source map now sits in the dedicated project default style model file while the project model source map stays as a separate closeout contract."
     })
 }
 
@@ -2081,7 +2082,11 @@ mod tests {
             contract["readiness_probes"][20],
             "projects-delete-business-rust"
         );
-        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 4);
+        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            contract["source_map_files"][1],
+            "backend/migrator_app/models/project_default_style.py"
+        );
         assert_eq!(
             contract["owner_profile"]["name"],
             "phase5-projects-business-owner"
@@ -2097,11 +2102,19 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_bootstrap_status"],
+            "projects_route_runtime_registration_deleted_no_python_route_shell_remains"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "projects_route_source_map_deleted_remaining_project_model_and_project_default_style_model_source_maps_only"
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["business_smoke_status"]["status"],
@@ -2110,16 +2123,13 @@ mod tests {
         assert_eq!(contract["business_smoke_status"]["business_probe_count"], 9);
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "projects route source-map shell deleted; remaining Python closeout work is limited to the project model and project default style model source-map contracts"
         );
-        assert!(contract["migration_policy"]
-            .as_str()
-            .expect("migration policy")
-            .contains("business smoke is covered"));
-        assert!(!contract["migration_policy"]
-            .as_str()
-            .expect("migration policy")
-            .contains("requires source-map freeze/delete/repoint evidence or business smoke"));
+        assert_eq!(
+            contract["migration_policy"],
+            "Projects route business smoke is covered by phase5-projects-business-owner; the Python projects route shell and its explicit bootstrap rollback registration have been physically deleted, and the remaining project default style persistence source map now sits in the dedicated project default style model file while the project model source map stays as a separate closeout contract."
+        );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
     }
 
     fn test_datetime() -> NaiveDateTime {

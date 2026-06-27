@@ -19,13 +19,7 @@ pub(crate) fn build_batch_generation_quality_payload_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation_runtime_state_service::quality_payload_current_quality_projection",
         "scope": "plot_analysis_quality_summary_latest_metrics_and_runtime_state_payload_projection",
-        "python_source_map": [
-            "backend/app/services/batch_generation_analysis_service.py",
-            "backend/app/services/batch_generation_orchestration_service.py",
-            "backend/app/services/batch_generation_candidate_service.py",
-            "backend/app/api/chapter_batch_generation_routes.py",
-            "backend/app/api/chapters.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service/quality_payload_owner.rs",
@@ -62,7 +56,7 @@ pub(crate) fn build_batch_generation_quality_payload_owner_contract() -> Value {
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_batch_quality_payload_projection_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_quality_payload_owner_is_rust_only_and_surviving_quality_runtime_surfaces_are_tracked_by_external_runtime_contracts",
             "runtime_state_keys": [
                 "quality_metrics_summary",
                 "quality_metrics_summary_state",

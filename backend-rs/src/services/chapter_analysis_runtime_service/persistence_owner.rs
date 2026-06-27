@@ -175,11 +175,7 @@ pub(crate) fn build_chapter_analysis_persistence_owner_contract() -> Value {
     json!({
         "owner": "chapter_analysis_runtime_service::persistence_owner",
         "scope": "plot_analysis_record_persist_memory_refresh_foreshadow_sync_character_and_organization_state_sync_quality_history_patch_and_task_completion",
-        "python_source_map": [
-            "backend/app/services/manual_chapter_analysis_execution_service.py",
-            "backend/app/services/chapter_analysis_response_service.py",
-            "backend/app/services/memory_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_analysis_runtime_service.rs",
             "backend-rs/src/services/chapter_analysis_runtime_service/persistence_owner.rs",

@@ -2,24 +2,25 @@ import pytest
 from typing import Any
 from sqlalchemy import select
 
-from app.api import chapter_regeneration_routes as chapter_regeneration_routes_api
-from app.models.batch_generation_task import BatchGenerationTask
-from app.models.chapter import Chapter
-from app.models.chapter_draft_attempt import ChapterDraftAttempt
-from app.models.generation_history import GenerationHistory
-from app.models.regeneration_task import RegenerationTask
-from app.api import chapter_partial_regeneration_routes as chapter_partial_regeneration_routes_api
+import tests.test_support.database_test_support as app_database
+from migrator_app.models.batch_generation_task import BatchGenerationTask
+from migrator_app.models.chapter import Chapter
+from migrator_app.models import ChapterDraftAttempt, GenerationHistory
+from migrator_app.models.regeneration_task import RegenerationTask
 from tests.test_api.chapters_test_support import (
     chapters_client,
     chapters_session_factory,
     create_chapter,
     create_project,
+    load_single_generation_stream_entry_module,
     fake_ai_service,
-    load_batch_generation_rollback_modules,
-    load_single_generation_rollback_modules,
+    load_batch_generation_test_adapter_module,
     mock_side_effect_services,
     parse_sse_data,
     reset_chapters_runtime_caches,
+)
+from tests.test_support import (
+    chapter_regeneration_route_test_adapter as chapter_regeneration_routes_api,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -118,14 +119,14 @@ async def test_should_build_context_with_expected_builder_during_generate_stream
             },
         }
 
-    _, chapter_generation_route_wiring_service = load_single_generation_rollback_modules()
-    monkeypatch.setattr(chapter_generation_route_wiring_service, "get_template", fake_get_template)
-    monkeypatch.setattr(chapter_generation_route_wiring_service, "format_prompt", fake_format_prompt)
-    monkeypatch.setattr(chapter_generation_route_wiring_service, "OneToManyContextBuilder", FakeOneToManyBuilder)
-    monkeypatch.setattr(chapter_generation_route_wiring_service, "OneToOneContextBuilder", FakeOneToOneBuilder)
-    monkeypatch.setattr(chapter_generation_route_wiring_service, "build_chapter_runtime_system_prompt", fake_build_runtime_system_prompt)
-    monkeypatch.setattr(chapter_generation_route_wiring_service, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
-    monkeypatch.setattr(chapter_generation_route_wiring_service, "resolve_quality_gate_execution_plan", fake_resolve_quality_gate_execution_plan)
+    stream_entry_service = load_single_generation_stream_entry_module()
+    monkeypatch.setattr(stream_entry_service, "get_template", fake_get_template)
+    monkeypatch.setattr(stream_entry_service, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(stream_entry_service, "OneToManyContextBuilder", FakeOneToManyBuilder)
+    monkeypatch.setattr(stream_entry_service, "OneToOneContextBuilder", FakeOneToOneBuilder)
+    monkeypatch.setattr(stream_entry_service, "build_chapter_runtime_system_prompt", fake_build_runtime_system_prompt)
+    monkeypatch.setattr(stream_entry_service, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
+    monkeypatch.setattr(stream_entry_service, "resolve_quality_gate_execution_plan", fake_resolve_quality_gate_execution_plan)
 
     fake_ai_service.calls.clear()
     fake_ai_service.chunks = ["段落甲", "段落乙"]
@@ -226,10 +227,8 @@ async def test_should_stream_partial_regenerate_with_web_research_grounding(
             ]
         }
 
-    from app.services import partial_regeneration_service as partial_regeneration_service_module
-
     monkeypatch.setattr(
-        partial_regeneration_service_module.chapter_web_research_service,
+        chapter_regeneration_routes_api.chapter_web_research_service,
         "collect_for_chapter",
         fake_collect_for_chapter,
     )
@@ -320,7 +319,7 @@ async def test_should_delegate_apply_partial_regenerate_route_to_compat_service(
         }
 
     monkeypatch.setattr(
-        chapter_partial_regeneration_routes_api,
+        chapter_regeneration_routes_api,
         "apply_partial_regenerate_with_default_route_wiring",
         fake_apply_partial_regenerate_with_default_route_wiring,
     )
@@ -370,10 +369,7 @@ async def test_should_stream_batch_generation_events_via_route_compat(
     chapters_client,
     monkeypatch,
 ):
-    (
-        chapter_batch_generation_routes_api,
-        _batch_generation_route_wiring_service,
-    ) = load_batch_generation_rollback_modules()
+    batch_generation_route_wiring_service = load_batch_generation_test_adapter_module()
 
     async def fake_validate_access(db_session, *, batch_id, user_id):
         assert batch_id == "batch-1"
@@ -381,17 +377,17 @@ async def test_should_stream_batch_generation_events_via_route_compat(
         return object()
 
     async def fake_build_stream(db_session, *, batch_id):
-        from app.utils.sse_response import SSEResponse
+        from tests.test_support.utils.sse_response import SSEResponse
         yield await SSEResponse.send_progress("connected", 0, "processing")
         yield await SSEResponse.send_done()
 
     monkeypatch.setattr(
-        chapter_batch_generation_routes_api,
+        batch_generation_route_wiring_service,
         "validate_batch_generation_stream_access",
         fake_validate_access,
     )
     monkeypatch.setattr(
-        chapter_batch_generation_routes_api,
+        batch_generation_route_wiring_service,
         "build_batch_generation_event_stream",
         fake_build_stream,
     )

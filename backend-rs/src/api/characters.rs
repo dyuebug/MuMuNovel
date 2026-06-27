@@ -40,12 +40,7 @@ fn build_characters_route_owner_contract() -> Value {
         "owner": "characters",
         "scope": "characters_crud_generation_import_export_validate_route_group",
         "python_source_map": [
-            "backend/app/api/characters.py",
-            "backend/app/models/character.py",
-            "backend/app/schemas/character.py",
-            "backend/app/services/auto_character_service.py",
-            "backend/app/services/character_context_service.py",
-            "backend/app/services/character_state_update_service.py"
+            "backend/migrator_app/models/character.py"
         ],
         "rust_owner_map": [
             "backend-rs/src/api/characters.rs",
@@ -161,13 +156,14 @@ fn build_characters_route_owner_contract() -> Value {
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_characters_route_model_schema_service_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "production_python_character_model_source_map_replaced_by_migrator_and_test_support_fixtures",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_route_files_status": "source_map_only_for_characters_route_group",
-            "python_fallback_removal_ready": false,
+            "full_module_freeze_ready": true,
+            "python_bootstrap_status": "characters_route_runtime_registration_deleted_no_python_route_shell_remains",
+            "python_route_files_status": "characters_route_source_map_deleted_remaining_character_model_source_map_only",
+            "python_fallback_removal_ready": true,
             "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
+                "character model source-map package still needs its own separate closeout round"
             ],
             "retired_manifest_fallbacks": [
                 "characters-project-list-auth-guard-python-fallback",
@@ -177,7 +173,8 @@ fn build_characters_route_owner_contract() -> Value {
                 "characters-import-auth-guard-python-fallback",
                 "characters-validate-import-auth-guard-python-fallback"
             ],
-            "validate_import_policy": "public Rust validation route; do not restore auth-guard Python fallback unless this policy is rolled back"
+            "validate_import_policy": "public Rust validation route; do not restore auth-guard Python fallback unless this policy is rolled back",
+            "rollback_files": []
         },
         "business_smoke_status": {
             "owner_profile": "phase5-characters-business-owner",
@@ -186,8 +183,8 @@ fn build_characters_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Characters route business smoke is covered by phase5-characters-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+        "next_cutover_gate": "characters route source-map shell deleted; remaining Python closeout work is limited to the character model source-map contract",
+        "migration_policy": "Characters route business smoke is covered by phase5-characters-business-owner; the Python characters route shell and its explicit bootstrap rollback registration have been physically deleted, while the remaining character model source map stays as a separate closeout contract."
     })
 }
 
@@ -2015,8 +2012,9 @@ mod tests {
         );
         assert_eq!(
             contract["python_source_map"][0],
-            "backend/app/api/characters.py"
+            "backend/migrator_app/models/character.py"
         );
+        assert_eq!(contract["python_source_map"].as_array().unwrap().len(), 1);
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/api/characters.rs"
@@ -2068,11 +2066,23 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            json!(false)
+            json!(true)
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_bootstrap_status"],
+            "characters_route_runtime_registration_deleted_no_python_route_shell_remains"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "characters_route_source_map_deleted_remaining_character_model_source_map_only"
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "production_python_character_model_source_map_replaced_by_migrator_and_test_support_fixtures"
         );
         assert_eq!(
             contract["business_smoke_status"]["status"],
@@ -2092,12 +2102,13 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "characters route source-map shell deleted; remaining Python closeout work is limited to the character model source-map contract"
         );
-        assert!(contract["migration_policy"]
-            .as_str()
-            .expect("characters migration policy should be present")
-            .contains("phase5-characters-business-owner"));
+        assert_eq!(
+            contract["migration_policy"],
+            "Characters route business smoke is covered by phase5-characters-business-owner; the Python characters route shell and its explicit bootstrap rollback registration have been physically deleted, while the remaining character model source map stays as a separate closeout contract."
+        );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
     }
 
     #[test]

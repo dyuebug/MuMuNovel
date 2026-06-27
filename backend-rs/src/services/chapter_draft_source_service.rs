@@ -130,12 +130,7 @@ pub(crate) fn build_chapter_draft_source_owner_contract() -> Value {
     json!({
         "owner": "chapter_draft_source_service",
         "scope": "chapter_draft_candidate_source_loading_full_content_and_python_truthy_compatibility",
-        "python_source_map": [
-            "backend/app/api/chapter_draft_routes.py",
-            "backend/app/api/chapter_analysis_routes.py",
-            "backend/app/services/chapter_draft_query_service.py",
-            "backend/app/services/chapter_generation/stream/candidate_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_draft_source_service.rs",
             "backend-rs/src/services/chapter_draft_view_payload_service.rs",
@@ -153,13 +148,13 @@ pub(crate) fn build_chapter_draft_source_owner_contract() -> Value {
             "rust_manifest_probe_count": 8,
             "python_fallback_probe_count": 0,
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit_python_source_map_freeze_delete_or_repoint_approval",
-            "status": "rust_service_runtime_owner_closeout_ready_python_source_map_pending"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "chapter-analysis route source-map shell deleted; no Python source-map files remain for this owner",
+            "status": "rust_service_runtime_owner_source_map_deleted"
         },
         "rollback_boundary": {
-            "python_source_map_retained": true,
-            "approval_required_before_python_edit": true
+            "python_source_map_retained": false,
+            "approval_required_before_python_edit": false
         }
     })
 }
@@ -280,7 +275,7 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
     }
 }

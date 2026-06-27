@@ -203,11 +203,7 @@ pub(crate) fn build_batch_generation_request_prepare_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation_write_workflow_service::request_prepare_owner",
         "scope": "batch_generation_create_request_normalization_validation_and_target_selection",
-        "python_source_map": [
-            "backend/app/api/chapter_batch_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/batch_generation/create_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs",
             "backend-rs/src/services/chapter_batch_generation_write_workflow_service/request_prepare_owner.rs",

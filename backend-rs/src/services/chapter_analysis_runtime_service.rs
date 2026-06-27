@@ -31,13 +31,7 @@ pub(crate) fn build_chapter_analysis_runtime_owner_contract() -> Value {
     json!({
         "owner": "chapter_analysis_runtime_service",
         "scope": "chapter_analysis_runtime_trigger_prompt_ai_persistence_query_and_health_handoff",
-        "python_source_map": [
-            "backend/app/api/chapter_analysis_routes.py",
-            "backend/app/api/chapter_analysis_task_routes.py",
-            "backend/app/services/manual_chapter_analysis_execution_service.py",
-            "backend/app/services/chapter_analysis_response_service.py",
-            "backend/app/services/memory_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_analysis_runtime_service.rs",
             "backend-rs/src/services/chapter_analysis_runtime_service/trigger_runtime_owner.rs",
@@ -69,13 +63,13 @@ pub(crate) fn build_chapter_analysis_runtime_owner_contract() -> Value {
             "runtime_trigger_owner": "chapter_analysis_runtime_service",
             "query_owner": "chapter_analysis_runtime_service/query_owner.rs",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit_python_source_map_freeze_delete_or_repoint_approval",
-            "status": "rust_service_runtime_owner_closeout_ready_python_source_map_pending"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "chapter-analysis runtime source-map package deleted; surviving Python closeout work is now limited to separate quality-history source-map contracts",
+            "status": "rust_service_runtime_owner_with_deleted_python_source_map"
         },
         "rollback_boundary": {
-            "python_source_map_retained": true,
-            "approval_required_before_python_edit": true
+            "python_source_map_retained": false,
+            "approval_required_before_python_edit": false
         }
     })
 }
@@ -112,6 +106,7 @@ mod tests {
         let contract = build_chapter_analysis_runtime_owner_contract();
 
         assert_eq!(contract["owner"], "chapter_analysis_runtime_service");
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["behavior_contract"]["runtime_trigger_owner"],
             "trigger_runtime_owner::execute_prepared_chapter_analysis_trigger"
@@ -150,6 +145,14 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_service_runtime_owner_with_deleted_python_source_map"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_source_map_retained"],
             false
         );
     }

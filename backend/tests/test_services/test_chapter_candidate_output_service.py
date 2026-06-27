@@ -1,6 +1,6 @@
 import pytest
 
-from app.services.chapter_candidate_output_service import (
+from tests.test_support.chapter_candidate_executor_test_support import (
     ChapterCandidateOutputRequest,
     collect_generation_candidate_output,
 )

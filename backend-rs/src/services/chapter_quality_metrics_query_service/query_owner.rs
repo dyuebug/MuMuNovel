@@ -404,12 +404,8 @@ fn build_chapter_quality_metrics_query_owner_contract() -> Value {
         "owner": "chapter_quality_metrics_query_service",
         "scope": "chapter_quality_metrics_fragments_latest_records_and_owned_payload_owner",
         "python_source_map": [
-            "backend/app/api/chapters.py",
-            "backend/app/api/chapter_analysis_routes.py",
-            "backend/app/services/story_repair_payload_service.py",
-            "backend/app/services/chapter_analysis_response_service.py",
-            "backend/app/models/generation_history.py",
-            "backend/app/models/chapter_draft_attempt.py"
+            "backend/migrator_app/models/generation_history.py",
+            "backend/migrator_app/models/chapter_draft_attempt.py"
         ],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_quality_metrics_query_service.rs",
@@ -446,10 +442,23 @@ fn build_chapter_quality_metrics_query_owner_contract() -> Value {
                 "chapter_access_service",
                 "chapter_quality_metrics_query_service"
             ],
+            "default_python_module_consumers": [
+                "backend/tests/test_support/database_test_support.py"
+            ],
+            "dedicated_python_regression_surfaces": [
+                "backend/tests/test_api/test_chapters.py",
+                "backend/tests/test_api/test_chapters_batch_generation.py",
+                "backend/tests/test_api/test_chapters_quality_views.py",
+                "backend/tests/test_api/test_chapters_stream_routes.py"
+            ],
+            "shared_test_support_consumers": [
+                "backend/tests/test_support/chapter_generation_history_test_support.py",
+                "backend/tests/test_support/chapter_quality_metrics_query_test_support.py"
+            ],
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_chapter_quality_metrics_query_service_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "chapter quality metrics owner is rust_only and the surviving generation_history and chapter_draft_attempt python files now remain shared metadata registration and regression references only",
+            "status": "rust_chapter_quality_metrics_query_service_owner_shared_model_source_maps_only"
         },
         "validation_boundary": [
             "cargo test chapter_quality_metrics_query_service --manifest-path backend-rs/Cargo.toml",
@@ -457,7 +466,7 @@ fn build_chapter_quality_metrics_query_owner_contract() -> Value {
             "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only --profile phase5-chapter-crud-owner",
             "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only --profile phase5-chapter-analysis-owner"
         ],
-        "rollback_boundary": "backend/app/api/chapters.py and backend/app/api/chapter_analysis_routes.py remain source-map rollback references"
+        "rollback_boundary": "chapter_quality_metrics_query_service_is_rust_owned_surviving_generation_history_and_chapter_draft_attempt_python_files_remain_shared_metadata_registration_and_regression_reference_only"
     })
 }
 
@@ -500,6 +509,20 @@ mod tests {
 
         assert_eq!(contract["owner"], "chapter_quality_metrics_query_service");
         assert_eq!(
+            contract["python_source_map"][0],
+            "backend/migrator_app/models/generation_history.py"
+        );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .map(|items| items.len()),
+            Some(2)
+        );
+        assert_eq!(
+            contract["python_source_map"][1],
+            "backend/migrator_app/models/chapter_draft_attempt.py"
+        );
+        assert_eq!(
             contract["behavior_contract"]["entrypoints"][4],
             "load_owned_chapter_quality_metrics_payload"
         );
@@ -520,12 +543,35 @@ mod tests {
             0
         );
         assert_eq!(
+            contract["service_runtime_closeout_status"]["default_python_module_consumers"],
+            json!(["backend/tests/test_support/database_test_support.py"])
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["shared_test_support_consumers"],
+            json!([
+                "backend/tests/test_support/chapter_generation_history_test_support.py",
+                "backend/tests/test_support/chapter_quality_metrics_query_test_support.py"
+            ])
+        );
+        assert_eq!(
             contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
             true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "chapter quality metrics owner is rust_only and the surviving generation_history and chapter_draft_attempt python files now remain shared metadata registration and regression references only"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_chapter_quality_metrics_query_service_owner_shared_model_source_maps_only"
+        );
+        assert_eq!(
+            contract["rollback_boundary"],
+            "chapter_quality_metrics_query_service_is_rust_owned_surviving_generation_history_and_chapter_draft_attempt_python_files_remain_shared_metadata_registration_and_regression_reference_only"
         );
     }
 

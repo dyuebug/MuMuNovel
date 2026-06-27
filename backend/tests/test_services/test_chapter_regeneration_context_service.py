@@ -3,8 +3,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.models.chapter import Chapter
-from app.services import chapter_regeneration_context_service as regeneration_context_service
+import tests.test_support.database_test_support as app_database
+from migrator_app.models.chapter import Chapter
+from tests.test_support import (
+    chapter_regeneration_route_test_adapter as regeneration_context_service,
+)
 
 
 class _ScalarResult:

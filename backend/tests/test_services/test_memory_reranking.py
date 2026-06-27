@@ -1,4 +1,4 @@
-from app.services.memory_ranking import rank_memories_for_generation
+from tests.test_support.memory_service_test_support import rank_memories_for_generation
 
 
 def test_should_prioritize_recent_character_memory_for_generation():

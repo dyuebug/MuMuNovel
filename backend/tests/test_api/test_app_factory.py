@@ -1,366 +1,121 @@
 import pytest
 import sys
 import importlib
+from pathlib import Path
 from fastapi.testclient import TestClient
 
-from app.bootstrap.app_factory import create_app
-from app.main import app as main_app
-from app.config import settings as config_settings
-from app.middleware.auth_middleware import user_manager
+from tests.test_support.app_runtime.app_factory import create_app
+from tests.test_support.app_runtime.main import app as main_app
+from tests.test_support.retired_runtime_test_support import settings as config_settings
 
 
 pytestmark = pytest.mark.asyncio
 
 
 LEGACY_SINGLE_GENERATION_MODULES = (
-    "app.api.chapter_generation_routes",
     "app.services.chapter_generation.route_wiring_service",
-    "app.services.compat.chapter_generation_route_compat_service",
-)
-
-LEGACY_SINGLE_GENERATION_ROUTE_REGISTRATION_MODULES = (
-    "app.services.chapter_generation.route_wiring_service",
-    "app.services.compat.chapter_generation_route_compat_service",
-)
-
-LEGACY_SINGLE_GENERATION_ROUTE_MODULE_IMPORT_GUARDS = (
-    "app.api.settings",
-    "app.database",
-    "app.models",
-    "app.services.ai_service",
-    "sqlalchemy",
 )
 
 LEGACY_SINGLE_GENERATION_ROUTE_WIRING_IMPORT_GUARDS = (
-    "app.api.chapters",
+    "app.api",
     "app.api.outlines",
     "app.api.chapter_route_helpers",
     "app.database",
     "app.models",
-    "app.services.ai_service",
-    "app.services.chapter_context_service",
-    "app.services.chapter_generation.runtime.prompt_service",
-    "app.services.chapter_generation.stream.entry_service",
-    "app.services.chapter_generation.background_entry_service",
-    "app.services.prompt_service",
-    "app.services.story_repair_payload_service",
-    "app.services.story_quality_feedback_service",
-    "app.services.task_workflow_runtime_service",
-    "app.services.manual_chapter_analysis_execution_service",
+    "tests.test_support.ai_gateway.ai_service",
+    "tests.test_support.chapter_context_test_support",
     "sqlalchemy",
-)
-
-LEGACY_SINGLE_GENERATION_COMPAT_IMPORT_GUARDS = (
-    "app.services.chapter_generation.route_wiring_service",
-    *LEGACY_SINGLE_GENERATION_ROUTE_WIRING_IMPORT_GUARDS,
-)
-
-LEGACY_SINGLE_GENERATION_STREAM_ENTRY_IMPORT_GUARDS = (
-    "app.database",
-    "app.models",
-    "app.services.chapter_generation.runtime.prompt_service",
-    "app.services.chapter_generation.stream.service",
-    "app.services.chapter_generation.stream.wiring_service",
-    "app.services.story_repair_payload_service",
-    "app.services.manual_chapter_analysis_execution_service",
-    "app.utils.sse_response",
-)
-
-LEGACY_SINGLE_GENERATION_STREAM_WIRING_IMPORT_GUARDS = (
-    "app.database",
-    "app.models",
-    "app.schemas.generation_payload",
-    "app.services.analysis_task_service",
-    "app.services.chapter_context_service",
-    "app.services.chapter_generation.history_service",
-    "app.services.chapter_generation.runtime.prompt_service",
-    "app.services.chapter_generation.runtime.service",
-    "app.services.chapter_generation.stream.models",
-    "app.services.foreshadow_service",
-    "app.services.manual_chapter_analysis_execution_service",
-    "app.services.memory_service",
-    "app.services.outline_runtime_source_service",
-    "app.services.prompt_service",
-    "app.services.story_quality_feedback_service",
-    "app.services.story_repair_payload_service",
-    "app.services.story_runtime_serialization_service",
 )
 
 LEGACY_SINGLE_GENERATION_STREAM_FINALIZE_IMPORT_GUARDS = (
     "app.database",
     "app.models",
-    "app.services.chapter_generation.stream.models",
 )
 
 LEGACY_SINGLE_GENERATION_STREAM_CANDIDATE_IMPORT_GUARDS = (
     "app.database",
     "app.models",
-    "app.services.chapter_candidate_event_service",
-    "app.services.chapter_generation.stream.models",
-)
-
-LEGACY_SINGLE_GENERATION_STREAM_SERVICE_IMPORT_GUARDS = (
-    "app.database",
-    "app.models",
-    "app.services.chapter_quality_context_service",
-    "app.services.chapter_generation.stream.candidate_service",
-    "app.services.chapter_generation.stream.execution_service",
-    "app.services.chapter_generation.stream.finalize_service",
-    "app.services.chapter_generation.stream.models",
-    "app.utils.sse_response",
+    "tests.test_support.batch_generation_single_chapter_wiring_test_adapter",
 )
 
 LEGACY_SINGLE_GENERATION_STREAM_EXECUTION_IMPORT_GUARDS = (
     "app.database",
     "app.models",
     "sqlalchemy",
-    "app.services.chapter_quality_context_service",
-    "app.services.chapter_generation.stream.models",
 )
 
-LEGACY_SINGLE_GENERATION_STREAM_MODELS_IMPORT_GUARDS = (
-    "app.database",
-    "app.models",
+LEGACY_BATCH_GENERATION_SOURCE_MAP_MODULES = (
+    "app.services.batch_generation",
 )
 
-LEGACY_BATCH_GENERATION_MODULES = (
-    "app.api.chapter_batch_generation_routes",
-    "app.services.batch_generation.route_wiring_service",
-    "app.services.batch_generation.create_service",
-    "app.services.batch_generation.query_service",
-    "app.services.batch_generation.resume_service",
-    "app.services.batch_generation.status_response_builder",
-    "app.services.batch_generation.task_workflow_snapshot_service",
-    "app.services.batch_generation_orchestration_service",
-    "app.services.batch_generation_run_wiring_service",
-    "app.services.batch_generation_single_chapter_wiring_service",
-    "app.services.batch_generation_stream_service",
-    "app.services.batch_generation_execution_service",
-    "app.services.batch_generation_analysis_service",
-    "app.services.batch_generation_run_service",
-)
-
-LEGACY_BATCH_GENERATION_ROUTE_MODULE_IMPORT_GUARDS = (
-    "app.api.common",
-    "app.api.settings",
-    "app.api.chapters",
-    "app.database",
-    "app.models",
-    "app.services.ai_service",
-    "app.services.batch_generation_orchestration_service",
-    "app.services.batch_generation.query_service",
-    "app.services.batch_generation_stream_service",
-    "app.services.batch_generation.status_response_builder",
-    "app.services.chapter_generation.prerequisite_service",
-    "app.services.chapter_quality_context_service",
-    "app.services.story_repair_payload_service",
-    "app.services.task_workflow_runtime_service",
-    "app.utils.sse_response",
-    "sqlalchemy",
-)
+RETIRED_BATCH_GENERATION_DEFAULT_IMPORT_BLOCKLIST = ()
 
 LEGACY_BATCH_GENERATION_ROUTE_WIRING_IMPORT_GUARDS = (
     "app.api.common",
-    "app.services.batch_generation_orchestration_service",
-    "app.services.batch_generation.query_service",
-    "app.services.batch_generation_stream_service",
-    "app.services.batch_generation.status_response_builder",
-    "app.services.chapter_generation.prerequisite_service",
-    "app.services.chapter_quality_context_service",
-    "app.services.story_repair_payload_service",
-    "app.services.task_workflow_runtime_service",
-    "app.utils.sse_response",
-    "sqlalchemy",
-)
-
-LEGACY_BATCH_GENERATION_STATUS_RESPONSE_IMPORT_GUARDS = (
-    "app.models",
-    "sqlalchemy",
-)
-
-LEGACY_BATCH_GENERATION_TASK_WORKFLOW_SNAPSHOT_IMPORT_GUARDS = (
-    "app.models",
-    "app.services.task_workflow_runtime_service",
-    "sqlalchemy",
-)
-
-LEGACY_BATCH_GENERATION_QUERY_SERVICE_IMPORT_GUARDS = (
-    "app.models",
-    "app.services.batch_generation.task_workflow_snapshot_service",
-    "app.services.task_quality_snapshot_service",
-    "sqlalchemy",
-)
-
-LEGACY_BATCH_GENERATION_CREATE_SERVICE_IMPORT_GUARDS = (
-    "fastapi",
-    "sqlalchemy",
-    "app.models.chapter",
-    "app.models.project",
-    "app.services.batch_generation_orchestration_service",
-)
-
-LEGACY_BATCH_GENERATION_RESUME_SERVICE_IMPORT_GUARDS = (
-    "fastapi",
-    "sqlalchemy",
-    "app.models.batch_generation_task",
-    "app.models.chapter",
-    "app.services.batch_generation_orchestration_service",
-)
-
-LEGACY_BATCH_GENERATION_ENTRY_SERVICE_IMPORT_GUARDS = (
+    "app.api.settings",
     "app.database",
     "app.models",
-    "app.services.ai_service",
-    "app.services.batch_generation_analysis_service",
-    "app.services.batch_generation_run_service",
-    "app.services.batch_generation_run_wiring_service",
-    "app.services.chapter_quality_context_service",
+    "sqlalchemy",
+)
+
+LEGACY_CHAPTER_ANALYSIS_PREP_SERVICE_IMPORT_GUARDS = (
+    "app.models",
+    "sqlalchemy",
+)
+
+LEGACY_CHAPTER_ANALYSIS_SUPPORT_SERVICE_IMPORT_GUARDS = (
+    "tests.test_support.ai_gateway.ai_service",
+    "app.services.chapter_generated_text_service",
+    "sqlalchemy",
+)
+
+LEGACY_CHAPTER_ANALYSIS_EXECUTION_SERVICE_IMPORT_GUARDS = (
+    "app.database",
+    "app.models",
+    "tests.test_support.ai_gateway.ai_service",
+    "tests.test_support.foreshadow_test_support",
+    "tests.test_support.plot_analyzer_test_support",
+    "sqlalchemy",
+)
+
+LEGACY_CHAPTER_ANALYSIS_ROUTE_IMPORT_GUARDS = (
+    "app.api.chapter_route_helpers",
+    "app.models",
+    "sqlalchemy",
+)
+
+LEGACY_CHAPTER_ANALYSIS_TASK_ROUTE_IMPORT_GUARDS = (
+    "app.api.chapter_route_helpers",
+    "app.api.common",
+    "tests.test_support.ai_gateway.ai_service",
     "app.services.manual_chapter_analysis_execution_service",
-    "app.services.story_repair_payload_service",
-    "app.services.task_workflow_runtime_service",
     "sqlalchemy",
 )
 
-LEGACY_BATCH_GENERATION_WORKFLOW_SERVICE_IMPORT_GUARDS = (
-    "fastapi",
-    "sqlalchemy",
-    "app.models",
-    "app.services.ai_service",
-    "app.services.chapter_quality_context_service",
-    "app.services.story_repair_payload_service",
-)
-
-LEGACY_BATCH_GENERATION_SINGLE_CHAPTER_ENTRY_IMPORT_GUARDS = (
+LEGACY_CHAPTER_REGENERATION_ROUTE_IMPORT_GUARDS = (
+    "app.api.chapter_route_helpers",
+    "app.api.settings",
     "app.database",
-    "app.models",
-    "app.services.ai_service",
-    "app.services.batch_generation_single_chapter_wiring_service",
-    "app.services.chapter_candidate_runtime_state_service",
-    "app.services.chapter_context_service",
-    "app.services.chapter_quality_context_service",
-    "app.services.chapter_web_research_service",
-    "app.services.prompt_service",
-    "app.services.story_repair_payload_service",
-    "app.services.story_quality_feedback_service",
-    "app.services.task_workflow_runtime_service",
+    "tests.test_support.ai_gateway.ai_service",
     "sqlalchemy",
 )
 
-LEGACY_BATCH_GENERATION_PACKAGE_IMPORT_GUARDS = (
-    "app.database",
-    "app.models",
-    "app.services.batch_generation.create_service",
-    "app.services.batch_generation.query_service",
-    "app.services.batch_generation.resume_service",
-    "app.services.batch_generation.status_response_builder",
-    "app.services.batch_generation.task_workflow_snapshot_service",
-    "sqlalchemy",
+LAZY_BOOTSTRAP_ROUTE_MODULES = (
+    "app.api.settings",
+    "app.api.outlines",
+    "app.api.characters",
+    "app.api.careers",
+    "app.api.chapter_crud_routes",
+    "app.api.chapter_annotation_routes",
+    "app.api.chapter_expansion_plan_routes",
+    "app.api.chapter_quality_routes",
+    "app.api.organizations",
+    "app.api.background_tasks",
 )
 
-BATCH_BATCH_GENERATION_FROZEN_SOURCE_MAPS = (
-    (
-        "app.services.batch_generation",
-        "backend-rs/src/api/chapter_batch_generation.rs; backend-rs/src/services/chapter_batch_generation_read_context_service.rs; backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs; backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs; backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs",
-        "legacy_batch_generation_python_routes_enabled; legacy_single_generation_python_routes_enabled",
-        "freeze",
-    ),
-    (
-        "app.api.chapter_batch_generation_routes",
-        "backend-rs/src/api/chapter_batch_generation.rs",
-        "legacy_batch_generation_python_routes_enabled",
-        "freeze",
-    ),
-    (
-        "app.services.batch_generation.route_wiring_service",
-        "backend-rs/src/api/chapter_batch_generation.rs; backend-rs/src/api/health.rs",
-        "legacy_batch_generation_python_routes_enabled",
-        "freeze",
-    ),
-    (
-        "app.services.batch_generation.create_service",
-        "backend-rs/src/api/chapter_batch_generation.rs; backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs; backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs; backend-rs/src/services/chapter_generation_execution_contract_service.rs",
-        "legacy_batch_generation_python_routes_enabled; legacy_single_generation_python_routes_enabled",
-        "freeze",
-    ),
-    (
-        "app.services.batch_generation.query_service",
-        "backend-rs/src/api/chapter_batch_generation.rs; backend-rs/src/services/chapter_batch_generation_read_context_service.rs; backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs; backend-rs/src/services/chapter_generation_runtime_service/snapshot_persistence_owner.rs",
-        "legacy_batch_generation_python_routes_enabled; legacy_single_generation_python_routes_enabled",
-        "freeze",
-    ),
-    (
-        "app.services.batch_generation.resume_service",
-        "backend-rs/src/api/chapter_batch_generation.rs; backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs; backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs; backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs; backend-rs/src/services/chapter_generation_runtime_service/snapshot_persistence_owner.rs",
-        "legacy_batch_generation_python_routes_enabled",
-        "freeze",
-    ),
-    (
-        "app.services.batch_generation.status_response_builder",
-        "backend-rs/src/api/chapter_batch_generation.rs; backend-rs/src/services/chapter_batch_generation_read_context_service.rs; backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs; backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs; backend-rs/src/services/chapter_generation_runtime_service/quality_runtime_context_owner.rs",
-        "legacy_batch_generation_python_routes_enabled",
-        "freeze",
-    ),
-    (
-        "app.services.batch_generation.task_workflow_snapshot_service",
-        "backend-rs/src/api/chapter_batch_generation.rs; backend-rs/src/services/chapter_batch_generation_read_context_service.rs; backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs; backend-rs/src/api/health.rs",
-        "legacy_batch_generation_python_routes_enabled; legacy_single_generation_python_routes_enabled",
-        "freeze",
-    ),
-    (
-        "app.services.batch_generation_orchestration_service",
-        "backend-rs/src/api/chapter_batch_generation.rs; backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs; backend-rs/src/services/chapter_batch_generation_read_context_service.rs; backend-rs/src/services/chapter_generation_execution_contract_service.rs; backend-rs/src/services/chapter_generation_runtime_service/story_repair_quality_context_owner.rs; backend-rs/src/services/chapter_access_service.rs",
-        "legacy_batch_generation_python_routes_enabled; legacy_single_generation_python_routes_enabled",
-        "freeze",
-    ),
-    (
-        "app.services.batch_generation_stream_service",
-        "backend-rs/src/api/chapter_batch_generation.rs; backend-rs/src/services/chapter_batch_generation_read_context_service.rs; backend-rs/src/api/health.rs",
-        "legacy_batch_generation_python_routes_enabled",
-        "freeze",
-    ),
-    (
-        "app.services.batch_generation_run_wiring_service",
-        "backend-rs/src/api/health.rs",
-        "aggregate_chapters_python_source_map",
-        "freeze",
-    ),
-    (
-        "app.services.batch_generation_analysis_service",
-        "backend-rs/src/api/health.rs",
-        "aggregate_chapters_python_source_map",
-        "freeze",
-    ),
-    (
-        "app.services.batch_generation_run_service",
-        "backend-rs/src/api/health.rs",
-        "aggregate_chapters_python_source_map",
-        "freeze",
-    ),
-    (
-        "app.services.batch_generation_execution_service",
-        "backend-rs/src/api/health.rs; backend-rs/src/services/chapter_generation_runtime_service.rs; backend-rs/src/services/chapter_generation_execution_contract_service.rs; backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
-        "aggregate_chapters_python_source_map; legacy_batch_generation_python_routes_enabled",
-        "freeze",
-    ),
-    (
-        "app.services.batch_generation_entry_service",
-        "backend-rs/src/api/chapter_batch_generation.rs; backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs; backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs",
-        "legacy_batch_generation_python_routes_enabled",
-        "freeze",
-    ),
-    (
-        "app.services.batch_generation_workflow_service",
-        "backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs; backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs",
-        "legacy_batch_generation_python_routes_enabled",
-        "freeze",
-    ),
-    (
-        "app.services.batch_generation_single_chapter_entry_service",
-        "backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs; backend-rs/src/services/chapter_single_generation_runtime_state_service.rs; backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs",
-        "legacy_batch_generation_python_routes_enabled",
-        "freeze",
-    ),
-)
+RETIRED_BATCH_GENERATION_FROZEN_SOURCE_MAPS = ()
+
+RETIRED_CHAPTER_ANALYSIS_FROZEN_SOURCE_MAPS = ()
 
 BATCH_B_DRAFT_ROUTE_PATHS = (
     "/api/chapters/{chapter_id}/analysis/auto-revision-draft",
@@ -383,61 +138,229 @@ BATCH_B_REGENERATION_ROUTE_PATHS = (
     "/api/chapters/{chapter_id}/apply-partial-regenerate",
 )
 
-BATCH_C_AGGREGATE_SOURCE_MAP_MODULES = (
-    "app.api.chapters",
-    "app.services.compat.chapter_generation_route_compat_service",
+RETIRED_BATCH_B_FROZEN_SOURCE_MAPS = ()
+
+RETIRED_BATCH_B_PROMOTED_FROZEN_SOURCE_MAPS = ()
+
+INSPIRATION_ROUTE_PATHS = (
+    "/api/inspiration/generate-options",
+    "/api/inspiration/refine-options",
+    "/api/inspiration/quick-generate",
 )
 
-BATCH_C_AGGREGATE_SOURCE_MAP_IMPORT_GUARDS = (
-    *BATCH_C_AGGREGATE_SOURCE_MAP_MODULES,
-    "app.services.chapter_generation.route_wiring_service",
-    "app.api.chapter_generation_routes",
-    "app.api.chapter_batch_generation_routes",
+MCP_PLUGINS_ROUTE_PATHS = (
+    "/api/mcp/plugins",
+    "/api/mcp/plugins/simple",
+    "/api/mcp/plugins/metrics",
+    "/api/mcp/plugins/cache/stats",
+    "/api/mcp/plugins/sessions/stats",
+    "/api/mcp/plugins/{plugin_id}",
+    "/api/mcp/plugins/{plugin_id}/status",
 )
 
-BATCH_B_FROZEN_SOURCE_MAPS = (
-    (
-        "app.api.chapter_draft_routes",
-        "backend-rs/src/api/chapter_draft_routes.rs",
-        "legacy_chapter_draft_python_routes_enabled",
-    ),
-    (
-        "app.api.chapter_analysis_routes",
-        "backend-rs/src/api/chapter_analysis_routes.rs",
-        "legacy_chapter_analysis_python_routes_enabled",
-    ),
-    (
-        "app.api.chapter_analysis_task_routes",
-        "backend-rs/src/api/chapter_analysis_routes.rs",
-        "legacy_chapter_analysis_python_routes_enabled",
-    ),
-    (
-        "app.api.chapter_regeneration_routes",
-        "backend-rs/src/api/chapter_regeneration_routes.rs",
-        "legacy_chapter_regeneration_python_routes_enabled",
-    ),
-    (
-        "app.api.chapter_partial_regeneration_routes",
-        "backend-rs/src/api/chapter_regeneration_routes.rs",
-        "legacy_chapter_regeneration_python_routes_enabled",
-    ),
+SETTINGS_ROUTE_PATHS = (
+    "/api/settings",
+    "/api/settings/api-key",
+    "/api/settings/presets",
+    "/api/settings/presets/{preset_id}",
+    "/api/settings/presets/{preset_id}/activate",
+    "/api/settings/presets/{preset_id}/test",
+    "/api/settings/presets/from-current",
+    "/api/settings/models",
+    "/api/settings/fetch-models",
+    "/api/settings/test",
+    "/api/settings/check-function-calling",
+    "/api/settings/test-web-research",
 )
 
-BATCH_C_FROZEN_SOURCE_MAPS = (
-    (
-        "app.api.chapters",
-        "backend-rs/src/api/chapter_generation_routes.rs; backend-rs/src/api/health.rs",
-        "aggregate_chapters_python_source_map",
-        "repoint",
-    ),
-    (
-        "app.services.compat.chapter_generation_route_compat_service",
-        "backend-rs/src/api/chapter_generation_routes.rs",
-        "aggregate_chapter_generation_route_compat_source_map",
-        "freeze",
-    ),
+AUTH_ROUTE_PATHS = (
+    "/api/auth/config",
+    "/api/auth/local/login",
+    "/api/auth/linuxdo/url",
+    "/api/auth/linuxdo/callback",
+    "/api/auth/callback",
+    "/api/auth/refresh",
+    "/api/auth/logout",
+    "/api/auth/user",
+    "/api/auth/password/status",
+    "/api/auth/password/set",
+    "/api/auth/password/initialize",
+    "/api/auth/bind/login",
 )
 
+USERS_ROUTE_PATHS = (
+    "/api/users/current",
+    "/api/users",
+    "/api/users/set-admin",
+    "/api/users/reset-password",
+    "/api/users/{user_id}",
+)
+
+ADMIN_ROUTE_PATHS = (
+    "/api/admin/users",
+    "/api/admin/users/{user_id}",
+    "/api/admin/users/{user_id}/toggle-status",
+    "/api/admin/users/{user_id}/reset-password",
+)
+
+PROMPT_TEMPLATES_ROUTE_PATHS = (
+    "/api/prompt-templates",
+    "/api/prompt-templates/categories",
+    "/api/prompt-templates/system-defaults",
+    "/api/prompt-templates/sync-status",
+    "/api/prompt-templates/{template_key}/sync-to-default",
+    "/api/prompt-templates/{template_key}",
+    "/api/prompt-templates/{template_key}/reset",
+    "/api/prompt-templates/export",
+    "/api/prompt-templates/import",
+    "/api/prompt-templates/{template_key}/preview",
+)
+
+PROMPT_WORKSHOP_ROUTE_PATHS = (
+    "/api/prompt-workshop/status",
+    "/api/prompt-workshop/items",
+    "/api/prompt-workshop/items/{item_id}",
+    "/api/prompt-workshop/items/{item_id}/import",
+    "/api/prompt-workshop/items/{item_id}/like",
+    "/api/prompt-workshop/items/{item_id}/download",
+    "/api/prompt-workshop/submit",
+    "/api/prompt-workshop/my-submissions",
+    "/api/prompt-workshop/submissions/{submission_id}",
+    "/api/prompt-workshop/admin/submissions",
+    "/api/prompt-workshop/admin/submissions/{submission_id}/review",
+    "/api/prompt-workshop/admin/items",
+    "/api/prompt-workshop/admin/items/{item_id}",
+    "/api/prompt-workshop/admin/stats",
+)
+
+CHANGELOG_ROUTE_PATHS = (
+    "/api/changelog",
+    "/api/changelog/refresh",
+)
+
+BOOK_IMPORT_ROUTE_PATHS = (
+    "/api/book-import/tasks",
+    "/api/book-import/tasks/{task_id}",
+    "/api/book-import/tasks/{task_id}/preview",
+    "/api/book-import/tasks/{task_id}/apply",
+    "/api/book-import/tasks/{task_id}/apply-stream",
+    "/api/book-import/tasks/{task_id}/retry-stream",
+)
+
+FORESHADOWS_ROUTE_PATHS = (
+    "/api/foreshadows/projects/{project_id}",
+    "/api/foreshadows/projects/{project_id}/stats",
+    "/api/foreshadows/projects/{project_id}/context/{chapter_number}",
+    "/api/foreshadows/projects/{project_id}/pending-resolve",
+    "/api/foreshadows/{foreshadow_id}",
+    "/api/foreshadows",
+    "/api/foreshadows/{foreshadow_id}/plant",
+    "/api/foreshadows/{foreshadow_id}/resolve",
+    "/api/foreshadows/{foreshadow_id}/abandon",
+    "/api/foreshadows/projects/{project_id}/sync-from-analysis",
+)
+
+RELATIONSHIPS_ROUTE_PATHS = (
+    "/api/relationships/types",
+    "/api/relationships/project/{project_id}",
+    "/api/relationships/graph/{project_id}",
+    "/api/relationships/",
+    "/api/relationships/{relationship_id}",
+)
+
+WRITING_STYLES_ROUTE_PATHS = (
+    "/api/writing-styles/presets/list",
+    "/api/writing-styles",
+    "/api/writing-styles/user",
+    "/api/writing-styles/project/{project_id}",
+    "/api/writing-styles/{style_id}",
+    "/api/writing-styles/{style_id}/set-default",
+    "/api/writing-styles/project/{project_id}/init-defaults",
+)
+
+POLISH_ROUTE_PATHS = (
+    "/api/polish",
+    "/api/polish/batch",
+)
+
+BACKGROUND_TASKS_ROUTE_PATHS = (
+    "/api/background-tasks",
+    "/api/background-tasks/{task_id}",
+    "/api/background-tasks/{task_id}/cancel",
+    "/api/background-tasks/{task_id}/workflow-state",
+)
+
+PROJECTS_ROUTE_PATHS = (
+    "/api/projects",
+    "/api/projects/{project_id}",
+    "/api/projects/{project_id}/export",
+    "/api/projects/{project_id}/check-consistency",
+    "/api/projects/{project_id}/fix-organizations",
+    "/api/projects/{project_id}/fix-member-counts",
+    "/api/projects/{project_id}/export-data",
+    "/api/projects/validate-import",
+    "/api/projects/import",
+)
+
+WIZARD_STREAM_ROUTE_PATHS = (
+    "/api/wizard-stream/world-building",
+    "/api/wizard-stream/career-system",
+    "/api/wizard-stream/characters",
+    "/api/wizard-stream/outline",
+    "/api/wizard-stream/world-building/{project_id}/regenerate",
+)
+
+OUTLINES_ROUTE_PATHS = (
+    "/api/outlines",
+    "/api/outlines/project/{project_id}",
+    "/api/outlines/{outline_id}",
+    "/api/outlines/generate-stream",
+    "/api/outlines/{outline_id}/create-single-chapter",
+    "/api/outlines/{outline_id}/expand-stream",
+    "/api/outlines/{outline_id}/chapters",
+    "/api/outlines/batch-expand-stream",
+    "/api/outlines/{outline_id}/create-chapters-from-plans",
+)
+
+CAREERS_ROUTE_PATHS = (
+    "/api/careers",
+    "/api/careers/generate-system",
+    "/api/careers/{career_id}",
+    "/api/careers/character/{character_id}/careers",
+    "/api/careers/character/{character_id}/careers/main",
+    "/api/careers/character/{character_id}/careers/sub",
+    "/api/careers/character/{character_id}/careers/{career_id}/stage",
+    "/api/careers/character/{character_id}/careers/{career_id}",
+)
+
+CHARACTERS_ROUTE_PATHS = (
+    "/api/characters",
+    "/api/characters/project/{project_id}",
+    "/api/characters/{character_id}",
+    "/api/characters/generate-stream",
+    "/api/characters/export",
+    "/api/characters/import",
+    "/api/characters/validate-import",
+)
+
+ORGANIZATIONS_ROUTE_PATHS = (
+    "/api/organizations",
+    "/api/organizations/project/{project_id}",
+    "/api/organizations/{org_id}",
+    "/api/organizations/{org_id}/members",
+    "/api/organizations/members/{member_id}",
+    "/api/organizations/generate-stream",
+)
+
+CHAPTER_CRUD_ROUTE_PATHS = (
+    "/api/chapters",
+    "/api/chapters/project/{project_id}",
+    "/api/chapters/{chapter_id}",
+    "/api/chapters/{chapter_id}/navigation",
+    "/api/chapters/{chapter_id}/annotations",
+    "/api/chapters/{chapter_id}/expansion-plan",
+    "/api/chapters/project/{project_id}/quality-trend",
+)
 
 @pytest.fixture(autouse=True)
 def restore_sqlalchemy_modules():
@@ -461,16 +384,22 @@ def _clear_legacy_single_generation_modules():
 
 
 def _clear_module_prefixes(module_prefixes):
+    expanded_prefixes = set(module_prefixes)
+    if "app.database" in expanded_prefixes or "app.models" in expanded_prefixes:
+        expanded_prefixes.add("app.model_base")
+    if "app.models" in expanded_prefixes:
+        expanded_prefixes.add("migrator_app.models")
+
     for module_name in list(sys.modules):
         if any(
             module_name == module_prefix or module_name.startswith(f"{module_prefix}.")
-            for module_prefix in module_prefixes
+            for module_prefix in expanded_prefixes
         ):
             sys.modules.pop(module_name, None)
 
 
 def _clear_legacy_batch_generation_modules():
-    for module_name in LEGACY_BATCH_GENERATION_MODULES:
+    for module_name in LEGACY_BATCH_GENERATION_SOURCE_MAP_MODULES:
         sys.modules.pop(module_name, None)
 
 
@@ -497,6 +426,20 @@ def _assert_frozen_source_map(module, *, rust_owner, rollback_flag):
 
 def _assert_source_map_closeout_action(module, *, action):
     assert module.SOURCE_MAP_PHYSICAL_CLOSEOUT_ACTION == action
+
+
+def _assert_thin_shell_import(module_name, import_guards, *, action):
+    _clear_module_prefixes((module_name, *import_guards))
+
+    importlib.import_module(module_name)
+
+    assert module_name in sys.modules
+    for guarded_module_name in import_guards:
+        assert guarded_module_name not in sys.modules
+    _assert_source_map_closeout_action(
+        sys.modules[module_name],
+        action=action,
+    )
 
 
 async def test_should_create_app_and_register_health_routes():
@@ -529,274 +472,297 @@ async def test_should_not_register_legacy_batch_generation_python_routes_by_defa
     assert "/api/chapters/project/{project_id}/batch-generate" not in route_paths
     assert "/api/chapters/batch-generate/{batch_id}/status" not in route_paths
     assert "/api/chapters/batch-generate/{batch_id}/stream" not in route_paths
-    for module_name in LEGACY_BATCH_GENERATION_MODULES:
+    assert not RETIRED_BATCH_GENERATION_DEFAULT_IMPORT_BLOCKLIST
+
+
+async def test_should_not_register_inspiration_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, INSPIRATION_ROUTE_PATHS)
+
+
+async def test_should_not_register_mcp_plugins_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, MCP_PLUGINS_ROUTE_PATHS)
+
+
+async def test_should_not_register_settings_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, SETTINGS_ROUTE_PATHS)
+
+
+async def test_should_not_register_auth_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, AUTH_ROUTE_PATHS)
+
+
+async def test_should_not_register_users_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, USERS_ROUTE_PATHS)
+
+
+async def test_should_not_register_admin_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, ADMIN_ROUTE_PATHS)
+
+
+async def test_legacy_identity_python_route_shells_should_be_deleted():
+    for module_name in ("app.api.auth", "app.api.users", "app.api.admin"):
+        _clear_module_prefixes((module_name,))
+
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module_name)
+
         assert module_name not in sys.modules
 
 
-async def test_should_not_import_batch_c_aggregate_source_maps_by_default():
-    _clear_module_prefixes(BATCH_C_AGGREGATE_SOURCE_MAP_IMPORT_GUARDS)
+async def test_should_not_register_prompt_templates_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, PROMPT_TEMPLATES_ROUTE_PATHS)
+
+
+async def test_should_not_register_prompt_workshop_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, PROMPT_WORKSHOP_ROUTE_PATHS)
+
+
+async def test_should_not_register_changelog_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, CHANGELOG_ROUTE_PATHS)
+
+
+async def test_should_not_register_book_import_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, BOOK_IMPORT_ROUTE_PATHS)
+
+
+async def test_should_not_register_foreshadows_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, FORESHADOWS_ROUTE_PATHS)
+
+
+async def test_should_not_register_relationships_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, RELATIONSHIPS_ROUTE_PATHS)
+
+
+async def test_should_not_register_writing_styles_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, WRITING_STYLES_ROUTE_PATHS)
+
+
+async def test_should_not_register_polish_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, POLISH_ROUTE_PATHS)
+
+
+async def test_should_not_register_background_tasks_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, BACKGROUND_TASKS_ROUTE_PATHS)
+
+
+async def test_should_not_register_projects_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, PROJECTS_ROUTE_PATHS)
+
+
+async def test_should_not_register_wizard_stream_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, WIZARD_STREAM_ROUTE_PATHS)
+
+
+async def test_should_not_register_outlines_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, OUTLINES_ROUTE_PATHS)
+
+
+async def test_should_not_register_careers_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, CAREERS_ROUTE_PATHS)
+
+
+async def test_should_not_register_characters_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, CHARACTERS_ROUTE_PATHS)
+
+
+async def test_should_not_register_organizations_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, ORGANIZATIONS_ROUTE_PATHS)
+
+
+async def test_should_not_register_chapter_crud_python_routes_by_default():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    _assert_paths_absent(route_paths, CHAPTER_CRUD_ROUTE_PATHS)
+
+
+async def test_should_not_import_legacy_bootstrap_route_modules_by_default():
+    _clear_module_prefixes(LAZY_BOOTSTRAP_ROUTE_MODULES)
 
     create_app()
 
-    for module_name in BATCH_C_AGGREGATE_SOURCE_MAP_MODULES:
+    for module_name in LAZY_BOOTSTRAP_ROUTE_MODULES:
         assert module_name not in sys.modules
-
-
-async def test_legacy_batch_generation_route_module_should_import_as_thin_shell():
-    _clear_module_prefixes(
-        (
-            "app.api.chapter_batch_generation_routes",
-            *LEGACY_BATCH_GENERATION_ROUTE_MODULE_IMPORT_GUARDS,
-        )
-    )
-
-    importlib.import_module("app.api.chapter_batch_generation_routes")
-
-    assert "app.api.chapter_batch_generation_routes" in sys.modules
-    for module_name in LEGACY_BATCH_GENERATION_ROUTE_MODULE_IMPORT_GUARDS:
-        assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.api.chapter_batch_generation_routes"],
-        action="freeze",
-    )
 
 
 async def test_legacy_batch_generation_route_wiring_should_import_as_thin_shell():
     _clear_module_prefixes(
         (
-            "app.services.batch_generation.route_wiring_service",
+            "app.services.batch_generation",
             *LEGACY_BATCH_GENERATION_ROUTE_WIRING_IMPORT_GUARDS,
         )
     )
 
-    importlib.import_module("app.services.batch_generation.route_wiring_service")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.services.batch_generation")
 
-    assert "app.services.batch_generation.route_wiring_service" in sys.modules
+    assert "app.services.batch_generation" not in sys.modules
     for module_name in LEGACY_BATCH_GENERATION_ROUTE_WIRING_IMPORT_GUARDS:
         assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.batch_generation.route_wiring_service"],
-        action="freeze",
-    )
 
 
-async def test_legacy_batch_generation_status_response_builder_should_import_as_thin_shell():
+async def test_legacy_manual_chapter_analysis_execution_service_should_be_deleted():
     _clear_module_prefixes(
         (
-            "app.services.batch_generation.status_response_builder",
-            *LEGACY_BATCH_GENERATION_STATUS_RESPONSE_IMPORT_GUARDS,
+            "app.services.manual_chapter_analysis_execution_service",
+            *LEGACY_CHAPTER_ANALYSIS_EXECUTION_SERVICE_IMPORT_GUARDS,
         )
     )
 
-    importlib.import_module("app.services.batch_generation.status_response_builder")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.services.manual_chapter_analysis_execution_service")
 
-    assert "app.services.batch_generation.status_response_builder" in sys.modules
-    for module_name in LEGACY_BATCH_GENERATION_STATUS_RESPONSE_IMPORT_GUARDS:
+    assert "app.services.manual_chapter_analysis_execution_service" not in sys.modules
+    for module_name in LEGACY_CHAPTER_ANALYSIS_EXECUTION_SERVICE_IMPORT_GUARDS:
         assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.batch_generation.status_response_builder"],
-        action="freeze",
-    )
 
 
-async def test_legacy_batch_generation_task_workflow_snapshot_should_import_as_thin_shell():
+async def test_legacy_chapter_analysis_route_shell_should_be_deleted():
     _clear_module_prefixes(
         (
-            "app.services.batch_generation.task_workflow_snapshot_service",
-            *LEGACY_BATCH_GENERATION_TASK_WORKFLOW_SNAPSHOT_IMPORT_GUARDS,
+            "app.api.chapter_analysis_routes",
+            *LEGACY_CHAPTER_ANALYSIS_ROUTE_IMPORT_GUARDS,
         )
     )
 
-    importlib.import_module("app.services.batch_generation.task_workflow_snapshot_service")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.api.chapter_analysis_routes")
 
-    assert "app.services.batch_generation.task_workflow_snapshot_service" in sys.modules
-    for module_name in LEGACY_BATCH_GENERATION_TASK_WORKFLOW_SNAPSHOT_IMPORT_GUARDS:
+    assert "app.api.chapter_analysis_routes" not in sys.modules
+    for module_name in LEGACY_CHAPTER_ANALYSIS_ROUTE_IMPORT_GUARDS:
         assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.batch_generation.task_workflow_snapshot_service"],
-        action="freeze",
-    )
 
 
-async def test_legacy_batch_generation_query_service_should_import_as_thin_shell():
+async def test_legacy_chapter_regeneration_route_shell_should_be_deleted():
     _clear_module_prefixes(
         (
-            "app.services.batch_generation.query_service",
-            *LEGACY_BATCH_GENERATION_QUERY_SERVICE_IMPORT_GUARDS,
+            "app.api.chapter_regeneration_routes",
+            *LEGACY_CHAPTER_REGENERATION_ROUTE_IMPORT_GUARDS,
         )
     )
 
-    importlib.import_module("app.services.batch_generation.query_service")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.api.chapter_regeneration_routes")
 
-    assert "app.services.batch_generation.query_service" in sys.modules
-    for module_name in LEGACY_BATCH_GENERATION_QUERY_SERVICE_IMPORT_GUARDS:
+    assert "app.api.chapter_regeneration_routes" not in sys.modules
+    for module_name in LEGACY_CHAPTER_REGENERATION_ROUTE_IMPORT_GUARDS:
         assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.batch_generation.query_service"],
-        action="freeze",
-    )
-
-
-async def test_legacy_batch_generation_create_service_should_import_as_thin_shell():
-    _clear_module_prefixes(
-        (
-            "app.services.batch_generation.create_service",
-            *LEGACY_BATCH_GENERATION_CREATE_SERVICE_IMPORT_GUARDS,
-        )
-    )
-
-    importlib.import_module("app.services.batch_generation.create_service")
-
-    assert "app.services.batch_generation.create_service" in sys.modules
-    for module_name in LEGACY_BATCH_GENERATION_CREATE_SERVICE_IMPORT_GUARDS:
-        assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.batch_generation.create_service"],
-        action="freeze",
-    )
-
-
-async def test_legacy_batch_generation_resume_service_should_import_as_thin_shell():
-    _clear_module_prefixes(
-        (
-            "app.services.batch_generation.resume_service",
-            *LEGACY_BATCH_GENERATION_RESUME_SERVICE_IMPORT_GUARDS,
-        )
-    )
-
-    importlib.import_module("app.services.batch_generation.resume_service")
-
-    assert "app.services.batch_generation.resume_service" in sys.modules
-    for module_name in LEGACY_BATCH_GENERATION_RESUME_SERVICE_IMPORT_GUARDS:
-        assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.batch_generation.resume_service"],
-        action="freeze",
-    )
-
-
-async def test_legacy_batch_generation_entry_service_should_import_as_thin_shell():
-    _clear_module_prefixes(
-        (
-            "app.services.batch_generation_entry_service",
-            *LEGACY_BATCH_GENERATION_ENTRY_SERVICE_IMPORT_GUARDS,
-        )
-    )
-
-    importlib.import_module("app.services.batch_generation_entry_service")
-
-    assert "app.services.batch_generation_entry_service" in sys.modules
-    for module_name in LEGACY_BATCH_GENERATION_ENTRY_SERVICE_IMPORT_GUARDS:
-        assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.batch_generation_entry_service"],
-        action="freeze",
-    )
-
-
-async def test_legacy_batch_generation_workflow_service_should_import_as_thin_shell():
-    _clear_module_prefixes(
-        (
-            "app.services.batch_generation_workflow_service",
-            *LEGACY_BATCH_GENERATION_WORKFLOW_SERVICE_IMPORT_GUARDS,
-        )
-    )
-
-    importlib.import_module("app.services.batch_generation_workflow_service")
-
-    assert "app.services.batch_generation_workflow_service" in sys.modules
-    for module_name in LEGACY_BATCH_GENERATION_WORKFLOW_SERVICE_IMPORT_GUARDS:
-        assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.batch_generation_workflow_service"],
-        action="freeze",
-    )
-
-
-async def test_legacy_batch_generation_single_chapter_entry_service_should_import_as_thin_shell():
-    _clear_module_prefixes(
-        (
-            "app.services.batch_generation_single_chapter_entry_service",
-            *LEGACY_BATCH_GENERATION_SINGLE_CHAPTER_ENTRY_IMPORT_GUARDS,
-        )
-    )
-
-    importlib.import_module("app.services.batch_generation_single_chapter_entry_service")
-
-    assert "app.services.batch_generation_single_chapter_entry_service" in sys.modules
-    for module_name in LEGACY_BATCH_GENERATION_SINGLE_CHAPTER_ENTRY_IMPORT_GUARDS:
-        assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.batch_generation_single_chapter_entry_service"],
-        action="freeze",
-    )
 
 
 async def test_legacy_batch_generation_package_root_should_import_as_thin_shell():
     _clear_module_prefixes(
         (
             "app.services.batch_generation",
-            *LEGACY_BATCH_GENERATION_PACKAGE_IMPORT_GUARDS,
+            "app.database",
+            "app.models",
+            "sqlalchemy",
         )
     )
 
-    importlib.import_module("app.services.batch_generation")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.services.batch_generation")
 
-    assert "app.services.batch_generation" in sys.modules
-    for module_name in LEGACY_BATCH_GENERATION_PACKAGE_IMPORT_GUARDS:
+    assert "app.services.batch_generation" not in sys.modules
+    assert not (Path(__file__).parents[2] / "app" / "database.py").exists()
+    for module_name in ("app.models", "sqlalchemy"):
         assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.batch_generation"],
-        action="freeze",
-    )
 
 
 
 
 async def test_chapters_test_support_should_not_import_legacy_single_generation_shell():
     sys.modules.pop("tests.test_api.chapters_test_support", None)
-    _clear_legacy_single_generation_modules()
-    _clear_legacy_batch_generation_modules()
+    sys.modules.pop("tests.test_support.foreshadow_test_support", None)
+    from tests.test_support.database_test_support import Base
 
-    importlib.import_module("tests.test_api.chapters_test_support")
+    removed_table = Base.metadata.tables.get("foreshadows")
+    if "foreshadows" in Base.metadata.tables:
+        Base.metadata.remove(removed_table)
+    try:
+        _clear_legacy_single_generation_modules()
+        _clear_legacy_batch_generation_modules()
 
-    for module_name in LEGACY_SINGLE_GENERATION_MODULES:
-        assert module_name not in sys.modules
-    for module_name in LEGACY_BATCH_GENERATION_MODULES:
-        assert module_name not in sys.modules
+        importlib.import_module("tests.test_api.chapters_test_support")
+
+        for module_name in LEGACY_SINGLE_GENERATION_MODULES:
+            assert module_name not in sys.modules
+        assert not RETIRED_BATCH_GENERATION_DEFAULT_IMPORT_BLOCKLIST
+    finally:
+        if removed_table is not None and "foreshadows" not in Base.metadata.tables:
+            Base.metadata._add_table("foreshadows", None, removed_table)
 
 
 async def test_chapters_api_should_not_import_legacy_batch_generation_shell_by_default():
     _clear_legacy_batch_generation_modules()
 
-    importlib.import_module("app.api.chapters")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.api")
+    assert "app.api" not in sys.modules
 
-    for module_name in LEGACY_BATCH_GENERATION_MODULES:
-        assert module_name not in sys.modules
-
-
-async def test_should_register_legacy_single_generation_python_routes_when_explicitly_enabled(
-    monkeypatch,
-):
-    _clear_legacy_single_generation_modules()
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_single_generation_python_routes_enabled",
-        True,
-    )
-    app = create_app()
-    route_paths = _route_paths(app)
-
-    assert "/api/chapters/{chapter_id}/generate-stream" in route_paths
-    assert "/api/chapters/{chapter_id}/generate-background" in route_paths
-    assert "app.api.chapter_generation_routes" in sys.modules
-    _assert_frozen_source_map(
-        sys.modules["app.api.chapter_generation_routes"],
-        rust_owner="backend-rs/src/api/chapter_generation_routes.rs",
-        rollback_flag="legacy_single_generation_python_routes_enabled",
-    )
-    for module_name in LEGACY_SINGLE_GENERATION_ROUTE_REGISTRATION_MODULES:
-        assert module_name not in sys.modules
+    assert not RETIRED_BATCH_GENERATION_DEFAULT_IMPORT_BLOCKLIST
 
 
 async def test_should_not_register_batch_b_python_source_map_routes_by_default():
@@ -808,211 +774,301 @@ async def test_should_not_register_batch_b_python_source_map_routes_by_default()
     _assert_paths_absent(route_paths, BATCH_B_REGENERATION_ROUTE_PATHS)
 
 
-async def test_batch_b_python_source_maps_should_be_repointed_after_approval():
-    for module_name, rust_owner, rollback_flag in BATCH_B_FROZEN_SOURCE_MAPS:
-        module = importlib.import_module(module_name)
-        _assert_frozen_source_map(
-            module,
-            rust_owner=rust_owner,
-            rollback_flag=rollback_flag,
-        )
-        _assert_source_map_closeout_action(module, action="repoint")
+async def test_batch_b_python_source_maps_should_match_per_lane_closeout_stage():
+    assert not RETIRED_BATCH_B_FROZEN_SOURCE_MAPS
 
 
-async def test_batch_c_aggregate_source_maps_should_be_repointed_after_approval():
-    for module_name, rust_owner, rollback_flag, action in BATCH_C_FROZEN_SOURCE_MAPS:
-        module = importlib.import_module(module_name)
-        _assert_frozen_source_map(
-            module,
-            rust_owner=rust_owner,
-            rollback_flag=rollback_flag,
-        )
-        _assert_source_map_closeout_action(module, action=action)
+async def test_batch_b_promoted_python_source_maps_should_be_frozen_after_closeout_promotion():
+    assert not RETIRED_BATCH_B_PROMOTED_FROZEN_SOURCE_MAPS
 
 
 async def test_batch_generation_python_service_source_maps_should_be_frozen_after_approval():
-    for module_name, rust_owner, rollback_flag, action in BATCH_BATCH_GENERATION_FROZEN_SOURCE_MAPS:
-        module = importlib.import_module(module_name)
-        _assert_frozen_source_map(
-            module,
-            rust_owner=rust_owner,
-            rollback_flag=rollback_flag,
-        )
-        _assert_source_map_closeout_action(module, action=action)
+    assert not RETIRED_BATCH_GENERATION_FROZEN_SOURCE_MAPS
 
 
-async def test_should_disable_legacy_chapter_draft_python_routes_when_explicitly_disabled(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_draft_python_routes_enabled",
-        False,
-    )
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_analysis_python_routes_enabled",
-        True,
-    )
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_regeneration_python_routes_enabled",
-        True,
-    )
+async def test_chapter_analysis_python_service_source_maps_should_be_frozen_after_approval():
+    assert not RETIRED_CHAPTER_ANALYSIS_FROZEN_SOURCE_MAPS
+
+
+async def test_should_keep_chapter_regeneration_python_routes_unregistered_after_route_shell_closeout():
     app = create_app()
     route_paths = _route_paths(app)
 
+    assert not hasattr(config_settings, "legacy_chapter_regeneration_python_routes_enabled")
     _assert_paths_absent(route_paths, BATCH_B_DRAFT_ROUTE_PATHS)
-    _assert_paths_present(route_paths, BATCH_B_ANALYSIS_ROUTE_PATHS)
-    _assert_paths_present(route_paths, BATCH_B_REGENERATION_ROUTE_PATHS)
-
-
-async def test_should_register_legacy_chapter_draft_python_routes_when_explicitly_enabled(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_draft_python_routes_enabled",
-        True,
-    )
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_analysis_python_routes_enabled",
-        False,
-    )
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_regeneration_python_routes_enabled",
-        False,
-    )
-    app = create_app()
-    route_paths = _route_paths(app)
-
-    _assert_paths_present(route_paths, BATCH_B_DRAFT_ROUTE_PATHS)
     _assert_paths_absent(route_paths, BATCH_B_ANALYSIS_ROUTE_PATHS)
     _assert_paths_absent(route_paths, BATCH_B_REGENERATION_ROUTE_PATHS)
 
+    _clear_module_prefixes(("app.api.chapter_regeneration_routes",))
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.api.chapter_regeneration_routes")
+    assert "app.api.chapter_regeneration_routes" not in sys.modules
 
-async def test_should_disable_legacy_chapter_analysis_python_routes_when_explicitly_disabled(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_draft_python_routes_enabled",
-        True,
-    )
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_analysis_python_routes_enabled",
-        False,
-    )
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_regeneration_python_routes_enabled",
-        True,
-    )
+
+async def test_should_keep_background_tasks_python_routes_unregistered_after_route_shell_closeout():
     app = create_app()
     route_paths = _route_paths(app)
 
-    _assert_paths_present(route_paths, BATCH_B_DRAFT_ROUTE_PATHS)
-    _assert_paths_absent(route_paths, BATCH_B_ANALYSIS_ROUTE_PATHS)
-    _assert_paths_present(route_paths, BATCH_B_REGENERATION_ROUTE_PATHS)
+    assert not hasattr(config_settings, "legacy_background_tasks_python_routes_enabled")
+    _assert_paths_absent(route_paths, BACKGROUND_TASKS_ROUTE_PATHS)
+
+    _clear_module_prefixes(("app.api.background_tasks",))
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.api.background_tasks")
+    assert "app.api.background_tasks" not in sys.modules
 
 
-async def test_should_register_legacy_chapter_analysis_python_routes_when_explicitly_enabled(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_draft_python_routes_enabled",
-        False,
-    )
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_analysis_python_routes_enabled",
-        True,
-    )
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_regeneration_python_routes_enabled",
-        False,
-    )
+async def test_should_keep_projects_python_routes_unregistered_after_route_shell_closeout():
     app = create_app()
     route_paths = _route_paths(app)
 
-    _assert_paths_absent(route_paths, BATCH_B_DRAFT_ROUTE_PATHS)
-    _assert_paths_present(route_paths, BATCH_B_ANALYSIS_ROUTE_PATHS)
-    _assert_paths_absent(route_paths, BATCH_B_REGENERATION_ROUTE_PATHS)
+    assert not hasattr(config_settings, "legacy_projects_python_routes_enabled")
+    _assert_paths_absent(route_paths, PROJECTS_ROUTE_PATHS)
+
+    _clear_module_prefixes(("app.api.projects",))
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.api.projects")
+    assert "app.api.projects" not in sys.modules
 
 
-async def test_should_disable_legacy_chapter_regeneration_python_routes_when_explicitly_disabled(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_draft_python_routes_enabled",
-        True,
-    )
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_analysis_python_routes_enabled",
-        True,
-    )
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_regeneration_python_routes_enabled",
-        False,
-    )
+async def test_legacy_settings_route_shell_should_be_deleted():
     app = create_app()
     route_paths = _route_paths(app)
 
-    _assert_paths_present(route_paths, BATCH_B_DRAFT_ROUTE_PATHS)
-    _assert_paths_present(route_paths, BATCH_B_ANALYSIS_ROUTE_PATHS)
-    _assert_paths_absent(route_paths, BATCH_B_REGENERATION_ROUTE_PATHS)
+    assert not hasattr(config_settings, "legacy_settings_python_routes_enabled")
+    _assert_paths_absent(route_paths, SETTINGS_ROUTE_PATHS)
+
+    _clear_module_prefixes(("app.api.settings",))
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.api.settings")
+    assert "app.api.settings" not in sys.modules
 
 
-async def test_should_register_legacy_chapter_regeneration_python_routes_when_explicitly_enabled(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_draft_python_routes_enabled",
-        False,
-    )
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_analysis_python_routes_enabled",
-        False,
-    )
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_chapter_regeneration_python_routes_enabled",
-        True,
-    )
-    app = create_app()
-    route_paths = _route_paths(app)
+async def test_legacy_chapter_route_helpers_should_be_deleted():
+    _clear_module_prefixes(("app.api.chapter_route_helpers",))
 
-    _assert_paths_absent(route_paths, BATCH_B_DRAFT_ROUTE_PATHS)
-    _assert_paths_absent(route_paths, BATCH_B_ANALYSIS_ROUTE_PATHS)
-    _assert_paths_present(route_paths, BATCH_B_REGENERATION_ROUTE_PATHS)
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.api.chapter_route_helpers")
+
+    assert "app.api.chapter_route_helpers" not in sys.modules
 
 
-async def test_legacy_single_generation_route_module_should_import_as_thin_shell():
-    _clear_module_prefixes(
-        (
-            "app.api.chapter_generation_routes",
-            *LEGACY_SINGLE_GENERATION_ROUTE_MODULE_IMPORT_GUARDS,
-        )
-    )
+async def test_legacy_api_common_helpers_should_be_deleted():
+    for module_name in ("app.api.common", "app.api.ai_dependencies"):
+        _clear_module_prefixes((module_name,))
 
-    importlib.import_module("app.api.chapter_generation_routes")
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module_name)
 
-    assert "app.api.chapter_generation_routes" in sys.modules
-    for module_name in LEGACY_SINGLE_GENERATION_ROUTE_MODULE_IMPORT_GUARDS:
         assert module_name not in sys.modules
 
 
-async def test_legacy_single_generation_route_wiring_should_import_as_thin_shell():
+async def test_legacy_prompt_template_helper_services_should_be_deleted():
+    for module_name in (
+        "app.services.prompt_template_access_service",
+        "app.services.prompt_template_catalog_service",
+        "app.services.prompt_template_render_service",
+        "app.services.prompt_template_sync_service",
+        "app.services.story_prompt_template_support_service",
+    ):
+        _clear_module_prefixes((module_name,))
+
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module_name)
+
+        assert module_name not in sys.modules
+
+
+async def test_legacy_story_style_helper_services_should_be_deleted():
+    sys.modules.pop("app.services", None)
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.services")
+    assert "app.services" not in sys.modules
+
+    for module_name in (
+        "app.services.story_style_profile_service",
+        "app.services.story_writing_style_service",
+        "app.services.story_repair_payload_service",
+        "app.services.background_task_manager",
+        "app.services.memory_service",
+        "app.services.ai_gateway",
+        "app.services.task_system",
+    ):
+        _clear_module_prefixes((module_name,))
+
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module_name)
+
+        assert module_name not in sys.modules
+
+
+async def test_legacy_python_utils_should_be_deleted():
+    for module_name in (
+        "app.utils.data_consistency",
+        "app.utils.exception_message",
+        "app.utils.sse_response",
+    ):
+        _clear_module_prefixes((module_name,))
+
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module_name)
+
+        assert module_name not in sys.modules
+
+
+async def test_legacy_python_mcp_package_should_be_deleted():
+    for module_name in (
+        "app.mcp",
+        "app.mcp.config",
+        "app.mcp.facade",
+        "app.mcp.status_sync",
+    ):
+        _clear_module_prefixes((module_name,))
+
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module_name)
+
+        assert module_name not in sys.modules
+
+
+async def test_legacy_python_schemas_package_should_be_deleted():
+    for module_name in (
+        "app.schemas",
+        "app.schemas.generation_payload",
+        "app.schemas.generation_preferences",
+        "app.schemas.import_export",
+        "app.schemas.mcp_plugin",
+        "app.schemas.novel_quality_profile_service",
+        "app.schemas.novel_quality_rules",
+        "app.schemas.quality",
+    ):
+        _clear_module_prefixes((module_name,))
+
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module_name)
+
+        assert module_name not in sys.modules
+
+
+async def test_legacy_python_fastapi_runtime_shell_should_be_deleted():
+    for module_name in (
+        "app.main",
+        "app.bootstrap",
+        "app.bootstrap.app_factory",
+        "app.bootstrap.lifespan",
+        "app.bootstrap.static_assets",
+    ):
+        _clear_module_prefixes((module_name,))
+
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module_name)
+
+        assert module_name not in sys.modules
+
+
+async def test_should_keep_auth_python_routes_unregistered_after_route_shell_closeout():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    assert not hasattr(config_settings, "legacy_auth_python_routes_enabled")
+    _assert_paths_absent(route_paths, AUTH_ROUTE_PATHS)
+
+
+async def test_should_keep_user_admin_python_routes_unregistered_after_route_shell_closeout():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    assert not hasattr(config_settings, "legacy_user_admin_python_routes_enabled")
+    _assert_paths_absent(route_paths, USERS_ROUTE_PATHS)
+    _assert_paths_absent(route_paths, ADMIN_ROUTE_PATHS)
+
+
+async def test_should_keep_wizard_stream_python_routes_unregistered_after_route_shell_closeout():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    assert not hasattr(config_settings, "legacy_wizard_stream_python_routes_enabled")
+    _assert_paths_absent(route_paths, WIZARD_STREAM_ROUTE_PATHS)
+
+    _clear_module_prefixes(("app.api.wizard_stream",))
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.api.wizard_stream")
+    assert "app.api.wizard_stream" not in sys.modules
+
+
+async def test_should_keep_outlines_python_routes_unregistered_after_route_shell_closeout():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    assert not hasattr(config_settings, "legacy_outlines_python_routes_enabled")
+    _assert_paths_absent(route_paths, OUTLINES_ROUTE_PATHS)
+
+    _clear_module_prefixes(("app.api.outlines",))
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.api.outlines")
+    assert "app.api.outlines" not in sys.modules
+
+
+async def test_should_keep_careers_python_routes_unregistered_after_route_shell_closeout():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    assert not hasattr(config_settings, "legacy_careers_python_routes_enabled")
+    _assert_paths_absent(route_paths, CAREERS_ROUTE_PATHS)
+
+    _clear_module_prefixes(("app.api.careers",))
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.api.careers")
+    assert "app.api.careers" not in sys.modules
+
+
+async def test_legacy_characters_route_shell_should_be_deleted():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    assert not hasattr(config_settings, "legacy_characters_python_routes_enabled")
+    _assert_paths_absent(route_paths, CHARACTERS_ROUTE_PATHS)
+
+    _clear_module_prefixes(("app.api.characters",))
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.api.characters")
+    assert "app.api.characters" not in sys.modules
+
+
+async def test_legacy_organizations_route_shell_should_be_deleted():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    assert not hasattr(config_settings, "legacy_organizations_python_routes_enabled")
+    _assert_paths_absent(route_paths, ORGANIZATIONS_ROUTE_PATHS)
+
+    _clear_module_prefixes(("app.api.organizations",))
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.api.organizations")
+    assert "app.api.organizations" not in sys.modules
+
+
+async def test_legacy_chapter_crud_route_shells_should_be_deleted():
+    app = create_app()
+    route_paths = _route_paths(app)
+
+    assert not hasattr(config_settings, "legacy_chapter_crud_python_routes_enabled")
+    _assert_paths_absent(route_paths, CHAPTER_CRUD_ROUTE_PATHS)
+
+    for module_name in (
+        "app.api.chapter_crud_routes",
+        "app.api.chapter_annotation_routes",
+        "app.api.chapter_expansion_plan_routes",
+        "app.api.chapter_quality_routes",
+    ):
+        _clear_module_prefixes((module_name,))
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(module_name)
+        assert module_name not in sys.modules
+
+
+async def test_legacy_single_generation_route_wiring_shim_should_be_deleted():
     _clear_module_prefixes(
         (
             "app.services.chapter_generation.route_wiring_service",
@@ -1020,192 +1076,25 @@ async def test_legacy_single_generation_route_wiring_should_import_as_thin_shell
         )
     )
 
-    importlib.import_module("app.services.chapter_generation.route_wiring_service")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.services.chapter_generation.route_wiring_service")
 
-    assert "app.services.chapter_generation.route_wiring_service" in sys.modules
+    assert "app.services.chapter_generation.route_wiring_service" not in sys.modules
     for module_name in LEGACY_SINGLE_GENERATION_ROUTE_WIRING_IMPORT_GUARDS:
         assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.chapter_generation.route_wiring_service"],
-        action="freeze",
-    )
 
 
-async def test_legacy_single_generation_compat_shell_should_import_without_route_wiring():
-    _clear_module_prefixes(
-        (
-            "app.services.compat.chapter_generation_route_compat_service",
-            *LEGACY_SINGLE_GENERATION_COMPAT_IMPORT_GUARDS,
-        )
-    )
-
-    importlib.import_module("app.services.compat.chapter_generation_route_compat_service")
-
-    assert "app.services.compat.chapter_generation_route_compat_service" in sys.modules
-    for module_name in LEGACY_SINGLE_GENERATION_COMPAT_IMPORT_GUARDS:
-        assert module_name not in sys.modules
-
-
-async def test_legacy_single_generation_stream_entry_should_import_as_thin_shell():
-    _clear_module_prefixes(
-        (
-            "app.services.chapter_generation.stream.entry_service",
-            *LEGACY_SINGLE_GENERATION_STREAM_ENTRY_IMPORT_GUARDS,
-        )
-    )
-
-    importlib.import_module("app.services.chapter_generation.stream.entry_service")
-
-    assert "app.services.chapter_generation.stream.entry_service" in sys.modules
-    for module_name in LEGACY_SINGLE_GENERATION_STREAM_ENTRY_IMPORT_GUARDS:
-        assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.chapter_generation.stream.entry_service"],
-        action="freeze",
-    )
-
-
-async def test_legacy_single_generation_stream_wiring_should_import_as_thin_shell():
-    _clear_module_prefixes(
-        (
-            "app.services.chapter_generation.stream.wiring_service",
-            *LEGACY_SINGLE_GENERATION_STREAM_WIRING_IMPORT_GUARDS,
-        )
-    )
-
-    importlib.import_module("app.services.chapter_generation.stream.wiring_service")
-
-    assert "app.services.chapter_generation.stream.wiring_service" in sys.modules
-    for module_name in LEGACY_SINGLE_GENERATION_STREAM_WIRING_IMPORT_GUARDS:
-        assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.chapter_generation.stream.wiring_service"],
-        action="freeze",
-    )
-
-
-async def test_legacy_single_generation_stream_finalize_should_import_as_thin_shell():
-    _clear_module_prefixes(
-        (
-            "app.services.chapter_generation.stream.finalize_service",
-            *LEGACY_SINGLE_GENERATION_STREAM_FINALIZE_IMPORT_GUARDS,
-        )
-    )
-
-    importlib.import_module("app.services.chapter_generation.stream.finalize_service")
-
-    assert "app.services.chapter_generation.stream.finalize_service" in sys.modules
-    for module_name in LEGACY_SINGLE_GENERATION_STREAM_FINALIZE_IMPORT_GUARDS:
-        assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.chapter_generation.stream.finalize_service"],
-        action="freeze",
-    )
-
-
-async def test_legacy_single_generation_stream_candidate_should_import_as_thin_shell():
-    _clear_module_prefixes(
-        (
-            "app.services.chapter_generation.stream.candidate_service",
-            *LEGACY_SINGLE_GENERATION_STREAM_CANDIDATE_IMPORT_GUARDS,
-        )
-    )
-
-    importlib.import_module("app.services.chapter_generation.stream.candidate_service")
-
-    assert "app.services.chapter_generation.stream.candidate_service" in sys.modules
-    for module_name in LEGACY_SINGLE_GENERATION_STREAM_CANDIDATE_IMPORT_GUARDS:
-        assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.chapter_generation.stream.candidate_service"],
-        action="freeze",
-    )
-
-
-async def test_legacy_single_generation_stream_service_should_import_as_thin_shell():
-    _clear_module_prefixes(
-        (
-            "app.services.chapter_generation.stream.service",
-            *LEGACY_SINGLE_GENERATION_STREAM_SERVICE_IMPORT_GUARDS,
-        )
-    )
-
-    importlib.import_module("app.services.chapter_generation.stream.service")
-
-    assert "app.services.chapter_generation.stream.service" in sys.modules
-    for module_name in LEGACY_SINGLE_GENERATION_STREAM_SERVICE_IMPORT_GUARDS:
-        assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.chapter_generation.stream.service"],
-        action="freeze",
-    )
-
-
-async def test_legacy_single_generation_stream_execution_should_import_as_thin_shell():
-    _clear_module_prefixes(
-        (
-            "app.services.chapter_generation.stream.execution_service",
-            *LEGACY_SINGLE_GENERATION_STREAM_EXECUTION_IMPORT_GUARDS,
-        )
-    )
-
-    importlib.import_module("app.services.chapter_generation.stream.execution_service")
-
-    assert "app.services.chapter_generation.stream.execution_service" in sys.modules
-    for module_name in LEGACY_SINGLE_GENERATION_STREAM_EXECUTION_IMPORT_GUARDS:
-        assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.chapter_generation.stream.execution_service"],
-        action="freeze",
-    )
-
-
-async def test_legacy_single_generation_stream_models_should_import_as_thin_shell():
-    _clear_module_prefixes(
-        (
-            "app.services.chapter_generation.stream.models",
-            *LEGACY_SINGLE_GENERATION_STREAM_MODELS_IMPORT_GUARDS,
-        )
-    )
-
-    importlib.import_module("app.services.chapter_generation.stream.models")
-
-    assert "app.services.chapter_generation.stream.models" in sys.modules
-    for module_name in LEGACY_SINGLE_GENERATION_STREAM_MODELS_IMPORT_GUARDS:
-        assert module_name not in sys.modules
-    _assert_source_map_closeout_action(
-        sys.modules["app.services.chapter_generation.stream.models"],
-        action="freeze",
-    )
-
-
-async def test_should_register_legacy_batch_generation_python_routes_when_explicitly_enabled(
-    monkeypatch,
-):
+async def test_should_keep_legacy_batch_generation_python_routes_unregistered_after_route_shell_closeout():
     _clear_legacy_batch_generation_modules()
-    monkeypatch.setattr(
-        config_settings,
-        "legacy_batch_generation_python_routes_enabled",
-        True,
-    )
     app = create_app()
     route_paths = {route.path for route in app.routes}
 
-    assert "/api/chapters/project/{project_id}/batch-generate" in route_paths
-    assert "/api/chapters/batch-generate/{batch_id}/status" in route_paths
-    assert "/api/chapters/batch-generate/{batch_id}/stream" in route_paths
-    batch_generation_routes = importlib.import_module(
-        "app.api.chapter_batch_generation_routes"
-    )
-    _assert_frozen_source_map(
-        batch_generation_routes,
-        rust_owner="backend-rs/src/api/chapter_batch_generation.rs",
-        rollback_flag="legacy_batch_generation_python_routes_enabled",
-    )
-    _assert_source_map_closeout_action(
-        batch_generation_routes,
-        action="freeze",
-    )
+    assert not hasattr(config_settings, "legacy_batch_generation_python_routes_enabled")
+    assert "/api/chapters/project/{project_id}/batch-generate" not in route_paths
+    assert "/api/chapters/batch-generate/{batch_id}/status" not in route_paths
+    assert "/api/chapters/batch-generate/{batch_id}/stream" not in route_paths
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("app.services.batch_generation")
 
 
 def test_main_app_should_serve_json_health_routes_before_spa_fallback():
@@ -1216,13 +1105,18 @@ def test_main_app_should_serve_json_health_routes_before_spa_fallback():
     assert client.get('/health/db-sessions').json()['status'] == 'ok'
 
 
-def test_main_app_should_skip_auth_lookup_for_health_routes(monkeypatch):
-    async def fake_get_user(user_id: str):
-        raise AssertionError('health routes should not query user manager')
-
-    monkeypatch.setattr(user_manager, 'get_user', fake_get_user)
+def test_main_app_should_serve_health_routes_with_login_cookies_after_auth_closeout():
     client = TestClient(main_app)
 
     assert client.get('/health', cookies={'user_id': 'user-1'}).json() == {'status': 'ok'}
     assert client.get('/livez', cookies={'user_id': 'user-1'}).json() == {'status': 'ok'}
     assert client.get('/health/db-sessions', cookies={'user_id': 'user-1'}).json()['status'] == 'ok'
+
+
+def test_test_support_runtime_should_keep_static_fallback_path_on_backend_static():
+    from tests.test_support.app_runtime import static_assets
+
+    static_path = static_assets.Path(static_assets.__file__).parents[3] / "static"
+
+    assert static_path.name == "static"
+    assert static_path.parent.name == "backend"

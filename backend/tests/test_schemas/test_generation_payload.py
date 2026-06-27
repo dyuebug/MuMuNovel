@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.schemas.generation_payload import (
+from tests.test_support.schemas.generation_payload import (
     build_chapter_generation_quality_history_payload,
     build_chapter_generation_stream_result_payload,
     build_chapter_regeneration_stream_result_payload,

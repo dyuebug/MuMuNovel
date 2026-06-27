@@ -1,5 +1,22 @@
 from types import SimpleNamespace
-from app.api import chapters as chapters_api
+
+from tests.test_support.batch_generation_single_chapter_wiring_test_adapter import (
+    _build_chapter_generation_request_options,
+    _calculate_chapter_generation_max_tokens,
+)
+from tests.test_support.story_quality_metrics_aggregation_test_support import (
+    extract_outline_anchor_lines,
+)
+from tests.test_support.story_quality_metrics_aggregation_test_support import (
+    compute_story_quality_metrics,
+)
+
+chapters_api = SimpleNamespace(
+    _calculate_chapter_generation_max_tokens=_calculate_chapter_generation_max_tokens,
+    _build_chapter_generation_request_options=_build_chapter_generation_request_options,
+    compute_story_quality_metrics=compute_story_quality_metrics,
+    _extract_outline_anchor_lines=extract_outline_anchor_lines,
+)
 
 
 def test_should_calculate_chapter_generation_max_tokens_with_tighter_budget():

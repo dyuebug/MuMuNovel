@@ -16,14 +16,7 @@ pub(crate) fn build_generation_terminal_runtime_patch_owner_contract() -> Value 
     json!({
         "owner": "chapter_batch_generation_runtime_state_service::terminal_runtime_patch",
         "scope": "terminal_quality_runtime_patch_manual_review_and_retry",
-        "python_source_map": [
-            "backend/app/services/batch_generation_chapter_failure_state_service.py",
-            "backend/app/services/batch_generation_chapter_success_state_service.py",
-            "backend/app/services/batch_generation_orchestration_service.py",
-            "backend/app/services/story_repair_payload_service.py",
-            "backend/app/services/task_workflow_runtime_service.py",
-            "backend/app/api/chapters.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service/terminal_runtime_patch_owner.rs",
@@ -80,8 +73,8 @@ pub(crate) fn build_generation_terminal_runtime_patch_owner_contract() -> Value 
         },
         "active_consumers": [
             "chapter_batch_generation_runtime_state_service",
-            "chapter_single_generation_active_gateway_smoke_service",
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-single-generation-active-gateway-smoke-rust",
+            "chapter-batch-generation-active-gateway-smoke-rust"
         ],
         "quality_runtime_owner_contract": build_generation_quality_runtime_owner_contract(),
         "request_runtime_state_owner_contract": build_batch_request_runtime_state_owner_contract(),
@@ -92,7 +85,7 @@ pub(crate) fn build_generation_terminal_runtime_patch_owner_contract() -> Value 
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_batch_failure_success_story_repair_task_runtime_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_terminal_runtime_patch_owner_is_rust_only_and_surviving_story_repair_task_runtime_surfaces_are_tracked_by_external_runtime_contracts",
             "runtime_state_keys": [
                 "active_story_repair_payload",
                 "quality_metrics_summary",

@@ -1,8 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from app.services.task_system.task_checkpoint_store import touch_checkpoint
-from app.services.task_system.task_resume_service import recover_orphan_tasks_on_boot
+from tests.test_support.task_system import recover_orphan_tasks_on_boot, touch_checkpoint
 
 
 @dataclass

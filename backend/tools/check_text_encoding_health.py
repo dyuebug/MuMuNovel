@@ -13,7 +13,10 @@ from typing import Iterable, List, Sequence, Tuple
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_ROOTS = (
     Path("frontend/src"),
-    Path("backend/app"),
+    Path("backend/migrator_app"),
+    Path("backend/tools"),
+    Path("backend/scripts"),
+    Path("backend/alembic"),
     Path("backend/tests"),
 )
 DOCUMENTATION_ROOT = Path("docs")
@@ -105,7 +108,7 @@ def should_skip(path: Path) -> bool:
 
 def has_cjk(text: str) -> bool:
     return any(
-        ("一" <= ch <= "鿿") or ("㐀" <= ch <= "䶿") or ch in "?????????????????????"
+        ("一" <= ch <= "鿿") or ("㐀" <= ch <= "䶿") or ("\u3400" <= ch <= "\u9fff")
         for ch in text
     )
 

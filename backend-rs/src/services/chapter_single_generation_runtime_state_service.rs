@@ -1,20 +1,11 @@
 mod lifecycle_owner;
+mod runtime_checkpoint_owner;
+mod terminal_state_owner;
 
-use chrono::{NaiveDateTime, Utc};
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use serde_json::{json, Value};
 
-use crate::models::batch_generation_task;
 use crate::services::chapter_analysis_runtime_service::build_chapter_analysis_runtime_owner_contract;
 use crate::services::chapter_generation_runtime_service::build_single_generation_candidate_runtime_owner_contract;
-use crate::services::chapter_generation_runtime_service::quality_runtime_context_owner::{
-    manual_review_label_from_quality_context_with_retry_budget,
-    retryable_repair_label_from_quality_context_with_retry_budget,
-};
-use crate::services::chapter_generation_runtime_service::snapshot_persistence_owner::{
-    build_chapter_generation_snapshot_owner_contract, upsert_chapter_generation_runtime_snapshot,
-};
-use crate::services::chapter_generation_runtime_service::GeneratedChapterResult;
 use crate::services::chapter_single_generation_result_lifecycle_service::build_single_generation_result_lifecycle_owner_contract;
 
 #[cfg(test)]
@@ -25,454 +16,38 @@ pub(crate) use self::lifecycle_owner::{
     SingleGenerationRuntimeLaunchInput, SingleGenerationRuntimeLifecyclePlan,
 };
 #[cfg(test)]
+pub(crate) use self::runtime_checkpoint_owner::{
+    attach_single_generation_candidate_gateway_checkpoint_metadata,
+    merge_single_generation_terminal_checkpoint_payload, ModelFieldUpdate, TaskTimestampUpdate,
+};
+pub(crate) use self::runtime_checkpoint_owner::{
+    build_single_generation_runtime_checkpoint_for_stage,
+    build_single_generation_runtime_checkpoint_owner_contract,
+    build_single_generation_runtime_terminal_checkpoint_projection, SingleGenerationSnapshotStage,
+    SingleGenerationTaskStage,
+};
+pub(crate) use self::terminal_state_owner::{
+    build_single_generation_error_terminal_state,
+    build_single_generation_terminal_state_owner_contract,
+    resolve_single_generation_manual_review_label_from_analysis_payload,
+    resolve_single_generation_quality_gate_terminal_state,
+    SingleGenerationFollowUpAnalysisDecision, SingleGenerationQualityGateTerminalState,
+};
+#[cfg(test)]
 pub(crate) use crate::services::chapter_generation_execution_contract_service::build_prompt_overrides_from_compat_options;
-
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct SingleGenerationQualityGateTerminalState {
-    pub(crate) checkpoint_payload: Value,
-    pub(crate) error_message: String,
-    pub(crate) failed_entry: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SingleGenerationFollowUpAnalysisDecision {
-    pub(crate) manual_review_label: String,
-    pub(crate) quality_metrics: Option<Value>,
-}
-
-pub(crate) fn build_single_generation_runtime_checkpoint_owner_contract() -> Value {
-    json!({
-        "owner": "chapter_single_generation_runtime_state_service::runtime_checkpoint_owner",
-        "scope": "runtime_checkpoint_projection_candidate_gateway_metadata_and_persisted_stage_updates",
-        "python_source_map": [
-            "backend/app/services/chapter_generation/stream/service.py",
-            "backend/app/services/chapter_generation/stream/finalize_service.py",
-            "backend/app/services/chapter_generation/stream/candidate_service.py"
-        ],
-        "rust_owner_map": [
-            "backend-rs/src/services/chapter_single_generation_runtime_state_service.rs",
-            "backend-rs/src/services/chapter_generation_runtime_service/snapshot_persistence_owner.rs",
-            "backend-rs/src/api/health.rs"
-        ],
-        "behavior_contract": {
-            "entrypoints": [
-                "build_single_generation_runtime_checkpoint_for_stage",
-                "attach_single_generation_candidate_gateway_checkpoint_metadata",
-                "build_single_generation_runtime_terminal_checkpoint_projection"
-            ],
-            "persistence_entrypoints": [
-                "SingleGenerationTaskStage::persist_runtime_preparation",
-                "SingleGenerationTaskStage::persist_with_checkpoint_payload"
-            ],
-            "checkpoint_fields": [
-                "phase",
-                "status",
-                "progress",
-                "chapter_id",
-                "current_chapter_number",
-                "word_count",
-                "candidate_gateway"
-            ]
-        },
-        "active_consumers": [
-            "chapter_single_generation_runtime_state_service",
-            "chapter_single_generation_runtime_restore_workflow_service",
-            "chapter_single_generation_active_gateway_smoke_service"
-        ],
-        "snapshot_persistence_owner_contract": build_chapter_generation_snapshot_owner_contract(),
-        "validation_boundary": [
-            "cargo test chapter_single_generation_runtime_state_service",
-            "cargo test chapter_single_generation_runtime_restore_workflow_service",
-            "cargo test api::health",
-            "cargo check"
-        ]
-    })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SingleGenerationSnapshotStage {
-    Pending,
-    Preparing,
-    Generating,
-    Finalizing,
-    Completed,
-    Failed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ModelFieldUpdate<T> {
-    Keep,
-    Set(T),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TaskTimestampUpdate {
-    Keep,
-    Clear,
-    Now,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SingleGenerationTaskStage {
-    Preparing,
-    Completed,
-    Failed,
-}
-
-impl SingleGenerationSnapshotStage {
-    fn build_checkpoint(
-        self,
-        chapter_id: &str,
-        current_chapter_number: Option<i32>,
-        word_count: Option<i32>,
-    ) -> Value {
-        let (phase, progress, status, last_event, last_message) = match self {
-            SingleGenerationSnapshotStage::Pending => (
-                "pending",
-                0,
-                "pending",
-                "queued",
-                "单章生成任务已创建，等待开始...",
-            ),
-            SingleGenerationSnapshotStage::Preparing => (
-                "generating",
-                15,
-                "running",
-                "chapter_start",
-                "正在准备章节生成...",
-            ),
-            SingleGenerationSnapshotStage::Generating => {
-                ("generating", 65, "running", "progress", "正在生成正文...")
-            }
-            SingleGenerationSnapshotStage::Finalizing => (
-                "finalizing",
-                95,
-                "running",
-                "progress",
-                "正在整理生成结果...",
-            ),
-            SingleGenerationSnapshotStage::Completed => {
-                ("completed", 100, "completed", "done", "章节生成完成")
-            }
-            SingleGenerationSnapshotStage::Failed => {
-                ("failed", 100, "failed", "error", "章节生成失败")
-            }
-        };
-        let mut checkpoint = json!({
-            "phase": phase,
-            "progress": progress.clamp(0, 100),
-            "status": status,
-            "last_event": last_event,
-            "last_message": last_message,
-            "chapter_id": chapter_id,
-            "current_chapter_id": chapter_id,
-            "current_chapter_number": current_chapter_number,
-            "updated_at": Utc::now().to_rfc3339(),
-        });
-        if let Some(object) = checkpoint.as_object_mut() {
-            if let Some(value) = word_count {
-                object.insert("word_count".to_string(), json!(value.max(0)));
-            }
-        }
-
-        checkpoint
-    }
-}
-
-impl SingleGenerationTaskStage {
-    pub(crate) fn status(self) -> &'static str {
-        match self {
-            SingleGenerationTaskStage::Preparing => "running",
-            SingleGenerationTaskStage::Completed => "completed",
-            SingleGenerationTaskStage::Failed => "failed",
-        }
-    }
-
-    pub(crate) fn started_at_update(self) -> TaskTimestampUpdate {
-        match self {
-            SingleGenerationTaskStage::Preparing => TaskTimestampUpdate::Now,
-            SingleGenerationTaskStage::Completed | SingleGenerationTaskStage::Failed => {
-                TaskTimestampUpdate::Keep
-            }
-        }
-    }
-
-    pub(crate) fn completed_at_update(self) -> TaskTimestampUpdate {
-        match self {
-            SingleGenerationTaskStage::Preparing => TaskTimestampUpdate::Clear,
-            SingleGenerationTaskStage::Completed | SingleGenerationTaskStage::Failed => {
-                TaskTimestampUpdate::Now
-            }
-        }
-    }
-
-    pub(crate) fn completed_chapters_update(self) -> ModelFieldUpdate<i32> {
-        match self {
-            SingleGenerationTaskStage::Preparing | SingleGenerationTaskStage::Failed => {
-                ModelFieldUpdate::Keep
-            }
-            SingleGenerationTaskStage::Completed => ModelFieldUpdate::Set(1),
-        }
-    }
-
-    pub(crate) fn current_retry_count_update(self) -> ModelFieldUpdate<i32> {
-        match self {
-            SingleGenerationTaskStage::Preparing => ModelFieldUpdate::Set(0),
-            SingleGenerationTaskStage::Completed | SingleGenerationTaskStage::Failed => {
-                ModelFieldUpdate::Keep
-            }
-        }
-    }
-
-    pub(crate) fn current_chapter_id_update(
-        self,
-        chapter_id: &str,
-    ) -> ModelFieldUpdate<Option<String>> {
-        match self {
-            SingleGenerationTaskStage::Preparing | SingleGenerationTaskStage::Completed => {
-                ModelFieldUpdate::Set(Some(chapter_id.to_string()))
-            }
-            SingleGenerationTaskStage::Failed => ModelFieldUpdate::Keep,
-        }
-    }
-
-    pub(crate) fn current_chapter_number_update(
-        self,
-        chapter_number: Option<i32>,
-    ) -> ModelFieldUpdate<Option<i32>> {
-        match self {
-            SingleGenerationTaskStage::Preparing | SingleGenerationTaskStage::Failed => {
-                ModelFieldUpdate::Keep
-            }
-            SingleGenerationTaskStage::Completed => ModelFieldUpdate::Set(chapter_number),
-        }
-    }
-
-    pub(crate) async fn persist_for_task(
-        self,
-        db: &DatabaseConnection,
-        task_id: &str,
-        chapter_id: &str,
-        chapter_number: Option<i32>,
-        error_message: Option<String>,
-        now: NaiveDateTime,
-    ) -> Result<(), String> {
-        if let Some(task_model) = batch_generation_task::Entity::find_by_id(task_id)
-            .one(db)
-            .await
-            .map_err(|error| error.to_string())?
-        {
-            let mut active: batch_generation_task::ActiveModel = task_model.into();
-            self.apply_to_active_model(&mut active, chapter_id, chapter_number, error_message, now);
-            active.update(db).await.map_err(|error| error.to_string())?;
-        }
-
-        Ok(())
-    }
-
-    pub(crate) fn apply_to_active_model(
-        self,
-        active: &mut batch_generation_task::ActiveModel,
-        chapter_id: &str,
-        chapter_number: Option<i32>,
-        error_message: Option<String>,
-        now: NaiveDateTime,
-    ) {
-        active.status = Set(self.status().to_string());
-
-        match self.started_at_update() {
-            TaskTimestampUpdate::Keep => {}
-            TaskTimestampUpdate::Clear => active.started_at = Set(None),
-            TaskTimestampUpdate::Now => active.started_at = Set(Some(now)),
-        }
-
-        match self.completed_at_update() {
-            TaskTimestampUpdate::Keep => {}
-            TaskTimestampUpdate::Clear => active.completed_at = Set(None),
-            TaskTimestampUpdate::Now => active.completed_at = Set(Some(now)),
-        }
-
-        active.error_message = Set(match self {
-            SingleGenerationTaskStage::Preparing | SingleGenerationTaskStage::Completed => None,
-            SingleGenerationTaskStage::Failed => error_message,
-        });
-
-        match self.completed_chapters_update() {
-            ModelFieldUpdate::Keep => {}
-            ModelFieldUpdate::Set(value) => active.completed_chapters = Set(value),
-        }
-
-        match self.current_retry_count_update() {
-            ModelFieldUpdate::Keep => {}
-            ModelFieldUpdate::Set(value) => active.current_retry_count = Set(value),
-        }
-
-        match self.current_chapter_id_update(chapter_id) {
-            ModelFieldUpdate::Keep => {}
-            ModelFieldUpdate::Set(value) => active.current_chapter_id = Set(value),
-        }
-
-        match self.current_chapter_number_update(chapter_number) {
-            ModelFieldUpdate::Keep => {}
-            ModelFieldUpdate::Set(value) => active.current_chapter_number = Set(value),
-        }
-    }
-
-    pub(crate) async fn persist_runtime_preparation(
-        db: &DatabaseConnection,
-        task_id: &str,
-        chapter_id: &str,
-    ) -> Result<(), String> {
-        let now = Utc::now().naive_utc();
-        Self::Preparing
-            .persist_for_task(db, task_id, chapter_id, None, None, now)
-            .await?;
-
-        upsert_chapter_generation_runtime_snapshot(
-            db,
-            task_id,
-            build_single_generation_runtime_checkpoint_for_stage(
-                SingleGenerationSnapshotStage::Preparing,
-                chapter_id,
-                None,
-                None,
-            ),
-            Utc::now().naive_utc(),
-        )
-        .await?;
-        upsert_chapter_generation_runtime_snapshot(
-            db,
-            task_id,
-            build_single_generation_runtime_checkpoint_for_stage(
-                SingleGenerationSnapshotStage::Generating,
-                chapter_id,
-                None,
-                None,
-            ),
-            Utc::now().naive_utc(),
-        )
-        .await
-    }
-
-    pub(crate) async fn persist_with_checkpoint_payload(
-        self,
-        db: &DatabaseConnection,
-        task_id: &str,
-        chapter_id: &str,
-        chapter_number: Option<i32>,
-        error_message: Option<String>,
-        checkpoint_payload: Value,
-    ) -> Result<(), String> {
-        let now = Utc::now().naive_utc();
-        self.persist_for_task(
-            db,
-            task_id,
-            chapter_id,
-            chapter_number,
-            error_message.clone(),
-            now,
-        )
-        .await?;
-
-        upsert_chapter_generation_runtime_snapshot(
-            db,
-            task_id,
-            checkpoint_payload,
-            Utc::now().naive_utc(),
-        )
-        .await
-    }
-}
-
-pub(crate) fn build_single_generation_runtime_checkpoint_for_stage(
-    stage: SingleGenerationSnapshotStage,
-    chapter_id: &str,
-    current_chapter_number: Option<i32>,
-    word_count: Option<i32>,
-) -> Value {
-    stage.build_checkpoint(chapter_id, current_chapter_number, word_count)
-}
-
-pub(crate) fn attach_single_generation_candidate_gateway_checkpoint_metadata(
-    mut checkpoint_payload: Value,
-    generated_result: &GeneratedChapterResult,
-) -> Value {
-    if let (Some(object), Some(candidate_gateway_metadata)) = (
-        checkpoint_payload.as_object_mut(),
-        generated_result.candidate_gateway_metadata.as_ref(),
-    ) {
-        object.insert(
-            "candidate_gateway".to_string(),
-            candidate_gateway_metadata.clone(),
-        );
-    }
-
-    checkpoint_payload
-}
-
-pub(crate) fn build_single_generation_runtime_terminal_checkpoint_projection(
-    stage: SingleGenerationSnapshotStage,
-    chapter_id: &str,
-    chapter_number: Option<i32>,
-    word_count: Option<i32>,
-    extra_payload: Option<Value>,
-    generated_result: Option<&GeneratedChapterResult>,
-) -> Value {
-    let base_checkpoint = build_single_generation_runtime_checkpoint_for_stage(
-        stage,
-        chapter_id,
-        chapter_number,
-        word_count,
-    );
-    let checkpoint_payload = match extra_payload {
-        Some(payload) => {
-            merge_single_generation_terminal_checkpoint_payload(base_checkpoint, payload)
-        }
-        None => base_checkpoint,
-    };
-
-    match generated_result {
-        Some(result) => attach_single_generation_candidate_gateway_checkpoint_metadata(
-            checkpoint_payload,
-            result,
-        ),
-        None => checkpoint_payload,
-    }
-}
-
-fn merge_single_generation_terminal_checkpoint_payload(
-    base_checkpoint: Value,
-    extra_payload: Value,
-) -> Value {
-    match (base_checkpoint, extra_payload) {
-        (Value::Object(mut base), Value::Object(extra)) => {
-            for (key, value) in extra {
-                base.insert(key, value);
-            }
-            Value::Object(base)
-        }
-        (_, extra) => extra,
-    }
-}
 
 pub(crate) fn build_single_generation_runtime_state_owner_contract() -> Value {
     json!({
         "owner": "chapter_single_generation_runtime_state_service",
         "scope": "single_generation_runtime_lifecycle_candidate_gateway_checkpoint_terminal_follow_up_analysis_and_task_persistence",
-        "python_source_map": [
-            "backend/app/api/chapter_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/chapter_generation/stream/service.py",
-            "backend/app/services/chapter_generation/stream/execution_service.py",
-            "backend/app/services/chapter_generation/stream/finalize_service.py",
-            "backend/app/services/chapter_generation/stream/candidate_service.py",
-            "backend/app/services/manual_chapter_analysis_execution_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_single_generation_runtime_state_service.rs",
+            "backend-rs/src/services/chapter_single_generation_runtime_state_service/lifecycle_owner.rs",
+            "backend-rs/src/services/chapter_single_generation_runtime_state_service/runtime_checkpoint_owner.rs",
+            "backend-rs/src/services/chapter_single_generation_runtime_state_service/terminal_state_owner.rs",
             "backend-rs/src/services/chapter_single_generation_runtime_restore_workflow_service.rs",
             "backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs",
-            "backend-rs/src/services/chapter_single_generation_runtime_restore_workflow_service.rs",
             "backend-rs/src/services/chapter_generation_runtime_service.rs",
             "backend-rs/src/services/chapter_single_generation_result_lifecycle_service.rs",
             "backend-rs/src/services/chapter_generation_runtime_service/snapshot_persistence_owner.rs",
@@ -527,7 +102,7 @@ pub(crate) fn build_single_generation_runtime_state_owner_contract() -> Value {
             "chapter_single_generation_runtime_restore_workflow_service",
             "chapter_single_generation_stream_workflow_service",
             "chapter_single_generation_runtime_restore_workflow_service",
-            "chapter_single_generation_active_gateway_smoke_service",
+            "chapter-single-generation-active-gateway-smoke-rust",
             "chapter_generation_routes"
         ],
         "shared_candidate_runtime_owner_contract": build_single_generation_candidate_runtime_owner_contract(),
@@ -551,358 +126,20 @@ pub(crate) fn build_single_generation_runtime_state_owner_contract() -> Value {
             "rust_manifest_probe_count": 6,
             "python_fallback_probe_count": 0,
             "source_map_closeout_ready": true,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_runtime_state_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "single-generation runtime state source-map package deleted; surviving Python closeout work is now limited to separate shared candidate/runtime, prepare/orchestration, prompt, and execution-config contracts",
+            "status": "rust_runtime_state_owner_with_deleted_python_source_map"
         },
         "rollback_boundary": {
             "runtime_knobs": [
                 "legacy_single_generation_direct_ai",
                 "python_candidate_executor_fallback"
             ],
-            "source_map_policy": "keep_python_single_generation_runtime_and_analysis_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "single_generation_runtime_state_owner_is_rust_only_and_runtime_analysis_source_maps_are_deleted",
             "python_fallback_removal_ready": true,
-            "rollback_files": [
-                "backend/app/api/chapter_generation_routes.py",
-                "backend/app/api/chapters.py",
-                "backend/app/services/chapter_generation/stream/service.py",
-                "backend/app/services/chapter_generation/stream/finalize_service.py",
-                "backend/app/services/manual_chapter_analysis_execution_service.py"
-            ]
+            "rollback_files": []
         }
     })
-}
-
-pub(crate) fn build_single_generation_terminal_state_owner_contract() -> Value {
-    json!({
-        "owner": "chapter_single_generation_runtime_state_service::terminal_state_owner",
-        "scope": "quality_gate_terminal_state_manual_review_retry_error_projection_and_follow_up_decision",
-        "python_source_map": [
-            "backend/app/services/chapter_generation/stream/finalize_service.py",
-            "backend/app/services/manual_chapter_analysis_execution_service.py"
-        ],
-        "rust_owner_map": [
-            "backend-rs/src/services/chapter_single_generation_runtime_state_service.rs",
-            "backend-rs/src/services/chapter_analysis_runtime_service.rs",
-            "backend-rs/src/api/health.rs"
-        ],
-        "behavior_contract": {
-            "entrypoints": [
-                "resolve_single_generation_manual_review_label_from_analysis_payload",
-                "resolve_single_generation_quality_gate_terminal_state",
-                "build_single_generation_error_terminal_state"
-            ],
-            "terminal_state_fields": [
-                "checkpoint_payload",
-                "error_message",
-                "failed_entry"
-            ],
-            "manual_review_contract": [
-                "manual review label follows quality context and retry budget",
-                "analysis payload quality_metrics may override generated result quality_metrics"
-            ]
-        },
-        "active_consumers": [
-            "chapter_single_generation_runtime_state_service",
-            "chapter_single_generation_active_gateway_smoke_service",
-            "chapter_generation_routes"
-        ],
-        "validation_boundary": [
-            "cargo test chapter_single_generation_runtime_state_service",
-            "cargo test api::health",
-            "cargo check"
-        ]
-    })
-}
-
-pub(crate) fn resolve_single_generation_manual_review_label_from_analysis_payload(
-    payload: &Value,
-) -> Option<String> {
-    let quality_metrics = payload.get("quality_metrics");
-    manual_review_label_from_quality_context_with_retry_budget(
-        None,
-        quality_metrics,
-        quality_metrics,
-        0,
-        0,
-    )
-}
-
-pub(crate) fn resolve_single_generation_quality_gate_terminal_state(
-    persisted_task: &Option<batch_generation_task::Model>,
-    generated_result: &GeneratedChapterResult,
-    analysis_decision: Option<&SingleGenerationFollowUpAnalysisDecision>,
-) -> Option<SingleGenerationQualityGateTerminalState> {
-    let current_retry_count = persisted_task
-        .as_ref()
-        .map(|task| task.current_retry_count)
-        .unwrap_or(0);
-    let max_retries = persisted_task
-        .as_ref()
-        .map(|task| task.max_retries)
-        .unwrap_or(0);
-    let quality_metrics = analysis_decision
-        .and_then(|decision| decision.quality_metrics.as_ref())
-        .or(generated_result.quality_metrics.as_ref());
-
-    let manual_review_label = analysis_decision
-        .map(|decision| decision.manual_review_label.clone())
-        .or_else(|| {
-            resolve_single_generation_manual_review_label_from_quality_context(
-                generated_result,
-                quality_metrics,
-                current_retry_count,
-                max_retries,
-            )
-        });
-    if let Some(label) = manual_review_label {
-        return Some(build_single_generation_manual_review_terminal_state(
-            persisted_task,
-            generated_result,
-            &label,
-            quality_metrics,
-        ));
-    }
-
-    if generated_result_requires_retry_follow_up(generated_result) {
-        let retry_label = resolve_single_generation_retry_terminal_label(
-            generated_result,
-            quality_metrics,
-            current_retry_count,
-            max_retries,
-        );
-        return Some(build_single_generation_retry_terminal_state(
-            persisted_task,
-            generated_result,
-            retry_label.as_deref(),
-            quality_metrics,
-        ));
-    }
-
-    None
-}
-
-pub(crate) fn build_single_generation_error_terminal_state(
-    persisted_task: &Option<batch_generation_task::Model>,
-    chapter_id: &str,
-    chapter_number: Option<i32>,
-    chapter_title: Option<&str>,
-    error_message: &str,
-) -> SingleGenerationQualityGateTerminalState {
-    let failed_entry = build_single_generation_failed_chapter_entry(
-        Some(chapter_id),
-        chapter_number,
-        chapter_title,
-        error_message,
-        persisted_task
-            .as_ref()
-            .map(|task| task.current_retry_count)
-            .unwrap_or(0),
-    );
-
-    SingleGenerationQualityGateTerminalState {
-        checkpoint_payload: json!({
-            "analysis_task_message": Value::Null,
-            "analysis_task_progress": 100,
-            "analysis_last_error": error_message,
-            "phase": "failed",
-        }),
-        error_message: error_message.to_string(),
-        failed_entry,
-    }
-}
-
-fn resolve_single_generation_manual_review_label_from_quality_context(
-    generated_result: &GeneratedChapterResult,
-    quality_metrics: Option<&Value>,
-    current_retry_count: i32,
-    max_retries: i32,
-) -> Option<String> {
-    if matches!(
-        generated_result.quality_gate_action.as_deref(),
-        Some("manual_review")
-    ) {
-        return generated_result
-            .quality_gate_message
-            .clone()
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| {
-                manual_review_label_from_quality_context_with_retry_budget(
-                    None,
-                    quality_metrics,
-                    quality_metrics,
-                    current_retry_count,
-                    max_retries,
-                )
-            });
-    }
-
-    manual_review_label_from_quality_context_with_retry_budget(
-        None,
-        quality_metrics,
-        quality_metrics,
-        current_retry_count,
-        max_retries,
-    )
-}
-
-fn generated_result_requires_retry_follow_up(generated_result: &GeneratedChapterResult) -> bool {
-    matches!(
-        generated_result.quality_gate_action.as_deref(),
-        Some("retry")
-    ) || generated_result.provisional_draft_saved
-        || (!generated_result.content_applied && generated_result.attempt_state.trim() == "retry")
-}
-
-fn resolve_single_generation_retry_terminal_label(
-    generated_result: &GeneratedChapterResult,
-    quality_metrics: Option<&Value>,
-    current_retry_count: i32,
-    max_retries: i32,
-) -> Option<String> {
-    generated_result
-        .quality_gate_message
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            retryable_repair_label_from_quality_context_with_retry_budget(
-                None,
-                quality_metrics,
-                quality_metrics,
-                current_retry_count,
-                max_retries,
-            )
-        })
-        .or_else(|| Some("可自动修复后重试".to_string()))
-}
-
-fn build_single_generation_failed_chapter_entry(
-    chapter_id: Option<&str>,
-    chapter_number: Option<i32>,
-    chapter_title: Option<&str>,
-    error_message: &str,
-    retry_count: i32,
-) -> Value {
-    json!({
-        "chapter_id": chapter_id,
-        "chapter_number": chapter_number,
-        "title": chapter_title,
-        "error": error_message,
-        "retry_count": retry_count.max(0),
-    })
-}
-
-fn apply_single_generation_quality_gate_terminal_fields(
-    entry: &mut Value,
-    decision: &str,
-    label: &str,
-    phase: &str,
-    quality_metrics: Option<&Value>,
-) {
-    let failed_metric_labels = quality_metrics
-        .and_then(|metrics| metrics.get("quality_gate"))
-        .and_then(|gate| gate.get("failed_metrics"))
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.get("label").and_then(Value::as_str))
-                .filter(|value| !value.trim().is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    if let Some(object) = entry.as_object_mut() {
-        object.insert("phase".to_string(), json!(phase));
-        object.insert("quality_gate_status".to_string(), json!("failed"));
-        object.insert("quality_gate_decision".to_string(), json!(decision));
-        object.insert("quality_gate_label".to_string(), json!(label));
-        object.insert(
-            "quality_gate_failed_metrics".to_string(),
-            json!(failed_metric_labels),
-        );
-    }
-}
-
-fn build_single_generation_manual_review_terminal_state(
-    persisted_task: &Option<batch_generation_task::Model>,
-    generated_result: &GeneratedChapterResult,
-    manual_review_label: &str,
-    quality_metrics: Option<&Value>,
-) -> SingleGenerationQualityGateTerminalState {
-    let error_message = format!("章节触发质量门禁，需人工复核: {manual_review_label}");
-    let mut failed_entry = build_single_generation_failed_chapter_entry(
-        Some(&generated_result.chapter_id),
-        Some(generated_result.chapter_number),
-        Some(&generated_result.title),
-        &error_message,
-        persisted_task
-            .as_ref()
-            .map(|task| task.current_retry_count)
-            .unwrap_or(0),
-    );
-    apply_single_generation_quality_gate_terminal_fields(
-        &mut failed_entry,
-        "manual_review",
-        manual_review_label,
-        "quality_blocked",
-        quality_metrics,
-    );
-
-    SingleGenerationQualityGateTerminalState {
-        checkpoint_payload: json!({
-            "analysis_task_message": "单章生成触发质量门禁，需人工复核",
-            "analysis_task_progress": 100,
-            "analysis_last_error": Value::Null,
-            "quality_gate_decision": "manual_review",
-            "quality_gate_label": manual_review_label,
-            "phase": "quality_blocked",
-        }),
-        error_message,
-        failed_entry,
-    }
-}
-
-fn build_single_generation_retry_terminal_state(
-    persisted_task: &Option<batch_generation_task::Model>,
-    generated_result: &GeneratedChapterResult,
-    retry_label: Option<&str>,
-    quality_metrics: Option<&Value>,
-) -> SingleGenerationQualityGateTerminalState {
-    let retry_label = retry_label
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("可自动修复后重试");
-    let error_message = format!("章节触发质量修复重试: {retry_label}");
-    let mut failed_entry = build_single_generation_failed_chapter_entry(
-        Some(&generated_result.chapter_id),
-        Some(generated_result.chapter_number),
-        Some(&generated_result.title),
-        &error_message,
-        persisted_task
-            .as_ref()
-            .map(|task| task.current_retry_count)
-            .unwrap_or(0),
-    );
-    apply_single_generation_quality_gate_terminal_fields(
-        &mut failed_entry,
-        "auto_repair",
-        retry_label,
-        "quality_retry",
-        quality_metrics,
-    );
-
-    SingleGenerationQualityGateTerminalState {
-        checkpoint_payload: json!({
-            "analysis_task_message": "单章生成已保存修复草稿，等待后续重试",
-            "analysis_task_progress": 100,
-            "analysis_last_error": Value::Null,
-            "quality_gate_decision": "auto_repair",
-            "quality_gate_label": retry_label,
-            "phase": "quality_retry",
-        }),
-        error_message,
-        failed_entry,
-    }
 }
 
 #[cfg(test)]
@@ -914,9 +151,7 @@ mod tests {
 
     use super::{
         append_single_generation_failed_chapter_entry,
-        build_chapter_analysis_runtime_owner_contract,
-        build_chapter_generation_snapshot_owner_contract,
-        build_prompt_overrides_from_compat_options,
+        build_chapter_analysis_runtime_owner_contract, build_prompt_overrides_from_compat_options,
         build_single_generation_candidate_runtime_owner_contract,
         build_single_generation_error_terminal_state,
         build_single_generation_runtime_checkpoint_owner_contract,
@@ -933,6 +168,7 @@ mod tests {
         SingleChapterGenerationCompatOptions, SingleChapterGenerationExecutionInput,
     };
     use crate::services::chapter_generation_prompt_service::PromptContextProviderPayload;
+    use crate::services::chapter_generation_runtime_service::snapshot_persistence_owner::build_chapter_generation_snapshot_owner_contract;
     use crate::services::chapter_generation_runtime_service::GeneratedChapterResult;
     use crate::services::chapter_single_generation_runtime_state_service::{
         attach_single_generation_candidate_gateway_checkpoint_metadata,
@@ -969,13 +205,10 @@ mod tests {
             "chapter_single_generation_runtime_state_service"
         );
         assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/api/chapter_generation_routes.py"
-        );
-        assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/services/chapter_single_generation_runtime_state_service.rs"
         );
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["behavior_contract"]["runtime_lifecycle_entrypoints"][0],
             "SingleGenerationRuntimeLifecyclePlan::from_runtime_launch_with_gateway_config"
@@ -994,7 +227,7 @@ mod tests {
         );
         assert_eq!(
             contract["active_consumers"][3],
-            "chapter_single_generation_active_gateway_smoke_service"
+            "chapter-single-generation-active-gateway-smoke-rust"
         );
         assert_eq!(
             contract["shared_candidate_runtime_owner_contract"]["owner"],
@@ -1049,9 +282,22 @@ mod tests {
             true
         );
         assert_eq!(
-            contract["service_runtime_closeout_status"]["status"],
-            "rust_runtime_state_owner_ready_for_source_map_closeout_review"
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            true
         );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "single-generation runtime state source-map package deleted; surviving Python closeout work is now limited to separate shared candidate/runtime, prepare/orchestration, prompt, and execution-config contracts"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_runtime_state_owner_with_deleted_python_source_map"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "single_generation_runtime_state_owner_is_rust_only_and_runtime_analysis_source_maps_are_deleted"
+        );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
     }
 
     #[test]
@@ -1062,6 +308,7 @@ mod tests {
             contract["owner"],
             "chapter_single_generation_runtime_state_service::runtime_checkpoint_owner"
         );
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["behavior_contract"]["entrypoints"][0],
             "build_single_generation_runtime_checkpoint_for_stage"
@@ -1078,6 +325,11 @@ mod tests {
             contract["snapshot_persistence_owner_contract"]["owner"],
             build_chapter_generation_snapshot_owner_contract()["owner"]
         );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["source_map_closeout_status"]
+                ["compat_shell_status"],
+            "physically_deleted"
+        );
     }
 
     #[test]
@@ -1088,6 +340,7 @@ mod tests {
             contract["owner"],
             "chapter_single_generation_runtime_state_service::terminal_state_owner"
         );
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["behavior_contract"]["entrypoints"][0],
             "resolve_single_generation_manual_review_label_from_analysis_payload"

@@ -73,8 +73,22 @@ impl QualityMetricRate {
 pub(crate) fn build_single_generation_quality_runtime_context(
     input: CandidateQualityRuntimeContextBuildInput,
 ) -> Value {
+    let story_packet = input.story_packet;
     let mut context = Map::new();
-    context.insert("story_packet".to_string(), input.story_packet);
+    if let Some(packet) = story_packet.as_object() {
+        copy_story_packet_runtime_value(&mut context, packet, "story_long_term_goal");
+        copy_story_packet_runtime_value(&mut context, packet, "character_focus");
+        copy_story_packet_runtime_value(&mut context, packet, "foreshadow_payoff_plan");
+        copy_story_packet_runtime_value(&mut context, packet, "character_state_ledger");
+        copy_story_packet_runtime_value(&mut context, packet, "relationship_state_ledger");
+        copy_story_packet_runtime_value(&mut context, packet, "foreshadow_state_ledger");
+        copy_story_packet_runtime_value(&mut context, packet, "organization_state_ledger");
+        copy_story_packet_runtime_value(&mut context, packet, "career_state_ledger");
+        copy_story_packet_runtime_value(&mut context, packet, "target_word_count");
+        copy_story_packet_runtime_value(&mut context, packet, "chapter_count");
+        copy_story_packet_runtime_value(&mut context, packet, "current_chapter_number");
+    }
+    context.insert("story_packet".to_string(), story_packet);
     context.insert("project".to_string(), input.project.clone());
     context.insert("chapter".to_string(), input.chapter.clone());
     context.insert("chapter_context".to_string(), input.chapter_context.clone());
@@ -83,6 +97,45 @@ pub(crate) fn build_single_generation_quality_runtime_context(
         json!(input.target_word_count),
     );
     context.insert("generation_intent".to_string(), input.generation_intent);
+    insert_non_empty_string(&mut context, "creative_mode", input.creative_mode.trim());
+    insert_non_empty_string(&mut context, "story_focus", input.story_focus.trim());
+    insert_non_empty_string(&mut context, "plot_stage", input.plot_stage.trim());
+    insert_non_empty_string(
+        &mut context,
+        "story_creation_brief",
+        input.story_creation_brief.trim(),
+    );
+    insert_non_empty_string(&mut context, "quality_preset", input.quality_preset.trim());
+    insert_non_empty_string(&mut context, "quality_notes", input.quality_notes.trim());
+    insert_non_empty_string(
+        &mut context,
+        "story_repair_summary",
+        input.story_repair_summary.trim(),
+    );
+    if let Some(chapter_count) = input.chapter_count {
+        context.insert("chapter_count".to_string(), json!(chapter_count));
+    }
+    if let Some(current_chapter_number) = input.current_chapter_number {
+        context.insert(
+            "current_chapter_number".to_string(),
+            json!(current_chapter_number),
+        );
+    }
+    if !input.story_repair_targets.is_empty() {
+        context.insert(
+            "story_repair_targets".to_string(),
+            json!(input.story_repair_targets),
+        );
+    }
+    if !input.story_preserve_strengths.is_empty() {
+        context.insert(
+            "story_preserve_strengths".to_string(),
+            json!(input.story_preserve_strengths),
+        );
+    }
+    if let Some(payload) = input.current_story_repair_payload {
+        context.insert("current_story_repair_payload".to_string(), payload);
+    }
 
     copy_object_field(&mut context, &input.project, "world_rules");
     copy_object_field(&mut context, &input.chapter, "chapter_number");
@@ -99,6 +152,20 @@ pub(crate) fn build_single_generation_quality_runtime_context(
     );
 
     Value::Object(context)
+}
+
+fn copy_story_packet_runtime_value(
+    context: &mut Map<String, Value>,
+    packet: &Map<String, Value>,
+    field_name: &str,
+) {
+    if let Some(value) = packet
+        .get(field_name)
+        .cloned()
+        .filter(|value| !value.is_null())
+    {
+        context.insert(field_name.to_string(), value);
+    }
 }
 
 pub(crate) fn compute_single_generation_story_quality_metrics(
@@ -252,6 +319,12 @@ fn copy_object_field(target: &mut Map<String, Value>, source: &Value, key: &str)
         .cloned()
     {
         target.insert(key.to_string(), value);
+    }
+}
+
+fn insert_non_empty_string(target: &mut Map<String, Value>, key: &str, value: &str) {
+    if !value.is_empty() {
+        target.insert(key.to_string(), Value::String(value.to_string()));
     }
 }
 
@@ -1572,13 +1645,7 @@ pub(crate) fn build_chapter_single_generation_candidate_quality_owner_contract()
         "owner": "chapter_generation_runtime_service::single_generation_candidate_quality_owner",
         "scope": "single_generation_candidate_quality_metrics_and_gate_owner",
         "python_source_map": [
-            "backend/app/services/chapter_generation/stream/candidate_service.py",
-            "backend/app/services/batch_generation_candidate_service.py",
-            "backend/app/services/story_quality_feedback_service.py",
-            "backend/app/services/story_quality_repair_effectiveness_service.py",
-            "backend/app/services/story_repair_payload_service.py",
-            "backend/app/services/quality_domain/story_quality_feedback_service.py",
-            "backend/app/services/quality_domain/story_quality_repair_effectiveness_service.py"
+            "backend/tests/test_support/schemas/quality.py"
         ],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_generation_runtime_service.rs",
@@ -1615,6 +1682,18 @@ pub(crate) fn build_chapter_single_generation_candidate_quality_owner_contract()
                 "chapter_context",
                 "target_word_count",
                 "generation_intent",
+                "creative_mode",
+                "story_focus",
+                "plot_stage",
+                "story_creation_brief",
+                "quality_preset",
+                "quality_notes",
+                "chapter_count",
+                "current_chapter_number",
+                "story_repair_summary",
+                "story_repair_targets",
+                "story_preserve_strengths",
+                "current_story_repair_payload",
                 "world_rules",
                 "chapter_number",
                 "title",
@@ -1668,7 +1747,13 @@ mod tests {
         );
         assert_eq!(
             contract["python_source_map"][0],
-            "backend/app/services/chapter_generation/stream/candidate_service.py"
+            "backend/tests/test_support/schemas/quality.py"
+        );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .map(|items| items.len()),
+            Some(1)
         );
         assert_eq!(
             contract["rust_owner_map"][0],
@@ -1685,6 +1770,14 @@ mod tests {
         assert_eq!(
             contract["behavior_contract"]["quality_gate_policy"][1],
             "auto_repair_with_remaining_retry_budget -> retry"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_context_fields"][6],
+            "creative_mode"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_context_fields"][17],
+            "current_story_repair_payload"
         );
         assert_eq!(
             contract["rollback_boundary"],
@@ -1793,7 +1886,14 @@ mod tests {
     fn should_build_runtime_context_from_adapter_input() {
         let context = build_single_generation_quality_runtime_context(
             CandidateQualityRuntimeContextBuildInput {
-                story_packet: json!({"story": true}),
+                story_packet: json!({
+                    "story": true,
+                    "story_long_term_goal": "追回主线伏笔",
+                    "character_focus": ["沈砚"],
+                    "foreshadow_payoff_plan": ["回收旧约定"],
+                    "character_state_ledger": [{"label": "沈砚", "summary": "情绪收紧"}],
+                    "organization_state_ledger": [{"label": "夜巡司", "summary": "开始施压"}]
+                }),
                 project: json!({"id": "p1", "world_rules": "rules"}),
                 chapter: json!({"id": "c1", "chapter_number": 4, "title": "第四章"}),
                 chapter_context: json!({
@@ -1802,12 +1902,41 @@ mod tests {
                 }),
                 target_word_count: 1800,
                 generation_intent: json!({"mode": "single_generation_active_route"}),
+                creative_mode: "hook".to_string(),
+                story_focus: "advance_plot".to_string(),
+                plot_stage: "climax".to_string(),
+                story_creation_brief: "保持直播事故压迫感".to_string(),
+                quality_preset: "plot_drive".to_string(),
+                quality_notes: "减少解释".to_string(),
+                chapter_count: Some(12),
+                current_chapter_number: Some(4),
+                story_repair_summary: "冲突升级不够".to_string(),
+                story_repair_targets: vec!["补强冲突".to_string()],
+                story_preserve_strengths: vec!["保留直播张力".to_string()],
+                current_story_repair_payload: Some(json!({"source": "manual_request"})),
             },
         );
 
         assert_eq!(context["target_word_count"], 1800);
         assert_eq!(context["chapter_number"], 4);
         assert_eq!(context["world_rules"], "rules");
+        assert_eq!(context["creative_mode"], "hook");
+        assert_eq!(context["story_focus"], "advance_plot");
+        assert_eq!(context["plot_stage"], "climax");
+        assert_eq!(context["quality_preset"], "plot_drive");
+        assert_eq!(context["chapter_count"], 12);
+        assert_eq!(context["current_chapter_number"], 4);
+        assert_eq!(context["story_long_term_goal"], "追回主线伏笔");
+        assert_eq!(context["character_focus"][0], "沈砚");
+        assert_eq!(context["foreshadow_payoff_plan"][0], "回收旧约定");
+        assert_eq!(context["organization_state_ledger"][0]["label"], "夜巡司");
+        assert_eq!(context["story_repair_summary"], "冲突升级不够");
+        assert_eq!(context["story_repair_targets"][0], "补强冲突");
+        assert_eq!(context["story_preserve_strengths"][0], "保留直播张力");
+        assert_eq!(
+            context["current_story_repair_payload"]["source"],
+            "manual_request"
+        );
         assert_eq!(
             context["previous_chapter_continuation_point"],
             "door opened"

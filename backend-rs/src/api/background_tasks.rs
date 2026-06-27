@@ -269,22 +269,16 @@ fn build_background_tasks_route_owner_contract() -> serde_json::Value {
             ],
             "python_fallback_probe_count": 0
         },
-        "source_map_files": [
-            "backend/app/api/background_tasks.py",
-            "backend/app/services/background_task_manager.py",
-            "backend/app/services/background_task_wizard_executor.py",
-            "backend/app/api/settings.py",
-            "backend/app/schemas/outline.py"
-        ],
+        "source_map_files": [],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_background_task_route_manager_wizard_settings_outline_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "background_tasks_active_route_group_no_longer_retains_python_startup_or_route_source_maps",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ],
-            "freeze_reason": "Rust background_tasks route group has dedicated phase5-background-tasks-business-owner probes for create/list/detail, workflow-state, and missing-task behavior; final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy."
+            "full_module_freeze_ready": true,
+            "python_bootstrap_status": "background_tasks_route_runtime_registration_deleted_no_python_route_shell_remains",
+            "python_route_files_status": "background_tasks_route_and_python_startup_source_maps_deleted_active_route_group_boundary_empty",
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "rollback_files": []
         },
         "business_smoke_status": {
             "owner_profile": "phase5-background-tasks-business-owner",
@@ -293,8 +287,8 @@ fn build_background_tasks_route_owner_contract() -> serde_json::Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Background tasks route business smoke is covered by phase5-background-tasks-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+        "next_cutover_gate": "background_tasks active route group no longer retains Python startup or route source maps; any remaining Python task-manager work is now outside the direct route-group boundary",
+        "migration_policy": "Background tasks route business smoke is covered by phase5-background-tasks-business-owner; the Python background_tasks route shell, its explicit bootstrap rollback registration, and the Python startup import of background_task_manager have been removed from the active production route-group boundary. Any remaining Python background task manager implementation now sits outside the direct background_tasks route ownership contract."
     })
 }
 
@@ -1045,19 +1039,32 @@ mod tests {
                 .as_array()
                 .expect("source map files should be present")
                 .len(),
-            5
+            0
         );
+        assert!(contract["source_map_files"].get(0).is_none());
         assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
             json!(true)
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            json!(false)
+            json!(true)
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_bootstrap_status"],
+            "background_tasks_route_runtime_registration_deleted_no_python_route_shell_remains"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "background_tasks_route_and_python_startup_source_maps_deleted_active_route_group_boundary_empty"
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            json!(false)
+            json!(true)
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"],
+            json!([])
         );
         assert_eq!(
             contract["business_smoke_status"]["status"],
@@ -1077,12 +1084,16 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "background_tasks active route group no longer retains Python startup or route source maps; any remaining Python task-manager work is now outside the direct route-group boundary"
         );
         assert!(contract["migration_policy"]
             .as_str()
             .expect("background tasks migration policy should be present")
             .contains("phase5-background-tasks-business-owner"));
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("background tasks migration policy should be present")
+            .contains("Python startup import of background_task_manager"));
     }
 
     #[test]

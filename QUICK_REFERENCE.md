@@ -1,21 +1,69 @@
 # API 模型获取功能 - 快速参考
 
-## 更新说明
+## 当前状态
 
-### 2026-05-05 更新
-- ✅ 移除预设模型列表（Anthropic、Gemini）
-- ✅ 实现智能路径剥离，支持动态获取
-- ✅ 支持 DeepSeek、GLM、Kimi 等国内提供商
-- ✅ 支持硅基流动、OpenRouter 等聚合站
+模型获取接口已经由 Rust backend 接管。生产调用路径：
 
-## 核心功能
-
-### 1. 智能路径剥离
-
-自动识别并剥离已知的 Anthropic 协议兼容子路径：
-
-**支持的子路径**（按长度降序匹配）：
+```text
+POST /api/settings/fetch-models
 ```
+
+Rust 内部 route：
+
+```text
+/settings/fetch-models
+```
+
+## 相关文件
+
+- `backend-rs/src/api/settings.rs` - Rust API owner、请求/响应结构、候选端点逻辑、focused tests
+- `frontend/src/services/modules/settings.ts` - `settingsApi.fetchModels(...)`
+- `frontend/src/components/ModelInputWithFetch.tsx` - 输入框 + 获取按钮 + 模型下拉
+- `frontend/src/components/SettingsCurrentTab.tsx` - Settings 页面集成点
+- `INTEGRATION_GUIDE.md` - 当前集成说明
+- `IMPLEMENTATION_SUMMARY.md` - 当前实现摘要
+
+## 请求示例
+
+```json
+{
+  "api_key": "sk-xxx",
+  "api_base_url": "https://api.deepseek.com/anthropic",
+  "provider": "deepseek"
+}
+```
+
+可选自定义模型列表 URL：
+
+```json
+{
+  "api_key": "sk-xxx",
+  "api_base_url": "https://api.openai.com/v1",
+  "provider": "openai",
+  "models_url": "https://api.openai.com/v1/models"
+}
+```
+
+## 响应示例
+
+```json
+{
+  "success": true,
+  "models": [
+    {
+      "id": "deepseek-chat",
+      "owned_by": "deepseek"
+    }
+  ],
+  "message": "成功获取 1 个可用模型"
+}
+```
+
+## 智能路径剥离
+
+支持识别并剥离常见兼容子路径：
+
+```text
 /api/claudecode
 /api/anthropic
 /apps/anthropic
@@ -27,99 +75,41 @@
 /claude
 ```
 
-**示例**：
-```
+示例：
+
+```text
 输入: https://api.deepseek.com/anthropic
-候选端点:
-  1. https://api.deepseek.com/anthropic/v1/models
-  2. https://api.deepseek.com/v1/models
-  3. https://api.deepseek.com/models
+候选:
+1. https://api.deepseek.com/anthropic/v1/models
+2. https://api.deepseek.com/v1/models
+3. https://api.deepseek.com/models
 ```
 
-### 2. 支持的提供商
-
-#### 国内提供商
-- **DeepSeek**: `https://api.deepseek.com` 或 `https://api.deepseek.com/anthropic`
-- **智谱 GLM**: `https://open.bigmodel.cn/api/anthropic`
-- **Kimi (月之暗面)**: 支持标准端点
-- **阶跃星辰**: `https://api.stepfun.com/step_plan`
-- **豆包**: `https://ark.cn-beijing.volces.com/api/coding`
-- **百炼**: `https://dashscope.aliyuncs.com/apps/anthropic`
-
-#### 聚合站
-- **硅基流动**: `https://api.siliconflow.cn`
-- **OpenRouter**: `https://openrouter.ai/api`
-- **其他 OpenAI 兼容代理**
-
-#### 国际提供商
-- **OpenAI**: `https://api.openai.com/v1`
-- **Azure OpenAI**: 自定义端点
-- **Anthropic**: `https://api.anthropic.com`（通过代理）
-
-### 3. 工作流程
-
-```
-用户点击"获取模型"
-    ↓
-检查是否有自定义 models_url
-    ↓
-是 → 直接使用自定义 URL
-否 → 构建候选端点列表
-    ↓
-尝试主端点 (base_url/v1/models)
-    ↓
-失败 → 尝试路径剥离后的端点
-    ↓
-成功 → 返回模型列表
-失败 → 返回错误提示
+```text
+输入: https://api.stepfun.com/step_plan
+候选:
+1. https://api.stepfun.com/step_plan/v1/models
+2. https://api.stepfun.com/v1/models
+3. https://api.stepfun.com/models
 ```
 
-## 使用方式
+## 支持的提供商
 
-### 后端 API
+- OpenAI
+- Azure OpenAI 兼容端点
+- DeepSeek
+- 智谱 GLM
+- Kimi
+- 阶跃星辰
+- 豆包
+- 百炼
+- 硅基流动
+- OpenRouter
+- NewAPI / Sub2API 等聚合代理
 
-**端点**：`POST /api/settings/fetch-models`
+用户始终可以手动输入模型名作为兜底。
 
-**请求示例 1 - DeepSeek**：
-```json
-{
-  "api_key": "sk-xxx",
-  "api_base_url": "https://api.deepseek.com/anthropic",
-  "provider": "deepseek"
-}
-```
-
-**响应**：
-```json
-{
-  "success": true,
-  "models": [
-    {"id": "deepseek-chat", "owned_by": "deepseek"},
-    {"id": "deepseek-coder", "owned_by": "deepseek"}
-  ],
-  "message": "成功获取 2 个可用模型"
-}
-```
-
-**请求示例 2 - 智谱 GLM**：
-```json
-{
-  "api_key": "xxx.yyy",
-  "api_base_url": "https://open.bigmodel.cn/api/anthropic",
-  "provider": "glm"
-}
-```
-
-**请求示例 3 - 硅基流动**：
-```json
-{
-  "api_key": "sk-xxx",
-  "api_base_url": "https://api.siliconflow.cn",
-  "provider": "siliconflow"
-}
-```
-
-### 前端组件
+## 前端用法
 
 ```tsx
 import ModelInputWithFetch from './ModelInputWithFetch';
@@ -129,76 +119,41 @@ import ModelInputWithFetch from './ModelInputWithFetch';
   onChange={setModelName}
   apiKey={apiKey}
   apiBaseUrl={apiBaseUrl}
-  provider="deepseek"  // 或 "glm", "siliconflow" 等
+  provider={provider}
 />
 ```
 
-## 测试验证
+Settings 页面注意事项：
 
-```bash
-cd backend
-python test_fetch_models.py
+- API Key、Base URL、Provider、Model、Web Research 配置应通过同一 settings/preset 保存链路持久化。
+- 获取模型按钮不负责保存配置，只读取当前表单值并请求模型列表。
+- 如果 Web Research API Key 或 Base URL 无法保存，优先检查 `SettingsCurrentTab.tsx` 的表单字段绑定和提交 payload。
+
+## 验证命令
+
+```powershell
+cargo test api::settings --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/settings-fetch-models"
 ```
 
-**测试覆盖**：
-- ✅ OpenAI 标准端点
-- ✅ 自定义 models_url
-- ✅ 响应模型解析
-- ✅ DeepSeek 路径剥离
-- ✅ GLM 路径剥离
-
-## 技术优势
-
-1. **智能路径剥离**：自动识别并处理兼容子路径
-2. **多候选端点**：失败自动尝试下一个端点
-3. **广泛兼容**：支持国内外主流提供商
-4. **动态获取**：实时获取最新模型列表
-5. **错误友好**：清晰的错误提示和建议
-
-## 路径剥离示例
-
-### DeepSeek
-```
-输入: https://api.deepseek.com/anthropic
-候选:
-  1. https://api.deepseek.com/anthropic/v1/models
-  2. https://api.deepseek.com/v1/models
-  3. https://api.deepseek.com/models
+```powershell
+cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/story-continuity-ledger-owner"
 ```
 
-### 智谱 GLM
-```
-输入: https://open.bigmodel.cn/api/anthropic
-候选:
-  1. https://open.bigmodel.cn/api/anthropic/v1/models
-  2. https://open.bigmodel.cn/v1/models
-  3. https://open.bigmodel.cn/models
+```powershell
+python -X utf8 "backend/tools/run_strangler_gateway_smoke.py" --manifest "deploy/strangler-gateway-probes.json" --validate-manifest-only
 ```
 
-### 阶跃星辰
-```
-输入: https://api.stepfun.com/step_plan
-候选:
-  1. https://api.stepfun.com/step_plan/v1/models
-  2. https://api.stepfun.com/v1/models
-  3. https://api.stepfun.com/models
-```
+## 已退役内容
 
-## 相关文件
+以下旧 Python runtime 文件或命令不再适用：
 
-- `backend/app/api/settings.py` - 预设模型定义 + API 端点
-- `backend/test_fetch_models.py` - 测试脚本
-- `INTEGRATION_GUIDE.md` - 完整集成指南
-- `IMPLEMENTATION_SUMMARY.md` - 实施总结
-
-## 下一步
-
-1. ✅ 后端预设模型已添加
-2. ✅ 测试验证通过
-3. ⏳ 前端集成到 Settings 页面
-4. ⏳ 用户测试不同提供商
+- `backend/app/api/settings.py`
+- `backend/app/schemas/settings.py`
+- `backend/test_fetch_models.py`
+- `python test_fetch_models.py`
+- `python -m uvicorn app.main:app`
 
 ---
 
-**更新日期**：2026-05-05  
-**状态**：预设模型功能已完成 ✅
+**最后更新**：2026-06-25
+**状态**：Rust-owned production API

@@ -91,11 +91,13 @@ impl SingleGenerationStreamSuccessArtifacts {
         enable_analysis: bool,
         result: &GeneratedChapterResult,
     ) -> Self {
-        let story_runtime_contract = build_single_generation_stream_story_runtime_contract(
-            result.chapter_number,
-            target_word_count,
-            compat_options,
-        );
+        let story_runtime_contract =
+            build_single_generation_stream_story_runtime_contract_with_metrics(
+                result.chapter_number,
+                target_word_count,
+                compat_options,
+                result.quality_metrics.as_ref(),
+            );
         let mut analysis = Self::from_quality_metrics(
             None,
             result.quality_metrics.clone(),
@@ -526,6 +528,20 @@ pub(crate) fn build_single_generation_stream_story_runtime_contract(
     target_word_count: i32,
     compat_options: &SingleChapterGenerationCompatOptions,
 ) -> Option<Value> {
+    build_single_generation_stream_story_runtime_contract_with_metrics(
+        chapter_number,
+        target_word_count,
+        compat_options,
+        None,
+    )
+}
+
+pub(crate) fn build_single_generation_stream_story_runtime_contract_with_metrics(
+    chapter_number: i32,
+    target_word_count: i32,
+    compat_options: &SingleChapterGenerationCompatOptions,
+    quality_metrics: Option<&Value>,
+) -> Option<Value> {
     let mut request_overrides = serde_json::Map::new();
     insert_single_generation_story_runtime_override(
         &mut request_overrides,
@@ -557,31 +573,36 @@ pub(crate) fn build_single_generation_stream_story_runtime_contract(
         "quality_notes",
         compat_options.quality_notes(),
     );
+    let runtime_context = quality_metrics
+        .and_then(|metrics| metrics.get("quality_runtime_context"))
+        .and_then(Value::as_object);
 
     Some(json!({
         "version": 1,
         "guidance": {
-            "creative_mode": single_generation_story_runtime_contract_text_value(compat_options.creative_mode()),
-            "story_focus": single_generation_story_runtime_contract_text_value(compat_options.story_focus()),
-            "plot_stage": single_generation_story_runtime_contract_text_value(compat_options.plot_stage()),
-            "story_creation_brief": single_generation_story_runtime_contract_text_value(compat_options.story_creation_brief()),
-            "quality_preset": single_generation_story_runtime_contract_text_value(compat_options.quality_preset()),
-            "quality_notes": single_generation_story_runtime_contract_text_value(compat_options.quality_notes()),
+            "creative_mode": single_generation_story_runtime_contract_runtime_text_value(runtime_context, "creative_mode", compat_options.creative_mode()),
+            "story_focus": single_generation_story_runtime_contract_runtime_text_value(runtime_context, "story_focus", compat_options.story_focus()),
+            "plot_stage": single_generation_story_runtime_contract_runtime_text_value(runtime_context, "plot_stage", compat_options.plot_stage()),
+            "story_creation_brief": single_generation_story_runtime_contract_runtime_text_value(runtime_context, "story_creation_brief", compat_options.story_creation_brief()),
+            "quality_preset": single_generation_story_runtime_contract_runtime_text_value(runtime_context, "quality_preset", compat_options.quality_preset()),
+            "quality_notes": single_generation_story_runtime_contract_runtime_text_value(runtime_context, "quality_notes", compat_options.quality_notes()),
         },
         "request_overrides": Value::Object(request_overrides),
         "source": "chapter-generation-intent",
         "blueprint": {
-            "long_term_goal": Value::Null,
-            "chapter_count": Value::Null,
-            "current_chapter_number": chapter_number,
-            "target_word_count": target_word_count,
-            "character_focus_names": Vec::<String>::new(),
-            "foreshadow_payoff_plan": Vec::<String>::new(),
-            "character_state_ledger": Vec::<Value>::new(),
-            "relationship_state_ledger": Vec::<Value>::new(),
-            "foreshadow_state_ledger": Vec::<Value>::new(),
-            "organization_state_ledger": Vec::<Value>::new(),
-            "career_state_ledger": Vec::<Value>::new(),
+            "long_term_goal": single_generation_story_runtime_contract_runtime_optional_text(runtime_context, "story_long_term_goal"),
+            "chapter_count": single_generation_story_runtime_contract_runtime_numeric_value(runtime_context, "chapter_count"),
+            "current_chapter_number": single_generation_story_runtime_contract_runtime_numeric_value(runtime_context, "current_chapter_number")
+                .unwrap_or_else(|| json!(chapter_number)),
+            "target_word_count": single_generation_story_runtime_contract_runtime_numeric_value(runtime_context, "target_word_count")
+                .unwrap_or_else(|| json!(target_word_count)),
+            "character_focus_names": single_generation_story_runtime_contract_runtime_array_value(runtime_context, "character_focus"),
+            "foreshadow_payoff_plan": single_generation_story_runtime_contract_runtime_array_value(runtime_context, "foreshadow_payoff_plan"),
+            "character_state_ledger": single_generation_story_runtime_contract_runtime_array_value(runtime_context, "character_state_ledger"),
+            "relationship_state_ledger": single_generation_story_runtime_contract_runtime_array_value(runtime_context, "relationship_state_ledger"),
+            "foreshadow_state_ledger": single_generation_story_runtime_contract_runtime_array_value(runtime_context, "foreshadow_state_ledger"),
+            "organization_state_ledger": single_generation_story_runtime_contract_runtime_array_value(runtime_context, "organization_state_ledger"),
+            "career_state_ledger": single_generation_story_runtime_contract_runtime_array_value(runtime_context, "career_state_ledger"),
         }
     }))
 }
@@ -629,6 +650,54 @@ fn single_generation_story_runtime_contract_text_value(value: &str) -> Value {
     } else {
         json!(trimmed)
     }
+}
+
+fn single_generation_story_runtime_contract_runtime_text_value(
+    runtime_context: Option<&serde_json::Map<String, Value>>,
+    key: &str,
+    fallback: &str,
+) -> Value {
+    runtime_context
+        .and_then(|context| context.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| json!(value))
+        .unwrap_or_else(|| single_generation_story_runtime_contract_text_value(fallback))
+}
+
+fn single_generation_story_runtime_contract_runtime_optional_text(
+    runtime_context: Option<&serde_json::Map<String, Value>>,
+    key: &str,
+) -> Value {
+    runtime_context
+        .and_then(|context| context.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| json!(value))
+        .unwrap_or(Value::Null)
+}
+
+fn single_generation_story_runtime_contract_runtime_numeric_value(
+    runtime_context: Option<&serde_json::Map<String, Value>>,
+    key: &str,
+) -> Option<Value> {
+    runtime_context
+        .and_then(|context| context.get(key))
+        .filter(|value| value.is_number())
+        .cloned()
+}
+
+fn single_generation_story_runtime_contract_runtime_array_value(
+    runtime_context: Option<&serde_json::Map<String, Value>>,
+    key: &str,
+) -> Value {
+    runtime_context
+        .and_then(|context| context.get(key))
+        .filter(|value| value.is_array())
+        .cloned()
+        .unwrap_or_else(|| json!([]))
 }
 
 fn insert_single_generation_story_runtime_override(

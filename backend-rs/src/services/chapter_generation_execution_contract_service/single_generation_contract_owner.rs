@@ -139,15 +139,7 @@ pub(crate) fn build_single_generation_execution_contract_owner_contract() -> Val
     json!({
         "owner": "chapter_generation_execution_contract_service::single_generation_contract_owner",
         "scope": "single_generation_execution_input_and_compat_options",
-        "python_source_map": [
-            "backend/app/api/chapters.py",
-            "backend/app/api/chapter_generation_routes.py",
-            "backend/app/services/chapter_generation/stream/execution_service.py",
-            "backend/app/services/batch_generation/create_service.py",
-            "backend/app/services/batch_generation_orchestration_service.py",
-            "backend/app/services/story_repair_payload_service.py",
-            "backend/app/services/prompt_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_generation_execution_contract_service.rs",
             "backend-rs/src/services/chapter_generation_execution_contract_service/single_generation_contract_owner.rs",
@@ -222,8 +214,8 @@ pub(crate) fn build_single_generation_execution_contract_owner_contract() -> Val
             "chapter_batch_generation_resume_task_command_service",
             "chapter_single_generation_prepare_service::research_payload_owner",
             "chapter_generation_runtime_service::story_repair_quality_context_owner",
-            "chapter_single_generation_active_gateway_smoke_service",
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-single-generation-active-gateway-smoke-rust",
+            "chapter-batch-generation-active-gateway-smoke-rust"
         ],
         "validation_boundary": [
             "cargo test chapter_generation_execution_contract_service",
@@ -250,11 +242,12 @@ pub(crate) fn build_single_generation_execution_contract_owner_contract() -> Val
             "request_runtime_state_owner": "BatchGenerationRequestRuntimeState",
             "prompt_override_owner": "build_prompt_overrides_from_compat_options",
             "source_map_closeout_ready": true,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_shared_execution_contract_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "single-generation execution contract owner is rust-only; surviving Python exit work is tracked by shared prompt and shared runtime owner contracts outside this owner",
+            "status": "rust_shared_execution_contract_owner_direct_package_closed_out"
         },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_route_request_story_repair_prompt_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "single_generation_execution_contract_owner_is_rust_only_and_shared_prompt_story_repair_python_surfaces_are_tracked_by_external_owner_contracts",
             "runtime_knobs": [
                 "SingleChapterGenerationCompatOptions",
                 "ChapterCandidateRouteGatewayConfig"

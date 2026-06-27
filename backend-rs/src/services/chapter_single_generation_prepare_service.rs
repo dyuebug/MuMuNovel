@@ -1,16 +1,10 @@
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use serde_json::{json, Value};
 
-pub(crate) mod prerequisite_owner;
 pub(crate) mod request_prepare_owner;
 pub(crate) mod research_payload_owner;
 pub(crate) mod task_view_payload_owner;
 
-pub(crate) use self::prerequisite_owner::{
-    build_chapter_generation_prerequisite_owner_contract, check_chapter_generation_prerequisites,
-    is_valid_optional_choice, is_valid_optional_text_length,
-    normalize_optional_single_generation_request_string,
-    normalize_single_generation_web_research_enabled, ChapterGenerationPrerequisiteCheck,
-};
 pub(crate) use self::request_prepare_owner::{
     load_single_chapter_generation_target,
     prepare_single_chapter_generation_execution_config_from_runtime_state,
@@ -26,6 +20,7 @@ pub(crate) use self::task_view_payload_owner::{
     build_single_generation_task_view_payload_owner_contract,
     estimated_single_generation_task_minutes, single_generation_active_task_statuses,
 };
+use crate::models::chapter;
 use crate::services::chapter_access_service::build_chapter_generation_access_owner_contract;
 pub(crate) use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
 use crate::services::chapter_generation_execution_contract_service::{
@@ -64,20 +59,152 @@ const SINGLE_GENERATION_QUALITY_PRESET_VALUES: &[&str] = &[
     "clean_prose",
 ];
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ChapterGenerationPrerequisiteCheck {
+    pub(crate) can_generate: bool,
+    pub(crate) error_message: String,
+    pub(crate) previous_chapters: Vec<chapter::Model>,
+}
+
+pub(crate) fn build_chapter_generation_prerequisite_owner_contract() -> Value {
+    json!({
+        "owner": "chapter_single_generation_prepare_service",
+        "scope": "prerequisite_owner",
+        "python_source_map": [
+            "backend/migrator_app/models/chapter.py"
+        ],
+        "rust_owner_map": [
+            "backend-rs/src/services/chapter_single_generation_prepare_service.rs",
+            "backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs",
+            "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
+            "backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs",
+            "backend-rs/src/services/chapter_query_service.rs"
+        ],
+        "behavior_contract": {
+            "entrypoint": "check_chapter_generation_prerequisites",
+            "first_chapter": {
+                "can_generate": true,
+                "error_message": "",
+                "previous_chapters": []
+            },
+            "previous_chapter_query": [
+                "same_project_id",
+                "chapter_number_lt_current",
+                "ordered_by_chapter_number_asc"
+            ],
+            "incomplete_content_rule": "missing_or_trimmed_empty_content_blocks_generation",
+            "error_message_template": "前置章节尚未完成: <numbers> 章",
+            "route_payload_consumers": [
+                "load_can_generate_payload",
+                "load_single_chapter_generation_target"
+            ],
+            "request_normalization_helpers": [
+                "normalize_optional_single_generation_request_string",
+                "is_valid_optional_choice",
+                "is_valid_optional_text_length",
+                "normalize_single_generation_web_research_enabled"
+            ],
+            "request_bounds": {
+                "story_creation_brief_max_chars": MAX_SINGLE_GENERATION_STORY_CREATION_BRIEF_LENGTH,
+                "quality_notes_max_chars": MAX_SINGLE_GENERATION_QUALITY_NOTES_LENGTH,
+                "creative_mode": SINGLE_GENERATION_CREATIVE_MODE_VALUES,
+                "story_focus": SINGLE_GENERATION_STORY_FOCUS_VALUES,
+                "plot_stage": SINGLE_GENERATION_PLOT_STAGE_VALUES,
+                "quality_preset": SINGLE_GENERATION_QUALITY_PRESET_VALUES
+            }
+        },
+        "validation_boundary": [
+            "cargo test chapter_single_generation_prepare_service",
+            "cargo check --manifest-path backend-rs/Cargo.toml",
+            "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only"
+        ],
+        "rollback_boundary": "chapter_generation_prerequisite_query_source_map"
+    })
+}
+
+pub(crate) async fn check_chapter_generation_prerequisites(
+    db: &DatabaseConnection,
+    chapter_model: &chapter::Model,
+) -> Result<ChapterGenerationPrerequisiteCheck, String> {
+    if chapter_model.chapter_number == 1 {
+        return Ok(ChapterGenerationPrerequisiteCheck {
+            can_generate: true,
+            error_message: String::new(),
+            previous_chapters: Vec::new(),
+        });
+    }
+
+    let previous_chapters = chapter::Entity::find()
+        .filter(chapter::Column::ProjectId.eq(&chapter_model.project_id))
+        .filter(chapter::Column::ChapterNumber.lt(chapter_model.chapter_number))
+        .order_by_asc(chapter::Column::ChapterNumber)
+        .all(db)
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let incomplete_numbers = previous_chapters
+        .iter()
+        .filter(|chapter| {
+            chapter
+                .content
+                .as_ref()
+                .map(|content| content.trim().is_empty())
+                .unwrap_or(true)
+        })
+        .map(|chapter| chapter.chapter_number.to_string())
+        .collect::<Vec<_>>();
+
+    if !incomplete_numbers.is_empty() {
+        return Ok(ChapterGenerationPrerequisiteCheck {
+            can_generate: false,
+            error_message: format!("前置章节尚未完成: {} 章", incomplete_numbers.join(", ")),
+            previous_chapters,
+        });
+    }
+
+    Ok(ChapterGenerationPrerequisiteCheck {
+        can_generate: true,
+        error_message: String::new(),
+        previous_chapters,
+    })
+}
+
+pub(crate) fn normalize_optional_single_generation_request_string(
+    value: Option<String>,
+) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn is_valid_optional_choice(value: Option<&str>, allowed_values: &[&str]) -> bool {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| allowed_values.contains(&value))
+        .unwrap_or(true)
+}
+
+pub(crate) fn is_valid_optional_text_length(value: Option<&str>, max_chars: usize) -> bool {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().count() <= max_chars)
+        .unwrap_or(true)
+}
+
+pub(crate) fn normalize_single_generation_web_research_enabled(
+    enabled: Option<bool>,
+    default_enabled: bool,
+) -> bool {
+    enabled.unwrap_or(default_enabled)
+}
+
 pub(crate) fn build_single_generation_prepare_owner_contract() -> Value {
     json!({
         "owner": "chapter_single_generation_prepare_service",
         "scope": "single_generation_route_request_target_prerequisite_execution_config_and_task_view_payload",
-        "python_source_map": [
-            "backend/app/api/chapter_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/schemas/chapter.py",
-            "backend/app/services/chapter_generation/route_wiring_service.py",
-            "backend/app/services/chapter_generation/stream/entry_service.py",
-            "backend/app/services/chapter_generation/stream/service.py",
-            "backend/app/services/chapter_generation/stream/execution_service.py",
-            "backend/app/services/compat/chapter_generation_route_compat_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_single_generation_prepare_service.rs",
             "backend-rs/src/api/chapter_generation_routes.rs",
@@ -149,7 +276,7 @@ pub(crate) fn build_single_generation_prepare_owner_contract() -> Value {
             "chapter_single_generation_stream_workflow_service",
             "chapter_single_generation_runtime_restore_workflow_service",
             "chapter_batch_generation_resume_task_command_service",
-            "chapter_single_generation_active_gateway_smoke_service"
+            "chapter-single-generation-active-gateway-smoke-rust"
         ],
         "chapter_generation_access_owner_contract": build_chapter_generation_access_owner_contract(),
         "prerequisite_owner_contract": build_chapter_generation_prerequisite_owner_contract(),
@@ -175,23 +302,18 @@ pub(crate) fn build_single_generation_prepare_owner_contract() -> Value {
             "rust_manifest_probe_count": 6,
             "python_fallback_probe_count": 0,
             "source_map_closeout_ready": true,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_prepare_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "single-generation prepare owner is already free of Python request-schema source maps; surviving Python exit work now lives in prerequisite/query and shared runtime contracts outside this owner",
+            "status": "rust_prepare_owner_request_schema_source_map_deleted"
         },
         "rollback_boundary": {
             "runtime_knobs": [
                 "legacy_single_generation_direct_ai",
                 "python_candidate_executor_fallback"
             ],
-            "source_map_policy": "keep_python_single_generation_route_schema_and_stream_prepare_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "single_generation_prepare_route_request_schema_source_map_deleted_and_surviving_python_exit_work_moves_to_outside_owner_contracts",
             "python_fallback_removal_ready": true,
-            "rollback_files": [
-                "backend/app/api/chapter_generation_routes.py",
-                "backend/app/api/chapters.py",
-                "backend/app/services/chapter_generation/route_wiring_service.py",
-                "backend/app/services/chapter_generation/stream/entry_service.py",
-                "backend/app/services/compat/chapter_generation_route_compat_service.py"
-            ]
+            "rollback_files": []
         }
     })
 }
@@ -241,10 +363,7 @@ mod tests {
             contract["owner"],
             "chapter_single_generation_prepare_service"
         );
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/api/chapter_generation_routes.py"
-        );
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/services/chapter_single_generation_prepare_service.rs"
@@ -270,7 +389,7 @@ mod tests {
         );
         assert_eq!(
             contract["active_consumers"][4],
-            "chapter_single_generation_active_gateway_smoke_service"
+            "chapter-single-generation-active-gateway-smoke-rust"
         );
         assert_eq!(
             contract["prerequisite_owner_contract"]["scope"],
@@ -297,6 +416,17 @@ mod tests {
         assert_eq!(
             contract["task_view_payload_owner_contract"]["owner"],
             "chapter_single_generation_prepare_service::task_view_payload_owner"
+        );
+        assert_eq!(
+            contract["task_view_payload_owner_contract"]["python_source_map"],
+            json!([])
+        );
+        assert_eq!(
+            contract["task_view_payload_owner_contract"]["python_source_map"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
         );
         assert_eq!(
             contract["execution_config_owner_contract"]["owner"],
@@ -363,8 +493,20 @@ mod tests {
             true
         );
         assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "single-generation prepare owner is already free of Python request-schema source maps; surviving Python exit work now lives in prerequisite/query and shared runtime contracts outside this owner"
+        );
+        assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_prepare_owner_ready_for_source_map_closeout_review"
+            "rust_prepare_owner_request_schema_source_map_deleted"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "single_generation_prepare_route_request_schema_source_map_deleted_and_surviving_python_exit_work_moves_to_outside_owner_contracts"
         );
     }
 
@@ -397,7 +539,7 @@ mod tests {
         assert_eq!(contract["scope"], "prerequisite_owner");
         assert_eq!(
             contract["python_source_map"][0],
-            "backend/app/services/chapter_generation/prerequisite_service.py"
+            "backend/migrator_app/models/chapter.py"
         );
         assert_eq!(
             contract["rust_owner_map"][0],
@@ -421,7 +563,7 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"],
-            "chapter_generation_prerequisite_service_python_source_map"
+            "chapter_generation_prerequisite_query_source_map"
         );
     }
 

@@ -162,7 +162,7 @@
             "readiness_evidence": {
               "fallback_shrink_readiness": {
                 "fallback_freeze_config_validated": true,
-                "python_fallback_removal_ready": false
+                "python_fallback_removal_ready": true
               }
             }
           },
@@ -241,49 +241,20 @@
                 "chapter_candidate_record_service",
                 "chapter_single_generation_runtime_restore_workflow_service"
               ],
-              "python_source_map": [
-                "backend/app/api/chapter_generation_routes.py",
-                "backend/app/api/chapters.py",
-                "backend/app/services/chapter_generation/route_wiring_service.py",
-                "backend/app/services/compat/chapter_generation_route_compat_service.py",
-                "backend/app/services/chapter_generation/stream/entry_service.py",
-                "backend/app/services/chapter_generation/stream/candidate_service.py",
-                "backend/app/services/chapter_generation/stream/finalize_service.py",
-                "backend/app/services/chapter_generation/stream/wiring_service.py"
-              ],
+              "python_source_map": [],
               "python_source_map_policy": {
                 "status": "source_map_only",
                 "active_manifest_fallback_owner": false,
                 "freeze_or_delete_requires_same_round_rollback_policy": true,
                 "active_gateway_cutover": "nginx_routes_to_rust",
                 "full_module_freeze_ready": true,
-                "freeze_scope": "single_generation_python_route_and_stream_shells",
-                "python_bootstrap_status": "lazy_imported_and_registered_for_explicit_gateway_rollback_only",
-                "python_route_module_import_status": "legacy_route_module_imports_without_settings_database_ai_service_sqlalchemy_or_models",
-                "python_route_registration_status": "legacy_route_module_registers_without_importing_route_wiring_service",
-                "python_route_wiring_import_status": "route_wiring_service_imports_without_sqlalchemy_database_models_ai_candidate_stream_or_background_runtime",
-                "python_compat_shell_import_status": "compat_shell_imports_without_route_wiring_sqlalchemy_database_models_ai_or_prompt_runtime",
-                "python_stream_entry_import_status": "stream_entry_service_imports_without_database_models_stream_or_sse_runtime",
-                "python_stream_wiring_import_status": "stream_wiring_service_imports_without_database_models_runtime_or_service_graph",
-                "python_stream_finalize_import_status": "stream_finalize_service_imports_without_database_models_or_stream_models",
-                "python_stream_candidate_import_status": "stream_candidate_service_imports_without_database_models_event_or_stream_models",
-                "python_stream_service_import_status": "stream_service_imports_without_quality_context_stream_submodules_or_sse_runtime",
-                "python_stream_execution_import_status": "stream_execution_service_imports_without_sqlalchemy_database_models_quality_context_or_stream_models",
-                "python_stream_models_import_status": "stream_models_imports_without_database_models",
-                "frozen_module_files": [
-                  "backend/app/api/chapter_generation_routes.py",
-                  "backend/app/api/chapters.py",
-                  "backend/app/services/chapter_generation/route_wiring_service.py",
-                  "backend/app/services/compat/chapter_generation_route_compat_service.py",
-                  "backend/app/services/chapter_generation/stream/entry_service.py",
-                  "backend/app/services/chapter_generation/stream/candidate_service.py",
-                  "backend/app/services/chapter_generation/stream/execution_service.py",
-                  "backend/app/services/chapter_generation/stream/finalize_service.py",
-                  "backend/app/services/chapter_generation/stream/models.py",
-                  "backend/app/services/chapter_generation/stream/service.py",
-                  "backend/app/services/chapter_generation/stream/wiring_service.py"
-                ],
-                "delete_candidate_boundary": "delete_or_freeze_single_generation_python_route_and_stream_shells_as_one_module_after_bootstrap_rollback_policy"
+                "freeze_scope": "single_generation_active_route_source_map_surface",
+                "python_bootstrap_status": "bootstrap_registration_retired_test_only_route_wiring_loader_remains",
+                "python_route_module_import_status": "legacy_route_module_deleted_after_route_wiring_repoint",
+                "python_route_registration_status": "no_python_route_registration_active_entry_source_maps_only",
+                "python_route_wiring_import_status": "route_wiring_service_physically_deleted_after_source_map_closeout",
+                "shared_prepare_query_source_maps": [],
+                "final_frozen_boundary": "single_generation_active_route_source_map_surface_empty_prepare_query_source_maps_deleted"
               },
               "active_gateway_cutover": {
                 "deployment_owner": "deploy/nginx/mumunovel.conf",
@@ -294,19 +265,12 @@
                 "sse_routes": [
                   "/api/chapters/{chapter_id}/generate-stream"
                 ],
-                "python_route_files_status": "source_map_only_for_single_generation_active_traffic",
-                "python_bootstrap_registration": "lazy_imported_and_registered_for_explicit_gateway_rollback_only",
-                "python_route_module_import_status": "legacy_route_module_imports_without_settings_database_ai_service_sqlalchemy_or_models",
-                "python_route_registration_status": "legacy_route_module_registers_without_importing_route_wiring_service",
-                "python_route_wiring_import_status": "route_wiring_service_imports_without_sqlalchemy_database_models_ai_candidate_stream_or_background_runtime",
-                "python_compat_shell_import_status": "compat_shell_imports_without_route_wiring_sqlalchemy_database_models_ai_or_prompt_runtime",
-                "python_stream_entry_import_status": "stream_entry_service_imports_without_database_models_stream_or_sse_runtime",
-                "python_stream_wiring_import_status": "stream_wiring_service_imports_without_database_models_runtime_or_service_graph",
-                "python_stream_finalize_import_status": "stream_finalize_service_imports_without_database_models_or_stream_models",
-                "python_stream_candidate_import_status": "stream_candidate_service_imports_without_database_models_event_or_stream_models",
-                "python_stream_service_import_status": "stream_service_imports_without_quality_context_stream_submodules_or_sse_runtime",
-                "python_stream_execution_import_status": "stream_execution_service_imports_without_sqlalchemy_database_models_quality_context_or_stream_models",
-                "python_stream_models_import_status": "stream_models_imports_without_database_models",
+                "python_route_files_status": "python_stream_background_entry_source_maps_deleted_for_single_generation_active_route_support",
+                "python_bootstrap_registration": "bootstrap_registration_deleted_no_route_wiring_loader_remains",
+                "python_route_module_import_status": "legacy_route_module_deleted_after_route_wiring_repoint",
+                "python_route_registration_status": "no_python_route_registration_active_entry_source_maps_only",
+                "python_route_wiring_import_status": "route_wiring_service_physically_deleted_after_source_map_closeout",
+                "python_compat_shell_import_status": "stream_background_entry_shells_deleted_after_test_seam_migration",
                 "rust_route_owner": "backend-rs/src/api/chapter_generation_routes.rs"
               },
               "db_backed_business_smoke": {
@@ -381,7 +345,7 @@
               "rollback_policy": {
                 "active_boundary": "legacy_single_generation_direct_ai",
                 "operator_knob": "CHAPTER_CANDIDATE_RUST_EXECUTOR_ENABLED / CHAPTER_CANDIDATE_RUST_EXECUTOR_FALLBACK_ON_ERROR",
-                "python_source_map_action": "keep_as_source_map_until_explicit_freeze_delete_round",
+                "python_source_map_action": "single_generation_active_route_source_maps_deleted_prerequisite_logic_rehomed_to_shared_chapter_query_source_map",
                 "manifest_owner_baseline": "rust = 131, python-fallback = 0"
               }
             }
@@ -407,10 +371,10 @@
             "readiness_evidence": {
               "shared_candidate_runtime_owner_contract": {
                 "owner": "chapter_generation_runtime_service",
-                "python_source_map": [
-                  "backend/app/services/compat/chapter_generation_route_compat_service.py",
-                  "backend/app/services/chapter_generation/stream/candidate_service.py"
-                ]
+                "python_source_map": [],
+                "rollback_boundary": {
+                  "single_generation_entry_source_maps": []
+                }
               },
               "active_route_gateway_config": {
                 "rust_executor_enabled": true,
@@ -421,7 +385,12 @@
                 "active_route_smoke_consumes_freeze_candidate": true,
                 "fallback_freeze_config_validated": true,
                 "python_fallback_removal_ready": true
-              }
+              },
+              "python_source_map_policy": {
+                "final_frozen_boundary": "single_generation_active_route_source_map_surface_empty_prepare_query_source_maps_deleted",
+                "shared_prepare_query_source_maps": []
+              },
+              "next_cutover_gate": "single-generation route entry source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/candidate and prepare/orchestration source-map packages"
             }
           }
         ]
@@ -480,48 +449,30 @@
                 "chapter_candidate_executor_production_adapter_service::quality_adapter_owner",
                 "chapter_candidate_record_service"
               ],
-              "python_source_map": [
-                "backend/app/api/chapters.py",
-                "backend/app/api/chapter_batch_generation_routes.py",
-                "backend/app/services/batch_generation/create_service.py",
-                "backend/app/services/batch_generation/query_service.py",
-                "backend/app/services/batch_generation/task_workflow_snapshot_service.py",
-                "backend/app/services/batch_generation/resume_service.py",
-                "backend/app/services/batch_generation/status_response_builder.py",
-                "backend/app/services/batch_generation_candidate_service.py",
-                "backend/app/services/chapter_generation/stream/candidate_service.py",
-                "backend/app/services/chapter_candidate_event_service.py"
-              ],
+              "python_source_map": [],
               "python_source_map_policy": {
                 "active_gateway_cutover": "nginx_routes_to_rust",
                 "full_module_freeze_ready": true,
-                "freeze_scope": "batch_generation_python_route_and_service_shells",
-                "python_bootstrap_status": "lazy_imported_and_registered_for_explicit_gateway_rollback_only",
+                "freeze_scope": "batch_generation_route_package_source_map_surface",
+                "python_bootstrap_status": "bootstrap_registration_deleted_no_route_wiring_loader_remains",
                 "python_default_import_status": "chapters_py_no_longer_imports_batch_package_source_maps_by_default",
-                "python_route_module_import_status": "legacy_batch_route_module_imports_without_sqlalchemy_database_models_ai_chapters_or_batch_runtime",
-                "python_status_response_import_status": "status_response_builder_imports_without_database_models_or_sqlalchemy",
-                "python_task_workflow_snapshot_import_status": "task_workflow_snapshot_service_imports_without_database_models_sqlalchemy_or_task_runtime",
-                "python_query_service_import_status": "query_service_imports_without_database_models_sqlalchemy_quality_snapshot_or_task_workflow_snapshot",
+                "python_route_module_import_status": "legacy_batch_route_module_deleted_after_route_wiring_repoint",
+                "python_route_registration_status": "no_python_route_registration_route_package_deleted_test_only_adapter_survives",
                 "remaining_default_import_source_maps": [],
-                "retired_default_import_wiring_shells": [
-                  "backend/app/services/batch_generation_run_wiring_service.py",
-                  "backend/app/services/batch_generation_single_chapter_wiring_service.py"
-                ],
-                "retired_default_import_route_support_shells": [
-                  "backend/app/services/batch_generation_stream_service.py",
-                  "backend/app/services/batch_generation_analysis_service.py",
-                  "backend/app/services/batch_generation_run_service.py"
-                ],
-                "retired_default_import_execution_facades": [
-                  "backend/app/services/batch_generation_execution_service.py"
-                ],
-                "delete_candidate_boundary": "delete_or_freeze_batch_generation_python_route_and_service_shells_as_one_module_after_logged_in_db_smoke"
+                "retired_default_import_wiring_shells": [],
+                "retired_default_import_route_support_shells": [],
+                "retired_default_import_execution_facades": [],
+                "read_context_source_maps": [],
+                "shared_candidate_runtime_source_maps": [],
+                "shared_projection_source_maps": [],
+                "delete_candidate_boundary": "batch_generation_route_package_delete_completed_after_logged_in_db_smoke_and_test_seam_migration"
               },
               "active_gateway_cutover": {
                 "deployment_owner": "deploy/nginx/mumunovel.conf",
                 "python_route_files_status": "source_map_only_for_batch_generation_active_traffic",
-                "python_bootstrap_registration": "lazy_imported_and_registered_for_explicit_gateway_rollback_only",
-                "python_route_module_import_status": "legacy_batch_route_module_imports_without_sqlalchemy_database_models_ai_chapters_or_batch_runtime",
+                "python_bootstrap_registration": "bootstrap_registration_deleted_no_route_wiring_loader_remains",
+                "python_route_module_import_status": "legacy_batch_route_module_deleted_after_route_wiring_repoint",
+                "python_route_registration_status": "no_python_route_registration_route_package_deleted_test_only_adapter_survives",
                 "rust_route_owner": "backend-rs/src/api/chapter_batch_generation.rs",
                 "routes_to_rust": [
                   "/api/chapters/project/{project_id}/batch-generate",
@@ -558,12 +509,7 @@
               },
               "shared_candidate_runtime_owner_contract": {
                 "owner": "chapter_generation_runtime_service",
-                "python_source_map": [
-                  "backend/app/services/compat/chapter_generation_route_compat_service.py",
-                  "backend/app/services/chapter_generation/stream/candidate_service.py",
-                  "backend/app/services/batch_generation_candidate_service.py",
-                  "backend/app/services/batch_generation_execution_service.py"
-                ],
+                "python_source_map": [],
                 "behavior_contract": {
                   "accepted_content_fields": [
                     "full_content",
@@ -572,7 +518,9 @@
                   "direct_fallback_generation_path": "direct_generation_fallback"
                 },
                 "rollback_boundary": {
-                  "source_map_policy": "keep_python_candidate_shells_as_source_map_until_explicit_freeze_delete_round"
+                  "source_map_policy": "shared_candidate_runtime_owner_is_rust_only_and_candidate_shell_source_maps_are_deleted",
+                  "single_generation_entry_source_maps": [],
+                  "shared_candidate_runtime_source_maps": []
                 }
               },
               "selected_candidate_stream": {
@@ -1145,30 +1093,36 @@
             "execution_path": "rust_regeneration_stream_workflow_owner",
             "fallback_applied": false,
             "rollback_boundary": "chapter_regeneration_python_source_map",
-            "result": {
-              "full_stream_owner_consumed": true,
-              "partial_stream_owner_consumed": true,
-              "apply_route_smoke_boundary": "logged_in_fixture_business_smoke",
-              "deterministic_business_sse_smoke": true,
-              "source_map_freeze_candidate_ready": true,
-              "source_map_freeze_ready": false
-            },
-            "runtime_state": {
-              "auth_guard_manifest_coverage": "all_regeneration_routes",
-              "deterministic_business_sse_smoke": true,
-              "source_map_freeze_candidate_ready": true,
-              "full_module_freeze_ready": false
-            },
-            "readiness_evidence": {
-              "source_map_policy": {
-                "status": "source_map_only",
-                "active_manifest_fallback_owner": false,
+              "result": {
+                "full_stream_owner_consumed": true,
+                "partial_stream_owner_consumed": true,
+                "apply_route_smoke_boundary": "logged_in_fixture_business_smoke",
+                "deterministic_business_sse_smoke": true,
+                "source_map_freeze_candidate_ready": true,
+                "source_map_freeze_ready": true
+              },
+              "runtime_state": {
                 "auth_guard_manifest_coverage": "all_regeneration_routes",
                 "deterministic_business_sse_smoke": true,
                 "source_map_freeze_candidate_ready": true,
-                "full_module_freeze_ready": false,
-                "freeze_scope": "chapter_regeneration_python_route_schema_and_service_shells",
-                "freeze_reason": "Rust regeneration route group has dedicated owner-profile business probes for full stream, partial stream, apply partial, task list, and cleanup; final source-map action still requires explicit approval.",
+                "full_module_freeze_ready": true
+              },
+              "readiness_evidence": {
+                "python_source_map": [],
+              "source_map_policy": {
+                  "status": "source_map_only",
+                  "active_manifest_fallback_owner": false,
+                  "auth_guard_manifest_coverage": "all_regeneration_routes",
+                  "deterministic_business_sse_smoke": true,
+                  "source_map_freeze_candidate_ready": true,
+                  "full_module_freeze_ready": true,
+                  "freeze_scope": "chapter_regeneration_route_package_source_map_surface",
+                  "freeze_reason": "Rust regeneration route group has dedicated owner-profile business probes for full stream, partial stream, apply partial, task list, and cleanup; the production chapter_regeneration route shell is now physically deleted, and the surviving Python follow-up work sits outside this direct route/workflow source-map package.",
+                  "stream_orchestration_source_maps": [],
+                "prepare_owner_source_maps": [],
+                "shared_prepare_dependency_source_maps": [],
+                "shared_context_compaction_source_maps": [],
+                "query_owner_source_maps": [],
                 "owner_profile_business_probes": [
                   "chapter-regeneration-fixture-import-project-business-rust",
                   "chapter-regeneration-fixture-list-chapter-business-rust",
@@ -1177,14 +1131,14 @@
                   "chapter-regeneration-partial-stream-business-rust",
                   "chapter-regeneration-apply-partial-business-rust",
                   "chapter-regeneration-tasks-business-rust",
-                  "chapter-regeneration-fixture-delete-project-business-rust"
-                ]
-              },
-              "next_cutover_gate": "run live owner-profile smoke, then execute explicit source-map freeze/delete/repoint round if approved"
+                    "chapter-regeneration-fixture-delete-project-business-rust"
+                  ]
+                },
+              "next_cutover_gate": "chapter-regeneration route/workflow source-map package is physically closed out; any surviving Python work is outside this direct regeneration package"
+              }
             }
-          }
-        ]
-      }
+          ]
+        }
     },
     {
       "name": "chapter-regeneration-full-stream-logged-in-not-found-rust",
@@ -1467,9 +1421,18 @@
       "expected_status": 200,
       "expected_json": {
         "chapter_id": "{{chapter_regeneration_business_chapter_id}}",
-        "total": 0,
-        "tasks": []
-      }
+        "total": 1,
+        "tasks": [
+          {
+            "status": "completed"
+          }
+        ]
+      },
+      "expected_json_has_keys": [
+        "chapter_id",
+        "total",
+        "tasks"
+      ]
     },
     {
       "name": "chapter-regeneration-fixture-delete-project-business-rust",

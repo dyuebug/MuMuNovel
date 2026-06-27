@@ -24,13 +24,7 @@ pub(crate) fn build_batch_generation_attempt_input_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation_runtime_state_service::attempt_input_prompt_provider_gateway_execution",
         "scope": "runtime_snapshot_restore_prompt_override_provider_payload_and_candidate_gateway_execute",
-        "python_source_map": [
-            "backend/app/services/batch_generation_orchestration_service.py",
-            "backend/app/services/batch_generation_candidate_service.py",
-            "backend/app/services/batch_generation_run_service.py",
-            "backend/app/api/chapter_batch_generation_routes.py",
-            "backend/app/api/chapters.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service/attempt_input_owner.rs",
@@ -71,7 +65,7 @@ pub(crate) fn build_batch_generation_attempt_input_owner_contract() -> Value {
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_attempt_input_prompt_provider_gateway_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_attempt_input_owner_is_rust_only_and_surviving_prompt_provider_gateway_surfaces_are_tracked_by_external_runtime_contracts",
             "runtime_state_keys": [
                 "batch_request_runtime_state",
                 "active_story_repair_payload",

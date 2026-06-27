@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ast
+import argparse
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,9 +52,13 @@ def _load_alembic_version_num_length() -> int:
 
 VERSION_ROOTS = {
     "postgres": REPO_ROOT / "backend/alembic/postgres/versions",
-    "sqlite": REPO_ROOT / "backend/alembic/sqlite/versions",
 }
 MAX_REVISION_LENGTH = _load_alembic_version_num_length()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Validate Alembic revision graph health")
+    return parser.parse_args()
 
 
 @dataclass(frozen=True)
@@ -282,10 +287,13 @@ def build_scope_report(root: Path) -> ScopeReport:
 
 
 def main() -> int:
+    parse_args()
+    version_roots = dict(VERSION_ROOTS)
+
     findings_total = 0
     healthy_heads: list[str] = []
 
-    for scope, root in VERSION_ROOTS.items():
+    for scope, root in version_roots.items():
         if not root.exists():
             continue
 
@@ -308,7 +316,7 @@ def main() -> int:
 
     print()
     print(f"FAIL: found {findings_total} Alembic revision issue(s).")
-    print("Rules: revision id length <= 32, down_revision/depends_on must stay within the same backend, graph must be acyclic, and each backend must have exactly one head.")
+    print("Rules: revision id length <= 32, down_revision/depends_on must stay within PostgreSQL, graph must be acyclic, and PostgreSQL must have exactly one head.")
     return 1
 
 

@@ -112,12 +112,7 @@ pub(crate) fn build_batch_generation_payload_metadata_owner_contract() -> Value 
     json!({
         "owner": "chapter_batch_generation_task_payload_base_service::metadata_owner",
         "scope": "batch_generation_task_kind_type_stage_execution_checkpoint_summary_and_eta_owner",
-        "python_source_map": [
-            "backend/app/models/batch_generation_task.py",
-            "backend/app/services/batch_generation/status_response_builder.py",
-            "backend/app/services/batch_generation/create_service.py",
-            "backend/app/services/batch_generation/resume_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs",
             "backend-rs/src/services/chapter_batch_generation_task_payload_base_service/metadata_owner.rs",
@@ -157,8 +152,42 @@ pub(crate) fn build_batch_generation_payload_metadata_owner_contract() -> Value 
             "cargo test chapter_batch_generation_task_payload_base_service",
             "cargo check --manifest-path backend-rs/Cargo.toml"
         ],
+        "service_runtime_closeout_status": {
+            "owner_profile": "phase5-batch-generation-owner",
+            "batch_generation_manifest_probe_count": 11,
+            "rust_manifest_probe_count": 11,
+            "python_fallback_probe_count": 0,
+            "task_kind_owner": "batch_generation_task_kind",
+            "task_type_owner": "batch_generation_task_type",
+            "stage_code_owner": "batch_generation_stage_code",
+            "checkpoint_owner": "checkpoint_with_runtime_metadata",
+            "summary_payload_owner": "build_batch_generation_command_summary_payload",
+            "eta_owner": "estimated_task_minutes",
+            "source_map_closeout_ready": true,
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "batch-generation payload metadata source-map package deleted; surviving Python closeout work is now limited to shared batch-generation-task schema/runtime/API/test-support packages",
+            "status": "rust_batch_generation_payload_metadata_owner_source_map_deleted"
+        },
+        "shared_schema_hold_status": {
+            "batch_generation_task_model": "shared_python_runtime_api_and_test_support_reference",
+            "default_python_module_consumers": [
+                "backend/tests/test_support/database_test_support.py",
+                "backend/tests/test_support/task_system/snapshot_runtime_persistence.py"
+            ],
+            "dedicated_python_regression_surfaces": [
+                "backend/tests/test_api/test_chapters.py",
+                "backend/tests/test_api/test_chapters_batch_generation.py",
+                "backend/tests/test_api/test_chapters_batch_status_resume.py"
+            ],
+            "test_support_consumers": [
+                "backend/tests/test_support/batch_generation_status_read_owner_test_adapter.py",
+                "backend/tests/test_support/batch_generation_orchestration_test_adapter.py",
+                "backend/tests/test_support/batch_generation_route_test_adapter.py"
+            ],
+            "physical_closeout_ready": false
+        },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_batch_payload_metadata_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_task_payload_metadata_owner_is_rust_only_and_surviving_python_schema_runtime_surfaces_are_tracked_by_shared_task_contracts",
             "cutover_gate": "same_round_focused_rust_validation_and_following_parent_aggregator_reexport"
         }
     })

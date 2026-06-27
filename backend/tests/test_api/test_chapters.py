@@ -12,30 +12,74 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from app.api import chapters as chapters_api
-from app.api import chapter_analysis_routes as chapter_analysis_routes_api
-from app.api import chapter_analysis_task_routes as chapter_analysis_task_routes_api
-from app.api import chapter_annotation_routes as chapter_annotation_routes_api
-from app.api import chapter_crud_routes as chapter_crud_routes_api
-from app.api import chapter_draft_routes as chapter_draft_routes_api
-from app.api import chapter_expansion_plan_routes as chapter_expansion_plan_routes_api
-from app.api import chapter_partial_regeneration_routes as chapter_partial_regeneration_routes_api
-from app.api import chapter_regeneration_routes as chapter_regeneration_routes_api
-import app.database as app_database
-from app.database import Base, get_db as app_get_db
-from app.models.analysis_task import AnalysisTask
-from app.models.batch_generation_snapshot import BatchGenerationSnapshot
-from app.models.batch_generation_task import BatchGenerationTask
-from app.models.chapter import Chapter
-from app.models.chapter_draft_attempt import ChapterDraftAttempt
-from app.models.generation_history import GenerationHistory
-from app.models.memory import PlotAnalysis, StoryMemory
-from app.models.outline import Outline
-from app.models.project import Project
-from app.models.regeneration_task import RegenerationTask
-from app.services import batch_generation_run_wiring_service
-from app.services import batch_generation_single_chapter_entry_service
-from app.services.chapter_quality_context_service import StoryPacket
+import tests.test_support.database_test_support as app_database
+from tests.test_support.database_test_support import Base, get_db as app_get_db
+from migrator_app.models import PlotAnalysis, StoryMemory
+from migrator_app.models.analysis_task import AnalysisTask
+from migrator_app.models.batch_generation_snapshot import BatchGenerationSnapshot
+from migrator_app.models.batch_generation_task import BatchGenerationTask
+from migrator_app.models.chapter import Chapter
+from migrator_app.models import ChapterDraftAttempt, GenerationHistory
+from migrator_app.models.outline import Outline
+from migrator_app.models.project import Project
+from migrator_app.models.regeneration_task import RegenerationTask
+from tests.test_support.task_quality_snapshot_test_support import (
+    record_task_quality_metrics,
+    task_quality_metrics_cache,
+)
+from tests.test_support.task_system.snapshot_runtime_persistence import (
+    upsert_batch_generation_snapshot,
+)
+from tests.test_support.task_system import (
+    publish_task_stream_event,
+    set_task_active_story_repair_payload,
+    workflow_runtime_state_store,
+)
+from tests.test_support import (
+    batch_generation_single_chapter_wiring_test_adapter as batch_generation_single_chapter_entry_service,
+)
+from tests.test_support import (
+    chapter_annotation_route_test_adapter as chapter_annotation_routes_api,
+)
+from tests.test_support import (
+    chapter_crud_route_test_adapter as chapter_crud_routes_api,
+)
+from tests.test_support import (
+    chapter_expansion_plan_route_test_adapter as chapter_expansion_plan_routes_api,
+)
+from tests.test_support.manual_chapter_analysis_execution_test_support import (
+    PromptService as ChapterAnalysisPromptService,
+    build_checker_history_payload,
+    build_reviser_history_payload,
+    run_chapter_text_reviser,
+)
+from tests.test_support.chapter_generated_text_test_support import (
+    contains_chapter_workflow_meta_text,
+    sanitize_generated_narrative_text,
+)
+from tests.test_support.chapter_generation_history_test_support import (
+    _build_candidate_draft_quality_highlights,
+    build_generation_history_payload,
+)
+from tests.test_support.single_generation_stream_entry_test_adapter import (
+    _generate_best_ranked_candidate,
+)
+from tests.test_support import (
+    batch_generation_run_wiring_test_adapter as batch_generation_run_wiring_service,
+)
+from tests.test_support import (
+    chapter_regeneration_route_test_adapter as chapter_regeneration_routes_api,
+)
+from tests.test_support.chapter_generation_runtime_prompt_test_support import (
+    build_chapter_runtime_system_prompt,
+    resolve_generation_temperature,
+)
+from tests.test_support.schemas.novel_quality_rules import detect_style_profile
+from tests.test_support.story_writing_style_test_support import WritingStyleManager
+from tests.test_support.story_quality_metrics_aggregation_test_support import (
+    compute_story_quality_metrics,
+)
+from tests.test_support import chapter_analysis_route_test_adapter as chapter_analysis_routes_api
 
 from tests.test_api.chapters_test_support import (
     _build_quality_history_payload,
@@ -51,6 +95,42 @@ from tests.test_api.chapters_test_support import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+def _assert_story_packet_like(value: Any) -> None:
+    assert hasattr(value, "guidance")
+    assert hasattr(value, "blueprint")
+    assert callable(getattr(value, "to_runtime_contract", None))
+    assert callable(getattr(value, "build_prompt_quality_kwargs", None))
+
+task_workflow_lock = workflow_runtime_state_store.lock
+task_workflow_state_cache = workflow_runtime_state_store.cache
+_set_task_active_story_repair_payload = set_task_active_story_repair_payload
+
+chapters_api = SimpleNamespace(
+    Lock=asyncio.Lock,
+    chapter_text_reviser_template=ChapterAnalysisPromptService.CHAPTER_TEXT_REVISER,
+    get_analysis_template=ChapterAnalysisPromptService.get_template,
+    WritingStyleManager=WritingStyleManager,
+    _build_chapter_runtime_system_prompt=build_chapter_runtime_system_prompt,
+    _detect_style_profile=detect_style_profile,
+    _resolve_generation_temperature=resolve_generation_temperature,
+    _build_candidate_draft_quality_highlights=_build_candidate_draft_quality_highlights,
+    compute_story_quality_metrics=compute_story_quality_metrics,
+    _contains_chapter_workflow_meta_text=contains_chapter_workflow_meta_text,
+    _sanitize_generated_narrative_text=sanitize_generated_narrative_text,
+    _build_generation_history_payload=build_generation_history_payload,
+    _build_checker_history_payload=build_checker_history_payload,
+    _build_reviser_history_payload=build_reviser_history_payload,
+    _generate_best_ranked_candidate=_generate_best_ranked_candidate,
+    _run_chapter_text_reviser=run_chapter_text_reviser,
+    publish_task_stream_event=publish_task_stream_event,
+    _record_task_quality_metrics=record_task_quality_metrics,
+    _set_task_active_story_repair_payload=_set_task_active_story_repair_payload,
+    task_quality_metrics_cache=task_quality_metrics_cache,
+    task_workflow_lock=task_workflow_lock,
+    task_workflow_state_cache=task_workflow_state_cache,
+)
 
 
 
@@ -189,6 +269,7 @@ async def test_should_delegate_create_chapter_workflow(
     async def fake_create_chapter_record(**kwargs):
         captured.update(kwargs)
         payload = kwargs['chapter_create']
+        captured['project_id'] = kwargs['project'].id
         return {
             'id': 'crud-create-route',
             'project_id': kwargs['project'].id,
@@ -225,7 +306,7 @@ async def test_should_delegate_create_chapter_workflow(
 
     assert response.status_code == 200
     assert response.json()['id'] == 'crud-create-route'
-    assert captured['project'].id == project.id
+    assert captured['project_id'] == project.id
     assert captured['db_session'] is not None
     assert captured['chapter_create'].title == 'delegated create'
 
@@ -250,6 +331,7 @@ async def test_should_delegate_update_chapter_workflow(
 
     async def fake_update_chapter_record(**kwargs):
         captured.update(kwargs)
+        captured['chapter_id'] = kwargs['chapter'].id
         return {
             'id': kwargs['chapter'].id,
             'project_id': kwargs['chapter'].project_id,
@@ -281,7 +363,7 @@ async def test_should_delegate_update_chapter_workflow(
 
     assert response.status_code == 200
     assert response.json()['title'] == 'delegated update'
-    assert captured['chapter'].id == chapter.id
+    assert captured['chapter_id'] == chapter.id
     assert captured['db_session'] is not None
     assert captured['chapter_update'].title == 'delegated update'
 
@@ -305,6 +387,7 @@ async def test_should_delegate_delete_chapter_workflow(
 
     async def fake_delete_chapter_record(**kwargs):
         captured.update(kwargs)
+        captured['chapter_id'] = kwargs['chapter'].id
         return {'success': True}
 
     monkeypatch.setattr(
@@ -317,7 +400,7 @@ async def test_should_delegate_delete_chapter_workflow(
 
     assert response.status_code == 200
     assert response.json()['success'] is True
-    assert captured['chapter'].id == chapter.id
+    assert captured['chapter_id'] == chapter.id
     assert captured['user_id'] == mock_user.user_id
     assert captured['db_session'] is not None
 
@@ -342,6 +425,7 @@ async def test_should_delegate_chapter_navigation_query(
 
     async def fake_load_chapter_navigation_payload(**kwargs):
         captured.update(kwargs)
+        captured['current_chapter_id'] = kwargs['current_chapter'].id
         return {
             'current': {'id': chapter.id, 'chapter_number': 2, 'title': 'delegated nav current'},
             'previous': None,
@@ -358,7 +442,7 @@ async def test_should_delegate_chapter_navigation_query(
 
     assert response.status_code == 200
     assert response.json()['current']['id'] == chapter.id
-    assert captured['current_chapter'].id == chapter.id
+    assert captured['current_chapter_id'] == chapter.id
     assert captured['db_session'] is not None
 
 
@@ -733,12 +817,12 @@ async def test_generate_single_chapter_for_batch_should_build_runtime_context_wi
         fake_resolve_chapter_quality_profile,
     )
     monkeypatch.setattr(
-        batch_generation_single_chapter_entry_service.PromptService,
+        batch_generation_single_chapter_entry_service,
         "get_template",
         fake_get_template,
     )
     monkeypatch.setattr(
-        batch_generation_single_chapter_entry_service.PromptService,
+        batch_generation_single_chapter_entry_service,
         "format_prompt",
         fake_format_prompt,
     )
@@ -910,12 +994,12 @@ async def test_generate_single_chapter_for_batch_should_inject_web_research_grou
         fake_resolve_chapter_quality_profile,
     )
     monkeypatch.setattr(
-        batch_generation_single_chapter_entry_service.PromptService,
+        batch_generation_single_chapter_entry_service,
         "get_template",
         fake_get_template,
     )
     monkeypatch.setattr(
-        batch_generation_single_chapter_entry_service.PromptService,
+        batch_generation_single_chapter_entry_service,
         "format_prompt",
         fake_format_prompt,
     )
@@ -1020,7 +1104,7 @@ async def test_should_forward_creative_mode_to_batch_background_generation(
 
     monkeypatch.setattr(
         batch_generation_run_wiring_service,
-        "execute_batch_generation_in_order_with_entry_service_seams",
+        "execute_batch_generation_in_order_with_default_wiring",
         fake_execute_batch_generation,
     )
 
@@ -1065,7 +1149,7 @@ async def test_should_forward_creative_mode_to_batch_background_generation(
     )
 
     assert response.status_code == 200
-    assert isinstance(captured["story_packet"], StoryPacket)
+    _assert_story_packet_like(captured["story_packet"])
     assert captured["story_packet"].guidance.creative_mode == "payoff"
     assert captured["story_packet"].guidance.story_focus == "foreshadow_payoff"
     assert captured["story_packet"].guidance.plot_stage == "ending"
@@ -1085,7 +1169,7 @@ async def test_should_forward_web_research_settings_for_batch_background_generat
 
     monkeypatch.setattr(
         batch_generation_run_wiring_service,
-        "execute_batch_generation_in_order_with_entry_service_seams",
+        "execute_batch_generation_in_order_with_default_wiring",
         fake_execute_batch_generation,
     )
 
@@ -1140,7 +1224,7 @@ async def test_should_fallback_to_project_generation_defaults_for_batch_backgrou
 
     monkeypatch.setattr(
         batch_generation_run_wiring_service,
-        "execute_batch_generation_in_order_with_entry_service_seams",
+        "execute_batch_generation_in_order_with_default_wiring",
         fake_execute_batch_generation,
     )
 
@@ -1182,7 +1266,7 @@ async def test_should_fallback_to_project_generation_defaults_for_batch_backgrou
     )
 
     assert response.status_code == 200
-    assert isinstance(captured["story_packet"], StoryPacket)
+    _assert_story_packet_like(captured["story_packet"])
     assert captured["story_packet"].guidance.creative_mode == "hook"
     assert captured["story_packet"].guidance.story_focus == "advance_plot"
     assert captured["story_packet"].guidance.plot_stage == "development"
@@ -1223,17 +1307,17 @@ async def test_should_skip_snapshot_commit_when_payload_is_unchanged(
 
         monkeypatch.setattr(session, "commit", counted_commit)
 
-        await chapters_api._upsert_batch_generation_snapshot(
+        await upsert_batch_generation_snapshot(
             session,
             task.id,
             workflow_runtime_state={"phase": "loading", "progress": 5},
         )
-        await chapters_api._upsert_batch_generation_snapshot(
+        await upsert_batch_generation_snapshot(
             session,
             task.id,
             workflow_runtime_state={"phase": "loading", "progress": 5},
         )
-        await chapters_api._upsert_batch_generation_snapshot(
+        await upsert_batch_generation_snapshot(
             session,
             task.id,
             workflow_runtime_state={"phase": "generating", "progress": 35},
@@ -1548,7 +1632,7 @@ async def test_should_forward_creative_mode_to_single_background_generation(
 
     monkeypatch.setattr(
         batch_generation_run_wiring_service,
-        "execute_batch_generation_in_order_with_entry_service_seams",
+        "execute_batch_generation_in_order_with_default_wiring",
         fake_execute_batch_generation,
     )
 
@@ -1583,7 +1667,7 @@ async def test_should_forward_creative_mode_to_single_background_generation(
     )
 
     assert response.status_code == 200
-    assert isinstance(captured["story_packet"], StoryPacket)
+    _assert_story_packet_like(captured["story_packet"])
     assert captured["story_packet"].guidance.creative_mode == "suspense"
     assert captured["story_packet"].guidance.story_focus == "reveal_mystery"
     assert captured["story_packet"].guidance.plot_stage == "climax"
@@ -1609,7 +1693,7 @@ async def test_should_forward_web_research_settings_to_single_background_generat
 
     monkeypatch.setattr(
         batch_generation_run_wiring_service,
-        "execute_batch_generation_in_order_with_entry_service_seams",
+        "execute_batch_generation_in_order_with_default_wiring",
         fake_execute_batch_generation,
     )
 
@@ -1656,7 +1740,7 @@ async def test_should_auto_fill_story_repair_payload_from_chapter_quality_histor
 
     monkeypatch.setattr(
         batch_generation_run_wiring_service,
-        "execute_batch_generation_in_order_with_entry_service_seams",
+        "execute_batch_generation_in_order_with_default_wiring",
         fake_execute_batch_generation,
     )
 
@@ -1737,7 +1821,7 @@ async def test_should_merge_manual_story_repair_summary_with_history_fallback_fo
 
     monkeypatch.setattr(
         batch_generation_run_wiring_service,
-        "execute_batch_generation_in_order_with_entry_service_seams",
+        "execute_batch_generation_in_order_with_default_wiring",
         fake_execute_batch_generation,
     )
 
@@ -1812,7 +1896,7 @@ async def test_should_auto_fill_story_repair_payload_from_previous_chapter_histo
 
     monkeypatch.setattr(
         batch_generation_run_wiring_service,
-        "execute_batch_generation_in_order_with_entry_service_seams",
+        "execute_batch_generation_in_order_with_default_wiring",
         fake_execute_batch_generation,
     )
 
@@ -1917,7 +2001,7 @@ async def test_should_fallback_to_project_generation_defaults_for_single_backgro
 
     monkeypatch.setattr(
         batch_generation_run_wiring_service,
-        "execute_batch_generation_in_order_with_entry_service_seams",
+        "execute_batch_generation_in_order_with_default_wiring",
         fake_execute_batch_generation,
     )
 
@@ -1952,7 +2036,7 @@ async def test_should_fallback_to_project_generation_defaults_for_single_backgro
     )
 
     assert response.status_code == 200
-    assert isinstance(captured["story_packet"], StoryPacket)
+    _assert_story_packet_like(captured["story_packet"])
     assert captured["story_packet"].guidance.creative_mode == "suspense"
     assert captured["story_packet"].guidance.story_focus == "reveal_mystery"
     assert captured["story_packet"].guidance.plot_stage == "climax"
@@ -2126,15 +2210,13 @@ async def test_should_include_web_research_assets_in_regeneration_prompt_context
             "assets": fake_assets,
         }
 
-    from app.services import chapter_regeneration_context_service as chapter_regeneration_context_service
-
     monkeypatch.setattr(
         chapter_regeneration_routes_api,
         "REGENERATOR_FACTORY",
         FakeRegenerator,
     )
     monkeypatch.setattr(
-        chapter_regeneration_context_service.chapter_web_research_service,
+        chapter_regeneration_routes_api.chapter_web_research_service,
         "collect_for_chapter",
         fake_collect_for_chapter,
     )
@@ -3130,9 +3212,13 @@ async def test_should_generate_auto_revision_draft_when_only_major_issues_exist(
             }
 
     async def fake_get_template(*args, **kwargs):
-        return chapters_api.PromptService.CHAPTER_TEXT_REVISER
+        return chapters_api.chapter_text_reviser_template
 
-    monkeypatch.setattr(chapters_api.PromptService, "get_template", fake_get_template)
+    monkeypatch.setattr(
+        ChapterAnalysisPromptService,
+        "get_template",
+        fake_get_template,
+    )
 
     checker_result = {
         "severity_counts": {"critical": 0, "major": 2, "minor": 1},

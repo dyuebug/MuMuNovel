@@ -209,14 +209,7 @@ pub(crate) fn build_chapter_analysis_service_owner_contract() -> Value {
     json!({
         "owner": "chapter_analysis_service",
         "scope": "chapter_analysis_task_state_read_context_and_draft_source_handoff",
-        "python_source_map": [
-            "backend/app/api/chapter_analysis_routes.py",
-            "backend/app/api/chapter_analysis_task_routes.py",
-            "backend/app/services/analysis_task_query_service.py",
-            "backend/app/services/analysis_task_status_service.py",
-            "backend/app/services/manual_chapter_analysis_service.py",
-            "backend/app/services/chapter_generation_history_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_analysis_service.rs",
             "backend-rs/src/services/chapter_analysis_runtime_service.rs",
@@ -254,13 +247,13 @@ pub(crate) fn build_chapter_analysis_service_owner_contract() -> Value {
             "task_state_owner": "chapter_analysis_service",
             "draft_read_context_owner": "chapter_analysis_service",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit_python_source_map_freeze_delete_or_repoint_approval",
-            "status": "rust_service_runtime_owner_closeout_ready_python_source_map_pending"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "chapter-analysis task query/status source-map package deleted; chapter generation history source-map review is also closed out",
+            "status": "rust_service_runtime_owner_with_deleted_python_source_map"
         },
         "rollback_boundary": {
-            "python_source_map_retained": true,
-            "approval_required_before_python_edit": true
+            "python_source_map_retained": false,
+            "approval_required_before_python_edit": false
         }
     })
 }
@@ -365,7 +358,7 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
     }
 

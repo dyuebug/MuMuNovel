@@ -39,14 +39,7 @@ pub(crate) fn build_batch_generation_startup_and_command_projection_owner_contra
     json!({
         "owner": "chapter_batch_generation_runtime_state_service::startup_cancel_resume_task_payload_projection",
         "scope": "queued_startup_snapshot_cancel_persistence_resume_reset_and_task_response_projection",
-        "python_source_map": [
-            "backend/app/api/chapter_batch_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/batch_generation_orchestration_service.py",
-            "backend/app/services/batch_generation/resume_service.py",
-            "backend/app/services/batch_generation/query_service.py",
-            "backend/app/services/task_workflow_runtime_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service/startup_and_command_projection_owner.rs",
@@ -119,7 +112,7 @@ pub(crate) fn build_batch_generation_startup_and_command_projection_owner_contra
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_batch_startup_cancel_resume_query_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_startup_command_projection_owner_is_rust_only_and_surviving_startup_cancel_resume_surfaces_are_tracked_by_external_route_contracts",
             "runtime_state_keys": [
                 "candidate_gateway",
                 "checkpoint",

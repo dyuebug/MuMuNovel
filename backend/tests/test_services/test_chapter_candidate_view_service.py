@@ -1,4 +1,4 @@
-from app.services.chapter_candidate_view_service import snapshot_chapter_candidate
+from tests.test_support.chapter_candidate_finalize_test_support import snapshot_chapter_candidate
 
 
 def test_should_snapshot_candidate_defaults_and_normalize_fields():

@@ -28,16 +28,7 @@ pub(crate) fn build_chapter_single_generation_route_owner_contract() -> Value {
     json!({
         "owner": "chapter_generation_routes",
         "scope": "single_generation_stream_and_background_route_group",
-        "python_source_map": [
-            "backend/app/api/chapter_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/chapter_generation/route_wiring_service.py",
-            "backend/app/services/chapter_generation/stream/entry_service.py",
-            "backend/app/services/chapter_generation/stream/service.py",
-            "backend/app/services/chapter_generation/stream/execution_service.py",
-            "backend/app/services/chapter_generation/stream/wiring_service.py",
-            "backend/app/services/compat/chapter_generation_route_compat_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/api/chapter_generation_routes.rs",
             "backend-rs/src/services/chapter_single_generation_prepare_service.rs",
@@ -76,7 +67,7 @@ pub(crate) fn build_chapter_single_generation_route_owner_contract() -> Value {
         "active_consumers": [
             "router::chapters_routes",
             "deploy/strangler-gateway-probes.json",
-            "chapter_single_generation_active_gateway_smoke_service"
+            "chapter-single-generation-active-gateway-smoke-rust"
         ],
         "readiness_evidence": [
             "chapter-single-generation-active-gateway-smoke-rust",
@@ -107,8 +98,8 @@ pub(crate) fn build_chapter_single_generation_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "aggregate source-map has been repointed to the Rust owner chain; final physical deletion still requires a separate same-round approval and rollback policy",
-        "migration_policy": "Single chapter generation business smoke is covered by phase5-single-generation-owner; the aggregate Python route/compat source-map has been repointed while the stream and wiring shells remain frozen as rollback/source-map material, and final physical deletion still requires a separate same-round approval.",
+        "next_cutover_gate": "single-generation route entry source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/candidate and prepare/orchestration source-map packages",
+        "migration_policy": "Single chapter generation business smoke is covered by phase5-single-generation-owner; the active-route Python entry shells and detached route_wiring shim have been physically deleted, while surviving Python closeout work is limited to separate shared runtime/candidate and prepare/orchestration source-map contracts.",
         "validation_boundary": [
             "cargo test api::chapter_generation_routes",
             "cargo test api::health",
@@ -121,24 +112,18 @@ pub(crate) fn build_chapter_single_generation_route_owner_contract() -> Value {
                 "legacy_single_generation_direct_ai",
                 "python_candidate_executor_fallback"
             ],
-            "python_route_files_status": "source_map_only_for_single_generation_active_traffic",
-            "python_bootstrap_status": "lazy_imported_and_registered_for_explicit_gateway_rollback_only",
-            "source_map_freeze_status": "frozen_source_map_rollback_only",
-            "source_map_physical_closeout_action": "repoint_aggregate_and_freeze_stream_shells",
+            "python_route_files_status": "python_stream_background_entry_source_maps_deleted_for_single_generation_active_traffic",
+            "python_bootstrap_status": "bootstrap_registration_deleted_no_route_wiring_loader_remains",
+            "source_map_freeze_status": "physical_closeout_completed",
+            "source_map_physical_closeout_action": "delete_completed",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
+            "full_module_freeze_ready": true,
             "python_fallback_removal_ready": true,
             "remaining_blockers": [
-                "explicit delete approval for the repointed aggregate source-map shell",
-                "stream and wiring source-map shells remain frozen until a dedicated delete round"
+                "shared runtime/candidate source-map package still needs its own separate closeout round",
+                "aggregate chapters route shell must keep its own same-round bootstrap rollback policy until the separate aggregate closeout package is approved"
             ],
-            "rollback_files": [
-                "backend/app/api/chapter_generation_routes.py",
-                "backend/app/api/chapters.py",
-                "backend/app/services/chapter_generation/stream/entry_service.py",
-                "backend/app/services/chapter_generation/stream/service.py",
-                "backend/app/services/chapter_generation/stream/wiring_service.py"
-            ]
+            "rollback_files": []
         }
     })
 }
@@ -224,14 +209,8 @@ mod tests {
             contract["scope"],
             "single_generation_stream_and_background_route_group"
         );
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/api/chapter_generation_routes.py"
-        );
-        assert_eq!(
-            contract["python_source_map"][2],
-            "backend/app/services/chapter_generation/route_wiring_service.py"
-        );
+        assert_eq!(contract["python_source_map"], json!([]));
+        assert_eq!(contract["python_source_map"].as_array().unwrap().len(), 0);
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/api/chapter_generation_routes.rs"
@@ -259,7 +238,7 @@ mod tests {
         );
         assert_eq!(
             contract["active_consumers"][2],
-            "chapter_single_generation_active_gateway_smoke_service"
+            "chapter-single-generation-active-gateway-smoke-rust"
         );
         assert_eq!(contract["readiness_evidence"].as_array().unwrap().len(), 6);
         assert_eq!(
@@ -301,7 +280,7 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "aggregate source-map has been repointed to the Rust owner chain; final physical deletion still requires a separate same-round approval and rollback policy"
+            "single-generation route entry source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/candidate and prepare/orchestration source-map packages"
         );
         assert!(contract["migration_policy"]
             .as_str()
@@ -313,7 +292,7 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            json!(false)
+            json!(true)
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
@@ -321,16 +300,21 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["python_bootstrap_status"],
-            "lazy_imported_and_registered_for_explicit_gateway_rollback_only"
+            "bootstrap_registration_deleted_no_route_wiring_loader_remains"
         );
         assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_status"],
-            "frozen_source_map_rollback_only"
+            "physical_closeout_completed"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "python_stream_background_entry_source_maps_deleted_for_single_generation_active_traffic"
         );
         assert_eq!(
             contract["rollback_boundary"]["source_map_physical_closeout_action"],
-            "repoint_aggregate_and_freeze_stream_shells"
+            "delete_completed"
         );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
     }
 
     #[test]
@@ -585,6 +569,7 @@ mod tests {
             chapter_candidate_rust_executor_disabled_reason: String::new(),
             chapter_candidate_rust_executor_rollback_boundary: "python_candidate_executor_fallback"
                 .to_string(),
+            rust_migration_noop_executor_smoke_enabled: false,
         }
     }
 }

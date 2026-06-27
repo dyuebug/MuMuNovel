@@ -1,4 +1,4 @@
-from app.services.chapter_candidate_record_service import (
+from tests.test_support.chapter_candidate_executor_test_support import (
     ChapterCandidateRecordRequest,
     build_generation_candidate_record,
 )

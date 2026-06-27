@@ -118,13 +118,7 @@ pub(crate) fn build_single_generation_write_workflow_runtime_owner_contract() ->
     json!({
         "owner": "chapter_single_generation_runtime_restore_workflow_service::write_workflow_owner",
         "scope": "single_generation_background_write_existing_task_check_launch_and_dispatch",
-        "python_source_map": [
-            "backend/app/api/chapter_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/chapter_generation/route_wiring_service.py",
-            "backend/app/services/chapter_generation/stream/entry_service.py",
-            "backend/app/services/chapter_generation/stream/wiring_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_single_generation_runtime_restore_workflow_service.rs",
             "backend-rs/src/services/chapter_single_generation_runtime_restore_workflow_service/write_workflow_owner.rs",

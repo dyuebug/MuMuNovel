@@ -1,0 +1,2090 @@
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass, field, replace
+from datetime import datetime
+from functools import cached_property
+import importlib
+import json
+import re
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Sequence
+
+from sqlalchemy import event, func, or_, select
+from sqlalchemy.orm import Session
+
+from migrator_app.models.chapter import Chapter
+from migrator_app.models.career import Career, CharacterCareer
+from migrator_app.models.character import Character
+from migrator_app.models.memory_analysis import PlotAnalysis, StoryMemory
+from migrator_app.models.organization import Organization
+from migrator_app.models.relationship import CharacterRelationship
+from tests.test_support.retired_runtime_test_support import get_logger
+from tests.test_support.story_generation_guidance_test_support import (
+    STORY_GUIDANCE_FIELD_NAMES,
+    StoryGenerationGuidance,
+    extract_story_guidance_overrides,
+    normalize_story_guidance_values,
+    read_story_guidance_value,
+    resolve_project_generation_defaults,
+    resolve_story_generation_guidance,
+)
+from tests.test_support.story_style_profile_test_support import (
+    LOW_AI_PRESET_DEFINITIONS,
+    clone_chapter_quality_profile,
+    resolve_chapter_quality_profile,
+    resolve_effective_style_context,
+    resolve_project_default_style_id,
+    sync_low_ai_presets,
+)
+from tests.test_support.story_repair_payload_test_support import (
+    StoryRepairPayload,
+    merge_story_repair_payload,
+    normalize_story_repair_payload,
+    resolve_story_repair_prompt_kwargs,
+    story_repair_payload_to_prompt_kwargs,
+)
+from tests.test_support.schemas.novel_quality_rules import (
+    detect_genre_profiles,
+    detect_style_profile,
+)
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from migrator_app.models.project import Project
+
+
+logger = get_logger(__name__)
+
+def __getattr__(name: str) -> Any:
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+_STORY_PROMPT_BLOCK_FUNCTIONS = (
+    "build_creative_mode_block",
+    "build_narrative_blueprint_block",
+    "build_quality_preference_block",
+    "build_story_career_state_ledger_block",
+    "build_story_character_focus_anchor_block",
+    "build_story_character_state_ledger_block",
+    "build_story_creation_brief_block",
+    "build_story_focus_block",
+    "build_story_foreshadow_payoff_plan_block",
+    "build_story_foreshadow_state_ledger_block",
+    "build_story_long_term_goal_block",
+    "build_story_organization_state_ledger_block",
+    "build_story_pacing_budget_block",
+    "build_story_quality_trend_block",
+    "build_story_relationship_state_ledger_block",
+    "build_story_repair_target_block",
+    "build_volume_pacing_block",
+    "normalize_plot_stage",
+    "normalize_story_focus",
+)
+
+
+def _story_prompt_block_attr(name: str) -> Any:
+    story_prompt_block_test_support = importlib.import_module(
+        "tests.test_support.story_prompt_block_test_support"
+    )
+
+    return getattr(story_prompt_block_test_support, name)
+
+
+def _lazy_story_prompt_block_function(name: str):
+    def _call(*args: Any, **kwargs: Any) -> Any:
+        return _story_prompt_block_attr(name)(*args, **kwargs)
+
+    _call.__name__ = name
+    _call.__qualname__ = name
+    _call.__doc__ = f"Lazy compatibility proxy for story_prompt_block_service.{name}."
+    return _call
+
+
+for _story_prompt_block_function_name in _STORY_PROMPT_BLOCK_FUNCTIONS:
+    globals()[_story_prompt_block_function_name] = _lazy_story_prompt_block_function(
+        _story_prompt_block_function_name
+    )
+del _story_prompt_block_function_name
+
+
+StoryRuntimeLedgerItem = str | Dict[str, Any]
+StoryRuntimePlanItem = str | Dict[str, Any]
+STORY_PACKET_RUNTIME_CONTRACT_VERSION = 1
+STORY_REPAIR_SOURCE_PROMPT_LABELS: Dict[str, str] = {
+    "manual_request": "手动要求",
+    "current_chapter_quality": "当前章节质量",
+    "recent_history_summary": "近期质量趋势",
+    "manual_plus_current_chapter_quality": "手动要求 + 当前章节质量",
+    "manual_plus_recent_history_summary": "手动要求 + 近期质量趋势",
+}
+STORY_REPAIR_FOCUS_PROMPT_LABELS: Dict[str, str] = {
+    "conflict": "冲突链推进",
+    "rule_grounding": "规则落地",
+    "outline": "大纲贴合",
+    "dialogue": "对白自然度",
+    "opening": "开场钩子",
+    "payoff": "回报兑现",
+    "cliffhanger": "章尾牵引",
+    "pacing": "节奏稳定度",
+}
+STORY_REPAIR_QUALITY_SIGNAL_SOURCES = {
+    "current_chapter_quality",
+    "recent_history_summary",
+    "manual_plus_current_chapter_quality",
+    "manual_plus_recent_history_summary",
+}
+STORY_REPAIR_ACTION_GUIDANCE_DEFAULTS: Dict[str, Dict[str, str]] = {
+    "rewrite_opening": {
+        "creative_mode": "hook",
+        "story_focus": "advance_plot",
+        "quality_preset": "plot_drive",
+        "story_creation_brief": "本轮优先重写开场钩子，尽快建立目标、悬念与冲突牵引。",
+        "quality_notes": "强化开篇吸引力，确保前三段交代目标、阻力与读者期待。",
+    },
+    "strengthen_dialogue": {
+        "creative_mode": "relationship",
+        "story_focus": "relationship_shift",
+        "quality_preset": "emotion_drama",
+        "story_creation_brief": "本轮用对话推进关系变化，让冲突、试探与态度转折更可感。",
+        "quality_notes": "提高对白张力与潜台词密度，让人物关系通过说话方式和行动反馈显性化。",
+    },
+    "patch_payoff": {
+        "creative_mode": "payoff",
+        "story_focus": "foreshadow_payoff",
+        "quality_preset": "plot_drive",
+        "story_creation_brief": "本轮优先补强伏笔兑现，让前文承诺在关键节点得到回应或反转。",
+        "quality_notes": "强化回报兑现与因果闭环，明确伏笔触发、兑现结果与情绪释放。",
+    },
+    "bridge_scene": {
+        "creative_mode": "suspense",
+        "story_focus": "advance_plot",
+        "quality_preset": "plot_drive",
+        "story_creation_brief": "本轮补桥关键场景，把剧情推进、角色状态变化与章节衔接写扎实。",
+        "quality_notes": "强化场景衔接与推进效率，确保目标、行动、阻碍和结果完整落地。",
+    },
+    "grounding_pass": {
+        "creative_mode": "balanced",
+        "quality_preset": "immersive",
+        "story_creation_brief": "本轮先校准设定落地，让规则、组织、职业与资源约束真正进入情节。",
+        "quality_notes": "强化设定约束在动作、对话和结果中的体现，避免信息悬空。",
+    },
+}
+STORY_REPAIR_ACTION_MODE_FALLBACKS: Dict[str, str] = {
+    "rewrite": "rewrite_opening",
+    "dialogue": "strengthen_dialogue",
+    "payoff": "patch_payoff",
+    "bridge": "bridge_scene",
+    "grounding": "grounding_pass",
+}
+
+@dataclass(frozen=True)
+class StoryBlueprint:
+    long_term_goal: Optional[str] = None
+    chapter_count: Optional[int] = None
+    current_chapter_number: Optional[int] = None
+    target_word_count: Optional[int] = None
+    character_focus_names: tuple[str, ...] = ()
+    foreshadow_payoff_plan: tuple[StoryRuntimePlanItem, ...] = ()
+    character_state_ledger: tuple[StoryRuntimeLedgerItem, ...] = ()
+    relationship_state_ledger: tuple[StoryRuntimeLedgerItem, ...] = ()
+    foreshadow_state_ledger: tuple[StoryRuntimeLedgerItem, ...] = ()
+    organization_state_ledger: tuple[StoryRuntimeLedgerItem, ...] = ()
+    career_state_ledger: tuple[StoryRuntimeLedgerItem, ...] = ()
+
+    @classmethod
+    def from_runtime_contract(
+        cls,
+        values: Optional[Mapping[str, Any]] = None,
+    ) -> "StoryBlueprint":
+        payload = values or {}
+        return cls(
+            long_term_goal=_normalize_optional_text(payload.get("long_term_goal")),
+            chapter_count=_normalize_optional_int(payload.get("chapter_count")),
+            current_chapter_number=_normalize_optional_int(payload.get("current_chapter_number")),
+            target_word_count=_normalize_optional_int(payload.get("target_word_count")),
+            character_focus_names=_normalize_string_sequence(payload.get("character_focus_names"), limit=4),
+            foreshadow_payoff_plan=_normalize_story_runtime_plan_items(payload.get("foreshadow_payoff_plan"), limit=3),
+            character_state_ledger=_normalize_story_runtime_ledger_items(payload.get("character_state_ledger"), limit=4),
+            relationship_state_ledger=_normalize_story_runtime_ledger_items(payload.get("relationship_state_ledger"), limit=4),
+            foreshadow_state_ledger=_normalize_story_runtime_ledger_items(payload.get("foreshadow_state_ledger"), limit=4),
+            organization_state_ledger=_normalize_story_runtime_ledger_items(payload.get("organization_state_ledger"), limit=4),
+            career_state_ledger=_normalize_story_runtime_ledger_items(payload.get("career_state_ledger"), limit=4),
+        )
+
+    def to_runtime_contract(self) -> Dict[str, Any]:
+        return {
+            "long_term_goal": self.long_term_goal,
+            "chapter_count": self.chapter_count,
+            "current_chapter_number": self.current_chapter_number,
+            "target_word_count": self.target_word_count,
+            "character_focus_names": list(self.character_focus_names),
+            "foreshadow_payoff_plan": list(self.foreshadow_payoff_plan),
+            "character_state_ledger": list(self.character_state_ledger),
+            "relationship_state_ledger": list(self.relationship_state_ledger),
+            "foreshadow_state_ledger": list(self.foreshadow_state_ledger),
+            "organization_state_ledger": list(self.organization_state_ledger),
+            "career_state_ledger": list(self.career_state_ledger),
+        }
+
+    def to_prompt_fields(self) -> Dict[str, Any]:
+        return {
+            "story_long_term_goal": self.long_term_goal or "",
+            "chapter_count": self.chapter_count or "",
+            "current_chapter_number": self.current_chapter_number or "",
+            "target_word_count": self.target_word_count or "",
+            "story_character_focus": list(self.character_focus_names),
+            "story_foreshadow_payoff_plan": list(_stringify_story_runtime_items(self.foreshadow_payoff_plan, limit=3)),
+            "story_character_state_ledger": list(_stringify_story_runtime_items(self.character_state_ledger, limit=4)),
+            "story_relationship_state_ledger": list(_stringify_story_runtime_items(self.relationship_state_ledger, limit=4)),
+            "story_foreshadow_state_ledger": list(_stringify_story_runtime_items(self.foreshadow_state_ledger, limit=4)),
+            "story_organization_state_ledger": list(_stringify_story_runtime_items(self.organization_state_ledger, limit=4)),
+            "story_career_state_ledger": list(_stringify_story_runtime_items(self.career_state_ledger, limit=4)),
+        }
+
+
+@dataclass(frozen=True)
+class StoryPacket:
+    guidance: StoryGenerationGuidance
+    request_overrides: Dict[str, Optional[str]] = field(default_factory=dict)
+    source: Optional[str] = None
+    blueprint: StoryBlueprint = field(default_factory=StoryBlueprint)
+
+    @classmethod
+    def from_runtime_contract(
+        cls,
+        values: Optional[Mapping[str, Any]] = None,
+    ) -> "StoryPacket":
+        payload = values or {}
+        guidance_payload = payload.get("guidance") if isinstance(payload.get("guidance"), Mapping) else {}
+        request_overrides = payload.get("request_overrides") if isinstance(payload.get("request_overrides"), Mapping) else {}
+        blueprint_payload = payload.get("blueprint") if isinstance(payload.get("blueprint"), Mapping) else {}
+        return cls.from_guidance(
+            StoryGenerationGuidance.from_generation_kwargs(guidance_payload),
+            request_overrides=request_overrides,
+            source=_normalize_optional_text(payload.get("source")),
+            blueprint=StoryBlueprint.from_runtime_contract(blueprint_payload),
+        )
+
+    @classmethod
+    def from_guidance(
+        cls,
+        guidance: StoryGenerationGuidance,
+        *,
+        request_overrides: Optional[Mapping[str, Any]] = None,
+        source: Optional[str] = None,
+        blueprint: Optional[StoryBlueprint] = None,
+    ) -> "StoryPacket":
+        normalized_overrides = normalize_story_guidance_values(
+            request_overrides or {}
+        )
+        return cls(
+            guidance=guidance,
+            request_overrides={
+                field_name: value
+                for field_name, value in normalized_overrides.items()
+                if value is not None
+            },
+            source=source,
+            blueprint=blueprint or StoryBlueprint(),
+        )
+
+    def with_blueprint(
+        self,
+        *,
+        long_term_goal: Optional[str] = None,
+        chapter_count: Optional[int] = None,
+        current_chapter_number: Optional[int] = None,
+        target_word_count: Optional[int] = None,
+        quality_metrics_summary: Optional[Mapping[str, Any]] = None,
+        character_focus_source: Optional[Any] = None,
+        foreshadow_payoff_source: Optional[Any] = None,
+        character_state_source: Optional[Any] = None,
+        relationship_state_source: Optional[Any] = None,
+        foreshadow_state_source: Optional[Any] = None,
+        organization_state_source: Optional[Any] = None,
+        career_state_source: Optional[Any] = None,
+    ) -> "StoryPacket":
+        current = self.blueprint
+        next_character_focus = _extract_story_packet_character_focus(character_focus_source)
+        next_foreshadow_payoff_plan = _extract_story_packet_foreshadow_payoff_plan(foreshadow_payoff_source)
+        next_character_state_ledger = _extract_story_packet_character_state_ledger(character_state_source)
+        next_relationship_state_ledger = _extract_story_packet_relationship_state_ledger(relationship_state_source)
+        next_foreshadow_state_ledger = _extract_story_packet_foreshadow_state_ledger(foreshadow_state_source)
+        next_organization_state_ledger = _extract_story_packet_organization_state_ledger(organization_state_source)
+        next_career_state_ledger = _extract_story_packet_career_state_ledger(career_state_source)
+        blueprint = StoryBlueprint(
+            long_term_goal=_normalize_optional_text(long_term_goal) or current.long_term_goal,
+            chapter_count=_normalize_optional_int(chapter_count) if chapter_count is not None else current.chapter_count,
+            current_chapter_number=(
+                _normalize_optional_int(current_chapter_number)
+                if current_chapter_number is not None
+                else current.current_chapter_number
+            ),
+            target_word_count=(
+                _normalize_optional_int(target_word_count)
+                if target_word_count is not None
+                else current.target_word_count
+            ),
+            character_focus_names=next_character_focus or current.character_focus_names,
+            foreshadow_payoff_plan=next_foreshadow_payoff_plan or current.foreshadow_payoff_plan,
+            character_state_ledger=next_character_state_ledger or current.character_state_ledger,
+            relationship_state_ledger=next_relationship_state_ledger or current.relationship_state_ledger,
+            foreshadow_state_ledger=next_foreshadow_state_ledger or current.foreshadow_state_ledger,
+            organization_state_ledger=next_organization_state_ledger or current.organization_state_ledger,
+            career_state_ledger=next_career_state_ledger or current.career_state_ledger,
+        )
+        return replace(self, blueprint=blueprint)
+
+    def to_prompt_fields(
+        self,
+        *,
+        exclude: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        fields = self.guidance.to_prompt_fields()
+        fields.update(self.blueprint.to_prompt_fields())
+        if exclude:
+            for key in exclude:
+                fields.pop(key, None)
+        return fields
+
+    def to_generation_kwargs(self) -> Dict[str, Optional[str]]:
+        return self.guidance.to_generation_kwargs()
+
+    def to_runtime_contract(self) -> Dict[str, Any]:
+        return {
+            "version": STORY_PACKET_RUNTIME_CONTRACT_VERSION,
+            "guidance": self.guidance.to_runtime_contract(),
+            "request_overrides": {
+                field_name: value
+                for field_name, value in self.request_overrides.items()
+                if value is not None
+            },
+            "source": self.source,
+            "blueprint": self.blueprint.to_runtime_contract(),
+        }
+
+    def build_prompt_quality_kwargs(
+        self,
+        profile: Optional[Dict[str, Any]],
+        *,
+        scene: str = "chapter",
+        story_repair_summary: Optional[str] = None,
+        story_repair_targets: Optional[list[str]] = None,
+        story_preserve_strengths: Optional[list[str]] = None,
+        active_story_repair_payload: Optional[Mapping[str, Any]] = None,
+        story_repair_payload: Optional["StoryRepairPayload"] = None,
+        chapter_count: Optional[int] = None,
+        current_chapter_number: Optional[int] = None,
+        target_word_count: Optional[int] = None,
+        quality_metrics_summary: Optional[Mapping[str, Any]] = None,
+        character_focus_source: Optional[Any] = None,
+        foreshadow_payoff_source: Optional[Any] = None,
+        character_state_source: Optional[Any] = None,
+        relationship_state_source: Optional[Any] = None,
+        foreshadow_state_source: Optional[Any] = None,
+        organization_state_source: Optional[Any] = None,
+        career_state_source: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        active_packet = self.with_blueprint(
+            chapter_count=chapter_count,
+            current_chapter_number=current_chapter_number,
+            target_word_count=target_word_count,
+            character_focus_source=character_focus_source,
+            foreshadow_payoff_source=foreshadow_payoff_source,
+            character_state_source=character_state_source,
+            relationship_state_source=relationship_state_source,
+            foreshadow_state_source=foreshadow_state_source,
+            organization_state_source=organization_state_source,
+            career_state_source=career_state_source,
+        )
+        blueprint = active_packet.blueprint
+        return build_prompt_quality_kwargs(
+            profile,
+            guidance=active_packet.guidance,
+            scene=scene,
+            story_repair_summary=story_repair_summary,
+            story_repair_targets=story_repair_targets,
+            story_preserve_strengths=story_preserve_strengths,
+            active_story_repair_payload=active_story_repair_payload,
+            story_repair_payload=story_repair_payload,
+            story_long_term_goal=blueprint.long_term_goal,
+            story_character_focus=blueprint.character_focus_names,
+            story_foreshadow_payoff_plan=blueprint.foreshadow_payoff_plan,
+            chapter_count=blueprint.chapter_count,
+            current_chapter_number=blueprint.current_chapter_number,
+            target_word_count=blueprint.target_word_count,
+            quality_metrics_summary=quality_metrics_summary,
+            story_character_state_ledger=blueprint.character_state_ledger,
+            story_relationship_state_ledger=blueprint.relationship_state_ledger,
+            story_foreshadow_state_ledger=blueprint.foreshadow_state_ledger,
+            story_organization_state_ledger=blueprint.organization_state_ledger,
+            story_career_state_ledger=blueprint.career_state_ledger,
+        )
+
+    def build_quality_runtime_context(
+        self,
+        *,
+        chapter_count: Optional[int] = None,
+        current_chapter_number: Optional[int] = None,
+        target_word_count: Optional[int] = None,
+        character_focus_source: Optional[Any] = None,
+        foreshadow_payoff_source: Optional[Any] = None,
+        character_state_source: Optional[Any] = None,
+        relationship_state_source: Optional[Any] = None,
+        foreshadow_state_source: Optional[Any] = None,
+        organization_state_source: Optional[Any] = None,
+        career_state_source: Optional[Any] = None,
+        genre: Optional[str] = None,
+        style_name: Optional[str] = None,
+        style_preset_id: Optional[str] = None,
+        style_content: Optional[str] = None,
+        style_profile: Optional[str] = None,
+        genre_profiles: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        active_packet = self.with_blueprint(
+            chapter_count=chapter_count,
+            current_chapter_number=current_chapter_number,
+            target_word_count=target_word_count,
+            character_focus_source=character_focus_source,
+            foreshadow_payoff_source=foreshadow_payoff_source,
+            character_state_source=character_state_source,
+            relationship_state_source=relationship_state_source,
+            foreshadow_state_source=foreshadow_state_source,
+            organization_state_source=organization_state_source,
+            career_state_source=career_state_source,
+        )
+        blueprint = active_packet.blueprint
+        resolved_genre = str(genre or "").strip()
+        resolved_style_name = str(style_name or "").strip()
+        resolved_style_preset_id = str(style_preset_id or "").strip()
+        resolved_style_profile = str(style_profile or "").strip().lower()
+        if not resolved_style_profile:
+            resolved_style_profile = detect_style_profile(
+                style_name=resolved_style_name,
+                style_preset_id=resolved_style_preset_id,
+                style_content=style_content,
+            )
+        return {
+            "creative_mode": active_packet.guidance.creative_mode or "",
+            "story_focus": active_packet.guidance.story_focus or "",
+            "plot_stage": active_packet.guidance.plot_stage or "",
+            "quality_preset": active_packet.guidance.quality_preset or "",
+            "story_long_term_goal": blueprint.long_term_goal or "",
+            "chapter_count": blueprint.chapter_count,
+            "current_chapter_number": blueprint.current_chapter_number,
+            "target_word_count": blueprint.target_word_count,
+            "character_focus": list(blueprint.character_focus_names),
+            "foreshadow_payoff_plan": list(blueprint.foreshadow_payoff_plan),
+            "character_state_ledger": list(blueprint.character_state_ledger),
+            "relationship_state_ledger": list(blueprint.relationship_state_ledger),
+            "foreshadow_state_ledger": list(blueprint.foreshadow_state_ledger),
+            "organization_state_ledger": list(blueprint.organization_state_ledger),
+            "career_state_ledger": list(blueprint.career_state_ledger),
+            "genre": resolved_genre,
+            "genre_profiles": _normalize_string_sequence(genre_profiles, limit=4)
+            or list(detect_genre_profiles(resolved_genre)),
+            "style_name": resolved_style_name,
+            "style_preset_id": resolved_style_preset_id,
+            "style_profile": resolved_style_profile,
+        }
+
+    def build_analysis_quality_kwargs(
+        self,
+        profile: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        return build_analysis_quality_kwargs(profile, guidance=self.guidance)
+
+
+@dataclass(frozen=True)
+class ChapterGenerationIntent:
+    story_packet: StoryPacket
+    quality_profile: Optional[Dict[str, Any]] = None
+    project: Optional["Project"] = None
+    chapter: Optional[Any] = None
+    chapter_context: Optional[Any] = None
+    target_word_count: Optional[int] = None
+    story_repair_payload: Optional["StoryRepairPayload"] = None
+    active_story_repair_payload: Optional[Mapping[str, Any]] = None
+    quality_history_context: Optional[Mapping[str, Any]] = None
+    quality_metrics_summary: Optional[Mapping[str, Any]] = None
+    character_focus_source: Optional[Any] = None
+    foreshadow_payoff_source: Optional[Any] = None
+    character_state_source: Optional[Any] = None
+    relationship_state_source: Optional[Any] = None
+    foreshadow_state_source: Optional[Any] = None
+    organization_state_source: Optional[Any] = None
+    career_state_source: Optional[Any] = None
+
+    @cached_property
+    def _runtime_source(self) -> Optional[Any]:
+        merged: Dict[str, Any] = {}
+        history_context = (
+            dict(self.quality_history_context)
+            if isinstance(self.quality_history_context, Mapping)
+            else {}
+        )
+        if history_context:
+            merged.update(history_context)
+
+        chapter_context = self.chapter_context
+        if chapter_context is not None:
+            chapter_context_fields = {
+                "character_arc_snapshot": getattr(
+                    chapter_context,
+                    "character_arc_snapshot",
+                    None,
+                ),
+                "foreshadow_reminders": getattr(
+                    chapter_context,
+                    "foreshadow_reminders",
+                    None,
+                ),
+                "chapter_careers": getattr(
+                    chapter_context,
+                    "chapter_careers",
+                    None,
+                ),
+                "chapter_characters": getattr(
+                    chapter_context,
+                    "chapter_characters",
+                    None,
+                ),
+            }
+            for key, value in chapter_context_fields.items():
+                if value:
+                    merged[key] = value
+
+        if merged:
+            return merged
+        if chapter_context is not None:
+            return chapter_context
+        if history_context:
+            return history_context
+        return None
+
+    def _build_story_packet_blueprint_kwargs(self) -> Dict[str, Any]:
+        runtime_source = self._runtime_source
+        return {
+            "chapter_count": getattr(self.project, "chapter_count", None),
+            "current_chapter_number": getattr(
+                self.chapter,
+                "chapter_number",
+                None,
+            ),
+            "target_word_count": self.target_word_count,
+            "character_focus_source": (
+                self.character_focus_source
+                if self.character_focus_source is not None
+                else (self.chapter if self.chapter is not None else runtime_source)
+            ),
+            "foreshadow_payoff_source": (
+                self.foreshadow_payoff_source
+                if self.foreshadow_payoff_source is not None
+                else runtime_source
+            ),
+            "character_state_source": (
+                self.character_state_source
+                if self.character_state_source is not None
+                else runtime_source
+            ),
+            "relationship_state_source": (
+                self.relationship_state_source
+                if self.relationship_state_source is not None
+                else runtime_source
+            ),
+            "foreshadow_state_source": (
+                self.foreshadow_state_source
+                if self.foreshadow_state_source is not None
+                else runtime_source
+            ),
+            "organization_state_source": (
+                self.organization_state_source
+                if self.organization_state_source is not None
+                else runtime_source
+            ),
+            "career_state_source": (
+                self.career_state_source
+                if self.career_state_source is not None
+                else runtime_source
+            ),
+        }
+
+    @cached_property
+    def _runtime_blueprint_kwargs(self) -> Dict[str, Any]:
+        return self._build_story_packet_blueprint_kwargs()
+
+    @cached_property
+    def _runtime_story_packet(self) -> StoryPacket:
+        return self.story_packet.with_blueprint(
+            quality_metrics_summary=self.quality_metrics_summary,
+            **self._runtime_blueprint_kwargs,
+        )
+
+    def build_runtime_story_packet(self) -> StoryPacket:
+        return self._runtime_story_packet
+
+    def build_story_runtime_contract(self) -> Dict[str, Any]:
+        return self._runtime_story_packet.to_runtime_contract()
+
+    def build_prompt_quality_kwargs(self) -> Dict[str, Any]:
+        return self._runtime_story_packet.build_prompt_quality_kwargs(
+            self.quality_profile,
+            story_repair_payload=self.story_repair_payload,
+            active_story_repair_payload=self.active_story_repair_payload,
+            quality_metrics_summary=self.quality_metrics_summary,
+        )
+
+    def build_quality_runtime_context(self) -> Dict[str, Any]:
+        profile_source = (
+            self.quality_profile
+            if isinstance(self.quality_profile, Mapping)
+            else {}
+        )
+        return self._runtime_story_packet.build_quality_runtime_context(
+            genre=str(
+                profile_source.get("genre")
+                or getattr(self.project, "genre", None)
+                or ""
+            ).strip(),
+            style_name=str(profile_source.get("style_name") or "").strip(),
+            style_preset_id=str(profile_source.get("style_preset_id") or "").strip(),
+            style_content=profile_source.get("style_content"),
+            style_profile=str(profile_source.get("style_profile") or "").strip().lower(),
+            genre_profiles=_normalize_string_sequence(
+                profile_source.get("genre_profiles"),
+                limit=4,
+            ),
+        )
+
+
+def build_chapter_generation_intent(
+    *,
+    story_packet: Optional[StoryPacket],
+    quality_profile: Optional[Dict[str, Any]],
+    project: Optional["Project"],
+    chapter: Optional[Any],
+    chapter_context: Optional[Any],
+    target_word_count: Optional[int],
+    story_repair_payload: Optional["StoryRepairPayload"] = None,
+    active_story_repair_payload: Optional[Mapping[str, Any]] = None,
+    quality_history_context: Optional[Mapping[str, Any]] = None,
+    quality_metrics_summary: Optional[Mapping[str, Any]] = None,
+    character_focus_source: Optional[Any] = None,
+    foreshadow_payoff_source: Optional[Any] = None,
+    character_state_source: Optional[Any] = None,
+    relationship_state_source: Optional[Any] = None,
+    foreshadow_state_source: Optional[Any] = None,
+    organization_state_source: Optional[Any] = None,
+    career_state_source: Optional[Any] = None,
+) -> ChapterGenerationIntent:
+    active_story_packet = story_packet or build_story_generation_packet(
+        project,
+        source=chapter,
+        source_label="chapter-generation-intent",
+    )
+    active_story_packet = _apply_story_repair_guidance_defaults(
+        project,
+        active_story_packet,
+        active_story_repair_payload,
+    )
+    return ChapterGenerationIntent(
+        story_packet=active_story_packet,
+        quality_profile=quality_profile,
+        project=project,
+        chapter=chapter,
+        chapter_context=chapter_context,
+        target_word_count=target_word_count,
+        story_repair_payload=story_repair_payload,
+        active_story_repair_payload=active_story_repair_payload,
+        quality_history_context=quality_history_context,
+        quality_metrics_summary=quality_metrics_summary,
+        character_focus_source=character_focus_source,
+        foreshadow_payoff_source=foreshadow_payoff_source,
+        character_state_source=character_state_source,
+        relationship_state_source=relationship_state_source,
+        foreshadow_state_source=foreshadow_state_source,
+        organization_state_source=organization_state_source,
+        career_state_source=career_state_source,
+    )
+
+
+@dataclass
+class ChapterGenerationRuntimeBundle:
+    generation_guidance: Optional[StoryGenerationGuidance]
+    generation_intent: ChapterGenerationIntent
+    prompt_quality_kwargs: Dict[str, Any]
+    story_repair_payload: Optional["StoryRepairPayload"] = None
+    active_story_repair_payload: Optional[Dict[str, Any]] = None
+    story_runtime_contract: Optional[Dict[str, Any]] = None
+
+
+def _resolve_runtime_story_repair_state(
+    *,
+    story_repair_state: Optional[Dict[str, Any]],
+    story_repair_payload: Optional["StoryRepairPayload"],
+    active_story_repair_payload: Optional[Dict[str, Any]],
+) -> tuple[
+    Optional["StoryRepairPayload"],
+    Optional[Dict[str, Any]],
+    Optional[Dict[str, Any]],
+    Optional[Dict[str, Any]],
+]:
+    resolved_story_repair_payload = story_repair_payload
+    resolved_active_story_repair_payload = active_story_repair_payload
+    quality_history_context: Optional[Dict[str, Any]] = None
+    quality_metrics_summary: Optional[Dict[str, Any]] = None
+
+    if isinstance(story_repair_state, dict):
+        if resolved_story_repair_payload is None:
+            candidate_payload = story_repair_state.get("payload")
+            if (
+                isinstance(candidate_payload, StoryRepairPayload)
+                or candidate_payload is None
+            ):
+                resolved_story_repair_payload = candidate_payload
+        if resolved_active_story_repair_payload is None:
+            candidate_active_payload = story_repair_state.get(
+                "active_story_repair_payload"
+            )
+            if (
+                isinstance(candidate_active_payload, dict)
+                or candidate_active_payload is None
+            ):
+                resolved_active_story_repair_payload = candidate_active_payload
+        candidate_quality_history_context = story_repair_state.get(
+            "quality_history_context"
+        )
+        if isinstance(candidate_quality_history_context, dict):
+            quality_history_context = candidate_quality_history_context
+        candidate_quality_metrics_summary = story_repair_state.get(
+            "quality_metrics_summary"
+        )
+        if isinstance(candidate_quality_metrics_summary, dict):
+            quality_metrics_summary = candidate_quality_metrics_summary
+
+    return (
+        resolved_story_repair_payload,
+        resolved_active_story_repair_payload,
+        quality_history_context,
+        quality_metrics_summary,
+    )
+
+
+def create_chapter_generation_intent_from_runtime(
+    *,
+    story_packet: Optional[StoryPacket],
+    quality_profile: Optional[Dict[str, Any]],
+    project: Optional["Project"],
+    chapter: Any,
+    chapter_context: Optional[Any],
+    target_word_count: Optional[int],
+    story_repair_state: Optional[Dict[str, Any]] = None,
+    story_repair_payload: Optional["StoryRepairPayload"] = None,
+    active_story_repair_payload: Optional[Dict[str, Any]] = None,
+    character_focus_source: Optional[Any] = None,
+    foreshadow_payoff_source: Optional[Any] = None,
+    character_state_source: Optional[Any] = None,
+    relationship_state_source: Optional[Any] = None,
+    foreshadow_state_source: Optional[Any] = None,
+    organization_state_source: Optional[Any] = None,
+    career_state_source: Optional[Any] = None,
+) -> ChapterGenerationIntent:
+    (
+        resolved_story_repair_payload,
+        resolved_active_story_repair_payload,
+        quality_history_context,
+        quality_metrics_summary,
+    ) = _resolve_runtime_story_repair_state(
+        story_repair_state=story_repair_state,
+        story_repair_payload=story_repair_payload,
+        active_story_repair_payload=active_story_repair_payload,
+    )
+
+    return build_chapter_generation_intent(
+        story_packet=story_packet,
+        quality_profile=quality_profile,
+        project=project,
+        chapter=chapter,
+        chapter_context=chapter_context,
+        target_word_count=target_word_count,
+        story_repair_payload=resolved_story_repair_payload,
+        active_story_repair_payload=resolved_active_story_repair_payload,
+        quality_history_context=quality_history_context,
+        quality_metrics_summary=quality_metrics_summary,
+        character_focus_source=character_focus_source,
+        foreshadow_payoff_source=foreshadow_payoff_source,
+        character_state_source=character_state_source,
+        relationship_state_source=relationship_state_source,
+        foreshadow_state_source=foreshadow_state_source,
+        organization_state_source=organization_state_source,
+        career_state_source=career_state_source,
+    )
+
+
+def build_chapter_quality_runtime_context(
+    *,
+    story_packet: Optional[StoryPacket],
+    project: Optional["Project"],
+    chapter: Any,
+    chapter_context: Optional[Any],
+    target_word_count: Optional[int],
+    story_repair_state: Optional[Dict[str, Any]] = None,
+    generation_intent: Optional[ChapterGenerationIntent] = None,
+) -> Dict[str, Any]:
+    active_generation_intent = (
+        generation_intent
+        or create_chapter_generation_intent_from_runtime(
+            story_packet=story_packet,
+            quality_profile=None,
+            project=project,
+            chapter=chapter,
+            chapter_context=chapter_context,
+            target_word_count=target_word_count,
+            story_repair_state=story_repair_state,
+        )
+    )
+    return active_generation_intent.build_quality_runtime_context()
+
+
+def build_chapter_prompt_quality_kwargs_from_runtime(
+    *,
+    story_packet: Optional[StoryPacket],
+    quality_profile: Optional[Dict[str, Any]],
+    project: Optional["Project"],
+    chapter: Any,
+    chapter_context: Optional[Any],
+    target_word_count: Optional[int],
+    story_repair_state: Optional[Dict[str, Any]] = None,
+    story_repair_payload: Optional["StoryRepairPayload"] = None,
+    active_story_repair_payload: Optional[Dict[str, Any]] = None,
+    character_focus_source: Optional[Any] = None,
+    foreshadow_payoff_source: Optional[Any] = None,
+    character_state_source: Optional[Any] = None,
+    relationship_state_source: Optional[Any] = None,
+    foreshadow_state_source: Optional[Any] = None,
+    organization_state_source: Optional[Any] = None,
+    career_state_source: Optional[Any] = None,
+    generation_intent: Optional[ChapterGenerationIntent] = None,
+) -> Dict[str, Any]:
+    active_generation_intent = (
+        generation_intent
+        or create_chapter_generation_intent_from_runtime(
+            story_packet=story_packet,
+            quality_profile=quality_profile,
+            project=project,
+            chapter=chapter,
+            chapter_context=chapter_context,
+            target_word_count=target_word_count,
+            story_repair_state=story_repair_state,
+            story_repair_payload=story_repair_payload,
+            active_story_repair_payload=active_story_repair_payload,
+            character_focus_source=(
+                chapter if character_focus_source is None else character_focus_source
+            ),
+            foreshadow_payoff_source=foreshadow_payoff_source,
+            character_state_source=character_state_source,
+            relationship_state_source=relationship_state_source,
+            foreshadow_state_source=foreshadow_state_source,
+            organization_state_source=organization_state_source,
+            career_state_source=career_state_source,
+        )
+    )
+    return active_generation_intent.build_prompt_quality_kwargs()
+
+
+def build_prompt_quality_kwargs(
+    profile: Optional[Dict[str, Any]],
+    *,
+    guidance: Optional[StoryGenerationGuidance] = None,
+    scene: str = "chapter",
+    story_repair_summary: Optional[str] = None,
+    story_repair_targets: Optional[list[str]] = None,
+    story_preserve_strengths: Optional[list[str]] = None,
+    active_story_repair_payload: Optional[Mapping[str, Any]] = None,
+    story_repair_payload: Optional[Any] = None,
+    story_long_term_goal: Optional[str] = None,
+    story_character_focus: Optional[Sequence[str]] = None,
+    story_foreshadow_payoff_plan: Optional[Sequence[Any]] = None,
+    chapter_count: Optional[int] = None,
+    current_chapter_number: Optional[int] = None,
+    target_word_count: Optional[int] = None,
+    quality_metrics_summary: Optional[Mapping[str, Any]] = None,
+    story_character_state_ledger: Optional[Sequence[Any]] = None,
+    story_relationship_state_ledger: Optional[Sequence[Any]] = None,
+    story_foreshadow_state_ledger: Optional[Sequence[Any]] = None,
+    story_organization_state_ledger: Optional[Sequence[Any]] = None,
+    story_career_state_ledger: Optional[Sequence[Any]] = None,
+) -> Dict[str, Any]:
+    source = profile or {}
+    active_guidance = guidance or StoryGenerationGuidance()
+    external_assets = source.get("external_assets") or ()
+    reference_assets = source.get("reference_assets") or external_assets or ()
+    resolved_story_repair_kwargs = resolve_story_repair_prompt_kwargs(
+        story_repair_payload,
+        summary=story_repair_summary,
+        targets=story_repair_targets,
+        strengths=story_preserve_strengths,
+    )
+    story_repair_summary = resolved_story_repair_kwargs.get("story_repair_summary")
+    story_repair_targets = resolved_story_repair_kwargs.get("story_repair_targets")
+    story_preserve_strengths = resolved_story_repair_kwargs.get(
+        "story_preserve_strengths"
+    )
+    repair_diagnostic_context = build_story_repair_diagnostic_context(
+        active_story_repair_payload,
+        scene=scene,
+    )
+    resolved_story_long_term_goal = _normalize_optional_text(story_long_term_goal)
+    resolved_story_character_focus = _normalize_string_sequence(
+        story_character_focus,
+        limit=4,
+    )
+    resolved_story_foreshadow_payoff_plan = _stringify_story_runtime_items(
+        story_foreshadow_payoff_plan,
+        limit=3,
+    )
+    resolved_story_character_state_ledger = _stringify_story_runtime_items(
+        story_character_state_ledger,
+        limit=4,
+    )
+    resolved_story_relationship_state_ledger = _stringify_story_runtime_items(
+        story_relationship_state_ledger,
+        limit=4,
+    )
+    resolved_story_foreshadow_state_ledger = _stringify_story_runtime_items(
+        story_foreshadow_state_ledger,
+        limit=4,
+    )
+    resolved_story_organization_state_ledger = _stringify_story_runtime_items(
+        story_organization_state_ledger,
+        limit=4,
+    )
+    resolved_story_career_state_ledger = _stringify_story_runtime_items(
+        story_career_state_ledger,
+        limit=4,
+    )
+    resolved_chapter_count = _normalize_optional_int(chapter_count)
+    resolved_current_chapter_number = _normalize_optional_int(
+        current_chapter_number
+    )
+    resolved_target_word_count = _normalize_optional_int(target_word_count)
+    resolved_quality_metrics_summary = (
+        dict(quality_metrics_summary)
+        if isinstance(quality_metrics_summary, Mapping)
+        else None
+    )
+
+    return {
+        "genre": source.get("genre") or "未设定",
+        "style_name": source.get("style_name") or "",
+        "style_preset_id": source.get("style_preset_id") or "",
+        "style_content": source.get("style_content") or "",
+        "external_assets": external_assets,
+        "reference_assets": reference_assets,
+        "mcp_guard": source.get("mcp_guard") or "",
+        "mcp_references": source.get("mcp_references") or "",
+        **active_guidance.to_prompt_fields(),
+        "story_long_term_goal": resolved_story_long_term_goal or "",
+        "story_character_focus": list(resolved_story_character_focus),
+        "story_foreshadow_payoff_plan": list(resolved_story_foreshadow_payoff_plan),
+        "story_character_state_ledger": list(resolved_story_character_state_ledger),
+        "story_relationship_state_ledger": list(
+            resolved_story_relationship_state_ledger
+        ),
+        "story_foreshadow_state_ledger": list(
+            resolved_story_foreshadow_state_ledger
+        ),
+        "story_organization_state_ledger": list(
+            resolved_story_organization_state_ledger
+        ),
+        "story_career_state_ledger": list(resolved_story_career_state_ledger),
+        "creative_mode_block": build_creative_mode_block(
+            active_guidance.creative_mode,
+            scene=scene,
+        ),
+        "story_focus_block": build_story_focus_block(
+            active_guidance.story_focus,
+            scene=scene,
+        ),
+        "story_creation_brief_block": build_story_creation_brief_block(
+            active_guidance.story_creation_brief
+        ),
+        "story_long_term_goal_block": build_story_long_term_goal_block(
+            resolved_story_long_term_goal
+        ),
+        "story_quality_hard_guard_block": build_story_quality_hard_guard_block(
+            creative_mode=active_guidance.creative_mode,
+            story_focus=active_guidance.story_focus,
+            plot_stage=active_guidance.plot_stage,
+            story_long_term_goal=resolved_story_long_term_goal,
+            story_character_focus=resolved_story_character_focus,
+            story_foreshadow_payoff_plan=resolved_story_foreshadow_payoff_plan,
+            story_character_state_ledger=resolved_story_character_state_ledger,
+            story_relationship_state_ledger=resolved_story_relationship_state_ledger,
+            story_foreshadow_state_ledger=resolved_story_foreshadow_state_ledger,
+        ),
+        "story_character_focus_anchor_block": build_story_character_focus_anchor_block(
+            resolved_story_character_focus,
+            scene=scene,
+        ),
+        "story_foreshadow_payoff_plan_block": build_story_foreshadow_payoff_plan_block(
+            resolved_story_foreshadow_payoff_plan,
+            scene=scene,
+        ),
+        "story_character_state_ledger_block": build_story_character_state_ledger_block(
+            resolved_story_character_state_ledger,
+            scene=scene,
+        ),
+        "story_relationship_state_ledger_block": build_story_relationship_state_ledger_block(
+            resolved_story_relationship_state_ledger,
+            scene=scene,
+        ),
+        "story_foreshadow_state_ledger_block": build_story_foreshadow_state_ledger_block(
+            resolved_story_foreshadow_state_ledger,
+            scene=scene,
+        ),
+        "story_organization_state_ledger_block": build_story_organization_state_ledger_block(
+            resolved_story_organization_state_ledger,
+            scene=scene,
+        ),
+        "story_career_state_ledger_block": build_story_career_state_ledger_block(
+            resolved_story_career_state_ledger,
+            scene=scene,
+        ),
+        "story_pacing_budget_block": build_story_pacing_budget_block(
+            resolved_chapter_count,
+            current_chapter_number=resolved_current_chapter_number,
+            target_word_count=resolved_target_word_count,
+            plot_stage=active_guidance.plot_stage,
+            scene=scene,
+        ),
+        "story_volume_pacing_block": build_volume_pacing_block(
+            resolved_chapter_count,
+            plot_stage=active_guidance.plot_stage,
+        ),
+        "quality_metrics_summary": resolved_quality_metrics_summary,
+        "story_quality_trend_block": build_story_quality_trend_block(
+            resolved_quality_metrics_summary,
+            scene=scene,
+        ),
+        "quality_preference_block": build_quality_preference_block(
+            active_guidance.quality_preset,
+            active_guidance.quality_notes,
+            scene=scene,
+        ),
+        "story_repair_summary": story_repair_summary or "",
+        "story_repair_targets": story_repair_targets or [],
+        "story_preserve_strengths": story_preserve_strengths or [],
+        "story_repair_target_block": build_story_repair_target_block(
+            story_repair_summary,
+            story_repair_targets,
+            story_preserve_strengths,
+        ),
+        **repair_diagnostic_context,
+        "narrative_blueprint_block": build_narrative_blueprint_block(
+            active_guidance.creative_mode,
+            active_guidance.story_focus,
+            scene=scene,
+            plot_stage=active_guidance.plot_stage,
+        ),
+    }
+
+
+def build_analysis_quality_kwargs(
+    profile: Optional[Dict[str, Any]],
+    *,
+    guidance: Optional[StoryGenerationGuidance] = None,
+) -> Dict[str, Any]:
+    source = profile or {}
+    active_guidance = guidance or StoryGenerationGuidance()
+    external_assets = source.get("external_assets") or ()
+    reference_assets = source.get("reference_assets") or external_assets or ()
+    return {
+        "genre": source.get("genre") or "未设定",
+        "style_name": source.get("style_name") or "",
+        "style_preset_id": source.get("style_preset_id") or "",
+        "style_content": source.get("style_content") or "",
+        "external_assets": external_assets,
+        "reference_assets": reference_assets,
+        "mcp_references": source.get("mcp_references") or "",
+        **active_guidance.to_prompt_fields(),
+    }
+
+
+def build_chapter_generation_runtime_bundle(
+    *,
+    story_packet: Optional[StoryPacket],
+    quality_profile: Optional[Dict[str, Any]],
+    project: Optional["Project"],
+    chapter: Any,
+    chapter_context: Optional[Any],
+    target_word_count: Optional[int],
+    story_repair_state: Optional[Dict[str, Any]] = None,
+    story_repair_payload: Optional["StoryRepairPayload"] = None,
+    active_story_repair_payload: Optional[Dict[str, Any]] = None,
+    character_focus_source: Optional[Any] = None,
+    foreshadow_payoff_source: Optional[Any] = None,
+    character_state_source: Optional[Any] = None,
+    relationship_state_source: Optional[Any] = None,
+    foreshadow_state_source: Optional[Any] = None,
+    organization_state_source: Optional[Any] = None,
+    career_state_source: Optional[Any] = None,
+) -> ChapterGenerationRuntimeBundle:
+    (
+        resolved_story_repair_payload,
+        resolved_active_story_repair_payload,
+        _quality_history_context,
+        _quality_metrics_summary,
+    ) = _resolve_runtime_story_repair_state(
+        story_repair_state=story_repair_state,
+        story_repair_payload=story_repair_payload,
+        active_story_repair_payload=active_story_repair_payload,
+    )
+
+    generation_intent = create_chapter_generation_intent_from_runtime(
+        story_packet=story_packet,
+        quality_profile=quality_profile,
+        project=project,
+        chapter=chapter,
+        chapter_context=chapter_context,
+        target_word_count=target_word_count,
+        story_repair_state=story_repair_state,
+        story_repair_payload=resolved_story_repair_payload,
+        active_story_repair_payload=resolved_active_story_repair_payload,
+        character_focus_source=character_focus_source,
+        foreshadow_payoff_source=foreshadow_payoff_source,
+        character_state_source=character_state_source,
+        relationship_state_source=relationship_state_source,
+        foreshadow_state_source=foreshadow_state_source,
+        organization_state_source=organization_state_source,
+        career_state_source=career_state_source,
+    )
+    prompt_quality_kwargs = build_chapter_prompt_quality_kwargs_from_runtime(
+        story_packet=story_packet,
+        quality_profile=quality_profile,
+        project=project,
+        chapter=chapter,
+        chapter_context=chapter_context,
+        target_word_count=target_word_count,
+        story_repair_state=story_repair_state,
+        story_repair_payload=resolved_story_repair_payload,
+        active_story_repair_payload=resolved_active_story_repair_payload,
+        character_focus_source=character_focus_source,
+        foreshadow_payoff_source=foreshadow_payoff_source,
+        character_state_source=character_state_source,
+        relationship_state_source=relationship_state_source,
+        foreshadow_state_source=foreshadow_state_source,
+        organization_state_source=organization_state_source,
+        career_state_source=career_state_source,
+        generation_intent=generation_intent,
+    )
+    return ChapterGenerationRuntimeBundle(
+        generation_guidance=(
+            generation_intent.story_packet.guidance if generation_intent else None
+        ),
+        generation_intent=generation_intent,
+        prompt_quality_kwargs=prompt_quality_kwargs,
+        story_repair_payload=resolved_story_repair_payload,
+        active_story_repair_payload=resolved_active_story_repair_payload,
+        story_runtime_contract=(
+            generation_intent.build_story_runtime_contract()
+            if generation_intent is not None
+            else None
+        ),
+    )
+
+
+def build_story_generation_packet(
+    project: Optional["Project"],
+    source: Optional[Any] = None,
+    *,
+    creative_mode: Optional[str] = None,
+    story_focus: Optional[str] = None,
+    plot_stage: Optional[str] = None,
+    story_creation_brief: Optional[str] = None,
+    quality_preset: Optional[str] = None,
+    quality_notes: Optional[str] = None,
+    source_label: Optional[str] = None,
+) -> StoryPacket:
+    raw_overrides = extract_story_guidance_overrides(
+        source,
+        creative_mode=creative_mode,
+        story_focus=story_focus,
+        plot_stage=plot_stage,
+        story_creation_brief=story_creation_brief,
+        quality_preset=quality_preset,
+        quality_notes=quality_notes,
+    )
+    guidance = resolve_story_generation_guidance(project, **raw_overrides)
+    request_overrides = {
+        field_name: value
+        for field_name, value in normalize_story_guidance_values(raw_overrides).items()
+        if value is not None
+    }
+    resolved_chapter_count = (
+        _normalize_optional_int(read_story_guidance_value(source, "chapter_count"))
+        or _normalize_optional_int(getattr(project, "chapter_count", None))
+    )
+    resolved_target_word_count = (
+        _normalize_optional_int(read_story_guidance_value(source, "target_word_count"))
+        or _normalize_optional_int(read_story_guidance_value(source, "target_words"))
+        or _normalize_optional_int(getattr(project, "target_words", None))
+    )
+    blueprint = StoryBlueprint(
+        long_term_goal=_build_story_long_term_goal_text(
+            project,
+            guidance,
+            chapter_count=resolved_chapter_count,
+            target_word_count=resolved_target_word_count,
+        ),
+        chapter_count=resolved_chapter_count,
+        target_word_count=resolved_target_word_count,
+        character_focus_names=_extract_story_packet_character_focus(source),
+        foreshadow_payoff_plan=_extract_story_packet_foreshadow_payoff_plan(source),
+        character_state_ledger=_extract_story_packet_character_state_ledger(source),
+        relationship_state_ledger=_extract_story_packet_relationship_state_ledger(source),
+        foreshadow_state_ledger=_extract_story_packet_foreshadow_state_ledger(source),
+        organization_state_ledger=_extract_story_packet_organization_state_ledger(source),
+        career_state_ledger=_extract_story_packet_career_state_ledger(source),
+    )
+    return StoryPacket(
+        guidance=guidance,
+        request_overrides=request_overrides,
+        source=source_label,
+        blueprint=blueprint,
+    )
+
+
+def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _resolve_optional_text(*values: Optional[str]) -> Optional[str]:
+    for value in values:
+        normalized = _normalize_optional_text(value)
+        if normalized is not None:
+            return normalized
+    return None
+
+
+def _normalize_optional_int(value: Optional[Any]) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        normalized = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def _normalize_string_sequence(values: Optional[Any], *, limit: int = 4) -> tuple[str, ...]:
+    if values is None:
+        return ()
+    if isinstance(values, str):
+        raw_items = [values]
+    elif isinstance(values, Sequence) and not isinstance(values, (str, bytes, bytearray)):
+        raw_items = list(values)
+    else:
+        raw_items = [values]
+
+    normalized: list[str] = []
+    for item in raw_items:
+        text = _normalize_optional_text(item)
+        if not text or text in normalized:
+            continue
+        normalized.append(text)
+        if len(normalized) >= limit:
+            break
+    return tuple(normalized)
+
+
+def _normalize_story_runtime_item_mapping(value: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    label = _normalize_optional_text(value.get("label") or value.get("name") or value.get("title"))
+    summary = _normalize_optional_text(
+        value.get("summary")
+        or value.get("content")
+        or value.get("item")
+        or value.get("value")
+    )
+    status = _normalize_optional_text(value.get("status"))
+    target_chapter = _normalize_optional_int(value.get("target_chapter"))
+
+    normalized: Dict[str, Any] = {}
+    if label:
+        normalized["label"] = label
+    if summary:
+        normalized["summary"] = summary
+    if status:
+        normalized["status"] = status.lower()
+    if target_chapter is not None:
+        normalized["target_chapter"] = target_chapter
+    return normalized or None
+
+
+def _normalize_story_runtime_items(
+    values: Optional[Any],
+    *,
+    limit: int = 4,
+) -> tuple[StoryRuntimeLedgerItem, ...]:
+    if values is None:
+        return ()
+    if isinstance(values, str):
+        raw_items = [values]
+    elif isinstance(values, Sequence) and not isinstance(values, (str, bytes, bytearray)):
+        raw_items = list(values)
+    else:
+        raw_items = [values]
+
+    normalized: list[StoryRuntimeLedgerItem] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        if isinstance(item, Mapping):
+            normalized_item = _normalize_story_runtime_item_mapping(item)
+            if not normalized_item:
+                continue
+            dedupe_key = json.dumps(normalized_item, sort_keys=True, ensure_ascii=False)
+            resolved_item: StoryRuntimeLedgerItem = normalized_item
+        else:
+            text = _normalize_optional_text(item)
+            if not text:
+                continue
+            dedupe_key = text
+            resolved_item = text
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized.append(resolved_item)
+        if len(normalized) >= limit:
+            break
+    return tuple(normalized)
+
+
+def _normalize_story_runtime_plan_items(
+    values: Optional[Any],
+    *,
+    limit: int = 3,
+) -> tuple[StoryRuntimePlanItem, ...]:
+    return _normalize_story_runtime_items(values, limit=limit)
+
+
+def _stringify_story_runtime_item(value: Any) -> str:
+    if isinstance(value, Mapping):
+        normalized = _normalize_story_runtime_item_mapping(value)
+        if not normalized:
+            return ""
+        label = str(normalized.get("label") or "").strip()
+        summary = str(normalized.get("summary") or "").strip()
+        status = str(normalized.get("status") or "").strip()
+        target_chapter = normalized.get("target_chapter")
+
+        base = f"{label}: {summary}" if label and summary else (summary or label)
+        meta_parts: list[str] = []
+        if status:
+            meta_parts.append(f"status={status}")
+        if isinstance(target_chapter, int):
+            meta_parts.append(f"target_chapter={target_chapter}")
+        if meta_parts:
+            return f"{base}; {'; '.join(meta_parts)}" if base else "; ".join(meta_parts)
+        return base
+    return _normalize_optional_text(value) or ""
+
+
+def _stringify_story_runtime_items(values: Optional[Any], *, limit: int = 4) -> tuple[str, ...]:
+    items = _normalize_story_runtime_items(values, limit=limit)
+    return tuple(
+        text
+        for text in (_stringify_story_runtime_item(item) for item in items)
+        if text
+    )
+
+
+def _normalize_story_repair_prompt_items(
+    values: Optional[Sequence[str]],
+    *,
+    limit: int = 4,
+) -> list[str]:
+    if not values:
+        return []
+
+    items: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        label = STORY_REPAIR_FOCUS_PROMPT_LABELS.get(text, text)
+        if label in seen:
+            continue
+        seen.add(label)
+        items.append(label)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _format_story_repair_metric_value(value: Any) -> Optional[str]:
+    if not isinstance(value, (int, float)):
+        return None
+    numeric = float(value)
+    if numeric.is_integer():
+        return str(int(numeric))
+    return f"{numeric:.1f}"
+
+
+def build_story_repair_diagnostic_context(
+    active_story_repair_payload: Optional[Mapping[str, Any]],
+    *,
+    scene: str = "chapter",
+) -> Dict[str, Any]:
+    empty = {
+        "story_repair_source": "",
+        "story_repair_source_label": "",
+        "story_repair_focus_areas": [],
+        "story_repair_weakest_metric_label": "",
+        "story_repair_weakest_metric_value": None,
+        "story_repair_quality_gate_label": "",
+        "story_repair_quality_gate_decision": "",
+        "story_repair_quality_gate_summary": "",
+        "story_repair_quality_gate_failed_metrics": [],
+        "story_repair_diagnostic_block": "",
+    }
+    if not isinstance(active_story_repair_payload, Mapping):
+        return empty
+
+    source = str(active_story_repair_payload.get("source") or "").strip()
+    fallback_source_label = str(
+        active_story_repair_payload.get("source_label") or source or ""
+    ).strip()
+    source_label = STORY_REPAIR_SOURCE_PROMPT_LABELS.get(
+        source,
+        fallback_source_label,
+    )
+    focus_areas = _normalize_story_repair_prompt_items(
+        active_story_repair_payload.get("focus_areas"),
+        limit=4,
+    )
+    weakest_metric_label = str(
+        active_story_repair_payload.get("weakest_metric_label") or ""
+    ).strip()
+    weakest_metric_value = (
+        active_story_repair_payload.get("weakest_metric_value")
+        if isinstance(
+            active_story_repair_payload.get("weakest_metric_value"),
+            (int, float),
+        )
+        else None
+    )
+    weakest_metric_text = _format_story_repair_metric_value(weakest_metric_value)
+    summary = str(active_story_repair_payload.get("summary") or "").strip()
+    quality_gate_label = str(
+        active_story_repair_payload.get("quality_gate_label") or ""
+    ).strip()
+    quality_gate_decision = str(
+        active_story_repair_payload.get("quality_gate_decision") or ""
+    ).strip()
+    quality_gate_summary = str(
+        active_story_repair_payload.get("quality_gate_summary") or ""
+    ).strip()
+    quality_gate_failed_metrics = _normalize_story_repair_prompt_items(
+        active_story_repair_payload.get("quality_gate_failed_metrics"),
+        limit=4,
+    )
+
+    closing_line = (
+        "先把最弱项拆成每章的目标、阻力、回报与章尾牵引，再统一分配节拍。"
+        if scene == "outline"
+        else "先修最弱项对应的事件、动作与后果，再统一润色语言。"
+    )
+    diagnostic_block = ""
+    if (
+        weakest_metric_label
+        or focus_areas
+        or quality_gate_label
+        or quality_gate_summary
+        or source in STORY_REPAIR_QUALITY_SIGNAL_SOURCES
+    ):
+        lines = ["【诊断优先级卡】"]
+        if source_label:
+            lines.append(f"- 诊断来源：{source_label}")
+        if quality_gate_label:
+            gate_line = quality_gate_label
+            if quality_gate_summary and quality_gate_summary != summary:
+                gate_line = f"{gate_line}（{quality_gate_summary}）"
+            lines.append(f"- 质量门禁：{gate_line}")
+        elif quality_gate_summary:
+            lines.append(f"- 质量门禁：{quality_gate_summary}")
+        if quality_gate_failed_metrics:
+            lines.append(
+                "- 门禁失败维度：" + " / ".join(quality_gate_failed_metrics)
+            )
+        if weakest_metric_label:
+            metric_line = weakest_metric_label
+            if weakest_metric_text:
+                metric_line = f"{metric_line}（当前值：{weakest_metric_text}）"
+            lines.append(f"- 当前最弱项：{metric_line}")
+        if focus_areas:
+            lines.append("- 优先修复维度：" + " / ".join(focus_areas))
+        if summary:
+            lines.append(f"- 诊断结论：{summary}")
+        lines.append(f"- {closing_line}")
+        diagnostic_block = "\n".join(lines)
+
+    return {
+        "story_repair_source": source,
+        "story_repair_source_label": source_label,
+        "story_repair_focus_areas": focus_areas,
+        "story_repair_weakest_metric_label": weakest_metric_label,
+        "story_repair_weakest_metric_value": weakest_metric_value,
+        "story_repair_quality_gate_label": quality_gate_label,
+        "story_repair_quality_gate_decision": quality_gate_decision,
+        "story_repair_quality_gate_summary": quality_gate_summary,
+        "story_repair_quality_gate_failed_metrics": quality_gate_failed_metrics,
+        "story_repair_diagnostic_block": diagnostic_block,
+    }
+
+
+def build_story_quality_hard_guard_block(
+    *,
+    creative_mode: Optional[str] = None,
+    story_focus: Optional[str] = None,
+    plot_stage: Optional[str] = None,
+    story_long_term_goal: Optional[str] = None,
+    story_character_focus: Optional[Sequence[str]] = None,
+    story_foreshadow_payoff_plan: Optional[Sequence[Any]] = None,
+    story_character_state_ledger: Optional[Sequence[Any]] = None,
+    story_relationship_state_ledger: Optional[Sequence[Any]] = None,
+    story_foreshadow_state_ledger: Optional[Sequence[Any]] = None,
+) -> str:
+    normalized_focus = normalize_story_focus(story_focus)
+    normalized_stage = normalize_plot_stage(plot_stage)
+    focus_items = _normalize_string_sequence(story_character_focus, limit=3)
+    payoff_items = _stringify_story_runtime_items(story_foreshadow_payoff_plan, limit=2)
+    character_state_items = _stringify_story_runtime_items(story_character_state_ledger, limit=2)
+    relationship_state_items = _stringify_story_runtime_items(story_relationship_state_ledger, limit=2)
+    foreshadow_state_items = _stringify_story_runtime_items(story_foreshadow_state_ledger, limit=2)
+
+    bullets: list[str] = [
+        "本章必须推动一个明确目标，并让局势产生可感知的变化或代价。",
+        "冲突不能只停留在解释或对话里，必须落到动作、阻力与后果。",
+        "世界规则或设定限制要写进人物行动与结果，避免悬空设定。",
+        "开篇前 20%-25% 内必须出现明确目标、异常、受阻点三者之一；禁止连续用背景、天气、回忆或纯情绪预热拖慢开场。",
+        "中段至少完成一次“推进→受阻→决断→代价/反弹”的冲突链，不能只停在争论、观察或解释。",
+        "本章至少落地一条“触发条件→规则生效→限制/代价→局势变化”的设定链，让规则真正咬到人物与场面。",
+    ]
+
+    if normalized_focus == "advance_plot":
+        bullets.append("优先推进主线任务，不要让章节停留在原地兜圈。")
+    elif normalized_focus == "deepen_character":
+        bullets.append("优先用选择、失误或坚持来塑造人物，而不是用说明替代行动。")
+    elif normalized_focus == "escalate_conflict":
+        bullets.append("优先抬高阻力和代价，确保冲突在本章出现升级。")
+    elif normalized_focus == "reveal_mystery":
+        bullets.append("优先交付新线索或新认知，让谜团有实质推进。")
+    elif normalized_focus == "relationship_shift":
+        bullets.append("优先制造关系位移，让互动结果反向影响后续行动。")
+    elif normalized_focus == "foreshadow_payoff":
+        bullets.append("优先回应既有伏笔或承诺，至少兑现一条可感知回报。")
+
+    if normalized_stage == "climax":
+        bullets.append("当前处于高潮阶段，减少解释性铺垫，把篇幅让给碰撞、抉择和后果。")
+    elif normalized_stage == "ending":
+        bullets.append("当前处于收束阶段，优先回收主承诺与关键关系线，同时保留余波。")
+
+    long_term_goal = _normalize_optional_text(story_long_term_goal)
+    if long_term_goal:
+        bullets.append(f"长线目标要持续可见：{long_term_goal}")
+    if focus_items:
+        bullets.append(f"本章优先关注这些角色或关系：{' / '.join(focus_items)}")
+    if payoff_items:
+        bullets.append(f"优先回应这些伏笔/兑现计划中的至少一项：{' / '.join(payoff_items)}")
+    elif foreshadow_state_items:
+        bullets.append(f"至少接住这些未完伏笔中的一项：{' / '.join(foreshadow_state_items)}")
+    if character_state_items or relationship_state_items:
+        state_fragments = list(character_state_items[:1]) + list(relationship_state_items[:1])
+        bullets.append(f"状态变化要真正落地到人物与关系：{' / '.join(state_fragments)}")
+    if character_state_items:
+        bullets.append(f"至少把 1 条角色状态账本写成现场动作、迟疑、失手或代价：{' / '.join(character_state_items[:1])}")
+    if relationship_state_items:
+        bullets.append(f"至少把 1 条关系状态账本写成试探对白、站位位移或信任波动：{' / '.join(relationship_state_items[:1])}")
+    bullets.append("最后一段必须留下新的前压：信息缺口、逼近危险、身份位移、未完成选择四者至少保留一项。")
+    bullets.append("若缺少开场抓手、规则落地、冲突链三项中的任意一项，本章视为未完成。")
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for bullet in bullets:
+        normalized = str(bullet or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+
+    return _compact_story_runtime_text(["【章节硬约束】", *[f"- {item}" for item in deduped]]) or ""
+
+
+def _extract_story_packet_character_focus(source: Optional[Any], *, limit: int = 4) -> tuple[str, ...]:
+    if source is None:
+        return ()
+
+    candidate = None
+    if isinstance(source, Mapping):
+        candidate = source.get("character_focus")
+        if not candidate:
+            expansion_plan = source.get("expansion_plan")
+            if isinstance(expansion_plan, str):
+                try:
+                    expansion_plan = json.loads(expansion_plan)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    expansion_plan = None
+            if isinstance(expansion_plan, Mapping):
+                candidate = expansion_plan.get("character_focus")
+    elif isinstance(source, str) or (
+        isinstance(source, Sequence) and not isinstance(source, (bytes, bytearray))
+    ):
+        candidate = source
+    else:
+        direct_focus = read_story_guidance_value(source, "character_focus")
+        if direct_focus:
+            candidate = direct_focus
+        else:
+            expansion_plan = read_story_guidance_value(source, "expansion_plan")
+            if isinstance(expansion_plan, str):
+                try:
+                    expansion_plan = json.loads(expansion_plan)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    expansion_plan = None
+            if isinstance(expansion_plan, Mapping):
+                candidate = expansion_plan.get("character_focus")
+
+    return _normalize_string_sequence(candidate, limit=limit)
+
+
+def _extract_story_packet_foreshadow_payoff_plan(
+    source: Optional[Any],
+    *,
+    limit: int = 3,
+) -> tuple[StoryRuntimePlanItem, ...]:
+    if source is None:
+        return ()
+
+    candidate = None
+    if isinstance(source, Mapping):
+        candidate = source.get("foreshadow_payoff_plan") or source.get("foreshadow_reminders")
+    elif isinstance(source, str) or (
+        isinstance(source, Sequence) and not isinstance(source, (bytes, bytearray))
+    ):
+        candidate = source
+    else:
+        candidate = (
+            read_story_guidance_value(source, "foreshadow_payoff_plan")
+            or read_story_guidance_value(source, "foreshadow_reminders")
+        )
+
+    if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+        return _normalize_story_runtime_plan_items(candidate, limit=limit)
+
+    text = _normalize_optional_text(candidate)
+    if not text:
+        return ()
+
+    normalized: list[str] = []
+    current_title: Optional[str] = None
+    for raw_line in text.splitlines():
+        line = _normalize_optional_text(raw_line)
+        if not line or line.startswith("【") or line.startswith("#"):
+            continue
+
+        cleaned = re.sub(r"^[-*\d\.\)\s]+", "", line).strip()
+        if not cleaned:
+            continue
+        if cleaned.startswith("埋入章节") or cleaned.startswith("伏笔内容"):
+            continue
+        if cleaned.startswith("回收提示"):
+            _, _, tip = cleaned.partition("：")
+            tip_text = _normalize_optional_text(tip or cleaned.replace("回收提示", "", 1))
+            entry = f"{current_title}：{tip_text}" if current_title and tip_text else tip_text
+            if entry and entry not in normalized:
+                normalized.append(entry)
+            if len(normalized) >= limit:
+                break
+            continue
+
+        current_title = cleaned
+        if current_title not in normalized:
+            normalized.append(current_title)
+        if len(normalized) >= limit:
+            break
+    return tuple(normalized)
+
+
+def _normalize_story_runtime_ledger_items(
+    values: Optional[Any],
+    *,
+    limit: int = 4,
+) -> tuple[StoryRuntimeLedgerItem, ...]:
+    return _normalize_story_runtime_items(values, limit=limit)
+
+
+def _extract_story_packet_section_lines(
+    text: Optional[Any],
+    *,
+    heading_prefix: Optional[str] = None,
+    value_prefixes: Optional[Sequence[str]] = None,
+    section_titles: Optional[Sequence[str]] = None,
+    limit: int = 4,
+) -> tuple[str, ...]:
+    normalized_text = _normalize_optional_text(text)
+    if not normalized_text:
+        return ()
+
+    matched: list[str] = []
+    current_entity: Optional[str] = None
+    normalized_prefixes = tuple(value_prefixes or ())
+    normalized_section_titles = tuple(
+        item.strip()
+        for item in (section_titles or ())
+        if str(item).strip()
+    )
+    heading = heading_prefix or ""
+    in_target_section = not normalized_section_titles
+
+    def _matches_section_title(value: str) -> bool:
+        stripped_value = value.strip().rstrip("：:")
+        return any(title in stripped_value for title in normalized_section_titles)
+
+    for raw_line in normalized_text.splitlines():
+        line = str(raw_line or "").rstrip()
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if heading and stripped.startswith(heading):
+            current_entity = stripped.replace("【", "").replace("】", "")
+            current_entity = current_entity.split("(", 1)[0].strip() if current_entity else None
+            in_target_section = (
+                _matches_section_title(current_entity or "")
+                if normalized_section_titles
+                else True
+            )
+            continue
+        if normalized_section_titles and _matches_section_title(stripped):
+            current_entity = None
+            in_target_section = True
+            continue
+        if stripped.startswith("- "):
+            if normalized_section_titles and not in_target_section:
+                continue
+            entry = stripped[2:].strip()
+            if entry and entry not in matched:
+                matched.append(entry)
+            if len(matched) >= limit:
+                break
+            continue
+        if normalized_section_titles:
+            in_target_section = False
+        for prefix in normalized_prefixes:
+            if stripped.startswith(prefix):
+                payload = stripped[len(prefix):].strip()
+                if not payload:
+                    break
+                entry = f"{current_entity}：{payload}" if current_entity else payload
+                if entry not in matched:
+                    matched.append(entry)
+                break
+        if len(matched) >= limit:
+            break
+
+    return tuple(matched[:limit])
+
+
+def _extract_story_packet_character_state_ledger(
+    source: Optional[Any],
+    *,
+    limit: int = 4,
+) -> tuple[StoryRuntimeLedgerItem, ...]:
+    if source is None:
+        return ()
+    candidate = None
+    if isinstance(source, Mapping):
+        candidate = (
+            source.get("story_character_state_ledger")
+            or source.get("character_state_ledger")
+            or source.get("character_arc_snapshot")
+            or source.get("chapter_characters")
+        )
+    elif isinstance(source, str) or (
+        isinstance(source, Sequence) and not isinstance(source, (bytes, bytearray))
+    ):
+        candidate = source
+    else:
+        candidate = (
+            read_story_guidance_value(source, "story_character_state_ledger")
+            or read_story_guidance_value(source, "character_state_ledger")
+            or read_story_guidance_value(source, "character_arc_snapshot")
+            or read_story_guidance_value(source, "chapter_characters")
+        )
+
+    if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+        return _normalize_story_runtime_ledger_items(candidate, limit=limit)
+    if not candidate:
+        return ()
+
+    return _extract_story_packet_section_lines(
+        candidate,
+        heading_prefix="【",
+        value_prefixes=("当前状态", "当前状态:", "生存状态", "生存状态:"),
+        section_titles=("人物状态", "角色状态", "人物动态", "角色动态"),
+        limit=limit,
+    )
+
+
+def _extract_story_packet_relationship_state_ledger(
+    source: Optional[Any],
+    *,
+    limit: int = 4,
+) -> tuple[StoryRuntimeLedgerItem, ...]:
+    if source is None:
+        return ()
+    candidate = None
+    if isinstance(source, Mapping):
+        candidate = (
+            source.get("story_relationship_state_ledger")
+            or source.get("relationship_state_ledger")
+            or source.get("chapter_characters")
+        )
+    elif isinstance(source, str) or (
+        isinstance(source, Sequence) and not isinstance(source, (bytes, bytearray))
+    ):
+        candidate = source
+    else:
+        candidate = (
+            read_story_guidance_value(source, "story_relationship_state_ledger")
+            or read_story_guidance_value(source, "relationship_state_ledger")
+            or read_story_guidance_value(source, "chapter_characters")
+        )
+
+    if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+        return _normalize_story_runtime_ledger_items(candidate, limit=limit)
+    if not candidate:
+        return ()
+
+    return _extract_story_packet_section_lines(
+        candidate,
+        heading_prefix="【",
+        value_prefixes=("关系网络:", "关系网络"),
+        section_titles=("关系动态", "关系网络", "关系状态"),
+        limit=limit,
+    )
+
+
+def _extract_story_packet_foreshadow_state_ledger(
+    source: Optional[Any],
+    *,
+    limit: int = 4,
+) -> tuple[StoryRuntimeLedgerItem, ...]:
+    if source is None:
+        return ()
+    candidate = None
+    if isinstance(source, Mapping):
+        candidate = (
+            source.get("story_foreshadow_state_ledger")
+            or source.get("foreshadow_state_ledger")
+            or source.get("foreshadow_reminders")
+            or source.get("story_foreshadow_payoff_plan")
+        )
+    elif isinstance(source, str) or (
+        isinstance(source, Sequence) and not isinstance(source, (bytes, bytearray))
+    ):
+        candidate = source
+    else:
+        candidate = (
+            read_story_guidance_value(source, "story_foreshadow_state_ledger")
+            or read_story_guidance_value(source, "foreshadow_state_ledger")
+            or read_story_guidance_value(source, "foreshadow_reminders")
+            or read_story_guidance_value(source, "story_foreshadow_payoff_plan")
+        )
+
+    if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+        return _normalize_story_runtime_ledger_items(candidate, limit=limit)
+    if not candidate:
+        return ()
+
+    return _extract_story_packet_foreshadow_payoff_plan(candidate, limit=limit)
+
+
+def _extract_story_packet_organization_state_ledger(
+    source: Optional[Any],
+    *,
+    limit: int = 4,
+) -> tuple[StoryRuntimeLedgerItem, ...]:
+    if source is None:
+        return ()
+    candidate = None
+    if isinstance(source, Mapping):
+        candidate = (
+            source.get("story_organization_state_ledger")
+            or source.get("organization_state_ledger")
+            or source.get("organization_states")
+        )
+    elif isinstance(source, str) or (
+        isinstance(source, Sequence) and not isinstance(source, (bytes, bytearray))
+    ):
+        candidate = source
+    else:
+        candidate = (
+            read_story_guidance_value(source, "story_organization_state_ledger")
+            or read_story_guidance_value(source, "organization_state_ledger")
+            or read_story_guidance_value(source, "organization_states")
+        )
+
+    if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+        return _normalize_story_runtime_ledger_items(candidate, limit=limit)
+    if not candidate:
+        return ()
+
+    return _extract_story_packet_section_lines(
+        candidate,
+        heading_prefix="【",
+        value_prefixes=("组织归属:", "组织归属", "当前势力:", "当前势力", "组织状态:", "组织状态"),
+        section_titles=("组织归属", "当前势力", "组织状态"),
+        limit=limit,
+    )
+
+
+def _extract_story_packet_career_state_ledger(
+    source: Optional[Any],
+    *,
+    limit: int = 4,
+) -> tuple[StoryRuntimeLedgerItem, ...]:
+    if source is None:
+        return ()
+    candidate = None
+    if isinstance(source, Mapping):
+        candidate = (
+            source.get("story_career_state_ledger")
+            or source.get("career_state_ledger")
+            or source.get("career_states")
+        )
+    elif isinstance(source, str) or (
+        isinstance(source, Sequence) and not isinstance(source, (bytes, bytearray))
+    ):
+        candidate = source
+    else:
+        candidate = (
+            read_story_guidance_value(source, "story_career_state_ledger")
+            or read_story_guidance_value(source, "career_state_ledger")
+            or read_story_guidance_value(source, "career_states")
+        )
+
+    if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+        return _normalize_story_runtime_ledger_items(candidate, limit=limit)
+    if not candidate:
+        return ()
+
+    return _extract_story_packet_section_lines(
+        candidate,
+        heading_prefix="【",
+        value_prefixes=("主职业:", "主职业", "副职业:", "副职业", "职业状态:", "职业状态"),
+        section_titles=("主职业", "副职业", "职业状态"),
+        limit=limit,
+    )
+
+
+def _build_story_long_term_goal_text(
+    project: Optional["Project"],
+    guidance: StoryGenerationGuidance,
+    *,
+    chapter_count: Optional[int] = None,
+    target_word_count: Optional[int] = None,
+) -> Optional[str]:
+    if project is None:
+        return None
+
+    parts: list[str] = []
+    theme = _normalize_optional_text(getattr(project, "theme", None))
+    description = _normalize_optional_text(getattr(project, "description", None))
+    if theme:
+        parts.append(f"主线主题：{theme}，整本书需要围绕它持续升级冲突与选择。")
+    if description:
+        parts.append(f"项目简介：{description[:90]}")
+    if guidance.story_creation_brief:
+        parts.append(f"创作总控：{guidance.story_creation_brief[:90]}")
+
+    resolved_chapter_count = chapter_count or _normalize_optional_int(getattr(project, "chapter_count", None))
+    if resolved_chapter_count:
+        parts.append(f"整体篇幅预计约 {resolved_chapter_count} 章，推进时要兼顾起势、升级与回报收束。")
+    elif target_word_count or _normalize_optional_int(getattr(project, "target_words", None)):
+        total_words = target_word_count or _normalize_optional_int(getattr(project, "target_words", None))
+        parts.append(f"整体体量预计约 {total_words} 字，推进时避免前松后挤。")
+
+    return _compact_story_runtime_text(parts)
+
+
+def _compact_story_runtime_text(parts: Sequence[str]) -> Optional[str]:
+    normalized = [segment.strip() for segment in parts if str(segment or "").strip()]
+    if not normalized:
+        return None
+    return " ".join(normalized)
+
+
+def _resolve_story_repair_guidance_defaults(
+    active_story_repair_payload: Optional[Mapping[str, Any]],
+) -> Dict[str, Optional[str]]:
+    if not isinstance(active_story_repair_payload, Mapping):
+        return {}
+
+    action_key = _normalize_optional_text(active_story_repair_payload.get("recommended_action"))
+    if not action_key:
+        mode_key = _normalize_optional_text(active_story_repair_payload.get("recommended_action_mode"))
+        if mode_key:
+            action_key = STORY_REPAIR_ACTION_MODE_FALLBACKS.get(mode_key)
+    if not action_key:
+        return {}
+
+    base_defaults = STORY_REPAIR_ACTION_GUIDANCE_DEFAULTS.get(action_key)
+    if not base_defaults:
+        return {}
+
+    resolved = dict(base_defaults)
+    weakest_metric_label = _normalize_optional_text(active_story_repair_payload.get("weakest_metric_label"))
+    focus_area = _normalize_optional_text(active_story_repair_payload.get("recommended_focus_area"))
+    summary = _normalize_optional_text(active_story_repair_payload.get("summary"))
+    focus_label = STORY_REPAIR_FOCUS_PROMPT_LABELS.get(focus_area, focus_area) if focus_area else None
+
+    note_segments: list[str] = []
+    if focus_label:
+        note_segments.append(f"优先修补：{focus_label}。")
+    if weakest_metric_label:
+        note_segments.append(f"当前最弱指标：{weakest_metric_label}。")
+    if summary:
+        note_segments.append(summary)
+
+    if note_segments:
+        extra_notes = " ".join(note_segments)
+        resolved["quality_notes"] = " ".join(
+            segment for segment in [resolved.get("quality_notes"), extra_notes] if segment
+        )
+
+    return normalize_story_guidance_values(resolved)
+
+
+def _apply_story_repair_guidance_defaults(
+    project: Optional["Project"],
+    story_packet: StoryPacket,
+    active_story_repair_payload: Optional[Mapping[str, Any]],
+) -> StoryPacket:
+    derived_defaults = _resolve_story_repair_guidance_defaults(active_story_repair_payload)
+    if not derived_defaults:
+        return story_packet
+
+    merged_overrides = dict(derived_defaults)
+    merged_overrides.update(story_packet.request_overrides)
+    next_guidance = resolve_story_generation_guidance(project, **merged_overrides)
+    if next_guidance == story_packet.guidance:
+        return story_packet
+    return replace(story_packet, guidance=next_guidance)
+
+
+
+

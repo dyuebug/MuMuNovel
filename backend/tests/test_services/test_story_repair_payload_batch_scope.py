@@ -1,4 +1,4 @@
-import app.services.story_repair_payload_service as story_repair_payload_service
+import tests.test_support.story_repair_payload_test_support as story_repair_payload_service
 
 
 def test_should_keep_manual_review_for_batch_when_quality_gate_requests_manual_review(monkeypatch):

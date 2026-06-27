@@ -21,13 +21,7 @@ pub(crate) fn build_batch_generation_retry_routing_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation_runtime_state_service::retry_failure_quality_gate_routing",
         "scope": "retry_persistence_generic_failure_quality_gate_retry_progression_and_terminal_stop_routing",
-        "python_source_map": [
-            "backend/app/services/batch_generation_orchestration_service.py",
-            "backend/app/services/batch_generation_retry_service.py",
-            "backend/app/services/batch_generation_candidate_service.py",
-            "backend/app/services/task_workflow_runtime_service.py",
-            "backend/app/api/chapter_batch_generation_routes.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service/retry_routing_owner.rs",
@@ -80,7 +74,7 @@ pub(crate) fn build_batch_generation_retry_routing_owner_contract() -> Value {
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_retry_failure_quality_gate_routing_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_retry_routing_owner_is_rust_only_and_surviving_retry_quality_gate_surfaces_are_tracked_by_external_runtime_contracts",
             "runtime_state_keys": [
                 "current_retry_count",
                 "max_retries",

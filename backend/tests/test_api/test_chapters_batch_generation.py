@@ -6,18 +6,18 @@ from typing import Any
 import pytest
 from sqlalchemy import select
 
-import app.database as app_database
-from app.api import chapters as chapters_api
-from app.models.batch_generation_task import BatchGenerationTask
-from app.models.chapter import Chapter
-from app.models.chapter_draft_attempt import ChapterDraftAttempt
-from app.models.generation_history import GenerationHistory
-from app.models.project import Project
-from app.services import (
-    batch_generation_run_wiring_service,
-    batch_generation_single_chapter_entry_service,
+import tests.test_support.database_test_support as app_database
+from migrator_app.models.batch_generation_task import BatchGenerationTask
+from migrator_app.models.chapter import Chapter
+from migrator_app.models import ChapterDraftAttempt, GenerationHistory
+from migrator_app.models.project import Project
+from tests.test_support import (
+    batch_generation_retry_test_adapter as batch_generation_retry_service,
 )
-from app.services.chapter_quality_context_service import StoryPacket
+from tests.test_support import (
+    batch_generation_single_chapter_wiring_test_adapter as batch_generation_single_chapter_entry_service,
+)
+from tests.test_support.story_packet_test_support import StoryPacket
 from tests.test_api.chapters_test_support import (
     REAL_EXECUTE_BATCH_GENERATION_IN_ORDER,
     chapters_client,
@@ -26,10 +26,13 @@ from tests.test_api.chapters_test_support import (
     create_outline,
     create_project,
     fake_ai_service,
-    load_single_generation_rollback_modules,
+    load_single_generation_stream_entry_module,
     mock_side_effect_services,
     parse_sse_data,
     reset_chapters_runtime_caches,
+)
+from tests.test_support import (
+    batch_generation_run_wiring_test_adapter as batch_generation_run_wiring_service,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -180,13 +183,13 @@ async def test_should_schedule_followup_analysis_when_generate_stream_hits_quali
     async def fake_sleep(_seconds):
         return None
 
-    _, chapter_generation_route_wiring_service = load_single_generation_rollback_modules()
-    monkeypatch.setattr(chapter_generation_route_wiring_service, "get_template", fake_get_template)
-    monkeypatch.setattr(chapter_generation_route_wiring_service, "format_prompt", fake_format_prompt)
-    monkeypatch.setattr(chapter_generation_route_wiring_service, "OneToManyContextBuilder", FakeOneToManyBuilder)
-    monkeypatch.setattr(chapter_generation_route_wiring_service, "build_chapter_runtime_system_prompt", fake_build_runtime_system_prompt)
-    monkeypatch.setattr(chapter_generation_route_wiring_service, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
-    monkeypatch.setattr(chapter_generation_route_wiring_service, "execute_chapter_analysis_background", fake_analyze_chapter_background)
+    stream_entry_service = load_single_generation_stream_entry_module()
+    monkeypatch.setattr(stream_entry_service, "get_template", fake_get_template)
+    monkeypatch.setattr(stream_entry_service, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(stream_entry_service, "OneToManyContextBuilder", FakeOneToManyBuilder)
+    monkeypatch.setattr(stream_entry_service, "build_chapter_runtime_system_prompt", fake_build_runtime_system_prompt)
+    monkeypatch.setattr(stream_entry_service, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
+    monkeypatch.setattr(stream_entry_service, "execute_chapter_analysis_background", fake_analyze_chapter_background)
     
     fake_ai_service.calls.clear()
     fake_ai_service.chunks = ["继续", "创作"]
@@ -330,8 +333,8 @@ async def test_execute_batch_generation_should_apply_candidate_only_after_qualit
     async def fake_resolve_generation_story_repair_state_for_batch(*args, **kwargs):
         return {"payload": None, "active_story_repair_payload": None}
 
-    async def fake_set_task_active_story_repair_payload(*args, **kwargs):
-        return None
+    async def fake_sync_task_story_repair_state(*args, **kwargs):
+        return {"payload": None, "active_story_repair_payload": None}
 
     async def fake_publish_task_stream_event(*args, **kwargs):
         return None
@@ -343,7 +346,11 @@ async def test_execute_batch_generation_should_apply_candidate_only_after_qualit
         return None
 
     monkeypatch.setattr(app_database, "get_engine", fake_get_engine)
-    monkeypatch.setattr(chapters_api, "check_prerequisites", fake_check_prerequisites)
+    monkeypatch.setattr(
+        batch_generation_retry_service,
+        "check_chapter_generation_prerequisites",
+        fake_check_prerequisites,
+    )
     monkeypatch.setattr(
         batch_generation_single_chapter_entry_service,
         "generate_single_chapter_for_batch",
@@ -354,13 +361,21 @@ async def test_execute_batch_generation_should_apply_candidate_only_after_qualit
         "resolve_story_repair_state_for_batch",
         fake_resolve_generation_story_repair_state_for_batch,
     )
-    monkeypatch.setattr(chapters_api, "_set_task_active_story_repair_payload", fake_set_task_active_story_repair_payload)
+    monkeypatch.setattr(
+        batch_generation_run_wiring_service,
+        "sync_task_story_repair_state",
+        fake_sync_task_story_repair_state,
+    )
     monkeypatch.setattr(
         batch_generation_run_wiring_service,
         "publish_task_stream_event_service",
         fake_publish_task_stream_event,
     )
-    monkeypatch.setattr(chapters_api, "_record_task_quality_metrics", fake_record_task_quality_metrics)
+    monkeypatch.setattr(
+        batch_generation_retry_service,
+        "record_task_quality_metrics",
+        fake_record_task_quality_metrics,
+    )
     
     await REAL_EXECUTE_BATCH_GENERATION_IN_ORDER(
         batch_id=batch_id,
@@ -460,8 +475,8 @@ async def test_execute_batch_generation_should_forward_web_research_options_to_s
     async def fake_resolve_generation_story_repair_state_for_batch(*args, **kwargs):
         return {"payload": None, "active_story_repair_payload": None}
 
-    async def fake_set_task_active_story_repair_payload(*args, **kwargs):
-        return None
+    async def fake_sync_task_story_repair_state(*args, **kwargs):
+        return {"payload": None, "active_story_repair_payload": None}
 
     async def fake_publish_task_stream_event(*args, **kwargs):
         return None
@@ -473,7 +488,11 @@ async def test_execute_batch_generation_should_forward_web_research_options_to_s
         return None
 
     monkeypatch.setattr(app_database, "get_engine", fake_get_engine)
-    monkeypatch.setattr(chapters_api, "check_prerequisites", fake_check_prerequisites)
+    monkeypatch.setattr(
+        batch_generation_retry_service,
+        "check_chapter_generation_prerequisites",
+        fake_check_prerequisites,
+    )
     monkeypatch.setattr(
         batch_generation_single_chapter_entry_service,
         "generate_single_chapter_for_batch",
@@ -484,13 +503,21 @@ async def test_execute_batch_generation_should_forward_web_research_options_to_s
         "resolve_story_repair_state_for_batch",
         fake_resolve_generation_story_repair_state_for_batch,
     )
-    monkeypatch.setattr(chapters_api, "_set_task_active_story_repair_payload", fake_set_task_active_story_repair_payload)
+    monkeypatch.setattr(
+        batch_generation_run_wiring_service,
+        "sync_task_story_repair_state",
+        fake_sync_task_story_repair_state,
+    )
     monkeypatch.setattr(
         batch_generation_run_wiring_service,
         "publish_task_stream_event_service",
         fake_publish_task_stream_event,
     )
-    monkeypatch.setattr(chapters_api, "_record_task_quality_metrics", fake_record_task_quality_metrics)
+    monkeypatch.setattr(
+        batch_generation_retry_service,
+        "record_task_quality_metrics",
+        fake_record_task_quality_metrics,
+    )
     
     await REAL_EXECUTE_BATCH_GENERATION_IN_ORDER(
         batch_id=batch_id,
@@ -566,8 +593,8 @@ async def test_execute_batch_generation_should_stop_promptly_when_task_cancelled
     async def fake_resolve_generation_story_repair_state_for_batch(*args, **kwargs):
         return {"payload": None, "active_story_repair_payload": None}
 
-    async def fake_set_task_active_story_repair_payload(*args, **kwargs):
-        return None
+    async def fake_sync_task_story_repair_state(*args, **kwargs):
+        return {"payload": None, "active_story_repair_payload": None}
 
     async def fake_publish_task_stream_event(_task_id, event, db_session=None):
         published_events.append(dict(event))
@@ -577,7 +604,11 @@ async def test_execute_batch_generation_should_stop_promptly_when_task_cancelled
         return None
 
     monkeypatch.setattr(app_database, "get_engine", fake_get_engine)
-    monkeypatch.setattr(chapters_api, "check_prerequisites", fake_check_prerequisites)
+    monkeypatch.setattr(
+        batch_generation_retry_service,
+        "check_chapter_generation_prerequisites",
+        fake_check_prerequisites,
+    )
     monkeypatch.setattr(
         batch_generation_single_chapter_entry_service,
         "generate_single_chapter_for_batch",
@@ -588,13 +619,21 @@ async def test_execute_batch_generation_should_stop_promptly_when_task_cancelled
         "resolve_story_repair_state_for_batch",
         fake_resolve_generation_story_repair_state_for_batch,
     )
-    monkeypatch.setattr(chapters_api, "_set_task_active_story_repair_payload", fake_set_task_active_story_repair_payload)
+    monkeypatch.setattr(
+        batch_generation_run_wiring_service,
+        "sync_task_story_repair_state",
+        fake_sync_task_story_repair_state,
+    )
     monkeypatch.setattr(
         batch_generation_run_wiring_service,
         "publish_task_stream_event_service",
         fake_publish_task_stream_event,
     )
-    monkeypatch.setattr(chapters_api, "_record_task_quality_metrics", fake_record_task_quality_metrics)
+    monkeypatch.setattr(
+        batch_generation_retry_service,
+        "record_task_quality_metrics",
+        fake_record_task_quality_metrics,
+    )
     monkeypatch.setattr(batch_generation_run_wiring_service, "CHAPTER_STREAM_HEARTBEAT_INTERVAL_SECONDS", 0.01)
 
     execution_task = asyncio.create_task(
@@ -704,8 +743,8 @@ async def test_execute_batch_generation_should_keep_candidate_out_of_chapter_and
     async def fake_resolve_generation_story_repair_state_for_batch(*args, **kwargs):
         return {"payload": None, "active_story_repair_payload": None}
 
-    async def fake_set_task_active_story_repair_payload(*args, **kwargs):
-        return None
+    async def fake_sync_task_story_repair_state(*args, **kwargs):
+        return {"payload": None, "active_story_repair_payload": None}
 
     async def fake_publish_task_stream_event(*args, **kwargs):
         return None
@@ -721,7 +760,11 @@ async def test_execute_batch_generation_should_keep_candidate_out_of_chapter_and
         return None
 
     monkeypatch.setattr(app_database, "get_engine", fake_get_engine)
-    monkeypatch.setattr(chapters_api, "check_prerequisites", fake_check_prerequisites)
+    monkeypatch.setattr(
+        batch_generation_retry_service,
+        "check_chapter_generation_prerequisites",
+        fake_check_prerequisites,
+    )
     monkeypatch.setattr(
         batch_generation_single_chapter_entry_service,
         "generate_single_chapter_for_batch",
@@ -732,19 +775,27 @@ async def test_execute_batch_generation_should_keep_candidate_out_of_chapter_and
         "resolve_story_repair_state_for_batch",
         fake_resolve_generation_story_repair_state_for_batch,
     )
-    monkeypatch.setattr(chapters_api, "_set_task_active_story_repair_payload", fake_set_task_active_story_repair_payload)
+    monkeypatch.setattr(
+        batch_generation_run_wiring_service,
+        "sync_task_story_repair_state",
+        fake_sync_task_story_repair_state,
+    )
     monkeypatch.setattr(
         batch_generation_run_wiring_service,
         "publish_task_stream_event_service",
         fake_publish_task_stream_event,
     )
-    monkeypatch.setattr(chapters_api, "_record_task_quality_metrics", fake_record_task_quality_metrics)
+    monkeypatch.setattr(
+        batch_generation_retry_service,
+        "record_task_quality_metrics",
+        fake_record_task_quality_metrics,
+    )
 
-    # chapters_test_support.mock_side_effect_services 会 autouse monkeypatch chapters_api.analyze_chapter_background。
-    # 当前默认 batch wiring 已消费 run_wiring_service 本地 seam；这里覆盖它以保持 analysis_calls 可观测。
+    # chapters_test_support.mock_side_effect_services 会默认覆盖分析后台 seam；
+    # 当前 batch runtime 已消费 run_wiring_service 本地 seam，这里继续覆盖该 owner 以保持 analysis_calls 可观测。
     monkeypatch.setattr(batch_generation_run_wiring_service, "analyze_chapter_background", fake_analyze_chapter_background)
-    _, chapter_generation_route_wiring_service = load_single_generation_rollback_modules()
-    monkeypatch.setattr(chapter_generation_route_wiring_service, "execute_chapter_analysis_background", fake_analyze_chapter_background)
+    stream_entry_service = load_single_generation_stream_entry_module()
+    monkeypatch.setattr(stream_entry_service, "execute_chapter_analysis_background", fake_analyze_chapter_background)
 
     # 断言批量流程确实会触发当前 wiring owner 的 analysis seam；避免未来入口漂移导致误报。
     assert batch_generation_run_wiring_service.analyze_chapter_background is not None
@@ -792,6 +843,6 @@ async def test_execute_batch_generation_should_keep_candidate_out_of_chapter_and
     assert analysis_calls[0]["project_id"] == project.id
     assert analysis_calls[0]["task_id"]
     assert isinstance(analysis_calls[0]["story_packet"], StoryPacket)
-    assert analysis_calls[0]["story_packet"].source == "batch-execution-request"
+    assert analysis_calls[0]["story_packet"].source == "batch-generation-runtime"
     assert analysis_calls[0]["chapter_content_override"] == "batch-candidate-blocked"
     assert analysis_calls[0]["chapter_word_count_override"] == len("batch-candidate-blocked")

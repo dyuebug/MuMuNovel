@@ -85,14 +85,10 @@ fn build_polish_route_owner_contract() -> Value {
             "status": "covered_by_dedicated_rust_owner_profile"
         },
         "source_map_files": [
-            "backend/app/api/polish.py",
-            "backend/app/schemas/polish.py",
-            "backend/app/services/prompt_service.py",
-            "backend/app/services/ai_service.py",
-            "backend/app/models/generation_history.py"
+            "backend/migrator_app/models/generation_history.py"
         ],
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Polish route business smoke is covered by phase5-polish-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy.",
+        "next_cutover_gate": "explicit polish generation_history source-map freeze/delete/repoint approval with same-round rollback policy",
+        "migration_policy": "Polish route business smoke is covered by phase5-polish-business-owner; the Python route shell and schema shell are no longer part of the surviving Python API surface, the legacy ai_service compatibility shim has already been physically deleted, and the route-facing AI_DENOISING prompt template definition/render path now lives in Rust PromptTemplateService plus bundled system_templates_data.json. The old Python generation-history runtime-store service file is also physically deleted, and the remaining closeout work is now limited to the shared generation_history model source-map contract under one explicit freeze/delete/repoint approval with same-round rollback policy.",
         "behavior_contract": {
             "text_alias": "original_text accepts the legacy text alias",
             "empty_text_error": "original_text or text empty returns 400",
@@ -100,14 +96,15 @@ fn build_polish_route_owner_contract() -> Value {
             "project_history": "single polish writes generation_history when project_id is present; batch keeps legacy no-history behavior"
         },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_polish_route_schema_prompt_ai_history_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "polish_route_source_map_deleted_remaining_generation_history_model_only",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ],
-            "freeze_reason": "phase5-polish-business-owner covers mock OpenAI configuration, text polish, and batch polish probes with zero Python fallback probes."
+            "full_module_freeze_ready": true,
+            "python_bootstrap_status": "polish_route_runtime_registration_deleted_no_python_route_shell_remains",
+            "python_route_files_status": "polish_route_source_map_deleted_remaining_generation_history_model_only",
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "freeze_reason": "Rust polish route group has dedicated phase5-polish-business-owner probes for mock OpenAI configuration, text polish, and batch polish behavior; the Python route shell and schema shell have been removed from the surviving Python API surface, the legacy ai_service compatibility shim has already been deleted, the route-facing AI_DENOISING prompt template definition/render path already lives in Rust PromptTemplateService plus bundled system_templates_data.json, the old Python generation-history runtime-store service file is physically deleted, and the remaining source map is now limited to the shared generation_history model file.",
+            "rollback_files": []
         }
     })
 }
@@ -452,7 +449,11 @@ mod tests {
         );
         assert_eq!(
             contract["source_map_files"].as_array().map(Vec::len),
-            Some(5)
+            Some(1)
+        );
+        assert_eq!(
+            contract["source_map_files"][0],
+            json!("backend/migrator_app/models/generation_history.py")
         );
         assert_eq!(
             contract["owner_profile"]["name"],
@@ -495,12 +496,16 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            json!("explicit source-map freeze/delete/repoint approval with same-round rollback policy")
+            json!("explicit polish generation_history source-map freeze/delete/repoint approval with same-round rollback policy")
         );
         assert!(contract["migration_policy"]
             .as_str()
             .unwrap()
             .contains("phase5-polish-business-owner"));
+        assert!(contract["migration_policy"]
+            .as_str()
+            .unwrap()
+            .contains("PromptTemplateService"));
         assert!(contract["behavior_contract"]["project_history"]
             .as_str()
             .unwrap_or_default()
@@ -511,12 +516,25 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            json!(false)
+            json!(true)
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_bootstrap_status"],
+            json!("polish_route_runtime_registration_deleted_no_python_route_shell_remains")
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            json!("polish_route_source_map_deleted_remaining_generation_history_model_only")
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            json!(false)
+            json!(true)
         );
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"],
+            json!([])
+        );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
     }
 
     #[test]

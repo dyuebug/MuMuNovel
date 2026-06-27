@@ -1,10 +1,22 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
-from app.models.batch_generation_task import BatchGenerationTask
-from app.services.batch_generation_orchestration_service import (
+from tests.test_support.single_generation_background_orchestration_test_adapter import (
     recover_stale_single_chapter_background_task_if_needed,
     single_chapter_background_task_contains_chapter,
 )
+
+
+def BatchGenerationTask(**kwargs):
+    defaults = {
+        'status': None,
+        'created_at': None,
+        'chapter_ids': [],
+        'error_message': None,
+        'completed_at': None,
+    }
+    defaults.update(kwargs)
+    return SimpleNamespace(**defaults)
 
 
 def test_should_match_single_chapter_background_task_for_string_or_object_chapter_ids():

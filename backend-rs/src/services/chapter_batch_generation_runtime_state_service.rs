@@ -145,14 +145,7 @@ pub(crate) fn build_batch_generation_runtime_state_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation_runtime_state_service",
         "scope": "batch_generation_runtime_lifecycle_execution_input_checkpoint_candidate_events_retry_terminal_and_follow_up_analysis",
-        "python_source_map": [
-            "backend/app/api/chapter_batch_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/batch_generation_orchestration_service.py",
-            "backend/app/services/batch_generation_candidate_service.py",
-            "backend/app/services/batch_generation_run_service.py",
-            "backend/app/services/batch_generation_analysis_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
             "backend-rs/src/services/chapter_generation_runtime_service/story_repair_quality_context_owner.rs",
@@ -229,7 +222,7 @@ pub(crate) fn build_batch_generation_runtime_state_owner_contract() -> Value {
             "chapter_batch_generation_write_workflow_service",
             "chapter_batch_generation_resume_task_command_service",
             "chapter_batch_generation_read_context_service",
-            "chapter_batch_generation_active_gateway_smoke_service",
+            "chapter-batch-generation-active-gateway-smoke-rust",
             "chapter_batch_generation"
         ],
         "selected_candidate_event_owner_contract": build_batch_generation_selected_candidate_event_owner_contract(),
@@ -269,9 +262,9 @@ pub(crate) fn build_batch_generation_runtime_state_owner_contract() -> Value {
             "resume_restore_owner": "prepare_batch_generation_resume_restored_runtime_state",
             "gateway_config_owner": "ChapterCandidateRouteGatewayConfig",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_batch_generation_runtime_state_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "batch-generation read-context source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/projection source-map packages",
+            "status": "rust_batch_generation_runtime_state_owner_with_deleted_route_package_source_map"
         },
         "validation_boundary": [
             "cargo test chapter_batch_generation_runtime_state_service",
@@ -281,14 +274,9 @@ pub(crate) fn build_batch_generation_runtime_state_owner_contract() -> Value {
         ],
         "rollback_boundary": {
             "runtime_knob": "python_candidate_executor_fallback",
-            "source_map_policy": "keep_python_batch_generation_runtime_orchestration_shells_as_source_map_until_explicit_freeze_delete_round",
-            "python_fallback_removal_ready": false,
-            "rollback_files": [
-                "backend/app/api/chapter_batch_generation_routes.py",
-                "backend/app/api/chapters.py",
-                "backend/app/services/batch_generation_orchestration_service.py",
-                "backend/app/services/batch_generation_candidate_service.py"
-            ]
+            "source_map_policy": "batch_generation_route_package_source_map_deleted_surviving_python_closeout_moves_to_read_context_and_shared_projection_packages",
+            "python_fallback_removal_ready": true,
+            "rollback_files": []
         }
     })
 }
@@ -363,10 +351,10 @@ mod tests {
             contract["owner"],
             "chapter_batch_generation_runtime_state_service"
         );
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/api/chapter_batch_generation_routes.py"
-        );
+        assert!(contract["python_source_map"]
+            .as_array()
+            .expect("python source map")
+            .is_empty());
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs"
@@ -462,7 +450,7 @@ mod tests {
         );
         assert_eq!(
             contract["active_consumers"][3],
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         );
         assert_eq!(contract["active_consumers"][4], "chapter_batch_generation");
         assert_eq!(
@@ -472,6 +460,12 @@ mod tests {
         assert_eq!(
             contract["terminal_runtime_patch_owner_contract"]["owner"],
             "chapter_batch_generation_runtime_state_service::terminal_runtime_patch"
+        );
+        assert_eq!(
+            contract["runtime_persistence_owner_contract"]["python_source_map"]
+                .as_array()
+                .expect("runtime persistence python source map"),
+            &Vec::<serde_json::Value>::new()
         );
         assert_eq!(
             contract["resume_restore_owner_contract"]["owner"],
@@ -486,8 +480,20 @@ mod tests {
             "chapter_batch_generation_runtime_state_service::retry_failure_quality_gate_routing"
         );
         assert_eq!(
+            contract["retry_routing_owner_contract"]["python_source_map"]
+                .as_array()
+                .expect("retry routing python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
             contract["startup_and_command_projection_owner_contract"]["owner"],
             "chapter_batch_generation_runtime_state_service::startup_cancel_resume_task_payload_projection"
+        );
+        assert_eq!(
+            contract["startup_and_command_projection_owner_contract"]["python_source_map"]
+                .as_array()
+                .expect("startup and command python source map"),
+            &Vec::<serde_json::Value>::new()
         );
         assert_eq!(
             contract["runtime_driver_owner_contract"]["owner"],
@@ -510,6 +516,24 @@ mod tests {
             "chapter_batch_generation_runtime_state_service::runtime_snapshot_merge_write_projection"
         );
         assert_eq!(
+            contract["resume_semantics_owner_contract"]["python_source_map"]
+                .as_array()
+                .expect("resume semantics python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
+            contract["resume_semantics_owner_contract"]["rollback_boundary"]["source_map_policy"],
+            "batch_generation_resume_semantics_owner_is_rust_only_and_surviving_resume_route_surfaces_are_tracked_by_external_command_contracts"
+        );
+        assert_eq!(
+            contract["runtime_launch_owner_contract"]["rollback_boundary"]["source_map_policy"],
+            "batch_generation_runtime_launch_owner_is_rust_only_and_surviving_launch_dispatch_surfaces_are_tracked_by_external_runtime_contracts"
+        );
+        assert_eq!(
+            contract["runtime_checkpoint_owner_contract"]["rollback_boundary"]["source_map_policy"],
+            "batch_generation_runtime_checkpoint_owner_is_rust_only_and_surviving_checkpoint_projection_surfaces_are_tracked_by_external_runtime_contracts"
+        );
+        assert_eq!(
             contract["terminal_semantics_owner_contract"]["owner"],
             "chapter_batch_generation_runtime_state_service::quality_gate_terminal_semantics_projection"
         );
@@ -519,7 +543,7 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profile"],
@@ -555,15 +579,23 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "batch-generation read-context source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/projection source-map packages"
         );
         assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_route_package_source_map_deleted_surviving_python_closeout_moves_to_read_context_and_shared_projection_packages"
+        );
+        assert!(contract["rollback_boundary"]["rollback_files"]
+            .as_array()
+            .expect("rollback files")
+            .is_empty());
+        assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_batch_generation_runtime_state_owner_ready_for_source_map_closeout_review"
+            "rust_batch_generation_runtime_state_owner_with_deleted_route_package_source_map"
         );
     }
 
@@ -597,7 +629,23 @@ mod tests {
             .is_none());
         assert_eq!(
             contract["active_consumers"][1],
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_batch_generation_selected_candidate_event_owner_source_map_deleted"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_selected_candidate_event_owner_is_rust_only_and_surviving_python_runtime_surfaces_are_tracked_by_external_runtime_state_contracts"
         );
     }
 
@@ -648,8 +696,18 @@ mod tests {
             "parse_batch_generation_request_runtime_state"
         );
         assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .expect("terminal runtime patch python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
             contract["active_consumers"][2],
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_terminal_runtime_patch_owner_is_rust_only_and_surviving_story_repair_task_runtime_surfaces_are_tracked_by_external_runtime_contracts"
         );
     }
 
@@ -712,8 +770,18 @@ mod tests {
             "summary"
         );
         assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .expect("resume restore python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
             contract["active_consumers"][0],
             "chapter_batch_generation_resume_task_command_service"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_resume_restore_owner_is_rust_only_and_surviving_story_repair_runtime_surfaces_are_tracked_by_external_runtime_contracts"
         );
     }
 
@@ -779,6 +847,16 @@ mod tests {
             contract["active_consumers"][0],
             "chapter_batch_generation_runtime_state_service"
         );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .expect("follow up analysis python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_follow_up_analysis_owner_is_rust_only_and_surviving_analysis_runtime_surfaces_are_tracked_by_external_analysis_contracts"
+        );
     }
 
     #[test]
@@ -838,6 +916,16 @@ mod tests {
         assert_eq!(
             contract["active_consumers"][1],
             "chapter_batch_generation_active_gateway_smoke_service"
+        );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .expect("retry routing python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_retry_routing_owner_is_rust_only_and_surviving_retry_quality_gate_surfaces_are_tracked_by_external_runtime_contracts"
         );
     }
 
@@ -900,6 +988,16 @@ mod tests {
             contract["rollback_boundary"]["runtime_state_keys"][7],
             "resumed_from_batch_id"
         );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .expect("startup command python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_startup_command_projection_owner_is_rust_only_and_surviving_startup_cancel_resume_surfaces_are_tracked_by_external_route_contracts"
+        );
     }
 
     #[test]
@@ -959,6 +1057,16 @@ mod tests {
             contract["active_consumers"][1],
             "chapter_batch_generation_active_gateway_smoke_service"
         );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .expect("runtime driver python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_runtime_driver_owner_is_rust_only_and_surviving_driver_orchestration_surfaces_are_tracked_by_external_runtime_contracts"
+        );
     }
 
     #[test]
@@ -994,8 +1102,18 @@ mod tests {
             "chapter_batch_generation_runtime_state_service::terminal_runtime_patch"
         );
         assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .expect("python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
             contract["active_consumers"][2],
             "chapter_batch_generation_runtime_state_service::retry_routing_owner"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_runtime_persistence_owner_is_rust_only_and_surviving_task_mutation_failed_entry_surfaces_are_tracked_by_external_persistence_contracts"
         );
     }
 
@@ -1031,6 +1149,16 @@ mod tests {
             contract["active_consumers"][1],
             "chapter_batch_generation_runtime_state_service::runtime_driver_owner"
         );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .expect("attempt input python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_attempt_input_owner_is_rust_only_and_surviving_prompt_provider_gateway_surfaces_are_tracked_by_external_runtime_contracts"
+        );
     }
 
     #[test]
@@ -1064,6 +1192,117 @@ mod tests {
         assert_eq!(
             contract["active_consumers"][1],
             "chapter_batch_generation_runtime_state_service::follow_up_analysis_owner"
+        );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .expect("quality payload python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_quality_payload_owner_is_rust_only_and_surviving_quality_runtime_surfaces_are_tracked_by_external_runtime_contracts"
+        );
+    }
+
+    #[test]
+    fn should_publish_terminal_semantics_owner_contract() {
+        let contract = super::build_batch_generation_terminal_semantics_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_runtime_state_service::quality_gate_terminal_semantics_projection"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["terminal_resolution_entrypoints"][0],
+            "resolve_batch_generation_quality_gate_terminal_semantics"
+        );
+        assert_eq!(
+            contract["task_payload_owner_contract"]["owner"],
+            "chapter_batch_generation_task_payload_base_service"
+        );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .expect("terminal semantics python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
+            contract["active_consumers"][2],
+            "chapter_batch_generation_active_gateway_smoke_service"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_terminal_semantics_owner_is_rust_only_and_surviving_quality_terminal_surfaces_are_tracked_by_external_task_contracts"
+        );
+    }
+
+    #[test]
+    fn should_publish_runtime_launch_owner_contract() {
+        let contract = super::build_batch_generation_runtime_launch_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_runtime_state_service::runtime_launch_session_dispatch"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["execution_input_entrypoints"][0],
+            "build_batch_generation_execution_input"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["dispatch_entrypoints"][1],
+            "BatchGenerationRuntimeLifecyclePlan::start"
+        );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .expect("runtime launch python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
+            contract["active_consumers"][4],
+            "chapter_batch_generation_write_workflow_service::create_launch_owner"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_runtime_launch_owner_is_rust_only_and_surviving_launch_dispatch_surfaces_are_tracked_by_external_runtime_contracts"
+        );
+    }
+
+    #[test]
+    fn should_publish_runtime_snapshot_owner_contract() {
+        let contract = super::build_batch_generation_runtime_snapshot_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_batch_generation_runtime_state_service::runtime_snapshot_merge_write_projection"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["runtime_state_entrypoints"][0],
+            "merge_batch_generation_runtime_state"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["snapshot_write_entrypoints"][1],
+            "persist_batch_generation_runtime_plan"
+        );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .expect("runtime snapshot python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
+            contract["snapshot_persistence_owner_contract"]["source_map_closeout_status"]
+                ["compat_shell_status"],
+            "physically_deleted"
+        );
+        assert_eq!(
+            contract["active_consumers"][3],
+            "chapter_batch_generation_runtime_state_service::follow_up_analysis_owner"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_runtime_snapshot_owner_is_rust_only_and_surviving_snapshot_runtime_surfaces_are_tracked_by_external_persistence_contracts"
         );
     }
 

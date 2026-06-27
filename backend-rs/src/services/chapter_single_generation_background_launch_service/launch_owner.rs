@@ -34,13 +34,7 @@ pub(crate) fn build_single_generation_startup_snapshot_owner_contract() -> Value
     json!({
         "owner": "chapter_single_generation_background_launch_service::launch_owner::startup_snapshot_owner",
         "scope": "pending_checkpoint_runtime_state_seed_quality_context_and_startup_snapshot_persist",
-        "python_source_map": [
-            "backend/app/api/chapter_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/chapter_generation/stream/service.py",
-            "backend/app/services/chapter_generation/stream/execution_service.py",
-            "backend/app/services/story_repair_payload_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_single_generation_background_launch_service.rs",
             "backend-rs/src/services/chapter_single_generation_background_launch_service/launch_owner.rs",
@@ -88,13 +82,7 @@ pub(crate) fn build_single_generation_background_launch_owner_contract() -> Valu
     json!({
         "owner": "chapter_single_generation_background_launch_service::launch_owner",
         "scope": "background_task_seed_persist_dispatch_and_create_response_payload",
-        "python_source_map": [
-            "backend/app/api/chapter_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/chapter_generation/route_wiring_service.py",
-            "backend/app/services/chapter_generation/stream/entry_service.py",
-            "backend/app/services/chapter_generation/stream/wiring_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_single_generation_background_launch_service.rs",
             "backend-rs/src/services/chapter_single_generation_background_launch_service/launch_owner.rs",

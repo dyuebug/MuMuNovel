@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from app.services.task_system.task_checkpoint_store import touch_checkpoint
+from tests.test_support.task_system import touch_checkpoint
 
 
 def test_touch_checkpoint_merges_and_sets_fields():

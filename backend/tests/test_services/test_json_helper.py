@@ -1,6 +1,6 @@
 import json
 
-from app.services.json_helper import clean_json_response, parse_json
+from tests.test_support.ai_gateway.ai_service import clean_json_response, parse_json
 
 
 def test_should_escape_invalid_control_chars_inside_json_strings():

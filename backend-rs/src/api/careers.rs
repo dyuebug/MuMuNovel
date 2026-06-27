@@ -116,20 +116,17 @@ fn build_careers_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0
         },
         "source_map_files": [
-            "backend/app/api/careers.py",
-            "backend/app/models/career.py",
-            "backend/app/schemas/career.py",
-            "backend/app/api/background_tasks.py"
+            "backend/migrator_app/models/career.py"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_careers_route_model_schema_background_task_launcher_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "production_python_career_model_source_map_replaced_by_migrator_and_test_support_fixtures",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ],
-            "freeze_reason": "phase5-careers-business-owner covers project/character setup, mock OpenAI config, main/sub career CRUD, assignment, stage update, remove, delete, and generate-system probes with zero Python fallback probes."
+            "full_module_freeze_ready": true,
+            "python_route_files_status": "careers_route_source_map_deleted_remaining_career_model_only",
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "freeze_reason": "phase5-careers-business-owner covers project/character setup, mock OpenAI config, main/sub career CRUD, assignment, stage update, remove, delete, and generate-system probes with zero Python fallback probes; the Python careers route shell and schema file have been physically deleted, and the remaining career persistence source map has been narrowed to the dedicated career model file.",
+            "rollback_files": []
         },
         "business_smoke_status": {
             "owner_profile": "phase5-careers-business-owner",
@@ -138,8 +135,8 @@ fn build_careers_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Careers route business smoke is covered by phase5-careers-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+        "next_cutover_gate": "explicit career model source-map freeze/delete/repoint approval with same-round rollback policy",
+        "migration_policy": "Careers route business smoke is covered by phase5-careers-business-owner; the Python careers route shell and schema file have been physically deleted, and final completion now requires explicit career model source-map freeze/delete/repoint approval with same-round rollback policy."
     })
 }
 
@@ -874,6 +871,8 @@ pub fn routes() -> Router {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::{
         build_careers_route_owner_contract, legacy_career_system_query_to_request,
         CAREERS_CHARACTER_LIST_ROUTE, CAREERS_CHARACTER_MAIN_ROUTE, CAREERS_CHARACTER_REMOVE_ROUTE,
@@ -913,7 +912,11 @@ mod tests {
             readiness_probes.last().unwrap(),
             "careers-generate-system-business-rust"
         );
-        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 4);
+        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            contract["source_map_files"][0],
+            "backend/migrator_app/models/career.py"
+        );
         assert_eq!(
             contract["owner_profile"]["name"],
             "phase5-careers-business-owner"
@@ -932,11 +935,19 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "careers_route_source_map_deleted_remaining_career_model_only"
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "production_python_career_model_source_map_replaced_by_migrator_and_test_support_fixtures"
         );
         assert_eq!(
             contract["business_smoke_status"]["status"],
@@ -956,12 +967,13 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "explicit career model source-map freeze/delete/repoint approval with same-round rollback policy"
         );
-        assert!(contract["migration_policy"]
-            .as_str()
-            .expect("careers migration policy should be present")
-            .contains("phase5-careers-business-owner"));
+        assert_eq!(
+            contract["migration_policy"],
+            "Careers route business smoke is covered by phase5-careers-business-owner; the Python careers route shell and schema file have been physically deleted, and final completion now requires explicit career model source-map freeze/delete/repoint approval with same-round rollback policy."
+        );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
     }
 
     #[test]

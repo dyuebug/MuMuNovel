@@ -345,12 +345,9 @@ pub(crate) fn build_chapter_service_owner_contract() -> serde_json::Value {
         "owner": "chapter_service",
         "scope": "chapter_crud_write_read_navigation_and_project_word_count_owner",
         "python_source_map": [
-            "backend/app/api/chapters.py",
-            "backend/app/services/chapter_crud_query_service.py",
-            "backend/app/services/chapter_crud_workflow_service.py",
-            "backend/app/models/chapter.py",
-            "backend/app/models/project.py",
-            "backend/app/models/memory.py"
+            "backend/migrator_app/models/chapter.py",
+            "backend/migrator_app/models/project.py",
+            "backend/migrator_app/models/memory_analysis.py"
         ],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_service.rs",
@@ -391,9 +388,9 @@ pub(crate) fn build_chapter_service_owner_contract() -> serde_json::Value {
                 "chapter_quality_metrics_query_service"
             ],
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_chapter_service_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "chapter CRUD workflow and query direct python source-maps deleted; surviving Python closeout work for this owner is now limited to chapter/project model references plus the memory analysis model rollback reference",
+            "status": "rust_chapter_service_owner_workflow_source_map_deleted"
         },
         "validation_boundary": [
             "cargo test chapter_service --manifest-path backend-rs/Cargo.toml",
@@ -402,7 +399,7 @@ pub(crate) fn build_chapter_service_owner_contract() -> serde_json::Value {
             "cargo test chapter_quality_metrics_query_service --manifest-path backend-rs/Cargo.toml",
             "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only --profile phase5-chapter-crud-owner"
         ],
-        "rollback_boundary": "backend/app/api/chapters.py plus backend/app/services/chapter_crud_query_service.py and backend/app/services/chapter_crud_workflow_service.py remain source-map rollback references"
+        "rollback_boundary": "chapter/project model references and the memory analysis model remain source-map rollback references"
     })
 }
 
@@ -473,6 +470,10 @@ mod tests {
             contract["rust_owner_map"][0],
             "backend-rs/src/services/chapter_service.rs"
         );
+        assert_eq!(
+            contract["python_source_map"][2],
+            "backend/migrator_app/models/memory_analysis.py"
+        );
         assert_eq!(contract["behavior_contract"]["entrypoints"][0], "create");
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profiles"][0],
@@ -492,7 +493,11 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"],
+            "chapter/project model references and the memory analysis model remain source-map rollback references"
         );
     }
 }

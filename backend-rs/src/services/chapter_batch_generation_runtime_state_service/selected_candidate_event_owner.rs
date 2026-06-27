@@ -6,11 +6,7 @@ pub(crate) fn build_batch_generation_selected_candidate_event_owner_contract() -
     json!({
         "owner": "chapter_batch_generation_runtime_state_service::selected_candidate_event_owner",
         "scope": "selected_candidate_snapshot_and_chunk_event_projection",
-        "python_source_map": [
-            "backend/app/services/chapter_candidate_event_service.py",
-            "backend/app/services/chapter_candidate_view_service.py",
-            "backend/app/services/batch_generation_candidate_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service/selected_candidate_event_owner.rs",
@@ -51,7 +47,7 @@ pub(crate) fn build_batch_generation_selected_candidate_event_owner_contract() -
         },
         "active_consumers": [
             "chapter_batch_generation_runtime_state_service",
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         ],
         "validation_boundary": [
             "cargo test chapter_batch_generation_runtime_state_service",
@@ -59,8 +55,20 @@ pub(crate) fn build_batch_generation_selected_candidate_event_owner_contract() -
             "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only",
             "cargo check"
         ],
+        "service_runtime_closeout_status": {
+            "owner_profile": "phase5-batch-generation-owner",
+            "batch_generation_manifest_probe_count": 11,
+            "rust_manifest_probe_count": 11,
+            "python_fallback_probe_count": 0,
+            "selected_candidate_snapshot_owner": "build_batch_generation_selected_candidate_event_snapshot",
+            "selected_candidate_batch_owner": "build_batch_generation_selected_candidate_event_batch",
+            "source_map_closeout_ready": true,
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "selected-candidate event projection is rust-only; surviving Python runtime closeout work is tracked by external runtime-state owner contracts",
+            "status": "rust_batch_generation_selected_candidate_event_owner_source_map_deleted"
+        },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_candidate_selected_event_projection_as_source_map_until_same_round_runtime_readiness_closeout",
+            "source_map_policy": "batch_generation_selected_candidate_event_owner_is_rust_only_and_surviving_python_runtime_surfaces_are_tracked_by_external_runtime_state_contracts",
             "runtime_state_keys": [
                 "selected_candidate",
                 "selected_candidate_events",

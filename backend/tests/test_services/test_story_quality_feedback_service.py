@@ -1,14 +1,18 @@
 import json
 
-from app.services.story_quality_feedback_service import (
+from tests.test_support.chapter_quality_metrics_query_test_support import (
     advance_quality_metrics_summary_state,
-    build_quality_gate_decision,
     build_quality_metrics_summary,
     build_quality_metrics_summary_from_state,
     build_quality_metrics_summary_state,
-    build_story_continuity_preflight,
-    build_story_repair_guidance,
     extract_quality_metrics_from_history_payload,
+)
+from tests.test_support.story_quality_metrics_aggregation_test_support import (
+    build_story_continuity_preflight,
+)
+from tests.test_support.schemas.quality import (
+    build_quality_gate_decision,
+    build_story_repair_guidance,
 )
 
 

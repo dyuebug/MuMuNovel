@@ -53,9 +53,10 @@ mod tests {
             contract["scope"],
             "shared_generation_execution_config_bridge"
         );
+        assert_eq!(contract["python_source_map"].as_array().unwrap().len(), 0);
         assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/services/chapter_generation/stream/execution_service.py"
+            contract["historical_python_test_support"][0],
+            "backend/tests/test_support/ai_gateway/ai_config.py"
         );
         assert_eq!(
             contract["rust_target_map"][0],
@@ -83,7 +84,7 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["source_map_policy"],
-            "keep_python_generation_execution_config_shells_as_source_map_until_explicit_freeze_delete_round"
+            "production_python_ai_gateway_source_map_deleted_historical_fixtures_live_under_tests_test_support"
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profiles"][0],
@@ -135,10 +136,7 @@ mod tests {
             contract["scope"],
             "batch_request_runtime_state_payload_and_story_repair_projection"
         );
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/services/batch_generation/create_service.py"
-        );
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["rust_target_map"][0],
             "backend-rs/src/services/chapter_generation_execution_contract_service.rs"
@@ -161,7 +159,31 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["source_map_policy"],
-            "keep_python_batch_request_runtime_state_shells_as_source_map_until_explicit_freeze_delete_round"
+            "batch_request_runtime_state_owner_is_rust_only_and_no_longer_tracks_direct_python_request_runtime_state_shell_source_maps"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profiles"],
+            json!(["phase5-batch-generation-owner"])
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["batch_generation_manifest_probe_count"],
+            json!(11)
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            json!(0)
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_batch_request_runtime_state_owner_direct_package_closed_out"
         );
     }
 
@@ -249,10 +271,7 @@ mod tests {
             contract["scope"],
             "single_generation_execution_input_and_compat_options"
         );
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/api/chapters.py"
-        );
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/services/chapter_generation_execution_contract_service.rs"
@@ -315,13 +334,21 @@ mod tests {
             true
         );
         assert_eq!(
+            contract["active_consumers"][9],
+            "chapter-single-generation-active-gateway-smoke-rust"
+        );
+        assert_eq!(
             contract["active_consumers"][10],
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         );
         assert_eq!(contract["active_consumers"][11], serde_json::Value::Null);
         assert_eq!(
             contract["rollback_boundary"]["runtime_knobs"][0],
             "SingleChapterGenerationCompatOptions"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "single_generation_execution_contract_owner_is_rust_only_and_shared_prompt_story_repair_python_surfaces_are_tracked_by_external_owner_contracts"
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profiles"][0],
@@ -348,6 +375,10 @@ mod tests {
             json!(0)
         );
         assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            true
+        );
+        assert_eq!(
             contract["service_runtime_closeout_status"]["compat_options_owner"],
             "SingleChapterGenerationCompatOptions"
         );
@@ -360,8 +391,12 @@ mod tests {
             true
         );
         assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "single-generation execution contract owner is rust-only; surviving Python exit work is tracked by shared prompt and shared runtime owner contracts outside this owner"
+        );
+        assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_shared_execution_contract_owner_ready_for_source_map_closeout_review"
+            "rust_shared_execution_contract_owner_direct_package_closed_out"
         );
     }
 

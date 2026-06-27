@@ -1750,11 +1750,7 @@ pub(crate) fn build_story_card_owner_contract() -> Value {
     json!({
         "owner": "chapter_generation_prompt_service::story_card_owner",
         "scope": "narrative_blueprint_and_story_card_runtime_prompt_block_family",
-        "python_source_map": [
-            "backend/app/services/prompt_service.py",
-            "backend/app/services/batch_generation_prompt_service.py",
-            "backend/app/services/chapter_generation/runtime/prompt_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_generation_prompt_service.rs",
             "backend-rs/src/services/chapter_generation_prompt_service/story_card_owner.rs"
@@ -1803,8 +1799,35 @@ pub(crate) fn build_story_card_owner_contract() -> Value {
             "cargo check --manifest-path backend-rs/Cargo.toml"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_prompt_story_card_builders_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "production_python_story_prompt_block_builders_deleted_after_rust_owner_validation",
+            "split_owner_note": "narrative blueprint plus the full story card prompt builder family are Rust-owned; historical Python parity fixtures live only under backend/tests/test_support/story_prompt_block_test_support.py",
             "runtime_contract": "story card block keys and combination semantics remain stable for shared prompt consumers"
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_story_card_owner_contract;
+
+    #[test]
+    fn should_publish_split_story_card_python_source_map_contract() {
+        let contract = build_story_card_owner_contract();
+
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .expect("python source map")
+                .len(),
+            0
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "production_python_story_prompt_block_builders_deleted_after_rust_owner_validation"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["split_owner_note"],
+            "narrative blueprint plus the full story card prompt builder family are Rust-owned; historical Python parity fixtures live only under backend/tests/test_support/story_prompt_block_test_support.py"
+        );
+    }
 }

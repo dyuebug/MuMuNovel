@@ -79,8 +79,18 @@ mod tests {
             "batch_generation_create_write_workflow_persist_dispatch_and_response_payload"
         );
         assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/api/chapter_batch_generation_routes.py"
+            contract["python_source_map"]
+                .as_array()
+                .expect("python source map")
+                .len(),
+            0
+        );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .expect("python source map")
+                .len(),
+            0
         );
         assert_eq!(
             contract["rust_owner_map"][1],
@@ -120,7 +130,7 @@ mod tests {
         );
         assert_eq!(
             contract["active_consumers"][1],
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         );
         assert_eq!(
             contract["runtime_state_owner_contract"]["owner"],
@@ -149,6 +159,10 @@ mod tests {
         assert_eq!(
             contract["rollback_boundary"]["python_bootstrap_status"],
             "lazy_imported_and_registered_for_explicit_gateway_rollback_only"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_write_workflow_owner_is_rust_only_and_surviving_create_route_service_surfaces_are_tracked_by_external_batch_route_contracts"
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profile"],
@@ -184,15 +198,15 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "batch-generation create workflow source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/projection source-map packages"
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_batch_generation_write_workflow_owner_ready_for_source_map_closeout_review"
+            "rust_batch_generation_write_workflow_owner_source_map_deleted"
         );
     }
 
@@ -233,8 +247,32 @@ mod tests {
             "prepare_generation_execution_config"
         );
         assert_eq!(
+            contract["startup_seed_owner_contract"]["python_source_map"]
+                .as_array()
+                .expect("startup seed python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
+            contract["persistence_owner_contract"]["python_source_map"]
+                .as_array()
+                .expect("persistence python source map"),
+            &Vec::<serde_json::Value>::new()
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_create_launch_owner_is_rust_only_and_surviving_create_route_service_surfaces_are_tracked_by_external_launch_contracts"
+        );
+        assert_eq!(
+            contract["startup_seed_owner_contract"]["rollback_boundary"]["source_map_policy"],
+            "batch_generation_create_startup_seed_owner_is_rust_only_and_surviving_startup_seed_surfaces_are_tracked_by_external_runtime_contracts"
+        );
+        assert_eq!(
+            contract["persistence_owner_contract"]["rollback_boundary"]["source_map_policy"],
+            "batch_generation_create_persistence_owner_is_rust_only_and_surviving_create_persistence_dispatch_surfaces_are_tracked_by_external_runtime_contracts"
+        );
+        assert_eq!(
             contract["active_consumers"][3],
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         );
         assert_eq!(
             contract["rollback_boundary"]["runtime_state_keys"][7],

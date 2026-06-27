@@ -75,16 +75,9 @@ fn build_ai_test_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "AI test route business smoke is covered by phase5-ai-test-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy.",
-        "source_map_files": [
-            "backend/app/api/settings.py",
-            "backend/app/schemas/settings.py",
-            "backend/app/services/ai_service.py",
-            "backend/app/services/ai_config.py",
-            "backend/app/services/ai_gateway/ai_service.py",
-            "backend/app/services/ai_gateway/ai_config.py"
-        ],
+        "next_cutover_gate": "ai-test route source-map shell deleted; surviving Python closeout work is outside this route group",
+        "migration_policy": "AI test route business smoke is covered by phase5-ai-test-owner; the detached Python ai_test route shell is already gone, and the remaining Python settings/ai-gateway files are shared runtime dependencies outside this direct route-group boundary.",
+        "source_map_files": [],
         "behavior_contract": {
             "auth": "all AI test routes require Claims before provider access",
             "aliases": "legacy /ai/test aliases stay registered beside /ai-test",
@@ -92,14 +85,12 @@ fn build_ai_test_route_owner_contract() -> Value {
             "probe_max_tokens": "max_tokens defaults to 4096 and is clamped to 1..=64 for probe calls"
         },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_settings_ai_service_config_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "ai_test_route_source_map_deleted_no_remaining_route_group_python_source_map_hold",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ],
-            "freeze_reason": "phase5-ai-test-owner covers main, alias, stream-main, and stream-alias business probes with zero Python fallback probes."
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "freeze_reason": "phase5-ai-test-owner covers main, alias, stream-main, and stream-alias business probes with zero Python fallback probes, the detached Python ai_test route shell is already gone, and the remaining Python settings plus ai-gateway files now belong to broader shared runtime lanes outside this direct route-group boundary."
         }
     })
 }
@@ -245,7 +236,7 @@ mod tests {
         );
         assert_eq!(
             contract["source_map_files"].as_array().map(Vec::len),
-            Some(6)
+            Some(0)
         );
         assert_eq!(
             contract["owner_profile"]["name"],
@@ -288,12 +279,16 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            json!("explicit source-map freeze/delete/repoint approval with same-round rollback policy")
+            json!("ai-test route source-map shell deleted; surviving Python closeout work is outside this route group")
         );
         assert!(contract["migration_policy"]
             .as_str()
             .expect("migration policy should be a string")
             .contains("phase5-ai-test-owner"));
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("migration policy should be a string")
+            .contains("shared runtime dependencies outside this direct route-group boundary"));
         assert!(contract["behavior_contract"]["probe_max_tokens"]
             .as_str()
             .unwrap_or_default()
@@ -308,11 +303,15 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            json!(false)
+            json!(true)
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            json!(false)
+            json!(true)
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"],
+            json!([])
         );
     }
 

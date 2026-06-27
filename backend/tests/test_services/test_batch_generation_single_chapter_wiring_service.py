@@ -2,7 +2,9 @@ from asyncio import Lock
 
 import pytest
 
-from app.services import batch_generation_single_chapter_wiring_service as wiring_service
+from tests.test_support import (
+    batch_generation_single_chapter_wiring_test_adapter as wiring_service,
+)
 
 
 def test_should_build_default_batch_generation_single_chapter_dependencies(monkeypatch):
@@ -47,8 +49,8 @@ def test_should_build_default_batch_generation_single_chapter_dependencies(monke
     assert captured['clone_quality_profile_fn'] is wiring_service.clone_chapter_quality_profile
     assert captured['build_outline_structure_runtime_sources_fn'] is wiring_service.build_outline_structure_runtime_sources
     assert captured['execute_prompt_stage_fn'] is wiring_service.execute_batch_generation_prompt_stage
-    assert captured['get_template_fn'].__qualname__ == wiring_service.PromptService.get_template.__qualname__
-    assert captured['format_prompt_fn'] is wiring_service.PromptService.format_prompt
+    assert captured['get_template_fn'] is wiring_service.get_template
+    assert captured['format_prompt_fn'] is wiring_service.format_prompt
     assert captured['apply_style_to_prompt_fn'] is wiring_service.WritingStyleManager.apply_style_to_prompt
     assert captured['build_runtime_system_prompt_fn'] is wiring_service.build_chapter_runtime_system_prompt
     assert captured['calculate_max_tokens_fn'] is wiring_service._calculate_chapter_generation_max_tokens
@@ -133,8 +135,8 @@ async def test_should_generate_single_chapter_for_batch_with_default_wiring(monk
     assert captured['dependency_kwargs']['resolve_quality_profile_fn'] is wiring_service.resolve_chapter_quality_profile
     assert captured['dependency_kwargs']['one_to_one_builder_cls'] is wiring_service.OneToOneContextBuilder
     assert captured['dependency_kwargs']['one_to_many_builder_cls'] is wiring_service.OneToManyContextBuilder
-    assert captured['dependency_kwargs']['get_template_fn'].__qualname__ == wiring_service.PromptService.get_template.__qualname__
-    assert captured['dependency_kwargs']['format_prompt_fn'] is wiring_service.PromptService.format_prompt
+    assert captured['dependency_kwargs']['get_template_fn'] is wiring_service.get_template
+    assert captured['dependency_kwargs']['format_prompt_fn'] is wiring_service.format_prompt
     assert captured['dependency_kwargs']['build_runtime_system_prompt_fn'] is wiring_service.build_chapter_runtime_system_prompt
     assert captured['dependency_kwargs']['compute_story_quality_metrics_fn'] is wiring_service.compute_story_quality_metrics
     assert captured['dependency_kwargs']['resolve_quality_gate_execution_plan_fn'] is wiring_service.resolve_quality_gate_execution_plan

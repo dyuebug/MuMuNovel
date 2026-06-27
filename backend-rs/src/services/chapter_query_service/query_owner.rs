@@ -911,12 +911,8 @@ fn build_chapter_query_service_owner_contract() -> Value {
         "owner": "chapter_query_service",
         "scope": "chapter_crud_navigation_annotations_can_generate_and_project_quality_trend_query_owner",
         "python_source_map": [
-            "backend/app/api/chapters.py",
-            "backend/app/services/chapter_crud_query_service.py",
-            "backend/app/services/project_quality_trend_query_service.py",
-            "backend/app/services/chapter_generation/prerequisite_service.py",
-            "backend/app/models/chapter.py",
-            "backend/app/models/memory.py"
+            "backend/migrator_app/models/chapter.py",
+            "backend/migrator_app/models/memory_analysis.py"
         ],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_query_service.rs",
@@ -953,16 +949,16 @@ fn build_chapter_query_service_owner_contract() -> Value {
                 "chapter_quality_metrics_query_service"
             ],
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_chapter_query_service_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "chapter query source-map package deleted; surviving Python work is limited to shared chapter and memory-analysis model rollback references",
+            "status": "rust_chapter_query_service_owner_query_source_map_deleted"
         },
         "validation_boundary": [
             "cargo test chapter_query_service --manifest-path backend-rs/Cargo.toml",
             "cargo test chapter_quality_metrics_query_service --manifest-path backend-rs/Cargo.toml",
             "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only --profile phase5-chapter-crud-owner"
         ],
-        "rollback_boundary": "backend/app/api/chapters.py remains the chapter query source-map rollback reference"
+        "rollback_boundary": "backend/migrator_app/models/chapter.py and backend/migrator_app/models/memory_analysis.py remain the chapter query source-map rollback references"
     })
 }
 
@@ -1089,6 +1085,10 @@ mod tests {
 
         assert_eq!(contract["owner"], "chapter_query_service");
         assert_eq!(
+            contract["python_source_map"][1],
+            "backend/migrator_app/models/memory_analysis.py"
+        );
+        assert_eq!(
             contract["behavior_contract"]["entrypoints"][3],
             "load_quality_trend_payload"
         );
@@ -1110,7 +1110,11 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"],
+            "backend/migrator_app/models/chapter.py and backend/migrator_app/models/memory_analysis.py remain the chapter query source-map rollback references"
         );
     }
 

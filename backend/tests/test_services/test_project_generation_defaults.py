@@ -1,5 +1,23 @@
-from app.models.project import Project
-from app.services.project_generation_defaults import resolve_project_generation_defaults
+from types import SimpleNamespace
+
+from tests.test_support.story_generation_guidance_test_support import (
+    resolve_project_generation_defaults,
+)
+
+
+def Project(**kwargs):
+    defaults = {
+        "title": "测试项目",
+        "user_id": "user-test",
+        "default_creative_mode": None,
+        "default_story_focus": None,
+        "default_plot_stage": None,
+        "default_story_creation_brief": None,
+        "default_quality_preset": None,
+        "default_quality_notes": None,
+    }
+    defaults.update(kwargs)
+    return SimpleNamespace(**defaults)
 
 
 def test_should_resolve_project_generation_defaults_from_project():

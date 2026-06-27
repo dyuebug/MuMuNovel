@@ -20,13 +20,7 @@ pub(crate) fn build_batch_generation_write_workflow_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation_write_workflow_service",
         "scope": "batch_generation_create_write_workflow_persist_dispatch_and_response_payload",
-        "python_source_map": [
-            "backend/app/api/chapter_batch_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/batch_generation/create_service.py",
-            "backend/app/services/batch_generation/status_response_builder.py",
-            "backend/app/services/batch_generation_candidate_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/api/chapter_batch_generation.rs",
             "backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs",
@@ -84,7 +78,7 @@ pub(crate) fn build_batch_generation_write_workflow_owner_contract() -> Value {
         },
         "active_consumers": [
             "chapter_batch_generation::create_batch_generation",
-            "chapter_batch_generation_active_gateway_smoke_service",
+            "chapter-batch-generation-active-gateway-smoke-rust",
             "chapter_batch_generation_runtime_state_service"
         ],
         "create_launch_owner_contract": build_batch_generation_create_launch_owner_contract(),
@@ -106,9 +100,9 @@ pub(crate) fn build_batch_generation_write_workflow_owner_contract() -> Value {
             "gateway_config_owner": "ChapterCandidateRouteGatewayConfig",
             "response_payload_owner": "BatchGenerationQueuedSnapshotPlan::into_create_response_payload",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_batch_generation_write_workflow_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "batch-generation create workflow source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/projection source-map packages",
+            "status": "rust_batch_generation_write_workflow_owner_source_map_deleted"
         },
         "validation_boundary": [
             "cargo test chapter_batch_generation_write_workflow_service",
@@ -118,14 +112,10 @@ pub(crate) fn build_batch_generation_write_workflow_owner_contract() -> Value {
         ],
         "rollback_boundary": {
             "runtime_knob": "python_candidate_executor_fallback",
-            "source_map_policy": "keep_python_batch_generation_route_and_service_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_write_workflow_owner_is_rust_only_and_surviving_create_route_service_surfaces_are_tracked_by_external_batch_route_contracts",
             "python_bootstrap_status": "lazy_imported_and_registered_for_explicit_gateway_rollback_only",
             "python_fallback_removal_ready": true,
-            "rollback_files": [
-                "backend/app/api/chapter_batch_generation_routes.py",
-                "backend/app/services/batch_generation/create_service.py",
-                "backend/app/services/batch_generation/status_response_builder.py",
-            ]
+            "rollback_files": []
         }
     })
 }

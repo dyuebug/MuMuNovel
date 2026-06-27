@@ -1,60 +1,55 @@
 # MuMuNovel - AI 智能小说创作助手
 
-> 面向长篇小说创作的 AI 协作平台，覆盖项目创建、世界观/角色/大纲生成、章节写作、灵感恢复、提示词工坊与多模型接入。
+> 面向长篇小说创作的 AI 协作平台，当前生产运行形态是
+> **Rust backend + Nginx gateway + PostgreSQL + Rust db-migrator**。
 
 ## 变更记录
 
-### 2026-04-20
-- 刷新根级项目上下文文档
-- 修正文档中已过时的测试、版本、入口与运行说明
-- 对齐当前前后端入口、健康检查与 E2E 状态
+### 2026-06-25
+
+- 根级上下文切换到 Rust-owned runtime。
+- 删除旧 FastAPI runtime、`backend/app`、`uvicorn` 与 Swagger/ReDoc 说明。
+- 明确 Python 当前只保留冻结的迁移 source-map、Alembic metadata 与测试支撑边界。
 
 ---
 
 ## 项目目的
 
-MuMuNovel 通过前后端分离架构，把小说创作工作流拆成可逐步完成的 AI 能力：
+MuMuNovel 把小说创作工作流拆成可逐步完成的 AI 能力：
+
 - 项目创建与智能向导
 - 世界观、角色、职业体系与大纲生成
 - 章节写作、重写、分析、批量生成与后台任务恢复
-- 灵感模式与联网研究透传
+- 灵感模式与生成前网络检索透传
 - 伏笔、写作风格、记忆与提示词工坊
-- 多模型接入：OpenAI、Anthropic、Gemini、MCP 工具链
+- 多模型接入：OpenAI 兼容接口、Anthropic、Gemini、MCP 工具链
 
 ---
 
-## 仓库地图
+## 当前架构
 
 ```text
 MuMuNovel/
-├── backend/                 # FastAPI 后端、数据库、AI 服务、后台任务
-│   ├── app/
-│   │   ├── main.py          # 应用入口、路由注册、健康检查、SPA 回退
-│   │   ├── config.py        # 配置与环境变量
-│   │   ├── database.py      # 数据库与会话管理
-│   │   ├── api/             # REST/SSE 路由
-│   │   ├── services/        # 业务服务与 AI 编排
-│   │   ├── models/          # SQLAlchemy 模型
-│   │   ├── schemas/         # Pydantic schema
-│   │   ├── middleware/      # 认证与 request id 中间件
-│   │   └── mcp/             # MCP 集成
-│   ├── tests/               # pytest API / service / schema 测试
-│   ├── alembic/             # PostgreSQL / SQLite 迁移
-│   └── CLAUDE.md
+├── backend-rs/              # Rust 生产后端：API、SSE、任务、数据库访问、静态资源回退
+│   ├── src/main.rs          # Rust 服务入口
+│   ├── src/api/             # Axum API 路由
+│   ├── src/services/        # 业务 owner 与迁移后的运行语义
+│   └── Cargo.toml
+├── backend/                 # 冻结的 Python 迁移 source-map、Alembic metadata、工具与测试
+│   ├── migrator_app/        # Alembic metadata owner，不是生产 runtime
+│   ├── alembic/             # PostgreSQL migrations；SQLite 为 legacy/manual profile
+│   ├── scripts/             # DB migration scripts
+│   ├── tools/               # 迁移/检查工具
+│   └── tests/               # migrator/tool/test-support 测试
 ├── frontend/                # React + TypeScript 前端
-│   ├── src/
-│   │   ├── main.tsx         # React 入口 + ThemeProvider
-│   │   ├── App.tsx          # 路由树、懒加载、全局后台任务中心
-│   │   ├── pages/           # 页面
-│   │   ├── components/      # 通用组件
-│   │   ├── services/        # API/SSE 客户端
-│   │   ├── theme/           # 主题模式与配置
-│   │   └── routes/          # 懒加载辅助
-│   ├── e2e/                 # Playwright 用例
-│   ├── playwright.config.ts # E2E 配置
-│   └── CLAUDE.md
-├── .github/workflows/       # CI / 镜像构建工作流
-└── CLAUDE.md                # 根级协作上下文
+│   ├── src/main.tsx
+│   ├── src/App.tsx
+│   ├── src/components/
+│   ├── src/pages/
+│   └── src/services/
+├── deploy/                  # Nginx、gateway smoke、部署探针
+├── docker-compose.yml       # Rust runtime compose
+└── docker-compose.strangler.yml
 ```
 
 ---
@@ -63,134 +58,154 @@ MuMuNovel/
 
 | 模块 | 语言 | 职责 | 主入口 | 文档 |
 |---|---|---|---|---|
-| `backend/` | Python | FastAPI API、SSE、数据库、AI 服务、后台任务 | `backend/app/main.py` | `backend/CLAUDE.md` |
+| `backend-rs/` | Rust | 生产 API、SSE、后台任务、数据库访问、静态资源回退 | `backend-rs/src/main.rs` | `backend-rs/CLAUDE.md` |
+| `backend/` | Python | 冻结的迁移 source-map、Alembic metadata、迁移工具与测试支持 | frozen source-map / test-support | `backend/CLAUDE.md` |
 | `frontend/` | TypeScript | React UI、路由、主题、SSE 消费、E2E | `frontend/src/main.tsx` | `frontend/CLAUDE.md` |
+| `deploy/` | Shell/PowerShell/Python | Nginx gateway、strangler probes、部署脚本 | `deploy-strangler.ps1` | `deploy/strangler-gateway-probes.json` |
 
 ---
 
 ## 运行与开发
 
-### 本地后端
+### Strangler 部署
 
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```powershell
+.\deploy-strangler.bat
 ```
 
-### 本地前端
+常用参数：
 
-```bash
+```powershell
+.\deploy-strangler.bat -NoCache
+.\deploy-strangler.bat -FullRestart
+.\deploy-strangler.bat -SkipFrontendBuild
+.\deploy-strangler.bat -NonInteractive
+```
+
+### Rust 后端检查
+
+```powershell
+cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/story-continuity-ledger-owner"
+```
+
+### Frozen Python source-map / 工具检查
+
+```powershell
+python -X utf8 "backend/tools/check_alembic_revision_health.py"
+python -X utf8 "backend/tools/check_text_encoding_health.py"
+python -X utf8 -m pytest "backend/tests/test_tools/test_alembic_versioning.py" -q
+```
+
+### 前端
+
+```powershell
 cd frontend
 npm install
 npm run dev
-```
-
-### 常用命令
-
-```bash
-# backend
-cd backend
-pytest
-alembic -c alembic-postgres.ini upgrade head
-alembic -c alembic-sqlite.ini upgrade head
-
-# frontend
-cd frontend
 npm run build
-npm run build:analyze
-npm run lint
-npm run e2e
-npm run e2e:auth
 ```
 
-### 健康检查
+### Compose 验证
 
-- `GET /health` - 兼容健康检查
-- `GET /livez` - liveness probe
-- `GET /readyz` - 启动阶段 + 数据库 readiness
-- `GET /health/db-sessions` - 数据库会话统计
+```powershell
+docker compose -f "docker-compose.yml" config --services
+docker compose -f "docker-compose.strangler.yml" config --services
+python -X utf8 "backend/tools/run_strangler_gateway_smoke.py" --manifest "deploy/strangler-gateway-probes.json" --validate-manifest-only
+```
 
----
+当前 compose runtime 应只包含：
 
-## 当前测试状态
-
-### 已有
-- 后端：`pytest`，覆盖 `tests/test_api`、`tests/test_services`、`tests/test_schemas`
-- 前端：Playwright E2E，覆盖登录、后台任务页、章节/大纲相关流程、灵感恢复、联网研究透传
-- 构建检查：`frontend` 已有 `lint`、`build`、`build:analyze`
-
-### 仍缺失
-- 前端组件级单元测试
-- 统一的仓库根级测试编排命令
-- 端到端的真实外部 AI 提供商回归
+```text
+postgres
+db-migrator
+rust-backend
+nginx
+```
 
 ---
 
-## 关键依赖与外部服务
+## 健康检查
 
-### 后端
-- `fastapi`, `uvicorn`
-- `sqlalchemy`, `asyncpg`, `aiosqlite`, `alembic`
-- `openai`, `anthropic`, `mcp`
-- `chromadb`, `sentence-transformers`, `transformers`
-- PostgreSQL / SQLite
+Gateway 默认地址：
 
-### 前端
-- `react`, `react-router-dom`, `antd`, `zustand`, `axios`
-- `@xyflow/react`, `dagre` 用于关系图/图布局
-- `@playwright/test` 用于 E2E
-- `vite`, `typescript`, `eslint`
+- `GET http://localhost:8005/health`
+- `GET http://localhost:8005/livez`
+- `GET http://localhost:8005/readyz`
+- `GET http://localhost:8005/health/db-sessions`
+
+Rust backend 容器内部服务端口为 `8001`。不再使用长期运行的 Python HTTP backend。
+
+---
+
+## API 模型获取当前状态
+
+`fetch-models` 已由 Rust settings API 接管：
+
+- Rust route 常量：`backend-rs/src/api/settings.rs`
+- Gateway 访问路径：`POST /api/settings/fetch-models`
+- Rust 内部 route：`/settings/fetch-models`
+- 前端调用：`frontend/src/services/modules/settings.ts`
+- UI 组件：`frontend/src/components/ModelInputWithFetch.tsx`
+- Settings 页面集成：`frontend/src/components/SettingsCurrentTab.tsx`
+
+旧的 Python `backend/app/api/settings.py`、`backend/app/schemas/settings.py`
+和 `backend/test_fetch_models.py` 已不再是当前实现来源。
 
 ---
 
 ## 编码与协作约定
 
-### 后端
-- 优先在 `app/services/` 放业务逻辑，`app/api/` 只保留路由与编排
-- 所有异步 I/O 使用 `async/await`
-- 数据访问遵循用户隔离；涉及项目/章节/记忆数据必须检查 `user_id`
-- 章节相关能力已拆分为多个 route/service 文件，改签名时必须追踪所有调用链
+### Rust runtime
 
-### 前端
-- 页面走 `src/pages/`，可复用 UI 放 `src/components/`
-- 路由由 `src/App.tsx` 统一维护，页面默认懒加载
-- API/SSE 客户端优先复用 `src/services/` 与 `src/utils/`
-- 主题切换相关逻辑集中在 `src/theme/`
+- route handler 保持 transport-oriented，业务语义进入 `backend-rs/src/services/`。
+- 章节生成、批量生成、重写、分析、后台任务等迁移工作按 owner/package 收口，不再用微小 Python cleanup 作为主要迁移进度。
+- 修改 route、SSE、task lifecycle、checkpoint、provider default、rollback/source-map evidence 时，必须补对应 focused tests 或 smoke/manifest 验证。
+
+### Frozen Python migration source-map
+
+- `backend/migrator_app/` 只保留 Alembic metadata source-map 和测试支撑。
+- 生产迁移执行器现在是 Rust `db-migrator`，不要恢复 `backend/app` 或 `app.*` production imports。
+- `backend/alembic/postgres/versions/` 仍是历史 source-map 与测试/检查输入，不是生产 deploy entry。
+- `backend/scripts/migrate.py` 已删除；手动 Alembic revision 维护直接使用 `alembic -c alembic-postgres.ini revision ...`。
+- SQLite Alembic profile 是 legacy/manual，不是 production migrator 默认路径。
+
+### Frontend
+
+- 页面走 `frontend/src/pages/`，复用 UI 放 `frontend/src/components/`。
+- API/SSE 客户端优先复用 `frontend/src/services/`。
+- Settings 中 API Key、Base URL、生成前网络检索等设置应保存到现有 settings/preset 数据流，不新增平行状态源。
 
 ---
 
 ## 当前风险与注意事项
 
-- 文档、页面文件与真实路由并不总是完全同步，改动前应以 `backend/app/main.py` 和 `frontend/src/App.tsx` 为准
-- 后端章节能力拆分较细，生成/分析/重写/后台任务恢复互相耦合，改动前要追踪 route → service → model
-- 前端构建产物默认输出到 `backend/static`，前后端联调时不要误删静态目录
-- `readyz` 依赖数据库 warmup；本地数据库未启动时 API 可能表现为部分可访问、readiness 失败
+- Python runtime 已退出生产 HTTP 路径，但 Python source-map / test-support 仍保留，因此不能宣称 Python-zero。
+- 根目录文档只记录当前操作入口；具体 owner 以 `backend-rs/src/api/*`、`backend-rs/src/services/*`、`backend/CLAUDE.md` 和 Trellis task checkpoint 为准。
+- 大量工作区变更可能来自并行迁移，禁止随意 revert 未确认来源的修改。
+- 前端构建产物和 Nginx gateway 由部署流程管理，不要用旧 Python static serving 假设判断当前架构。
 
 ---
 
 ## 推荐阅读顺序
 
-1. `backend/CLAUDE.md`
-2. `frontend/CLAUDE.md`
-3. `backend/app/main.py`
-4. `frontend/src/App.tsx`
-5. 目标功能对应的 `api/`、`services/`、`pages/` 文件
+1. `.trellis/tasks/05-18-backend-chapter-generation-refactor-followup/implement.md`
+2. `backend-rs/src/main.rs`
+3. `backend-rs/src/api/settings.rs`
+4. `backend-rs/src/api/chapter_generation_routes.rs`
+5. `backend/CLAUDE.md`
+6. `frontend/CLAUDE.md`
+7. `frontend/src/App.tsx`
 
 ---
 
 ## 相关资源
 
 - 项目仓库：`https://github.com/dyuebug/MuMuNovel`
-- Swagger UI：`http://localhost:8000/docs`
-- ReDoc：`http://localhost:8000/redoc`
+- Gateway 健康检查：`http://localhost:8005/health`
 - Linux DO 讨论帖：`https://linux.do/t/topic/1106333`
 
 ---
 
-**最后更新**: 2026-04-20
-**文档版本**: 1.1.0
-**项目版本**: 1.3.9
+**最后更新**: 2026-06-25
+**文档版本**: 2.0.0
+**项目版本**: Rust-owned runtime closeout

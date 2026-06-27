@@ -4,8 +4,8 @@ from pathlib import Path
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-PROMPT_SERVICE_PATH = ROOT_DIR / "app/services/prompt_service.py"
-SYNC_RULES_PATH = ROOT_DIR / "app/services/prompt_template_sync_service.py"
+PROMPT_SERVICE_PATH = ROOT_DIR / "tests/test_support/prompt_service_test_support.py"
+SYNC_RULES_PATH = ROOT_DIR / "tests/test_support/prompt_template_sync_test_support.py"
 V3_TAG = "rule_v3_fusion_20260303"
 
 

@@ -1,6 +1,6 @@
 import pytest
 
-from app.services.task_system.task_stream_hub import TaskStreamHub
+from tests.test_support.task_system import TaskStreamHub
 
 
 pytestmark = pytest.mark.asyncio

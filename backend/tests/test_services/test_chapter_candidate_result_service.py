@@ -1,4 +1,6 @@
-from app.services.chapter_candidate_result_service import normalize_selected_candidate_result
+from tests.test_support.chapter_candidate_result_test_support import (
+    normalize_selected_candidate_result,
+)
 
 
 def test_should_normalize_selected_candidate_result_with_quality_gate_snapshot_merge():

@@ -13,7 +13,7 @@ for %%A in (%*) do (
 echo.
 echo MuMuNovel Strangler Fig Deploy
 echo ==============================
-echo Python + Rust + Nginx (3-service architecture)
+echo Rust + Nginx runtime, Rust db-migrator
 echo.
 echo Usage: deploy-strangler.bat [-NoCache] [-UseCnMirror] [-SkipFrontendBuild] [-FullRestart] [-NoPause^|-NonInteractive] [-RepairPostgresPassword]
 echo.

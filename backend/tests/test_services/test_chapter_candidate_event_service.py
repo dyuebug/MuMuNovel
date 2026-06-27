@@ -1,17 +1,25 @@
-from app.models.chapter import Chapter
-from app.services.chapter_candidate_event_service import (
+from types import SimpleNamespace
+
+from tests.test_support.chapter_candidate_finalize_test_support import ChapterCandidateView
+from tests.test_support.batch_generation_single_chapter_wiring_test_adapter import (
     build_batch_generation_candidate_progress_event,
     build_batch_generation_chunk_event,
     build_batch_generation_selected_candidate_progress_event,
     build_batch_generation_start_progress_event,
     build_chapter_generation_progress_kwargs,
 )
-from app.services.chapter_candidate_runtime_state_service import ChapterCandidateRuntimeStateSnapshot
-from app.services.chapter_candidate_view_service import ChapterCandidateView
+from tests.test_support.chapter_candidate_runtime_state_test_support import (
+    ChapterCandidateRuntimeStateSnapshot,
+)
 
 
-def _chapter() -> Chapter:
-    return Chapter(id="chapter-1", project_id="project-1", chapter_number=3, title="Title")
+def _chapter():
+    return SimpleNamespace(
+        id="chapter-1",
+        project_id="project-1",
+        chapter_number=3,
+        title="Title",
+    )
 
 
 def test_should_build_batch_generation_start_progress_event():

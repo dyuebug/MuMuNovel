@@ -1,18 +1,70 @@
 from pydantic import BaseModel
+import sys
 
-from app.models.project import Project
-from app.services.story_repair_payload_service import StoryRepairPayload
-from app.services.chapter_quality_context_service import (
+import tests.test_support.database_test_support as _app_database  # noqa: F401
+
+from migrator_app.models.project import Project
+from tests.test_support.story_packet_test_support import (
     ChapterGenerationIntent,
+    build_chapter_generation_intent,
+)
+from tests.test_support.story_packet_test_support import (
+    build_analysis_quality_kwargs,
+    build_prompt_quality_kwargs,
+    build_story_repair_diagnostic_context,
+)
+from tests.test_support.story_packet_test_support import (
     StoryGenerationGuidance,
     StoryPacket,
-    build_analysis_quality_kwargs,
-    build_chapter_generation_intent,
-    build_prompt_quality_kwargs,
     build_story_generation_packet,
-    build_story_repair_diagnostic_context,
     resolve_story_generation_guidance,
 )
+from tests.test_support.story_repair_payload_test_support import StoryRepairPayload
+
+
+def test_story_packet_test_support_import_should_not_eagerly_load_story_prompt_source_map():
+    sys.modules.pop("app.services.story_packet_service", None)
+    sys.modules.pop("tests.test_support.story_packet_test_support", None)
+    sys.modules.pop("app.services.story_prompt_block_service", None)
+    sys.modules.pop("tests.test_support.story_prompt_block_test_support", None)
+    sys.modules.pop("app.services.story_continuity_ledger_service", None)
+
+    __import__("tests.test_support.story_packet_test_support")
+
+    assert "tests.test_support.story_packet_test_support" in sys.modules
+    assert "app.services.story_packet_service" not in sys.modules
+    assert "app.services.story_prompt_block_service" not in sys.modules
+    assert "tests.test_support.story_prompt_block_test_support" not in sys.modules
+    assert "app.services.story_continuity_ledger_service" not in sys.modules
+
+
+def test_story_packet_should_not_export_retired_continuity_ledger_symbols():
+    sys.modules.pop("app.services.story_packet_service", None)
+    sys.modules.pop("app.services.story_continuity_ledger_service", None)
+
+    import tests.test_support.story_packet_test_support as story_packet_service
+
+    assert not hasattr(story_packet_service, "ProjectContinuityLedger")
+    assert not hasattr(story_packet_service, "build_project_continuity_ledger")
+    assert "app.services.story_continuity_ledger_service" not in sys.modules
+
+
+def test_story_packet_prompt_block_proxy_should_lazy_load_source_map():
+    sys.modules.pop("app.services.story_packet_service", None)
+    sys.modules.pop("tests.test_support.story_packet_test_support", None)
+    sys.modules.pop("app.services.story_prompt_block_service", None)
+    sys.modules.pop("tests.test_support.story_prompt_block_test_support", None)
+
+    from tests.test_support.story_packet_test_support import build_creative_mode_block
+
+    assert "app.services.story_prompt_block_service" not in sys.modules
+    block = build_creative_mode_block("balanced", scene="chapter")
+
+    assert "创作模式" in block
+    assert "均衡推进" in block
+    assert "app.services.story_packet_service" not in sys.modules
+    assert "app.services.story_prompt_block_service" not in sys.modules
+    assert "tests.test_support.story_prompt_block_test_support" in sys.modules
 
 
 def test_should_resolve_story_generation_guidance_from_project_defaults():

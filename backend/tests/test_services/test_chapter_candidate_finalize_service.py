@@ -1,4 +1,4 @@
-from app.services.chapter_candidate_finalize_service import (
+from tests.test_support.chapter_candidate_finalize_test_support import (
     ChapterCandidateFinalizeRequest,
     build_chapter_candidate_finalize_dependencies,
     finalize_selected_candidate_result,

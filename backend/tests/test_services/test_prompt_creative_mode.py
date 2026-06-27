@@ -1,9 +1,9 @@
-from app.api.outlines import _merge_outline_requirements
-from app.services.prompt_service import PromptService
+from tests.test_support.outlines_route_test_adapter import _merge_outline_requirements
+from tests.test_support.story_prompt_block_test_support import build_quality_runtime_blocks
 
 
 def test_should_inject_creative_mode_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="hook",
         story_focus="advance_plot",

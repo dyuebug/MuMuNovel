@@ -74,10 +74,7 @@ fn build_users_route_owner_contract() -> Value {
         "owner": "users",
         "scope": "users_current_list_detail_set_admin_delete_reset_password_route_group",
         "python_source_map": [
-            "backend/app/api/users.py",
-            "backend/app/models/user.py",
-            "backend/app/api/admin.py",
-            "backend/app/services/oauth_service.py"
+            "backend/migrator_app/models/user.py"
         ],
         "rust_owner_map": [
             "backend-rs/src/api/users.rs",
@@ -157,29 +154,22 @@ fn build_users_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Users route business smoke is covered by phase5-users-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy.",
+        "next_cutover_gate": "explicit user model source-map freeze/delete/repoint approval with same-round rollback policy",
+        "migration_policy": "Users route business smoke is covered by phase5-users-business-owner; the Python users/admin route shells and old runtime-store facade have been physically deleted, and final completion now requires explicit user model source-map freeze/delete/repoint approval with same-round rollback policy.",
         "validation_boundary": [
             "cargo test api::users",
             "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only --profile phase5-users-business-owner",
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_users_route_and_user_password_files_as_source_map_until_explicit_freeze_delete_round",
-            "python_route_files_status": "source_map_only_for_users_route_group",
+            "source_map_policy": "users_route_source_map_deleted_remaining_user_model_only",
+            "python_route_files_status": "users_route_source_map_deleted_remaining_user_model_only",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ],
-            "freeze_reason": "Rust users route group has dedicated phase5-users-business-owner probes for current/list/detail/admin grant/revoke/reset-password/delete; final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy.",
-            "rollback_files": [
-                "backend/app/api/users.py",
-                "backend/app/models/user.py",
-                "backend/app/api/admin.py",
-                "backend/app/services/oauth_service.py"
-            ]
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "freeze_reason": "Rust users route group has dedicated phase5-users-business-owner probes for current/list/detail/admin grant/revoke/reset-password/delete; the Python users/admin route shells and old runtime-store facade have been physically deleted, and the remaining users source map is now limited to the shared user model definition.",
+            "rollback_files": []
         }
     })
 }
@@ -296,7 +286,10 @@ mod tests {
             contract["scope"],
             "users_current_list_detail_set_admin_delete_reset_password_route_group"
         );
-        assert_eq!(contract["python_source_map"][0], "backend/app/api/users.py");
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/migrator_app/models/user.py"
+        );
         assert_eq!(contract["rust_owner_map"][0], "backend-rs/src/api/users.rs");
         assert_eq!(contract["route_contract"]["list"], USERS_LIST_ROUTE);
         assert_eq!(contract["route_contract"]["current"], USERS_CURRENT_ROUTE);
@@ -352,7 +345,7 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "explicit user model source-map freeze/delete/repoint approval with same-round rollback policy"
         );
         assert!(contract["migration_policy"]
             .as_str()
@@ -364,16 +357,21 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
-            contract["rollback_boundary"]["remaining_blockers"][0],
-            "explicit source-map freeze/delete/repoint approval"
+            contract["rollback_boundary"]["python_route_files_status"],
+            "users_route_source_map_deleted_remaining_user_model_only"
         );
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"],
+            json!([])
+        );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
     }
 
     #[test]

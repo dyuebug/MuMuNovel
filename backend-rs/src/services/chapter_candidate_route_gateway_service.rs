@@ -29,12 +29,7 @@ pub(crate) fn build_chapter_candidate_route_gateway_owner_contract() -> Value {
     json!({
         "owner": "chapter_candidate_route_gateway_service",
         "scope": "candidate_executor_route_gateway_cutover_and_rollback_boundary",
-        "python_source_map": [
-            "backend/app/services/chapter_candidate_executor_wiring_service.py",
-            "backend/app/services/chapter_candidate_executor_service.py",
-            "backend/app/services/chapter_generation/stream/candidate_service.py",
-            "backend/app/services/compat/chapter_generation_route_compat_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_candidate_route_gateway_service.rs",
             "backend-rs/src/services/chapter_candidate_executor_production_adapter_service.rs",
@@ -90,8 +85,8 @@ pub(crate) fn build_chapter_candidate_route_gateway_owner_contract() -> Value {
         "active_consumers": [
             "chapter_generation_routes",
             "chapter_batch_generation",
-            "chapter_single_generation_active_gateway_smoke_service",
-            "chapter_batch_generation_active_gateway_smoke_service",
+            "chapter-single-generation-active-gateway-smoke-rust",
+            "chapter-batch-generation-active-gateway-smoke-rust",
             "chapter_generation_runtime_service",
             "chapter_batch_generation_runtime_state_service"
         ],
@@ -102,10 +97,10 @@ pub(crate) fn build_chapter_candidate_route_gateway_owner_contract() -> Value {
             "active_route_smoke_consumes_freeze_candidate": true,
             "rust_executor_required": true,
             "fallback_on_rust_error_required": false,
-            "physical_python_closeout_completed": false,
+            "physical_python_closeout_completed": true,
             "source_map_closeout_policy": "freeze_repoint_or_delete_only_with_explicit_approval_and_same_round_rollback_policy",
             "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
+                "separate route-gateway rollback shell freeze/delete/repoint review remains for non-executor Python source-map packages"
             ]
         },
         "service_runtime_closeout_status": {
@@ -130,9 +125,9 @@ pub(crate) fn build_chapter_candidate_route_gateway_owner_contract() -> Value {
             ],
             "fallback_freeze_config_validated": true,
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_candidate_route_gateway_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "candidate executor direct python source-map deleted; separate route-gateway rollback shell freeze/delete/repoint review now remains for non-executor Python source-map packages",
+            "status": "rust_candidate_route_gateway_owner_executor_source_map_deleted"
         },
         "validation_boundary": [
             "cargo test chapter_candidate_route_gateway_service",
@@ -153,7 +148,7 @@ pub(crate) fn build_chapter_candidate_route_gateway_owner_contract() -> Value {
             ],
             "python_source_map_policy": "source_map_and_explicit_gateway_rollback_only",
             "freeze_or_delete_requires_same_round_rollback_policy": true,
-            "python_fallback_removal_ready": false
+            "python_fallback_removal_ready": true
         }
     })
 }
@@ -447,12 +442,7 @@ fn build_chapter_candidate_route_gateway_readiness_evidence(
             "chapter_candidate_runtime_state_service",
             "chapter_candidate_output_service"
         ],
-        "python_source_map": [
-            "backend/app/services/chapter_candidate_executor_wiring_service.py",
-            "backend/app/services/chapter_candidate_executor_service.py",
-            "backend/app/services/chapter_generation/stream/candidate_service.py",
-            "backend/app/services/compat/chapter_generation_route_compat_service.py"
-        ],
+        "python_source_map": [],
         "gateway": {
             "route_group": probe.route_group,
             "rust_executor_enabled": probe.config.rust_executor_enabled,
@@ -505,10 +495,13 @@ fn build_chapter_candidate_route_gateway_readiness_evidence(
                     .get("gateway_consumed")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ]
+            "python_fallback_removal_ready": probe.config.rust_executor_enabled
+                && !probe.config.fallback_on_rust_error
+                && gateway_result
+                    .get("gateway_consumed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            "remaining_blockers": []
         },
         "service_runtime_closeout_status": {
             "owner_profiles": [
@@ -533,11 +526,11 @@ fn build_chapter_candidate_route_gateway_readiness_evidence(
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_candidate_route_gateway_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "candidate executor direct python source-map deleted; separate route-gateway rollback shell freeze/delete/repoint review now remains for non-executor Python source-map packages",
+            "status": "rust_candidate_route_gateway_owner_executor_source_map_deleted"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+        "next_cutover_gate": "candidate executor direct python source-map deleted; separate route-gateway rollback shell freeze/delete/repoint review now remains for non-executor Python source-map packages",
     })
 }
 
@@ -575,8 +568,19 @@ fn smoke_quality_adapter(
             chapter_context: json!({"chapter_outline": "outline"}),
             target_word_count: 1200,
             generation_intent: json!({"mode": "smoke"}),
+            creative_mode: String::new(),
+            story_focus: String::new(),
+            plot_stage: String::new(),
+            story_creation_brief: String::new(),
+            quality_preset: String::new(),
+            quality_notes: String::new(),
+            chapter_count: None,
+            current_chapter_number: None,
             retry_count: 0,
             max_retries: 1,
+            story_repair_summary: String::new(),
+            story_repair_targets: Vec::new(),
+            story_preserve_strengths: Vec::new(),
             current_story_repair_payload: None,
             scope: "chapter".to_string(),
             log_prefix: "Chapter".to_string(),
@@ -611,6 +615,33 @@ mod tests {
         build_chapter_candidate_quality_adapter, ChapterCandidateQualityAdapterContext,
     };
     use crate::services::chapter_candidate_executor_service::ChapterCandidateExecutorRequest;
+
+    fn assert_no_deleted_python_service_source_map(contract: &serde_json::Value) {
+        for key in ["python_source_map", "source_map_files", "rollback_files"] {
+            let Some(items) = contract.get(key).and_then(|value| value.as_array()) else {
+                continue;
+            };
+            assert!(
+                !items.iter().any(|item| item
+                    .as_str()
+                    .is_some_and(|path| path.starts_with("backend/app/services/"))),
+                "{key} must not retain deleted backend/app/services source-map paths"
+            );
+        }
+
+        if let Some(rollback_files) = contract
+            .get("rollback_boundary")
+            .and_then(|value| value.get("rollback_files"))
+            .and_then(|value| value.as_array())
+        {
+            assert!(
+                !rollback_files.iter().any(|item| item
+                    .as_str()
+                    .is_some_and(|path| path.starts_with("backend/app/services/"))),
+                "rollback_boundary.rollback_files must not retain deleted backend/app/services paths"
+            );
+        }
+    }
 
     #[test]
     fn should_build_gateway_config_from_app_config_cutover_flags() {
@@ -662,12 +693,9 @@ mod tests {
     #[test]
     fn should_publish_candidate_route_gateway_owner_contract() {
         let contract = build_chapter_candidate_route_gateway_owner_contract();
+        assert_no_deleted_python_service_source_map(&contract);
 
         assert_eq!(contract["owner"], "chapter_candidate_route_gateway_service");
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/services/chapter_candidate_executor_wiring_service.py"
-        );
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/services/chapter_candidate_route_gateway_service.rs"
@@ -691,7 +719,7 @@ mod tests {
         );
         assert_eq!(
             contract["active_consumers"][2],
-            "chapter_single_generation_active_gateway_smoke_service"
+            "chapter-single-generation-active-gateway-smoke-rust"
         );
         assert_eq!(
             contract["active_route_closeout_evidence"]["single_generation_active_smoke"],
@@ -712,11 +740,11 @@ mod tests {
         );
         assert_eq!(
             contract["active_route_closeout_evidence"]["physical_python_closeout_completed"],
-            false
+            true
         );
         assert_eq!(
             contract["active_route_closeout_evidence"]["remaining_blockers"][0],
-            "explicit source-map freeze/delete/repoint approval"
+            "separate route-gateway rollback shell freeze/delete/repoint review remains for non-executor Python source-map packages"
         );
         assert_eq!(
             contract["rollback_boundary"]["runtime_knob"],
@@ -724,7 +752,7 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profiles"][0],
@@ -752,11 +780,11 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_candidate_route_gateway_owner_ready_for_source_map_closeout_review"
+            "rust_candidate_route_gateway_owner_executor_source_map_deleted"
         );
     }
 
@@ -886,7 +914,7 @@ mod tests {
         assert_eq!(
             results[1].readiness_evidence["fallback_shrink_readiness"]
                 ["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
             results[1].readiness_evidence["service_runtime_closeout_status"]
@@ -901,7 +929,7 @@ mod tests {
         assert_eq!(
             results[1].readiness_evidence["service_runtime_closeout_status"]
                 ["physical_python_closeout_completed"],
-            false
+            true
         );
 
         assert_eq!(results[2].execution_path, "python_fallback");
@@ -1038,7 +1066,7 @@ mod tests {
         }));
         assert_eq!(
             result.readiness_evidence["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "candidate executor direct python source-map deleted; separate route-gateway rollback shell freeze/delete/repoint review now remains for non-executor Python source-map packages"
         );
     }
 
@@ -1072,9 +1100,11 @@ mod tests {
                 ["fallback_freeze_config_validated"],
             true
         );
-        assert_eq!(
-            result.readiness_evidence["fallback_shrink_readiness"]["remaining_blockers"][0],
-            "explicit source-map freeze/delete/repoint approval"
+        assert!(
+            result.readiness_evidence["fallback_shrink_readiness"]["remaining_blockers"]
+                .as_array()
+                .expect("remaining blockers")
+                .is_empty()
         );
     }
 
@@ -1108,6 +1138,7 @@ mod tests {
             chapter_candidate_rust_executor_disabled_reason: String::new(),
             chapter_candidate_rust_executor_rollback_boundary: "python_candidate_executor_fallback"
                 .to_string(),
+            rust_migration_noop_executor_smoke_enabled: false,
         }
     }
 
@@ -1142,8 +1173,19 @@ mod tests {
                 chapter_context: json!({"chapter_outline": "outline"}),
                 target_word_count: 1200,
                 generation_intent: json!({"mode": "draft"}),
+                creative_mode: String::new(),
+                story_focus: String::new(),
+                plot_stage: String::new(),
+                story_creation_brief: String::new(),
+                quality_preset: String::new(),
+                quality_notes: String::new(),
+                chapter_count: None,
+                current_chapter_number: None,
                 retry_count: 0,
                 max_retries: 1,
+                story_repair_summary: String::new(),
+                story_repair_targets: Vec::new(),
+                story_preserve_strengths: Vec::new(),
                 current_story_repair_payload: None,
                 scope: "chapter".to_string(),
                 log_prefix: "Chapter".to_string(),

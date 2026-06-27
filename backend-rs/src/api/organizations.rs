@@ -111,20 +111,18 @@ fn build_organizations_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0
         },
         "source_map_files": [
-            "backend/app/api/organizations.py",
-            "backend/app/models/relationship.py",
-            "backend/app/schemas/relationship.py",
-            "backend/app/services/auto_organization_service.py"
+            "backend/migrator_app/models/organization.py"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_organizations_route_relationship_model_schema_auto_service_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "production_python_organization_model_source_map_replaced_by_migrator_and_test_support_fixtures",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ],
-            "freeze_reason": "Rust organizations route group has dedicated phase5-organizations-business-owner probes for project/character setup, organization CRUD, project list, member add/list/update/delete, detail-after-member, generate-stream, delete, and missing-detail behavior; final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy."
+            "full_module_freeze_ready": true,
+            "python_bootstrap_status": "organizations_route_runtime_registration_deleted_no_python_route_shell_remains",
+            "python_route_files_status": "organizations_route_source_map_deleted_remaining_organization_model_only",
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "freeze_reason": "Rust organizations route group has dedicated phase5-organizations-business-owner probes for project/character setup, organization CRUD, project list, member add/list/update/delete, detail-after-member, generate-stream, delete, and missing-detail behavior; the Python organizations route shell, bootstrap rollback registration, and relationship schema file are already deleted, and the remaining organization/member persistence source map has been narrowed to the dedicated organization model file.",
+            "rollback_files": []
         },
         "business_smoke_status": {
             "owner_profile": "phase5-organizations-business-owner",
@@ -133,8 +131,8 @@ fn build_organizations_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Organizations route business smoke is covered by phase5-organizations-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+        "next_cutover_gate": "explicit organization model source-map freeze/delete/repoint approval with same-round rollback policy",
+        "migration_policy": "Organizations route business smoke is covered by phase5-organizations-business-owner; the Python organizations route shell, explicit bootstrap rollback registration, and relationship schema file have been physically deleted, and final completion now requires explicit organization model source-map freeze/delete/repoint approval with same-round rollback policy."
     })
 }
 
@@ -1207,6 +1205,8 @@ pub fn routes() -> Router {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::{
         build_organizations_route_owner_contract, GenerateOrganizationTaskError,
         ORGANIZATIONS_DETAIL_ROUTE, ORGANIZATIONS_GENERATE_STREAM_ROUTE,
@@ -1278,18 +1278,30 @@ mod tests {
             "organizations-generate-stream-business-rust"
         );
         assert_eq!(contract["owner_profile"]["python_fallback_probe_count"], 0);
-        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 4);
+        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 1);
         assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
             true
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_bootstrap_status"],
+            "organizations_route_runtime_registration_deleted_no_python_route_shell_remains"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "organizations_route_source_map_deleted_remaining_organization_model_only"
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "production_python_organization_model_source_map_replaced_by_migrator_and_test_support_fixtures"
         );
         assert_eq!(
             contract["business_smoke_status"]["status"],
@@ -1307,14 +1319,25 @@ mod tests {
             contract["business_smoke_status"]["python_fallback_probe_count"],
             0
         );
+        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            contract["source_map_files"][0],
+            "backend/migrator_app/models/organization.py"
+        );
+        assert!(contract["source_map_files"].get(1).is_none());
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "organizations_route_source_map_deleted_remaining_organization_model_only"
+        );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "explicit organization model source-map freeze/delete/repoint approval with same-round rollback policy"
         );
-        assert!(contract["migration_policy"]
-            .as_str()
-            .expect("organizations migration policy should be present")
-            .contains("phase5-organizations-business-owner"));
+        assert_eq!(
+            contract["migration_policy"],
+            "Organizations route business smoke is covered by phase5-organizations-business-owner; the Python organizations route shell, explicit bootstrap rollback registration, and relationship schema file have been physically deleted, and final completion now requires explicit organization model source-map freeze/delete/repoint approval with same-round rollback policy."
+        );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
     }
 
     #[test]

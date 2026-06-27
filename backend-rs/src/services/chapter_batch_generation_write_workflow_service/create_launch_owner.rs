@@ -34,13 +34,7 @@ pub(crate) fn build_batch_generation_create_launch_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation_write_workflow_service::create_launch_startup_seed_and_persistence",
         "scope": "create_runtime_seed_workflow_launch_persistence_dispatch_and_response_projection",
-        "python_source_map": [
-            "backend/app/api/chapter_batch_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/batch_generation/create_service.py",
-            "backend/app/services/batch_generation/status_response_builder.py",
-            "backend/app/services/task_workflow_runtime_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_write_workflow_service.rs",
             "backend-rs/src/services/chapter_batch_generation_write_workflow_service/create_launch_owner.rs",
@@ -96,7 +90,7 @@ pub(crate) fn build_batch_generation_create_launch_owner_contract() -> Value {
             "chapter_batch_generation_write_workflow_service",
             "chapter_batch_generation::create_batch_generation",
             "chapter_batch_generation_runtime_state_service",
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         ],
         "startup_seed_owner_contract": build_batch_generation_create_startup_seed_owner_contract(),
         "persistence_owner_contract": build_batch_generation_create_persistence_owner_contract(),
@@ -107,7 +101,7 @@ pub(crate) fn build_batch_generation_create_launch_owner_contract() -> Value {
         ],
         "rollback_boundary": {
             "runtime_knob": "python_candidate_executor_fallback",
-            "source_map_policy": "keep_python_batch_create_route_and_service_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_create_launch_owner_is_rust_only_and_surviving_create_route_service_surfaces_are_tracked_by_external_launch_contracts",
             "runtime_state_keys": [
                 "batch_request_runtime_state",
                 "quality_metrics_summary",

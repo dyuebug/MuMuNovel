@@ -2,10 +2,12 @@ from typing import Any
 
 import pytest
 
-from app.api import chapters as chapters_api
-from app.models.batch_generation_snapshot import BatchGenerationSnapshot
-from app.models.batch_generation_task import BatchGenerationTask
-from app.services import batch_generation_run_wiring_service
+from migrator_app.models.batch_generation_snapshot import BatchGenerationSnapshot
+from migrator_app.models.batch_generation_task import BatchGenerationTask
+from tests.test_support.task_system import (
+    publish_task_stream_event,
+    workflow_runtime_state_store,
+)
 from tests.test_api.chapters_test_support import (
     chapters_client,
     chapters_session_factory,
@@ -15,8 +17,14 @@ from tests.test_api.chapters_test_support import (
     mock_side_effect_services,
     reset_chapters_runtime_caches,
 )
+from tests.test_support import (
+    batch_generation_run_wiring_test_adapter as batch_generation_run_wiring_service,
+)
 
 pytestmark = pytest.mark.asyncio
+
+task_workflow_lock = workflow_runtime_state_store.lock
+task_workflow_state_cache = workflow_runtime_state_store.cache
 
 async def test_should_create_batch_generation_task_and_query_status(
     chapters_client,
@@ -188,10 +196,10 @@ async def test_should_expose_runtime_workflow_phase_in_batch_status(
         await session.commit()
         await session.refresh(task)
 
-    async with chapters_api.task_workflow_lock:
-        chapters_api.task_workflow_state_cache.pop(task.id, None)
+    async with task_workflow_lock:
+        task_workflow_state_cache.pop(task.id, None)
 
-    await chapters_api.publish_task_stream_event(
+    await publish_task_stream_event(
         task.id,
         {
             "type": "analysis_started",
@@ -295,8 +303,8 @@ async def test_should_resume_failed_batch_task_from_current_chapter(
         assert resumed_task.total_chapters == 2
         assert resumed_task.completed_chapters == 0
 
-    async with chapters_api.task_workflow_lock:
-        runtime = dict(chapters_api.task_workflow_state_cache.get(resumed_task_id) or {})
+    async with task_workflow_lock:
+        runtime = dict(task_workflow_state_cache.get(resumed_task_id) or {})
     assert runtime.get("phase") == "loading"
     assert runtime.get("resume_from_batch_id") == source_task_id
 
@@ -314,7 +322,7 @@ async def test_should_resume_failed_batch_task_with_persisted_story_repair_paylo
 
     monkeypatch.setattr(
         batch_generation_run_wiring_service,
-        "execute_batch_generation_in_order_with_entry_service_seams",
+        "execute_batch_generation_in_order_with_default_wiring",
         fake_execute_batch_generation,
     )
 
@@ -381,8 +389,8 @@ async def test_should_resume_failed_batch_task_with_persisted_story_repair_paylo
         await session.commit()
         source_task_id = source_task.id
 
-    async with chapters_api.task_workflow_lock:
-        chapters_api.task_workflow_state_cache.pop(source_task_id, None)
+    async with task_workflow_lock:
+        task_workflow_state_cache.pop(source_task_id, None)
 
     response = await chapters_client.post(f"/api/chapters/batch-generate/{source_task_id}/resume")
     assert response.status_code == 200
@@ -393,13 +401,13 @@ async def test_should_resume_failed_batch_task_with_persisted_story_repair_paylo
     assert captured["story_repair_targets"] == active_story_repair_payload["repair_targets"]
     assert captured["story_preserve_strengths"] == active_story_repair_payload["preserve_strengths"]
     captured_payload = captured["story_repair_payload"]
-    assert isinstance(captured_payload, chapters_api.StoryRepairPayload)
+    assert captured_payload.__class__.__name__ == "StoryRepairPayload"
     assert captured_payload.summary == active_story_repair_payload["summary"]
     assert list(captured_payload.targets) == active_story_repair_payload["repair_targets"]
     assert list(captured_payload.strengths) == active_story_repair_payload["preserve_strengths"]
 
-    async with chapters_api.task_workflow_lock:
-        runtime = dict(chapters_api.task_workflow_state_cache.get(resumed_task_id) or {})
+    async with task_workflow_lock:
+        runtime = dict(task_workflow_state_cache.get(resumed_task_id) or {})
     assert runtime["active_story_repair_payload"]["summary"] == active_story_repair_payload["summary"]
     assert runtime["active_story_repair_payload"]["repair_targets"] == active_story_repair_payload["repair_targets"]
     assert runtime["active_story_repair_payload"]["preserve_strengths"] == active_story_repair_payload["preserve_strengths"]

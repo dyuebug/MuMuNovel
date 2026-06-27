@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from app.services import chapter_candidate_executor_wiring_service as wiring_service
+from tests.test_support import chapter_candidate_executor_test_support as wiring_service
 
 
 def test_should_build_default_candidate_executor_dependencies(monkeypatch):
@@ -55,4 +55,3 @@ def test_should_build_default_candidate_executor_dependencies(monkeypatch):
         captured["executor"]["select_targeted_final_repair_seed_candidate_fn"]
         is wiring_service.select_targeted_final_repair_seed_candidate
     )
-

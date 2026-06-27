@@ -96,21 +96,19 @@ fn build_writing_styles_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0
         },
         "source_map_files": [
-            "backend/app/api/writing_styles.py",
-            "backend/app/models/writing_style.py",
-            "backend/app/models/project_default_style.py",
-            "backend/app/schemas/writing_style.py",
-            "backend/app/services/writing_style_sync_service.py"
+            "backend/migrator_app/models/writing_style.py",
+            "backend/migrator_app/models/project_default_style.py"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_writing_styles_route_model_schema_sync_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "writing_styles_route_source_map_deleted_remaining_writing_style_and_project_default_style_models_require_separate_closeout",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ],
-            "freeze_reason": "Rust writing_styles route group has dedicated phase5-writing-styles-business-owner probes for setup, presets, user/project list, initialize, create/detail/update, set-default, reset-default, delete, and missing-detail behavior; final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy."
+            "full_module_freeze_ready": true,
+            "python_bootstrap_status": "writing_styles_route_runtime_registration_deleted_no_python_route_shell_remains",
+            "python_route_files_status": "writing_styles_route_source_map_deleted_remaining_writing_style_and_project_default_style_models_only",
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "freeze_reason": "Rust writing_styles route group has dedicated phase5-writing-styles-business-owner probes for setup, presets, user/project list, initialize, create/detail/update, set-default, reset-default, delete, and missing-detail behavior; the Python writing-styles route shell has been physically deleted from bootstrap, the detached Python writing-style schema file and legacy writing_style_sync_service source map have been physically deleted, and the remaining persistence source maps have been narrowed to the dedicated writing_style and project_default_style model files.",
+            "rollback_files": []
         },
         "business_smoke_status": {
             "owner_profile": "phase5-writing-styles-business-owner",
@@ -119,8 +117,8 @@ fn build_writing_styles_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Writing styles route business smoke is covered by phase5-writing-styles-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+        "next_cutover_gate": "explicit writing style and project default style source-map freeze/delete/repoint approval with same-round rollback policy",
+        "migration_policy": "Writing styles route business smoke is covered by phase5-writing-styles-business-owner; the Python route shell is no longer registered in app bootstrap, the detached Python writing-style schema file and prompt-quality source-map file have been physically deleted, and final completion now requires explicit writing style and project default style source-map freeze/delete/repoint approval with same-round rollback policy."
     })
 }
 
@@ -529,18 +527,34 @@ mod tests {
             "writing-styles-set-default-business-rust"
         );
         assert_eq!(contract["owner_profile"]["python_fallback_probe_count"], 0);
-        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 5);
+        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            contract["source_map_files"][0],
+            "backend/migrator_app/models/writing_style.py"
+        );
+        assert_eq!(
+            contract["source_map_files"][1],
+            "backend/migrator_app/models/project_default_style.py"
+        );
         assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
             true
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_bootstrap_status"],
+            "writing_styles_route_runtime_registration_deleted_no_python_route_shell_remains"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "writing_styles_route_source_map_deleted_remaining_writing_style_and_project_default_style_models_only"
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["business_smoke_status"]["status"],
@@ -560,12 +574,25 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "explicit writing style and project default style source-map freeze/delete/repoint approval with same-round rollback policy"
         );
         assert!(contract["migration_policy"]
             .as_str()
             .expect("migration policy")
             .contains("business smoke is covered"));
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("migration policy")
+            .contains("Python route shell is no longer registered in app bootstrap"));
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("migration policy")
+            .contains("final completion now requires explicit writing style and project default style source-map freeze/delete/repoint approval"));
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"],
+            json!([])
+        );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
     }
 
     #[test]

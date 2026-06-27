@@ -2190,7 +2190,7 @@ mod tests {
     use super::{
         build_book_import_career_system_prompt_params, build_book_import_characters_prompt_params,
         build_book_import_world_building_prompt_params, BookImportAiExecutionContext,
-        BookImportAiStepKind,
+        BookImportAiStepKind, TxtParserService,
     };
 
     fn sample_project() -> project::Model {
@@ -2306,5 +2306,60 @@ mod tests {
             Some(BookImportAiStepKind::Characters)
         );
         assert_eq!(BookImportAiStepKind::from_step_name("unknown"), None);
+    }
+
+    #[test]
+    fn should_decode_utf8_sig_txt_bytes() {
+        let parser = TxtParserService;
+        let content = "\u{feff}第一章 开始\n这里是正文".as_bytes();
+
+        let (text, encoding) = parser.decode_bytes(content);
+
+        assert_eq!(encoding, "utf-8");
+        assert!(text.contains("第一章 开始"));
+    }
+
+    #[test]
+    fn should_clean_txt_text_and_normalize_blank_lines() {
+        let parser = TxtParserService;
+        let raw = "\u{feff}第一章\r\n正文第一段\u{3000}\r\n\r\n\r\n\r\n第二段  \n";
+
+        let cleaned = parser.clean_text(raw);
+
+        assert_eq!(cleaned, "第一章\n正文第一段\n\n\n第二段");
+    }
+
+    #[test]
+    fn should_split_txt_chapters_by_detected_headings() {
+        let parser = TxtParserService;
+        let chapter_one_body = "甲".repeat(220);
+        let raw = format!(
+            "{chapter_one_body}\n第1章 初入宗门\n主角踏入山门。\n\n第2章 夜探藏经阁\n夜色里有人跟踪。"
+        );
+
+        let chapters = parser.split_chapters(&raw);
+
+        let titles = chapters
+            .iter()
+            .map(|chapter| chapter["title"].as_str().unwrap_or(""))
+            .collect::<Vec<_>>();
+        assert_eq!(titles, vec!["前言", "第1章 初入宗门", "第2章 夜探藏经阁"]);
+        assert_eq!(chapters[0]["chapter_number"].as_i64(), Some(1));
+        assert_eq!(chapters[1]["content"].as_str(), Some("主角踏入山门。"));
+        assert_eq!(chapters[2]["content"].as_str(), Some("夜色里有人跟踪。"));
+    }
+
+    #[test]
+    fn should_fallback_split_txt_when_no_heading_found() {
+        let parser = TxtParserService;
+        let raw = format!("{}\n结尾。", "这是一段没有标题的正文。".repeat(220));
+
+        let chapters = parser.split_chapters(&raw);
+
+        assert!(!chapters.is_empty());
+        assert_eq!(chapters[0]["title"].as_str(), Some("第1章"));
+        assert!(chapters[0]["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("这是一段没有标题的正文")));
     }
 }

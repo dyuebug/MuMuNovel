@@ -64,15 +64,11 @@ pub(crate) fn build_chapter_regeneration_prepare_owner_contract() -> Value {
     serde_json::json!({
         "owner": "chapter_regeneration_prepare_service",
         "scope": "full_and_partial_regeneration_request_prompt_prepare_owner",
-        "python_source_map": [
-            "backend/app/api/chapter_regeneration_routes.py",
-            "backend/app/api/chapter_partial_regeneration_routes.py",
-            "backend/app/services/chapter_regeneration_stream_service.py",
-            "backend/app/services/partial_regeneration_service.py",
-            "backend/app/services/prompt_service.py",
-            "backend/app/services/chapter_web_research_service.py",
-            "backend/app/schemas/regeneration.py"
-        ],
+        "python_source_map": [],
+        "shared_owner_source_maps": {
+            "prompt_owner": [],
+            "research_payload_owner": []
+        },
         "rust_owner_map": [
             "backend-rs/src/services/chapter_regeneration_prepare_service.rs",
             "backend-rs/src/services/chapter_regeneration_prepare_service/prompt_prepare_owner.rs",
@@ -193,8 +189,8 @@ pub(crate) fn build_chapter_regeneration_prepare_owner_contract() -> Value {
         ],
         "rollback_boundary": {
             "python_source_map": "chapter_regeneration_prepare_python_source_map",
-            "python_fallback_removal_ready": false,
-            "approval_required": "explicit source-map freeze/delete/repoint approval"
+            "python_fallback_removal_ready": true,
+            "approval_required": "separate shared prompt or research owner closeout outside direct regeneration prepare package"
         },
         "service_runtime_closeout_status": {
             "owner_profile": "phase5-chapter-regeneration-owner",
@@ -211,9 +207,9 @@ pub(crate) fn build_chapter_regeneration_prepare_owner_contract() -> Value {
             "partial_stream_prepare_owner": "prepare_partial_regeneration_stream",
             "ai_service_owner": "build_regeneration_ai_service",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_chapter_regeneration_prepare_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "separate_shared_prompt_or_research_owner_closeout_outside_direct_regeneration_prepare_package",
+            "status": "rust_chapter_regeneration_prepare_owner_direct_package_closed_out"
         }
     })
 }
@@ -327,6 +323,7 @@ mod tests {
     fn should_build_regeneration_prompt_with_explicit_fields() {
         let chapter = chapter_with_content("原始正文");
         let route_request = FullChapterRegenerationStreamRouteRequest {
+            modification_source: None,
             target_word_count: Some(1800),
             custom_instructions: Some("强化冲突".to_string()),
             selected_suggestion_indices: vec![Value::from(1), Value::from("skip"), Value::from(3)],
@@ -348,6 +345,9 @@ mod tests {
             })),
             story_repair_targets: vec![Value::from("目标A"), Value::from("目标B")],
             story_preserve_strengths: vec![Value::from("优势A")],
+            style_id: None,
+            version_note: None,
+            auto_apply: None,
         };
         let request =
             build_full_chapter_regeneration_stream_request_from_route_payload(route_request);
@@ -987,9 +987,20 @@ mod tests {
             contract["scope"],
             "full_and_partial_regeneration_request_prompt_prepare_owner"
         );
+        assert_eq!(contract["python_source_map"].as_array().unwrap().len(), 0);
         assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/api/chapter_regeneration_routes.py"
+            contract["shared_owner_source_maps"]["prompt_owner"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            contract["shared_owner_source_maps"]["research_payload_owner"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
         );
         assert_eq!(
             contract["rust_owner_map"][0],
@@ -1021,7 +1032,7 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profile"],
@@ -1053,11 +1064,11 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_chapter_regeneration_prepare_owner_ready_for_source_map_closeout_review"
+            "rust_chapter_regeneration_prepare_owner_direct_package_closed_out"
         );
     }
 }

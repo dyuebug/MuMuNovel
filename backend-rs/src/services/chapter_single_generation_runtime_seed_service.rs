@@ -19,14 +19,7 @@ pub(crate) fn build_single_generation_runtime_seed_owner_contract() -> Value {
     json!({
         "owner": "chapter_single_generation_runtime_seed_service",
         "scope": "single_generation_runtime_state_seed_story_repair_restore_recent_history_and_launch_input_projection",
-        "python_source_map": [
-            "backend/app/api/chapter_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/chapter_generation/stream/service.py",
-            "backend/app/services/chapter_generation/stream/execution_service.py",
-            "backend/app/services/story_repair_payload_service.py",
-            "backend/app/services/manual_chapter_analysis_execution_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_single_generation_runtime_seed_service.rs",
             "backend-rs/src/services/chapter_single_generation_runtime_restore_workflow_service.rs",
@@ -113,6 +106,10 @@ mod tests {
         assert_eq!(
             contract["behavior_contract"]["seed_sources"][1],
             "recent_history_summary"
+        );
+        assert_eq!(
+            contract["python_source_map"].as_array().map(Vec::len),
+            Some(0)
         );
     }
 

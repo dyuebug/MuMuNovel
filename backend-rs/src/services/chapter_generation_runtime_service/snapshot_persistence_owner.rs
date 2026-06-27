@@ -19,11 +19,7 @@ pub(crate) fn build_chapter_generation_snapshot_owner_contract() -> Value {
         "owner": "chapter_generation_runtime_service::snapshot_persistence_owner",
         "scope": "chapter_generation_runtime_snapshot_persistence",
         "python_source_map": [
-            "backend/app/services/task_workflow_runtime_service.py",
-            "backend/app/models/batch_generation_snapshot.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/batch_generation/query_service.py",
-            "backend/app/services/batch_generation/resume_service.py"
+            "backend/migrator_app/models/batch_generation_snapshot.py"
         ],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_generation_runtime_service/snapshot_persistence_owner.rs",
@@ -58,12 +54,32 @@ pub(crate) fn build_chapter_generation_snapshot_owner_contract() -> Value {
                 "missing_quality_fields_backfill_from_persisted_runtime_sources"
             ]
         },
+        "source_map_closeout_status": {
+            "compat_shell_status": "physically_deleted",
+            "default_python_module_consumers": [],
+            "dedicated_python_regression_surfaces": [],
+            "shared_test_support_consumers_removed": true,
+            "shared_import_guard_consumers_removed": true,
+            "physical_python_closeout_completed": true,
+            "shared_schema_hold_status": {
+                "batch_generation_snapshot_model": "shared_python_runtime_database_and_api_test_reference",
+                "default_python_module_consumers": [
+                    "backend/tests/test_support/database_test_support.py",
+                    "backend/tests/test_support/task_system/snapshot_runtime_persistence.py"
+                ],
+                "dedicated_python_regression_surfaces": [
+                    "backend/tests/test_api/test_chapters.py",
+                    "backend/tests/test_api/test_chapters_batch_status_resume.py"
+                ],
+                "physical_closeout_ready": false
+            }
+        },
         "validation_boundary": [
             "cargo test services::chapter_generation_runtime_service::snapshot_persistence_owner",
             "cargo check --manifest-path backend-rs/Cargo.toml",
             "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only"
         ],
-        "rollback_boundary": "task_workflow_runtime_service_python_source_map"
+        "rollback_boundary": "batch_generation_snapshot_python_source_map"
     })
 }
 
@@ -300,11 +316,14 @@ mod tests {
         );
         assert_eq!(
             contract["python_source_map"][0],
-            "backend/app/services/task_workflow_runtime_service.py"
+            "backend/migrator_app/models/batch_generation_snapshot.py"
         );
         assert_eq!(
-            contract["python_source_map"][1],
-            "backend/app/models/batch_generation_snapshot.py"
+            contract["python_source_map"]
+                .as_array()
+                .expect("python source map")
+                .len(),
+            1
         );
         assert_eq!(
             contract["rust_owner_map"][0],
@@ -323,9 +342,64 @@ mod tests {
             "object_payloads_merge_keywise"
         );
         assert_eq!(
-            contract["rollback_boundary"],
-            "task_workflow_runtime_service_python_source_map"
+            contract["source_map_closeout_status"]["compat_shell_status"],
+            "physically_deleted"
         );
+        assert_eq!(
+            contract["source_map_closeout_status"]["default_python_module_consumers"],
+            json!([])
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["dedicated_python_regression_surfaces"],
+            json!([])
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["shared_test_support_consumers_removed"],
+            json!(true)
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["shared_import_guard_consumers_removed"],
+            json!(true)
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["physical_python_closeout_completed"],
+            json!(true)
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["shared_schema_hold_status"]
+                ["batch_generation_snapshot_model"],
+            "shared_python_runtime_database_and_api_test_reference"
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["shared_schema_hold_status"]
+                ["default_python_module_consumers"],
+            json!([
+                "backend/tests/test_support/database_test_support.py",
+                "backend/tests/test_support/task_system/snapshot_runtime_persistence.py"
+            ])
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["shared_schema_hold_status"]
+                ["dedicated_python_regression_surfaces"],
+            json!([
+                "backend/tests/test_api/test_chapters.py",
+                "backend/tests/test_api/test_chapters_batch_status_resume.py"
+            ])
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["shared_schema_hold_status"]
+                ["physical_closeout_ready"],
+            json!(false)
+        );
+        assert_eq!(
+            contract["rollback_boundary"],
+            "batch_generation_snapshot_python_source_map"
+        );
+        assert!(!contract["python_source_map"]
+            .as_array()
+            .expect("python source map")
+            .iter()
+            .any(|item| item == "backend/app/api/chapters.py"));
     }
 
     #[test]

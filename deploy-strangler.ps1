@@ -46,8 +46,6 @@ $DbContainer = "mumunovel-postgres-new"
 $DbMigratorService = "db-migrator"
 $DbMigratorContainer = "mumunovel-db-migrator"
 $DbMigratorRunContainer = "mumunovel-db-migrator-once"
-$PythonService = "python-backend"
-$PythonContainer = "mumunovel-python"
 $RustService = "rust-backend"
 $RustContainer = "mumunovel-rust"
 $NginxService = "nginx"
@@ -226,12 +224,21 @@ function Invoke-PostgresNetworkCredentialProbe {
         [string]$PostgresDb
     )
 
+    $composeArgs = Get-DockerComposeArgs
+    $networkName = (docker compose @composeArgs ps -q $DbService | ForEach-Object {
+        docker inspect $_ --format '{{range $name, $network := .NetworkSettings.Networks}}{{println $name}}{{end}}'
+    } | Select-Object -First 1)
+    if ([string]::IsNullOrWhiteSpace($networkName)) {
+        throw "Unable to resolve Docker network for PostgreSQL service."
+    }
+
     $previousPgPassword = [Environment]::GetEnvironmentVariable('PGPASSWORD')
     [Environment]::SetEnvironmentVariable('PGPASSWORD', $PostgresPassword, 'Process')
     try {
-        $command = @('docker', 'compose') + (Get-DockerComposeArgs) + @(
-            'run', '--rm', '--no-deps', '-T', '--entrypoint', 'psql', '-e', 'PGPASSWORD',
-            $PythonService,
+        $command = @(
+            'docker', 'run', '--rm', '-e', 'PGPASSWORD', '--network', $networkName,
+            'postgres:18-alpine',
+            'psql',
             '-h', $DbService, '-U', $PostgresUser, '-d', $PostgresDb,
             '-v', 'ON_ERROR_STOP=1', '-c', 'select 1;'
         )
@@ -289,7 +296,7 @@ function Test-PostgresNetworkCredentials {
 
     if ($result.ExitCode -ne 0) {
         $message = @(
-            "PostgreSQL is healthy, but configured credentials cannot connect from python-backend over the Docker network.",
+            "PostgreSQL is healthy, but configured credentials cannot connect from db-migrator over the Docker network.",
             "Current config:",
             "  POSTGRES_USER=$postgresUser",
             "  POSTGRES_DB=$postgresDb",
@@ -353,10 +360,9 @@ function Invoke-DatabaseMigrator {
         '--name', $DbMigratorRunContainer,
         '--no-deps',
         '-T',
-        '--entrypoint', '/app/run_migrations.sh',
         $DbMigratorService
     )
-    $result = Invoke-LoggedCommand -Command $command -Label 'docker compose run db-migrator'
+    $result = Invoke-LoggedCommand -Command $command -Label 'docker compose run db-migrator (Rust migration-executor)'
     Invoke-LoggedCommand -Command @('docker', 'rm', '-f', $DbMigratorRunContainer) -Label 'cleanup db migrator run' -IgnoreExitCode | Out-Null
     return $result
 }
@@ -389,10 +395,7 @@ function Wait-ContainerHealthy {
         Start-Sleep -Seconds 3
     }
     Write-LogLine "$Label health wait timed out. Last status: $lastStatus"
-    if ($ContainerName -eq $PythonContainer) {
-        Show-ContainerDiagnostics -ContainerName $PythonContainer -ServiceName $PythonService -Label $Label -Tail 120
-    }
-    elseif ($ContainerName -eq $RustContainer) {
+    if ($ContainerName -eq $RustContainer) {
         Show-ContainerDiagnostics -ContainerName $RustContainer -ServiceName $RustService -Label $Label -Tail 120
     }
     elseif ($ContainerName -eq $NginxContainer) {
@@ -431,7 +434,7 @@ function Build-ServiceImage {
         $buildArgs += '--build-arg'; $buildArgs += 'USE_CN_MIRROR=true'
     }
     if ($SkipFrontendBuild) {
-        $buildArgs += '--build-arg'; $buildArgs += 'SKIP_FRONTEND_BUILD=true'
+        Write-LogLine "-SkipFrontendBuild accepted for CLI compatibility; Rust migrator image does not build frontend assets."
     }
     foreach ($name in @('HTTP_PROXY','HTTPS_PROXY','NO_PROXY')) {
         $val = [Environment]::GetEnvironmentVariable($name)
@@ -478,8 +481,8 @@ else {
 
 # ---- Build ----
 if (-not $SkipBuild) {
-    Write-Step "Building Python backend image"
-    Build-ServiceImage -ServiceName $PythonService
+    Write-Step "Building Rust migrator image"
+    Build-ServiceImage -ServiceName $DbMigratorService
 
     Write-Step "Building Rust backend image"
     Build-ServiceImage -ServiceName $RustService
@@ -506,14 +509,11 @@ catch {
 }
 
 # ---- Start backends ----
-Write-Step "Starting Python backend"
-Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('up', '-d', '--force-recreate', $PythonService)) -Label "docker compose up python-backend" | Out-Null
 
 Write-Step "Starting Rust backend"
 Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('up', '-d', '--force-recreate', $RustService)) -Label "docker compose up rust-backend" | Out-Null
 
-Write-Step "Waiting for backends to be healthy"
-Wait-ContainerHealthy -ContainerName $PythonContainer -Label "Python backend" -TimeoutSec 180
+Write-Step "Waiting for Rust backend to be healthy"
 Wait-ContainerHealthy -ContainerName $RustContainer -Label "Rust backend" -TimeoutSec 60
 
 # ---- Start Nginx ----
@@ -557,7 +557,6 @@ if (-not $isHealthy) {
     Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('ps')) -Label "diag ps" -IgnoreExitCode | Out-Null
     Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('logs', '--tail=80', $NginxService)) -Label "diag nginx logs" -IgnoreExitCode | Out-Null
     Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('logs', '--tail=40', $RustService)) -Label "diag rust logs" -IgnoreExitCode | Out-Null
-    Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('logs', '--tail=40', $PythonService)) -Label "diag python logs" -IgnoreExitCode | Out-Null
     throw "Strangler deploy finished but health check failed: http://localhost:8005/health"
 }
 
@@ -583,7 +582,6 @@ catch {
     Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('ps')) -Label "diag ps after smoke" -IgnoreExitCode | Out-Null
     Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('logs', '--tail=80', $NginxService)) -Label "diag nginx logs after smoke" -IgnoreExitCode | Out-Null
     Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('logs', '--tail=40', $RustService)) -Label "diag rust logs after smoke" -IgnoreExitCode | Out-Null
-    Invoke-LoggedCommand -Command (@('docker', 'compose') + (Get-DockerComposeArgs) + @('logs', '--tail=40', $PythonService)) -Label "diag python logs after smoke" -IgnoreExitCode | Out-Null
     throw
 }
 
@@ -591,7 +589,7 @@ Write-Host ""
 Write-Host "=== Strangler Fig Deploy SUCCESS ===" -ForegroundColor Green
 Write-Host "   Entry:  http://localhost:8005 (Nginx :8005)" -ForegroundColor Green
 Write-Host "   Rust:   docker://${RustContainer}:8001 (162 endpoints)" -ForegroundColor DarkCyan
-Write-Host "   Python: docker://${PythonContainer}:8000 (fallback)" -ForegroundColor DarkCyan
+Write-Host "   Rust migrator: one-shot db-migrator service (no Python runtime backend)" -ForegroundColor DarkCyan
 Write-Host "   DB:     docker://${DbContainer}:5432" -ForegroundColor DarkCyan
 Write-LogLine "Strangler deploy succeeded."
 

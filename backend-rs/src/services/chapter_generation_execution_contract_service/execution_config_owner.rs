@@ -53,12 +53,10 @@ pub(crate) fn build_generation_execution_config_owner_contract() -> Value {
     json!({
         "owner": "chapter_generation_execution_contract_service::execution_config",
         "scope": "shared_generation_execution_config_bridge",
-        "python_source_map": [
-            "backend/app/services/chapter_generation/stream/execution_service.py",
-            "backend/app/services/chapter_generation/stream/service.py",
-            "backend/app/services/batch_generation_execution_service.py",
-            "backend/app/services/ai_config.py",
-            "backend/app/services/ai_gateway/ai_config.py"
+        "python_source_map": [],
+        "historical_python_test_support": [
+            "backend/tests/test_support/ai_gateway/ai_config.py",
+            "backend/tests/test_support/ai_gateway/ai_service.py"
         ],
         "rust_target_map": [
             "backend-rs/src/services/chapter_generation_execution_contract_service.rs",
@@ -91,8 +89,8 @@ pub(crate) fn build_generation_execution_config_owner_contract() -> Value {
             "chapter_batch_generation_write_workflow_service",
             "chapter_batch_generation_runtime_state_service",
             "chapter_generation_execution_contract_service",
-            "chapter_single_generation_active_gateway_smoke_service",
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-single-generation-active-gateway-smoke-rust",
+            "chapter-batch-generation-active-gateway-smoke-rust"
         ],
         "validation_boundary": [
             "cargo test chapter_generation_execution_contract_service",
@@ -114,11 +112,11 @@ pub(crate) fn build_generation_execution_config_owner_contract() -> Value {
             "execution_config_owner": "prepare_generation_execution_config_with_provider_payload",
             "provider_payload_owner": "PreparedGenerationExecutionConfig",
             "source_map_closeout_ready": true,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_shared_execution_config_owner_ready_for_source_map_closeout_review"
+            "remaining_cutover_gate": "none_python_ai_gateway_source_map_deleted",
+            "status": "rust_shared_execution_config_owner_with_deleted_python_ai_gateway_source_map"
         },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_generation_execution_config_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "production_python_ai_gateway_source_map_deleted_historical_fixtures_live_under_tests_test_support",
             "runtime_knob": "SettingsService AI provider configuration plus ChapterCandidateRouteGatewayConfig",
             "compatibility_note": "Execution config must keep model_override and provider payload behavior stable for single and batch generation"
         }

@@ -1,10 +1,10 @@
 from types import SimpleNamespace
 
-from app.services.chapter_generation.runtime.prompt_service import (
+from tests.test_support.chapter_generation_runtime_prompt_test_support import (
     build_chapter_runtime_system_prompt,
-    detect_style_profile,
     resolve_generation_temperature,
 )
+from tests.test_support.schemas.novel_quality_rules import detect_style_profile
 
 
 def test_should_detect_low_ai_serial_style_profile():

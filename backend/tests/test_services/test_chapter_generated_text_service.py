@@ -1,4 +1,4 @@
-from app.services.chapter_generated_text_service import (
+from tests.test_support.chapter_generated_text_test_support import (
     contains_chapter_workflow_meta_text,
     sanitize_generated_narrative_text,
     trim_text_to_sentence_boundary,

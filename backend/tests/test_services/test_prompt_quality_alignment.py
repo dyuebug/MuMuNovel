@@ -1,10 +1,10 @@
 import pytest
 
-from app.services.chapter_quality_context_service import (
-    StoryGenerationGuidance,
+from tests.test_support.story_packet_test_support import StoryGenerationGuidance
+from tests.test_support.story_packet_test_support import (
     build_analysis_quality_kwargs,
 )
-from app.services.prompt_service import PromptService
+from tests.test_support.prompt_service_test_support import format_prompt
 
 
 @pytest.mark.parametrize(
@@ -32,7 +32,7 @@ def test_should_align_analysis_checker_and_reviser_with_story_guidance(template_
         guidance=guidance,
     )
 
-    prompt = PromptService.format_prompt(
+    prompt = format_prompt(
         "请输出结果。",
         _template_key=template_key,
         **kwargs,

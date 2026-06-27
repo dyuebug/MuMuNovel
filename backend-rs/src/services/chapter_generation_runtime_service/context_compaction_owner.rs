@@ -407,11 +407,7 @@ pub(crate) fn build_generation_context_compaction_owner_contract() -> Value {
     json!({
         "owner": "chapter_generation_runtime_service",
         "scope": "shared_generation_context_compaction",
-        "python_source_map": [
-            "backend/app/services/chapter_context_service.py",
-            "backend/app/services/chapter_generation/stream/execution_service.py",
-            "backend/app/services/chapter_regeneration_context_service.py"
-        ],
+        "python_source_map": [],
         "rust_target_map": [
             "backend-rs/src/services/chapter_generation_runtime_service.rs",
             "backend-rs/src/services/chapter_generation_runtime_service/context_compaction_owner.rs",
@@ -463,10 +459,18 @@ pub(crate) fn build_generation_context_compaction_owner_contract() -> Value {
             "cargo test api::health",
             "cargo check --manifest-path backend-rs/Cargo.toml"
         ],
+        "service_runtime_closeout_status": {
+            "owner": "chapter_generation_runtime_service::context_compaction_owner",
+            "source_map_closeout_ready": true,
+            "physical_python_closeout_completed": true,
+            "remaining_python_surface": "backend/tests/test_support/chapter_context_test_support.py",
+            "status": "rust_shared_runtime_owner_with_test_support_only_python_surface"
+        },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_chapter_context_compaction_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "production_python_context_compaction_source_map_deleted_test_support_only_surface_remains",
             "runtime_knob": "ChapterCandidateRouteGatewayConfig",
-            "compatibility_note": "Context compaction must preserve prompt-visible provider payload fields and only shorten oversized context"
+            "compatibility_note": "Context compaction must preserve prompt-visible provider payload fields and only shorten oversized context",
+            "test_support_closeout_boundary": "backend/tests/test_support/chapter_context_test_support.py now owns the remaining Python test/test-support context helpers until those seams are retired"
         }
     })
 }
@@ -476,6 +480,7 @@ mod tests {
     use super::{build_generation_context_compaction_owner_contract, compact_generation_context};
     use crate::services::chapter_generation_prompt_service::PreviousChapterPromptContext;
     use crate::services::chapter_generation_prompt_service::PromptContextProviderPayload;
+    use serde_json::json;
 
     fn build_payload() -> PromptContextProviderPayload {
         PromptContextProviderPayload {
@@ -556,10 +561,7 @@ mod tests {
 
         assert_eq!(contract["owner"], "chapter_generation_runtime_service");
         assert_eq!(contract["scope"], "shared_generation_context_compaction");
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/services/chapter_context_service.py"
-        );
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["rust_target_map"][0],
             "backend-rs/src/services/chapter_generation_runtime_service.rs"
@@ -585,8 +587,20 @@ mod tests {
             "chapter_regeneration_prepare_service"
         );
         assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_shared_runtime_owner_with_test_support_only_python_surface"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_python_surface"],
+            "backend/tests/test_support/chapter_context_test_support.py"
+        );
+        assert_eq!(
             contract["rollback_boundary"]["source_map_policy"],
-            "keep_python_chapter_context_compaction_as_source_map_until_explicit_freeze_delete_round"
+            "production_python_context_compaction_source_map_deleted_test_support_only_surface_remains"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["test_support_closeout_boundary"],
+            "backend/tests/test_support/chapter_context_test_support.py now owns the remaining Python test/test-support context helpers until those seams are retired"
         );
     }
 }

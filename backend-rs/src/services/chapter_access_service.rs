@@ -71,13 +71,8 @@ pub(crate) fn build_chapter_generation_access_owner_contract() -> serde_json::Va
         "owner": "chapter_access_service",
         "scope": "shared_chapter_access_and_generation_specific_access_boundary",
         "python_source_map": [
-            "backend/app/api/chapter_route_helpers.py",
-            "backend/app/api/common.py",
-            "backend/app/api/chapter_generation_routes.py",
-            "backend/app/services/chapter_generation/background_entry_service.py",
-            "backend/app/services/compat/chapter_generation_route_compat_service.py",
-            "backend/app/models/chapter.py",
-            "backend/app/models/project.py"
+            "backend/migrator_app/models/chapter.py",
+            "backend/migrator_app/models/project.py"
         ],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_access_service.rs",
@@ -132,11 +127,11 @@ pub(crate) fn build_chapter_generation_access_owner_contract() -> serde_json::Va
                 "chapter_quality_metrics_query_service"
             ],
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_chapter_access_service_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "chapter access route-helper source-map deleted; surviving Python closeout work for this owner is now limited to chapter/project model rollback references",
+            "status": "rust_chapter_access_service_owner_route_source_map_deleted"
         },
-        "rollback_boundary": "chapter_route_helpers_python_source_map"
+        "rollback_boundary": "chapter/project model references remain the chapter access source-map rollback boundary"
     })
 }
 
@@ -160,6 +155,14 @@ mod tests {
             "load_accessible_chapter_for_generation"
         );
         assert_eq!(
+            contract["python_source_map"][0],
+            "backend/migrator_app/models/chapter.py"
+        );
+        assert_eq!(
+            contract["python_source_map"][1],
+            "backend/migrator_app/models/project.py"
+        );
+        assert_eq!(
             contract["behavior_contract"]["generation_error_contract"][1],
             "ChapterNotFoundOrAccessDenied"
         );
@@ -181,11 +184,11 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
         assert_eq!(
             contract["rollback_boundary"],
-            "chapter_route_helpers_python_source_map"
+            "chapter/project model references remain the chapter access source-map rollback boundary"
         );
     }
 }

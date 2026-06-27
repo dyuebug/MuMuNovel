@@ -1208,10 +1208,7 @@ pub(crate) fn build_chapter_analysis_state_sync_owner_contract() -> Value {
     json!({
         "owner": "chapter_analysis_runtime_service::state_sync_owner",
         "scope": "post_analysis_character_and_organization_state_sync_relationship_career_and_membership_updates",
-        "python_source_map": [
-            "backend/app/services/manual_chapter_analysis_execution_service.py",
-            "backend/app/services/chapter_analysis_response_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_analysis_runtime_service.rs",
             "backend-rs/src/services/chapter_analysis_runtime_service/state_sync_owner.rs",
@@ -1233,7 +1230,7 @@ pub(crate) fn build_chapter_analysis_state_sync_owner_contract() -> Value {
             "cargo check"
         ],
         "rollback_boundary": {
-            "python_source_map_retained": true,
+            "python_source_map_retained": false,
             "same_round_python_edit_required": false
         }
     })

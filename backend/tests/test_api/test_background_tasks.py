@@ -3,8 +3,10 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api import background_tasks as background_tasks_api
-from app.services.background_task_manager import BackgroundTaskRecord
+from tests.test_support.background_task_manager_test_support import BackgroundTaskRecord
+from tests.test_support import (
+    background_tasks_route_test_adapter as background_tasks_api,
+)
 
 
 pytestmark = pytest.mark.asyncio
@@ -28,20 +30,24 @@ async def test_should_default_enable_mcp_true_for_career_background_task(monkeyp
         if False:
             yield ""
 
-    async def fake_generate_career_system(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(body_iterator=fake_stream())
-
     async def fake_consume_sse_stream(task_id: str, stream):
+        async for _ in stream:
+            pass
         return None
+
+    async def fake_create_career_system_stream(**kwargs):
+        captured.update(kwargs)
+        if False:
+            yield ""
 
     monkeypatch.setattr(background_tasks_api, "get_session_factory", fake_get_session_factory)
     monkeypatch.setattr(background_tasks_api, "_build_user_ai_service", fake_build_user_ai_service)
     monkeypatch.setattr(background_tasks_api.background_task_manager, "consume_sse_stream", fake_consume_sse_stream)
+    async def fake_verify_project_access(*args, **kwargs):
+        return None
 
-    import app.api.careers as careers_api
-
-    monkeypatch.setattr(careers_api, "generate_career_system", fake_generate_career_system)
+    monkeypatch.setattr(background_tasks_api, "create_career_system_stream", fake_create_career_system_stream)
+    monkeypatch.setattr(background_tasks_api, "verify_project_access", fake_verify_project_access)
 
     await background_tasks_api._run_generation_task(
         task_id="task-1",
@@ -57,6 +63,72 @@ async def test_should_default_enable_mcp_true_for_career_background_task(monkeyp
     assert captured["enable_mcp"] is True
     assert captured["main_career_count"] == 2
     assert captured["sub_career_count"] == 4
+
+
+@pytest.mark.parametrize(
+    ("task_type", "patch_name", "expected_field", "expected_value"),
+    [
+        ("character_generate", "create_character_generate_stream", "role_type", "supporting"),
+        ("organization_generate", "create_organization_generate_stream", "organization_type", "guild"),
+    ],
+)
+async def test_should_route_character_and_organization_background_tasks_through_shared_entry_owner(
+    monkeypatch,
+    test_db: AsyncSession,
+    task_type: str,
+    patch_name: str,
+    expected_field: str,
+    expected_value: str,
+):
+    captured = {}
+    session_maker = async_sessionmaker(
+        test_db.bind,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+
+    async def fake_get_session_factory(user_id: str):
+        return session_maker
+
+    async def fake_build_user_ai_service(user_id: str, db: AsyncSession):
+        return SimpleNamespace()
+
+    async def fake_stream():
+        if False:
+            yield ""
+
+    async def fake_consume_sse_stream(task_id: str, stream):
+        async for _ in stream:
+            pass
+        return None
+
+    async def fake_shared_entry(**kwargs):
+        captured.update(kwargs)
+        return fake_stream()
+
+    monkeypatch.setattr(background_tasks_api, "get_session_factory", fake_get_session_factory)
+    monkeypatch.setattr(background_tasks_api, "_build_user_ai_service", fake_build_user_ai_service)
+    monkeypatch.setattr(background_tasks_api.background_task_manager, "consume_sse_stream", fake_consume_sse_stream)
+    monkeypatch.setattr(background_tasks_api, patch_name, fake_shared_entry)
+
+    await background_tasks_api._run_generation_task(
+        task_id=f"task-{task_type}",
+        user_id="user-1",
+        task_type=task_type,
+        project_id="project-1",
+        payload={
+            "name": "seed name",
+            expected_field: expected_value,
+            "background": "seed background",
+            "requirements": "seed requirements",
+        },
+    )
+
+    assert captured["request_user_id"] == "user-1"
+    assert captured["data"]["project_id"] == "project-1"
+    assert captured["data"]["name"] == "seed name"
+    assert captured["data"][expected_field] == expected_value
+    assert captured["data"]["enable_mcp"] is True
 
 
 async def test_should_pass_mapping_payload_to_outline_generate_background_task(monkeypatch, test_db: AsyncSession):
@@ -77,20 +149,19 @@ async def test_should_pass_mapping_payload_to_outline_generate_background_task(m
         if False:
             yield ""
 
-    async def fake_generate_outline_stream(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(body_iterator=fake_stream())
-
     async def fake_consume_sse_stream(task_id: str, stream):
+        async for _ in stream:
+            pass
         return None
+
+    async def fake_create_outline_generate_stream(**kwargs):
+        captured.update(kwargs)
+        return fake_stream()
 
     monkeypatch.setattr(background_tasks_api, "get_session_factory", fake_get_session_factory)
     monkeypatch.setattr(background_tasks_api, "_build_user_ai_service", fake_build_user_ai_service)
     monkeypatch.setattr(background_tasks_api.background_task_manager, "consume_sse_stream", fake_consume_sse_stream)
-
-    import app.api.outlines as outlines_api
-
-    monkeypatch.setattr(outlines_api, "generate_outline_stream", fake_generate_outline_stream)
+    monkeypatch.setattr(background_tasks_api, "create_outline_generate_stream", fake_create_outline_generate_stream)
 
     await background_tasks_api._run_generation_task(
         task_id="task-outline-1",
@@ -132,20 +203,19 @@ async def test_should_strip_user_id_from_outline_generate_background_payload(mon
         if False:
             yield ""
 
-    async def fake_generate_outline_stream(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(body_iterator=fake_stream())
-
     async def fake_consume_sse_stream(task_id: str, stream):
+        async for _ in stream:
+            pass
         return None
+
+    async def fake_create_outline_generate_stream(**kwargs):
+        captured.update(kwargs)
+        return fake_stream()
 
     monkeypatch.setattr(background_tasks_api, "get_session_factory", fake_get_session_factory)
     monkeypatch.setattr(background_tasks_api, "_build_user_ai_service", fake_build_user_ai_service)
     monkeypatch.setattr(background_tasks_api.background_task_manager, "consume_sse_stream", fake_consume_sse_stream)
-
-    import app.api.outlines as outlines_api
-
-    monkeypatch.setattr(outlines_api, "generate_outline_stream", fake_generate_outline_stream)
+    monkeypatch.setattr(background_tasks_api, "create_outline_generate_stream", fake_create_outline_generate_stream)
 
     await background_tasks_api._run_generation_task(
         task_id="task-outline-2",
@@ -165,7 +235,7 @@ async def test_should_strip_user_id_from_outline_generate_background_payload(mon
     assert captured["data"]["project_id"] == "project-1"
     assert "user_id" not in captured["data"]
     assert captured["data"]["mode"] == "new"
-    assert captured["request"].state.user_id == "local_21232f297a57a5a7"
+    assert captured["request_user_id"] == "local_21232f297a57a5a7"
 
 
 async def test_should_apply_outline_expand_schema_defaults_for_background_task(monkeypatch, test_db: AsyncSession):
@@ -186,20 +256,19 @@ async def test_should_apply_outline_expand_schema_defaults_for_background_task(m
         if False:
             yield ""
 
-    async def fake_expand_outline_to_chapters_stream(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(body_iterator=fake_stream())
-
     async def fake_consume_sse_stream(task_id: str, stream):
+        async for _ in stream:
+            pass
         return None
+
+    async def fake_create_outline_expand_stream(**kwargs):
+        captured.update(kwargs)
+        return fake_stream()
 
     monkeypatch.setattr(background_tasks_api, "get_session_factory", fake_get_session_factory)
     monkeypatch.setattr(background_tasks_api, "_build_user_ai_service", fake_build_user_ai_service)
     monkeypatch.setattr(background_tasks_api.background_task_manager, "consume_sse_stream", fake_consume_sse_stream)
-
-    import app.api.outlines as outlines_api
-
-    monkeypatch.setattr(outlines_api, "expand_outline_to_chapters_stream", fake_expand_outline_to_chapters_stream)
+    monkeypatch.setattr(background_tasks_api, "create_outline_expand_stream", fake_create_outline_expand_stream)
 
     await background_tasks_api._run_generation_task(
         task_id="task-outline-expand-1",
@@ -236,20 +305,19 @@ async def test_should_apply_outline_batch_expand_schema_defaults_for_background_
         if False:
             yield ""
 
-    async def fake_batch_expand_outlines_stream(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(body_iterator=fake_stream())
-
     async def fake_consume_sse_stream(task_id: str, stream):
+        async for _ in stream:
+            pass
         return None
+
+    async def fake_create_outline_batch_expand_stream(**kwargs):
+        captured.update(kwargs)
+        return fake_stream()
 
     monkeypatch.setattr(background_tasks_api, "get_session_factory", fake_get_session_factory)
     monkeypatch.setattr(background_tasks_api, "_build_user_ai_service", fake_build_user_ai_service)
     monkeypatch.setattr(background_tasks_api.background_task_manager, "consume_sse_stream", fake_consume_sse_stream)
-
-    import app.api.outlines as outlines_api
-
-    monkeypatch.setattr(outlines_api, "batch_expand_outlines_stream", fake_batch_expand_outlines_stream)
+    monkeypatch.setattr(background_tasks_api, "create_outline_batch_expand_stream", fake_create_outline_batch_expand_stream)
 
     await background_tasks_api._run_generation_task(
         task_id="task-outline-batch-1",
@@ -300,10 +368,8 @@ async def test_should_inject_user_id_into_wizard_background_task_payload(
         if False:
             yield ""
 
-    def fake_target(data, db, user_ai_service):
-        captured["data"] = data
-        captured["db"] = db
-        captured["user_ai_service"] = user_ai_service
+    async def fake_target(**kwargs):
+        captured.update(kwargs)
         return fake_stream()
 
     async def fake_consume_sse_stream(task_id: str, stream):
@@ -313,9 +379,13 @@ async def test_should_inject_user_id_into_wizard_background_task_payload(
     monkeypatch.setattr(background_tasks_api, "_build_user_ai_service", fake_build_user_ai_service)
     monkeypatch.setattr(background_tasks_api.background_task_manager, "consume_sse_stream", fake_consume_sse_stream)
 
-    import app.api.wizard_stream as wizard_stream_api
-
-    monkeypatch.setattr(wizard_stream_api, target_name, fake_target)
+    target_map = {
+        "world_building_generator": "create_wizard_world_building_stream",
+        "career_system_generator": "create_wizard_career_system_stream",
+        "characters_generator": "create_wizard_characters_stream",
+        "outline_generator": "create_wizard_outline_stream",
+    }
+    monkeypatch.setattr(background_tasks_api, target_map[target_name], fake_target)
 
     await background_tasks_api._run_generation_task(
         task_id=f"task-{task_type}",
@@ -336,12 +406,12 @@ async def test_should_inject_user_id_into_wizard_background_task_payload(
         },
     )
 
-    assert captured["data"]["user_id"] == "user-1"
+    assert captured["request_user_id"] == "user-1"
     assert captured["data"]["enable_web_research"] is True
     assert captured["data"]["web_research_query"] == "harbor guild rumors"
     assert captured["data"]["reference_research_assets"][0]["title"] == "carried note"
     if expect_project_id:
-        assert captured["data"]["project_id"] == "project-1"
+        assert captured["project_id"] == "project-1"
 
 
 async def test_should_not_override_known_metadata_when_background_task_missing(monkeypatch):
@@ -398,11 +468,8 @@ async def test_should_inject_user_id_into_world_regenerate_background_task(monke
         if False:
             yield ""
 
-    def fake_generator(project_id, data, db, user_ai_service):
-        captured["project_id"] = project_id
-        captured["data"] = data
-        captured["db"] = db
-        captured["user_ai_service"] = user_ai_service
+    async def fake_generator(**kwargs):
+        captured.update(kwargs)
         return fake_stream()
 
     async def fake_consume_sse_stream(task_id: str, stream):
@@ -412,9 +479,7 @@ async def test_should_inject_user_id_into_world_regenerate_background_task(monke
     monkeypatch.setattr(background_tasks_api, "_build_user_ai_service", fake_build_user_ai_service)
     monkeypatch.setattr(background_tasks_api.background_task_manager, "consume_sse_stream", fake_consume_sse_stream)
 
-    import app.api.wizard_stream as wizard_stream_api
-
-    monkeypatch.setattr(wizard_stream_api, "world_building_regenerate_generator", fake_generator)
+    monkeypatch.setattr(background_tasks_api, "create_world_building_regenerate_stream", fake_generator)
 
     await background_tasks_api._run_generation_task(
         task_id="task-world-regenerate",
@@ -425,7 +490,8 @@ async def test_should_inject_user_id_into_world_regenerate_background_task(monke
     )
 
     assert captured["project_id"] == "project-1"
-    assert captured["data"]["user_id"] == "user-1"
+    assert captured["request_user_id"] == "user-1"
+    assert captured["data"]["topic"] == "seed"
 
 
 @pytest.mark.parametrize(

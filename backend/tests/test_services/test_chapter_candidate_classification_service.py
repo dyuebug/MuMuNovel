@@ -1,4 +1,4 @@
-from app.services.chapter_candidate_classification_service import (
+from tests.test_support.chapter_candidate_finalize_test_support import (
     collect_word_budget_repair_candidates,
     is_targeted_quality_repair_candidate,
     is_word_budget_repair_candidate,

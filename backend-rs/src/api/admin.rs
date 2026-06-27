@@ -128,31 +128,21 @@ fn build_admin_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
+        "next_cutover_gate": "explicit user model source-map freeze/delete/repoint approval with same-round rollback policy",
         "source_map_files": [
-            "backend/app/api/admin.py",
-            "backend/app/models/user.py",
-            "backend/app/api/users.py",
-            "backend/app/services/oauth_service.py"
+            "backend/migrator_app/models/user.py"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_admin_user_password_files_as_source_map_until_explicit_freeze_delete_round",
-            "python_route_files_status": "source_map_only_for_admin_users_route_group",
+            "source_map_policy": "admin_users_route_source_map_deleted_remaining_user_model_only",
+            "python_route_files_status": "admin_users_route_source_map_deleted_remaining_user_model_only",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ],
-            "freeze_reason": "Rust admin route owner covers admin users list/update/delete/toggle-status/reset-password logged-in business smoke plus auth-guard probes; final Python source-map freeze/delete/repoint still requires explicit approval.",
-            "rollback_files": [
-                "backend/app/api/admin.py",
-                "backend/app/models/user.py",
-                "backend/app/api/users.py",
-                "backend/app/services/oauth_service.py"
-            ]
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "freeze_reason": "Rust admin route owner covers admin users list/update/delete/toggle-status/reset-password logged-in business smoke plus auth-guard probes; the Python users/admin route shells and old runtime-store facade have been physically deleted, and the remaining admin source map is now limited to the shared user model definition.",
+            "rollback_files": []
         },
-        "migration_policy": "Do not bind admin-users readiness to the /api/users business owner profile; admin completion still requires explicit source-map closeout."
+        "migration_policy": "Do not bind admin-users readiness to the /api/users business owner profile; the Python users/admin route shells and old runtime-store facade have been physically deleted, and admin completion still requires explicit user model source-map closeout."
     })
 }
 
@@ -719,7 +709,7 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "explicit user model source-map freeze/delete/repoint approval with same-round rollback policy"
         );
         assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
@@ -727,15 +717,24 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
-            contract["rollback_boundary"]["remaining_blockers"][0],
-            "explicit source-map freeze/delete/repoint approval"
+            contract["rollback_boundary"]["full_module_freeze_ready"],
+            true
         );
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "admin_users_route_source_map_deleted_remaining_user_model_only"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"],
+            json!([])
+        );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
         assert_eq!(
             contract["migration_policy"],
-            "Do not bind admin-users readiness to the /api/users business owner profile; admin completion still requires explicit source-map closeout."
+            "Do not bind admin-users readiness to the /api/users business owner profile; the Python users/admin route shells and old runtime-store facade have been physically deleted, and admin completion still requires explicit user model source-map closeout."
         );
     }
 

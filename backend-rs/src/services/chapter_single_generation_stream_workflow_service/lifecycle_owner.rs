@@ -23,12 +23,7 @@ pub(crate) fn build_single_generation_stream_lifecycle_owner_contract() -> Value
     json!({
         "owner": "chapter_single_generation_stream_workflow_service::lifecycle_owner",
         "scope": "single_generation_stream_entry_and_runtime_lifecycle",
-        "python_source_map": [
-            "backend/app/api/chapter_generation_routes.py",
-            "backend/app/services/chapter_generation/stream/entry_service.py",
-            "backend/app/services/chapter_generation/stream/service.py",
-            "backend/app/services/chapter_generation/stream/execution_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs",
             "backend-rs/src/services/chapter_single_generation_stream_workflow_service/lifecycle_owner.rs",
@@ -60,7 +55,7 @@ pub(crate) fn build_single_generation_stream_lifecycle_owner_contract() -> Value
             "cargo check"
         ],
         "rollback_boundary": {
-            "python_source_map_retained": true,
+            "python_source_map_retained": false,
             "same_round_python_edit_required": false
         }
     })

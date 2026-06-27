@@ -10,13 +10,7 @@ pub(crate) fn build_batch_generation_terminal_semantics_owner_contract() -> Valu
     json!({
         "owner": "chapter_batch_generation_runtime_state_service::quality_gate_terminal_semantics_projection",
         "scope": "quality_runtime_state_snapshot_retry_budget_and_failed_terminal_semantics_resolution",
-        "python_source_map": [
-            "backend/app/services/batch_generation_quality_status_service.py",
-            "backend/app/services/batch_generation_retry_service.py",
-            "backend/app/services/task_workflow_runtime_service.py",
-            "backend/app/api/chapter_batch_generation_routes.py",
-            "backend/app/api/chapters.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service/terminal_semantics_owner.rs",
@@ -52,7 +46,7 @@ pub(crate) fn build_batch_generation_terminal_semantics_owner_contract() -> Valu
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_batch_terminal_semantics_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_terminal_semantics_owner_is_rust_only_and_surviving_quality_terminal_surfaces_are_tracked_by_external_task_contracts",
             "runtime_state_keys": [
                 "quality_metrics_summary",
                 "latest_quality_metrics",

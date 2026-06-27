@@ -902,24 +902,23 @@ fn build_prompt_workshop_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "source_map_files": [
-            "backend/app/api/prompt_workshop.py",
-            "backend/app/models/prompt_workshop.py",
-            "backend/app/schemas/prompt_workshop.py",
-            "backend/app/services/workshop_client.py",
-            "backend/app/constants/prompt_categories.py"
-        ],
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Prompt workshop route business smoke is covered by phase5-prompt-workshop-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy.",
+        "source_map_files": [],
+        "next_cutover_gate": "prompt-workshop Python route/model/schema/client/category source-map deleted; remaining maturity work is limited to optional cloud-proxy success smoke hardening",
+        "migration_policy": "Prompt workshop route business smoke is covered by phase5-prompt-workshop-business-owner; the Python route shell, legacy model/schema, cloud client, and category source maps are physically deleted, and the remaining maturity work is limited to optional cloud-proxy success smoke hardening.",
         "rollback_boundary": {
-            "source_map_policy": "keep_python_prompt_workshop_route_model_schema_client_category_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "prompt_workshop_route_model_schema_client_category_source_map_deleted_no_python_prompt_workshop_shell_remains",
+            "python_route_files_status": "prompt_workshop_route_model_schema_client_category_source_map_deleted",
+            "python_bootstrap_status": "prompt_workshop_route_registration_deleted_no_python_route_model_schema_client_or_category_shell_remains",
+            "source_map_freeze_status": "physical_closeout_completed",
+            "source_map_physical_closeout_action": "delete_completed",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
             "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
+                "optional prompt-workshop cloud-proxy success smoke if final active-route maturity coverage needs end-to-end external service evidence"
             ],
-            "freeze_reason": "phase5-prompt-workshop-business-owner covers status, submit, my-submissions, and withdraw probes with zero Python fallback probes."
+            "freeze_reason": "phase5-prompt-workshop-business-owner covers status, submit, my-submissions, and withdraw probes with zero Python fallback probes, while the detached Python route/model/schema/cloud-client/category files no longer have any production consumers and are physically deleted.",
+            "rollback_files": []
         }
     })
 }
@@ -1846,7 +1845,7 @@ mod tests {
         );
         assert_eq!(
             contract["source_map_files"].as_array().map(Vec::len),
-            Some(5)
+            Some(0)
         );
         assert_eq!(
             contract["owner_profile"]["name"],
@@ -1889,23 +1888,32 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            json!("explicit source-map freeze/delete/repoint approval with same-round rollback policy")
+            json!("prompt-workshop Python route/model/schema/client/category source-map deleted; remaining maturity work is limited to optional cloud-proxy success smoke hardening")
         );
         assert!(contract["migration_policy"]
             .as_str()
             .unwrap()
             .contains("phase5-prompt-workshop-business-owner"));
+        assert!(contract["migration_policy"].as_str().unwrap().contains(
+            "legacy model/schema, cloud client, and category source maps are physically deleted"
+        ));
         assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
             json!(true)
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            json!(false)
+            json!(true)
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            json!(false)
+            json!(true)
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["rollback_files"]
+                .as_array()
+                .map(Vec::len),
+            Some(0)
         );
     }
 

@@ -2673,15 +2673,7 @@ pub(crate) fn build_story_repair_quality_context_owner_contract() -> Value {
     json!({
         "owner": "chapter_generation_runtime_service::story_repair_quality_context_owner",
         "scope": "story_repair_payload_quality_context_resume_and_recent_history",
-        "python_source_map": [
-            "backend/app/services/story_repair_payload_service.py",
-            "backend/app/services/chapter_quality_context_service.py",
-            "backend/app/services/chapter_generation/stream/execution_service.py",
-            "backend/app/services/batch_generation_orchestration_service.py",
-            "backend/app/services/task_workflow_runtime_service.py",
-            "backend/app/api/chapters.py",
-            "backend/app/api/chapter_batch_generation_routes.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_generation_runtime_service/story_repair_quality_context_owner.rs",
             "backend-rs/src/services/chapter_generation_prompt_service/quality_profile_owner.rs",
@@ -2754,8 +2746,8 @@ pub(crate) fn build_story_repair_quality_context_owner_contract() -> Value {
             "chapter_batch_generation_resume_task_command_service",
             "chapter_batch_generation_task_payload_base_service",
             "chapter_query_service",
-            "chapter_single_generation_active_gateway_smoke_service",
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-single-generation-active-gateway-smoke-rust",
+            "chapter-batch-generation-active-gateway-smoke-rust"
         ],
         "validation_boundary": [
             "cargo test chapter_generation_runtime_service::story_repair_quality_context_owner",
@@ -2769,7 +2761,7 @@ pub(crate) fn build_story_repair_quality_context_owner_contract() -> Value {
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_story_repair_payload_and_quality_context_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "production_python_quality_context_file_deleted_test_support_and_reference_contracts_only",
             "runtime_state_keys": [
                 "active_story_repair_payload",
                 "quality_metrics_summary",
@@ -3176,8 +3168,10 @@ mod tests {
             "story_repair_payload_quality_context_resume_and_recent_history"
         );
         assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/services/story_repair_payload_service.py"
+            contract["python_source_map"]
+                .as_array()
+                .map(|items| items.len()),
+            Some(0)
         );
         assert_eq!(
             contract["rust_owner_map"][0],
@@ -3201,15 +3195,19 @@ mod tests {
         );
         assert_eq!(
             contract["active_consumers"][7],
-            "chapter_single_generation_active_gateway_smoke_service"
+            "chapter-single-generation-active-gateway-smoke-rust"
         );
         assert_eq!(
             contract["active_consumers"][8],
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         );
         assert_eq!(
             contract["rollback_boundary"]["runtime_state_keys"][0],
             "active_story_repair_payload"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "production_python_quality_context_file_deleted_test_support_and_reference_contracts_only"
         );
     }
 }

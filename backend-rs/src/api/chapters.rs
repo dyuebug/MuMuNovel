@@ -33,16 +33,7 @@ fn build_chapters_route_aggregate_owner_contract() -> Value {
             "backend-rs/src/api/chapter_regeneration_routes.rs",
             "backend-rs/src/api/chapter_batch_generation.rs"
         ],
-        "python_source_map": [
-            "backend/app/api/chapters.py",
-            "backend/app/api/chapter_generation_routes.py",
-            "backend/app/api/chapter_batch_generation_routes.py",
-            "backend/app/api/chapter_regeneration_routes.py",
-            "backend/app/api/chapter_partial_regeneration_routes.py",
-            "backend/app/api/chapter_analysis_routes.py",
-            "backend/app/api/chapter_analysis_task_routes.py",
-            "backend/app/api/chapter_draft_routes.py"
-        ],
+        "python_source_map": [],
         "route_merge_contract": {
             "crud": "chapter_crud_routes::routes()",
             "analysis": "chapter_analysis_routes::routes()",
@@ -55,7 +46,7 @@ fn build_chapters_route_aggregate_owner_contract() -> Value {
             "aggregation_only": true,
             "transport_behavior": "No request parsing, database access, auth decision, SSE projection, task lifecycle, or business payload is implemented in chapters.rs.",
             "owner_boundary": "Each merged route file owns its route handlers, service handoffs, error mapping, tests, and rollback/source-map policy.",
-            "migration_meaning": "Python backend/app/api/chapters.py has been decomposed into multiple Rust route owners plus this aggregate merge owner; this file proves the route group wiring boundary only."
+            "migration_meaning": "Legacy Python chapters.py has been retired; the app.api package root now keeps only aggregate source-map metadata while Rust route owners plus this aggregate merge owner own the route group wiring boundary."
         },
         "readiness_evidence": [
             "chapter-candidate-route-gateway-smoke-rust",
@@ -108,35 +99,26 @@ fn build_chapters_route_aggregate_owner_contract() -> Value {
             "status": "covered_by_aggregate_route_group_readiness_profile",
             "scope_note": "chapters.rs is an aggregate merge owner; child route files own business handlers and dedicated owner profiles."
         },
-        "next_cutover_gate": "aggregate source-map has been repointed to the split Rust route owners; final physical deletion still requires a same-round approval and rollback policy",
-        "migration_policy": "Chapters aggregate routing is covered by the route-groups manifest profile; the aggregate Python source-map has been repointed to the split Rust route owners after child-owner review, and final physical deletion still requires a same-round approval and rollback policy.",
+        "next_cutover_gate": "aggregate Python metadata shell deleted; child route owners now carry the remaining route-group rollback/source-map boundaries directly",
+        "migration_policy": "Chapters aggregate routing is covered by the route-groups manifest profile; the legacy chapters.py shell and repointed aggregate package-root metadata have been physically retired, leaving child route owners as the remaining rollback/source-map references.",
         "validation_boundary": [
             "cargo test api::chapters",
             "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only --route-group chapters",
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_chapters_py_and_split_route_modules_as_source_map_until_explicit_freeze_delete_round",
-            "python_route_files_status": "source_map_only_for_chapters_route_group",
+            "source_map_policy": "chapters_route_aggregate_owner_is_rust_only_and_legacy_chapters_py_source_map_is_deleted",
+            "python_route_files_status": "chapters_route_group_source_maps_deleted_child_route_owners_track_remaining_boundaries",
+            "source_map_freeze_status": "physical_closeout_completed",
+            "source_map_physical_closeout_action": "delete_completed",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
             "remaining_blockers": [
-                "chapters.rs is an aggregate wiring owner, not a business implementation owner",
-                "some merged child owners have auth-guard or internal readiness rather than full logged-in business smoke",
-                "explicit aggregate source-map delete approval is still required"
+                "chapters.rs is an aggregate wiring owner, not a business implementation owner"
             ],
-            "freeze_reason": "Rust chapters.rs now owns route-group aggregation across the split Rust route owners, and the aggregate Python chapters.py source-map has been repointed after child-owner review; final physical deletion still requires explicit same-round approval.",
-            "rollback_files": [
-                "backend/app/api/chapters.py",
-                "backend/app/api/chapter_generation_routes.py",
-                "backend/app/api/chapter_batch_generation_routes.py",
-                "backend/app/api/chapter_regeneration_routes.py",
-                "backend/app/api/chapter_partial_regeneration_routes.py",
-                "backend/app/api/chapter_analysis_routes.py",
-                "backend/app/api/chapter_analysis_task_routes.py",
-                "backend/app/api/chapter_draft_routes.py"
-            ]
+            "freeze_reason": "Rust chapters.rs now owns route-group aggregation across the split Rust route owners, and the aggregate Python metadata shells have been physically retired with no route-local behavior remaining on the Python package roots.",
+            "rollback_files": []
         }
     })
 }
@@ -156,9 +138,37 @@ mod tests {
     use super::build_chapters_route_aggregate_owner_contract;
     use serde_json::json;
 
+    fn assert_no_deleted_python_service_source_map(contract: &serde_json::Value) {
+        for key in ["python_source_map", "source_map_files", "rollback_files"] {
+            let Some(items) = contract.get(key).and_then(|value| value.as_array()) else {
+                continue;
+            };
+            assert!(
+                !items.iter().any(|item| item
+                    .as_str()
+                    .is_some_and(|path| path.starts_with("backend/app/services/"))),
+                "{key} must not retain deleted backend/app/services source-map paths"
+            );
+        }
+
+        if let Some(rollback_files) = contract
+            .get("rollback_boundary")
+            .and_then(|value| value.get("rollback_files"))
+            .and_then(|value| value.as_array())
+        {
+            assert!(
+                !rollback_files.iter().any(|item| item
+                    .as_str()
+                    .is_some_and(|path| path.starts_with("backend/app/services/"))),
+                "rollback_boundary.rollback_files must not retain deleted backend/app/services paths"
+            );
+        }
+    }
+
     #[test]
     fn should_publish_chapters_route_aggregate_owner_contract() {
         let contract = build_chapters_route_aggregate_owner_contract();
+        assert_no_deleted_python_service_source_map(&contract);
 
         assert_eq!(contract["owner"], "chapters_route_aggregate");
         assert_eq!(contract["rust_owner"], "backend-rs/src/api/chapters.rs");
@@ -226,11 +236,11 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "aggregate source-map has been repointed to the split Rust route owners; final physical deletion still requires a same-round approval and rollback policy"
+            "aggregate Python metadata shell deleted; child route owners now carry the remaining route-group rollback/source-map boundaries directly"
         );
         assert_eq!(
             contract["migration_policy"],
-            "Chapters aggregate routing is covered by the route-groups manifest profile; the aggregate Python source-map has been repointed to the split Rust route owners after child-owner review, and final physical deletion still requires a same-round approval and rollback policy."
+            "Chapters aggregate routing is covered by the route-groups manifest profile; the legacy chapters.py shell and repointed aggregate package-root metadata have been physically retired, leaving child route owners as the remaining rollback/source-map references."
         );
         assert!(contract["readiness_evidence"]
             .as_array()
@@ -243,11 +253,42 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_freeze_status"],
+            "physical_closeout_completed"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "chapters_route_aggregate_owner_is_rust_only_and_legacy_chapters_py_source_map_is_deleted"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "chapters_route_group_source_maps_deleted_child_route_owners_track_remaining_boundaries"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_physical_closeout_action"],
+            "delete_completed"
+        );
+        assert!(contract["python_source_map"]
+            .as_array()
+            .expect("python source map")
+            .is_empty());
+        assert!(contract["rollback_boundary"]["rollback_files"]
+            .as_array()
+            .expect("rollback files")
+            .is_empty());
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"]
+                .as_array()
+                .expect("remaining blockers")
+                .len(),
+            1
         );
     }
 

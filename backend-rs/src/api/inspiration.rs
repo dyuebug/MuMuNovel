@@ -122,22 +122,16 @@ fn build_inspiration_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "source_map_files": [
-            "backend/app/api/inspiration.py",
-            "backend/app/services/prompt_service.py",
-            "backend/app/services/chapter_web_research_service.py"
-        ],
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Inspiration route business smoke is covered by phase5-inspiration-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy.",
+        "source_map_files": [],
+        "next_cutover_gate": "inspiration route source-map shell deleted; surviving Python closeout work is outside this route group",
+        "migration_policy": "Inspiration route business smoke is covered by phase5-inspiration-business-owner; the Python route shell is no longer registered in app bootstrap, the legacy web-research runtime has moved to test-support only, and the active Rust owner now consumes bundled system template data, rendering, and sync-rule metadata directly. The surviving Python prompt closeout work now sits outside this direct route-group boundary.",
         "rollback_boundary": {
-            "source_map_policy": "keep_python_inspiration_route_prompt_service_web_research_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "inspiration_route_source_map_deleted_no_remaining_route_group_python_source_map_hold",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ],
-            "freeze_reason": "phase5-inspiration-business-owner covers mock OpenAI configuration, generate-options, refine-options, and quick-generate probes with zero Python fallback probes."
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "freeze_reason": "phase5-inspiration-business-owner covers mock OpenAI configuration, generate-options, refine-options, and quick-generate probes with zero Python fallback probes; the Python inspiration route shell has been removed from app bootstrap, the legacy web-research runtime has exited the production services directory, and the active Rust owner now consumes bundled system template data, rendering, and sync-rule metadata directly, so no direct Python route-group source-map hold remains."
         }
     })
 }
@@ -900,7 +894,7 @@ mod tests {
             readiness_probes.last().unwrap(),
             "inspiration-quick-generate-business-rust"
         );
-        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 3);
+        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 0);
         assert_eq!(
             contract["owner_profile"]["name"],
             "phase5-inspiration-business-owner"
@@ -939,23 +933,31 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "inspiration route source-map shell deleted; surviving Python closeout work is outside this route group"
         );
         assert!(contract["migration_policy"]
             .as_str()
             .unwrap()
             .contains("phase5-inspiration-business-owner"));
+        assert!(contract["migration_policy"]
+            .as_str()
+            .unwrap()
+            .contains("surviving Python prompt closeout work now sits outside this direct route-group boundary"));
         assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
             true
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"],
+            json!([])
         );
     }
 

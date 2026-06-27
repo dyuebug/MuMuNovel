@@ -1,11 +1,17 @@
 import json
 from types import SimpleNamespace
-from app.models.character import Character
-from app.models.memory import StoryMemory
-from app.services.chapter_context_service import (
+from tests.test_support.chapter_context_test_support import (
     _build_outline_structure_character_fallback,
     build_character_arc_snapshot,
 )
+
+
+def Character(**kwargs):
+    return SimpleNamespace(**kwargs)
+
+
+def StoryMemory(**kwargs):
+    return SimpleNamespace(**kwargs)
 
 
 def test_should_build_character_arc_snapshot_from_state_and_recent_memory():
@@ -56,7 +62,10 @@ def test_should_build_character_arc_snapshot_from_state_and_recent_memory():
 
 import pytest
 
-from app.services.chapter_context_service import OneToManyContextBuilder, OneToOneContextBuilder
+from tests.test_support.chapter_context_test_support import (
+    OneToManyContextBuilder,
+    OneToOneContextBuilder,
+)
 
 
 @pytest.mark.asyncio

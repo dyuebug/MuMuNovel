@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.services.chapter_context_service import (
+from tests.test_support.chapter_context_test_support import (
     OneToManyContext,
     OneToManyContextBuilder,
     OneToOneContext,

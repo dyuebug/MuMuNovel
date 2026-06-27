@@ -16,9 +16,8 @@ pub(crate) fn build_chapter_generation_history_persistence_owner_contract() -> V
         "owner": "chapter_generation_history_persistence_service",
         "scope": "generated_history_model_construction_single_generation_persistence_transaction_and_candidate_draft_attempt_insert",
         "python_source_map": [
-            "backend/app/services/chapter_generation/stream/finalize_service.py",
-            "backend/app/services/chapter_generation/stream/candidate_service.py",
-            "backend/app/models/generation_history.py"
+            "backend/migrator_app/models/generation_history.py",
+            "backend/migrator_app/models/chapter_draft_attempt.py"
         ],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_generation_history_persistence_service.rs",
@@ -44,17 +43,41 @@ pub(crate) fn build_chapter_generation_history_persistence_owner_contract() -> V
         "active_consumers": [
             "chapter_generation_runtime_service"
         ],
+        "source_map_closeout_status": {
+            "default_python_module_consumers": [
+                "backend/tests/test_support/database_test_support.py"
+            ],
+            "dedicated_python_regression_surfaces": [
+                "backend/tests/test_api/test_chapters.py",
+                "backend/tests/test_api/test_chapters_batch_generation.py",
+                "backend/tests/test_api/test_chapters_stream_routes.py"
+            ],
+            "shared_test_support_consumers": [
+                "backend/tests/test_support/chapter_generation_history_test_support.py",
+                "backend/tests/test_support/batch_generation_retry_test_adapter.py"
+            ],
+            "physical_python_closeout_completed": true,
+            "shared_schema_hold_status": {
+                "generation_history_model": "shared_python_database_metadata_and_regression_reference",
+                "chapter_draft_attempt_model": "shared_python_database_metadata_and_regression_reference",
+                "default_python_module_consumers": [
+                    "backend/tests/test_support/database_test_support.py"
+                ],
+                "physical_closeout_ready": false
+            },
+            "remaining_cutover_gate": "generation_history_and_chapter_draft_attempt_python_model_files_remain_shared_metadata_and_regression_references_only",
+            "status": "rust_chapter_generation_history_persistence_owner_shared_model_source_maps_only"
+        },
         "validation_boundary": [
             "cargo test chapter_generation_runtime_service",
             "cargo test chapter_generation_history_persistence_service",
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_generation_finalize_and_history_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "production_history_persistence_owner_is_rust_only_surviving_python_generation_history_and_chapter_draft_attempt_closeout_is_limited_to_shared_metadata_registration_and_regression_reference",
             "rollback_files": [
-                "backend/app/services/chapter_generation/stream/finalize_service.py",
-                "backend/app/services/chapter_generation/stream/candidate_service.py",
-                "backend/app/models/generation_history.py"
+                "backend/migrator_app/models/generation_history.py",
+                "backend/migrator_app/models/chapter_draft_attempt.py"
             ]
         }
     })
@@ -181,4 +204,65 @@ pub(crate) async fn persist_single_generation_generated_result(
     txn.commit().await.map_err(|error| error.to_string())?;
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::build_chapter_generation_history_persistence_owner_contract;
+
+    #[test]
+    fn should_publish_history_persistence_owner_contract_with_shared_metadata_only_python_hold() {
+        let contract = build_chapter_generation_history_persistence_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_generation_history_persistence_service"
+        );
+        assert_eq!(
+            contract["python_source_map"],
+            json!([
+                "backend/migrator_app/models/generation_history.py",
+                "backend/migrator_app/models/chapter_draft_attempt.py"
+            ])
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["default_python_module_consumers"],
+            json!(["backend/tests/test_support/database_test_support.py"])
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["shared_test_support_consumers"],
+            json!([
+                "backend/tests/test_support/chapter_generation_history_test_support.py",
+                "backend/tests/test_support/batch_generation_retry_test_adapter.py"
+            ])
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["physical_python_closeout_completed"],
+            json!(true)
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["shared_schema_hold_status"]
+                ["generation_history_model"],
+            "shared_python_database_metadata_and_regression_reference"
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["shared_schema_hold_status"]
+                ["chapter_draft_attempt_model"],
+            "shared_python_database_metadata_and_regression_reference"
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["remaining_cutover_gate"],
+            "generation_history_and_chapter_draft_attempt_python_model_files_remain_shared_metadata_and_regression_references_only"
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["status"],
+            "rust_chapter_generation_history_persistence_owner_shared_model_source_maps_only"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "production_history_persistence_owner_is_rust_only_surviving_python_generation_history_and_chapter_draft_attempt_closeout_is_limited_to_shared_metadata_registration_and_regression_reference"
+        );
+    }
 }

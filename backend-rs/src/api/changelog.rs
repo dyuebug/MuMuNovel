@@ -47,7 +47,6 @@ fn build_changelog_route_owner_contract() -> Value {
         "owner": "changelog",
         "scope": "public_changelog_route_group",
         "python_source_map": [
-            "backend/app/api/changelog.py"
         ],
         "rust_owner_map": [
             "backend-rs/src/api/changelog.rs",
@@ -96,22 +95,20 @@ fn build_changelog_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Changelog route business smoke is covered by phase5-changelog-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy.",
+        "next_cutover_gate": "explicit public-changelog source-map deletion rollback review completed; no remaining Python route shell source-map hold",
+        "migration_policy": "Changelog route business smoke is covered by phase5-changelog-owner; the Python route shell is no longer registered in app bootstrap, and the changelog route group now has no remaining Python route-shell source-map hold.",
         "validation_boundary": [
             "cargo test api::changelog",
             "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only --profile phase5-changelog-owner",
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_changelog_route_file_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "python_changelog_route_shell_deleted_no_remaining_route_source_map_hold",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ],
-            "freeze_reason": "Rust changelog route group has dedicated phase5-changelog-owner probes for list and refresh behavior; final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy."
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "freeze_reason": "phase5-changelog-owner covers list and refresh behavior with zero Python fallback probes, and the Python changelog route shell has been removed from app bootstrap."
         }
     })
 }
@@ -543,8 +540,8 @@ mod tests {
         assert_eq!(contract["owner"], "changelog");
         assert_eq!(contract["scope"], "public_changelog_route_group");
         assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/api/changelog.py"
+            contract["python_source_map"].as_array().map(Vec::len),
+            Some(0)
         );
         assert_eq!(
             contract["rust_owner_map"][0],
@@ -595,7 +592,7 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "explicit public-changelog source-map deletion rollback review completed; no remaining Python route shell source-map hold"
         );
         assert!(contract["migration_policy"]
             .as_str()
@@ -607,11 +604,11 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
     }
 }

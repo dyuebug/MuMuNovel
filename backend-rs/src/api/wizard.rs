@@ -351,27 +351,29 @@ fn build_wizard_stream_route_owner_contract() -> serde_json::Value {
             ],
             "python_fallback_probe_count": 0
         },
-        "source_map_files": [
-            "backend/app/api/wizard_stream.py",
-            "backend/app/services/background_task_wizard_executor.py"
-        ],
+        "source_map_files": [],
+        "next_cutover_gate": "wizard-stream route source-map shell deleted; surviving Python closeout work is outside this route group",
+        "migration_policy": "Wizard-stream SSE business smoke is covered by phase5-wizard-stream-business-owner; the Python wizard-stream route shell and its explicit bootstrap rollback registration have been physically deleted.",
+        "smoke_gap": "Dedicated business owner-profile smoke now exists for setup-project, world-building, world-building-regenerate, career-system, characters, outline, and cleanup; surviving Python closeout work is outside the wizard-stream route group.",
         "rollback_boundary": {
-            "source_map_policy": "keep_python_wizard_stream_route_executor_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "wizard_stream_route_source_map_deleted_after_owner_profile_business_smoke",
+            "python_route_files_status": "wizard_stream_route_source_map_deleted_after_frozen_closeout",
+            "python_bootstrap_status": "wizard_stream_runtime_registration_deleted_no_python_route_shell_remains",
+            "source_map_freeze_status": "physical_closeout_completed",
+            "source_map_physical_closeout_action": "delete_completed",
+            "top_level_surviving_shells": [],
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ]
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "rollback_reference": "No Python wizard-stream route shell remains; rollback must happen through Rust route ownership or deployment changes."
         },
         "business_smoke_status": {
             "owner_profile": "phase5-wizard-stream-business-owner",
             "business_probe_count": 7,
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
-        },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Wizard-stream SSE business smoke is covered by phase5-wizard-stream-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+        }
     })
 }
 
@@ -597,18 +599,30 @@ mod tests {
             contract["owner_profile"]["python_fallback_probe_count"],
             json!(0)
         );
-        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 2);
+        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 0);
         assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
             json!(true)
         );
         assert_eq!(
+            contract["rollback_boundary"]["source_map_freeze_status"],
+            "physical_closeout_completed"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_physical_closeout_action"],
+            "delete_completed"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["top_level_surviving_shells"],
+            json!([])
+        );
+        assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            json!(false)
+            json!(true)
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            json!(false)
+            json!(true)
         );
         assert_eq!(
             contract["business_smoke_status"]["status"],
@@ -620,16 +634,20 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "wizard-stream route source-map shell deleted; surviving Python closeout work is outside this route group"
         );
-        assert!(contract["migration_policy"]
+        assert_eq!(
+            contract["migration_policy"],
+            "Wizard-stream SSE business smoke is covered by phase5-wizard-stream-business-owner; the Python wizard-stream route shell and its explicit bootstrap rollback registration have been physically deleted."
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"],
+            json!([])
+        );
+        assert!(contract["smoke_gap"]
             .as_str()
-            .expect("migration policy")
-            .contains("SSE business smoke is covered"));
-        assert!(!contract["migration_policy"]
-            .as_str()
-            .expect("migration policy")
-            .contains("requires source-map freeze/delete/repoint evidence or SSE business smoke"));
+            .unwrap_or_default()
+            .contains("surviving Python closeout work is outside"));
     }
 
     #[test]

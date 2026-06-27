@@ -21,12 +21,7 @@ pub(crate) fn build_batch_generation_active_query_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation_read_context_service::active_query_owner",
         "scope": "active_query_task_view_projection_and_route_read_models",
-        "python_source_map": [
-            "backend/app/services/batch_generation/query_service.py",
-            "backend/app/services/batch_generation_status_read_owner_service.py",
-            "backend/app/services/batch_generation/route_wiring_service.py",
-            "backend/app/api/chapter_batch_generation_routes.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_read_context_service.rs",
             "backend-rs/src/services/chapter_batch_generation_read_context_service/active_query_owner.rs",
@@ -78,12 +73,12 @@ pub(crate) fn build_batch_generation_active_query_owner_contract() -> Value {
             "active_user_task_list_owner": "load_active_user_batch_generation_task_list_view_from_route_query",
             "read_context_projection_owner": "BatchGenerationReadContext::from_task_and_snapshot_projection",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_batch_generation_active_query_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "batch-generation read-context source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/projection source-map packages",
+            "status": "rust_batch_generation_active_query_owner_source_map_deleted"
         },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_batch_query_status_route_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_read_context_owner_is_rust_only_and_surviving_python_query_status_surfaces_are_tracked_by_external_shared_runtime_projection_contracts",
             "route_payloads": [
                 "has_active_task",
                 "task",

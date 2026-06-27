@@ -17,12 +17,7 @@ pub(crate) fn build_single_generation_result_lifecycle_owner_contract() -> Value
     json!({
         "owner": "chapter_single_generation_result_lifecycle_service",
         "scope": "single_generation_generated_result_quality_draft_and_history_lifecycle",
-        "python_source_map": [
-            "backend/app/services/chapter_generation/stream/candidate_service.py",
-            "backend/app/services/chapter_generation/stream/finalize_service.py",
-            "backend/app/services/chapter_generation/stream/execution_service.py",
-            "backend/app/services/manual_chapter_analysis_execution_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_single_generation_result_lifecycle_service.rs",
             "backend-rs/src/services/chapter_single_generation_result_lifecycle_service/lifecycle_owner.rs",
@@ -63,6 +58,19 @@ pub(crate) fn build_single_generation_result_lifecycle_owner_contract() -> Value
             "chapter_single_generation_stream_workflow_service",
             "chapter_analysis_runtime_service"
         ],
+        "service_runtime_closeout_status": {
+            "owner_profiles": [
+                "phase5-single-generation-owner",
+                "phase5-chapter-regeneration-owner"
+            ],
+            "single_generation_manifest_probe_count": 6,
+            "regeneration_manifest_probe_count": 13,
+            "python_fallback_probe_count": 0,
+            "source_map_closeout_ready": true,
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "single_generation_result_lifecycle_owner_is_rust_only_and_surviving_python_closeout_work_now_lives_in_shared_metadata_registration_and_regression_surfaces_outside_this_direct_package",
+            "status": "rust_single_generation_result_lifecycle_owner_direct_package_closed_out"
+        },
         "validation_boundary": [
             "cargo test chapter_generation_runtime_service",
             "cargo test chapter_single_generation_stream_workflow_service",
@@ -71,12 +79,8 @@ pub(crate) fn build_single_generation_result_lifecycle_owner_contract() -> Value
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_single_generation_candidate_finalize_and_history_shells_as_source_map_until_explicit_freeze_delete_round",
-            "rollback_files": [
-                "backend/app/services/chapter_generation/stream/candidate_service.py",
-                "backend/app/services/chapter_generation/stream/finalize_service.py",
-                "backend/app/services/manual_chapter_analysis_execution_service.py"
-            ]
+            "source_map_policy": "single_generation_result_lifecycle_owner_is_rust_only_and_no_longer_tracks_direct_python_finalize_or_history_shell_source_maps",
+            "rollback_files": []
         }
     })
 }
@@ -502,4 +506,280 @@ pub(crate) async fn update_latest_generated_chapter_history_quality_metrics(
     ));
     active.update(db).await.map_err(|error| error.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{
+        build_single_generation_followup_draft_result,
+        build_single_generation_result_lifecycle_owner_contract, generated_result_lifecycle_view,
+        generated_result_quality_view, persisted_history_payload_view,
+        single_generation_candidate_draft_attempt_view,
+        single_generation_candidate_draft_lifecycle_view,
+    };
+    use crate::models::chapter;
+    use crate::services::chapter_generation_runtime_service::GeneratedChapterResult;
+    use chrono::Utc;
+
+    fn build_chapter() -> chapter::Model {
+        chapter::Model {
+            id: "chapter-1".to_string(),
+            project_id: "project-1".to_string(),
+            title: "第一章".to_string(),
+            chapter_number: 1,
+            content: None,
+            summary: None,
+            expansion_plan: None,
+            status: "pending".to_string(),
+            word_count: 0,
+            outline_id: None,
+            sub_index: 0,
+            created_at: Utc::now().naive_utc(),
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn should_publish_single_generation_result_lifecycle_owner_contract_as_closed_out() {
+        let contract = build_single_generation_result_lifecycle_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_single_generation_result_lifecycle_service"
+        );
+        assert_eq!(contract["python_source_map"], json!([]));
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profiles"],
+            json!([
+                "phase5-single-generation-owner",
+                "phase5-chapter-regeneration-owner"
+            ])
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["single_generation_manifest_probe_count"],
+            6
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["regeneration_manifest_probe_count"],
+            13
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_single_generation_result_lifecycle_owner_direct_package_closed_out"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "single_generation_result_lifecycle_owner_is_rust_only_and_no_longer_tracks_direct_python_finalize_or_history_shell_source_maps"
+        );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
+    }
+
+    #[test]
+    fn should_build_generated_result_quality_view_from_candidate_payload() {
+        let candidate = json!({
+            "full_content": "候选章节正文",
+            "quality_gate_plan": {
+                "quality_gate": {
+                    "decision": "manual_review"
+                }
+            },
+            "quality_metrics": {
+                "quality_gate": {
+                    "decision": "manual_review",
+                    "summary": "需要人工复核"
+                }
+            }
+        });
+
+        let view = generated_result_quality_view(&candidate);
+
+        assert_eq!(
+            view.quality_metrics.as_ref().expect("quality metrics")["quality_gate"]["decision"],
+            "manual_review"
+        );
+        assert_eq!(view.quality_gate_action.as_deref(), Some("manual_review"));
+        assert_eq!(view.quality_gate_decision.as_deref(), Some("manual_review"));
+        assert_eq!(view.quality_gate_message.as_deref(), Some("需要人工复核"));
+    }
+
+    #[test]
+    fn should_build_generated_result_lifecycle_view_for_quality_gate_actions() {
+        let retry = generated_result_lifecycle_view("writing", Some("retry"), "candidate");
+        assert_eq!(retry.content_applied, false);
+        assert_eq!(retry.provisional_draft_saved, true);
+        assert_eq!(retry.attempt_state, "retry");
+        assert_eq!(retry.chapter_status, "draft");
+
+        let manual_review =
+            generated_result_lifecycle_view("writing", Some("manual_review"), "candidate");
+        assert_eq!(manual_review.content_applied, false);
+        assert_eq!(manual_review.provisional_draft_saved, false);
+        assert_eq!(manual_review.attempt_state, "manual_review");
+        assert_eq!(manual_review.chapter_status, "writing");
+
+        let applied = generated_result_lifecycle_view("writing", Some("continue"), "candidate");
+        assert_eq!(applied.content_applied, true);
+        assert_eq!(applied.provisional_draft_saved, false);
+        assert_eq!(applied.attempt_state, "applied");
+        assert_eq!(applied.chapter_status, "completed");
+    }
+
+    #[test]
+    fn should_build_single_generation_followup_draft_result_from_shared_lifecycle_owner() {
+        let result = GeneratedChapterResult {
+            chapter_id: "chapter-2".to_string(),
+            content: "候选正文".to_string(),
+            word_count: 18,
+            chapter_status: "completed".to_string(),
+            content_applied: true,
+            quality_metrics: Some(json!({
+                "quality_gate": {
+                    "decision": "manual_review",
+                    "summary": "需要人工复核"
+                }
+            })),
+            quality_gate_action: Some("continue".to_string()),
+            quality_gate_message: Some("已完成".to_string()),
+            ..Default::default()
+        };
+
+        let followup = build_single_generation_followup_draft_result(
+            &result,
+            "draft",
+            "manual_review",
+            Some("retry"),
+            None,
+            None,
+        );
+
+        assert_eq!(followup.content_applied, false);
+        assert_eq!(followup.provisional_draft_saved, true);
+        assert_eq!(followup.attempt_state, "retry");
+        assert_eq!(followup.chapter_status, "draft");
+        assert_eq!(followup.quality_gate_action.as_deref(), Some("retry"));
+        assert_eq!(followup.quality_gate_message.as_deref(), Some("已完成"));
+        assert_eq!(
+            followup.quality_metrics.as_ref().expect("quality metrics")["quality_gate"]["decision"],
+            "manual_review"
+        );
+    }
+
+    #[test]
+    fn should_build_single_generation_candidate_draft_attempt_view() {
+        let result = GeneratedChapterResult {
+            content: "烟测改写成功。第二段继续推进。".to_string(),
+            word_count: 15,
+            attempt_state: "retry".to_string(),
+            quality_metrics: Some(json!({
+                "quality_gate": {
+                    "decision": "auto_repair",
+                    "summary": "需要继续修复"
+                }
+            })),
+            quality_gate_action: Some("retry".to_string()),
+            quality_gate_message: Some("需要继续修复".to_string()),
+            ..Default::default()
+        };
+
+        let view = single_generation_candidate_draft_attempt_view(&result, "上一版正文", 12);
+
+        assert_eq!(view.quality_gate_action.as_deref(), Some("retry"));
+        assert_eq!(view.quality_gate_decision.as_deref(), Some("auto_repair"));
+        assert_eq!(view.word_count, 15);
+        assert_eq!(
+            view.summary_preview.as_deref(),
+            Some("烟测改写成功。第二段继续推进。")
+        );
+        assert_eq!(
+            view.content_preview.as_deref(),
+            Some("烟测改写成功。第二段继续推进。")
+        );
+        assert_eq!(view.repair_payload["previous_content"], "上一版正文");
+        assert_eq!(view.repair_payload["previous_word_count"], 12);
+        assert_eq!(
+            view.repair_payload["candidate_full_content"],
+            "烟测改写成功。第二段继续推进。"
+        );
+        assert_eq!(view.repair_payload["content_complete"], true);
+    }
+
+    #[test]
+    fn should_build_single_generation_candidate_draft_lifecycle_view() {
+        let chapter = build_chapter();
+        let result = GeneratedChapterResult {
+            content: "烟测改写成功。第二段继续推进。".to_string(),
+            word_count: 15,
+            attempt_state: "retry".to_string(),
+            quality_metrics: Some(json!({
+                "quality_gate": {
+                    "decision": "auto_repair",
+                    "summary": "需要继续修复"
+                }
+            })),
+            quality_gate_action: Some("retry".to_string()),
+            quality_gate_message: Some("需要继续修复".to_string()),
+            ..Default::default()
+        };
+
+        let view =
+            single_generation_candidate_draft_lifecycle_view(&chapter, &result, "上一版正文", 12);
+
+        assert_eq!(
+            view.draft_attempt.quality_gate_action.as_deref(),
+            Some("retry")
+        );
+        assert_eq!(
+            view.draft_attempt.quality_gate_decision.as_deref(),
+            Some("auto_repair")
+        );
+        assert_eq!(
+            view.draft_attempt.summary_preview.as_deref(),
+            Some("烟测改写成功。第二段继续推进。")
+        );
+        assert_eq!(
+            view.draft_attempt
+                .repair_payload
+                .as_ref()
+                .expect("repair payload")["previous_word_count"],
+            12
+        );
+        assert_eq!(view.candidate_draft_payload["quality_gate_action"], "retry");
+    }
+
+    #[test]
+    fn should_build_persisted_history_payload_view_from_generated_history_payload() {
+        let payload = json!({
+            "content_applied": false,
+            "attempt_state": "manual_review",
+            "candidate_gateway": {
+                "execution_path": "rust_candidate_executor",
+                "rollback_boundary": "python_candidate_executor_fallback"
+            }
+        });
+
+        let view = persisted_history_payload_view(Some(&payload.to_string()));
+
+        assert_eq!(view.content_applied, false);
+        assert_eq!(view.attempt_state.as_deref(), Some("manual_review"));
+        assert_eq!(
+            view.candidate_gateway_metadata
+                .as_ref()
+                .expect("candidate gateway metadata")["rollback_boundary"],
+            "python_candidate_executor_fallback"
+        );
+    }
 }

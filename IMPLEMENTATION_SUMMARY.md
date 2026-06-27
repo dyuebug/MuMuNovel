@@ -1,193 +1,112 @@
 # API 模型获取功能实施总结
 
-## 当前理解
+## 当前状态
 
-根据 cc-switch 项目的 API 模型获取机制，为 MuMuNovel 添加了从 AI 提供商自动获取可用模型列表的功能。
+API 模型获取功能已经从旧 Python FastAPI 实现迁移到 Rust settings API。
+当前生产路径由 Rust backend 提供，前端通过统一 settings client 调用。
 
-## 实施进度
+旧文档中提到的 `backend/app/api/settings.py`、
+`backend/app/schemas/settings.py` 和 `backend/test_fetch_models.py` 已不是当前实现来源。
 
-### ✅ 已完成
+## 当前实现
 
-#### 1. 后端实现
+### 后端 Rust owner
 
-**文件修改**：
-- `backend/app/schemas/settings.py` - 新增 3 个 Pydantic 模型
-  - `FetchModelsRequest` - 请求模型
-  - `FetchedModel` - 单个模型信息
-  - `FetchModelsResponse` - 响应模型
+- `backend-rs/src/api/settings.rs`
+  - `SETTINGS_FETCH_MODELS_ROUTE = "/settings/fetch-models"`
+  - `FetchModelsRequest`
+  - `fetch_models_endpoint(...)`
+  - route 注册：`POST /settings/fetch-models`
+  - focused tests 覆盖 route 常量、请求/响应和候选端点行为
 
-- `backend/app/api/settings.py` - 新增 API 端点
-  - `POST /api/settings/fetch-models` - 模型获取端点
-  - 支持 OpenAI 兼容的 `/v1/models` 协议
-  - 自动尝试多个候选端点
-  - 智能路径剥离（移除 `/anthropic`、`/openai` 等子路径）
-  - 完善的错误处理（401/403/404/405/Timeout）
+Gateway 对外路径仍是：
 
-**核心特性**：
-- ✅ 多候选端点自动尝试
-- ✅ 自定义 `models_url` 支持
-- ✅ 按 `owned_by` 分组返回
-- ✅ 友好的错误提示
-- ✅ 日志记录
-
-#### 2. 前端实现
-
-**文件创建**：
-- `frontend/src/components/ModelInputWithFetch.tsx` - UI 组件
-  - 输入框 + 获取按钮（初始状态）
-  - 输入框 + 下拉选择（获取成功后）
-  - 加载状态显示
-  - 按提供商分组的模型列表
-
-**文件修改**：
-- `frontend/src/services/modules/settings.ts` - 新增 `fetchModels` 方法
-  - 调用后端 `/api/settings/fetch-models` 端点
-  - 返回标准化的响应格式
-
-#### 3. 文档与测试
-
-**文件创建**：
-- `INTEGRATION_GUIDE.md` - 完整的集成指南
-  - 功能概述
-  - API 文档
-  - 集成方案（方案 A 和方案 B）
-  - 测试步骤
-  - 错误处理说明
-
-- `backend/test_fetch_models.py` - 后端测试脚本
-  - Schema 验证
-  - 候选端点构建逻辑测试
-  - 响应模型验证
-  - ✅ 所有测试通过
-
-## 验证状态
-
-### ✅ 后端验证
-```bash
-cd backend
-python test_fetch_models.py
-# 输出：所有测试通过！
+```text
+POST /api/settings/fetch-models
 ```
 
-### ⏳ 前端集成（待用户执行）
+### 前端调用
 
-需要在 `frontend/src/components/SettingsCurrentTab.tsx` 中集成新组件。
+- `frontend/src/services/modules/settings.ts`
+  - `settingsApi.fetchModels(...)`
+  - 调用 `/settings/fetch-models`，由 API client 统一补齐 gateway/API prefix
+- `frontend/src/components/ModelInputWithFetch.tsx`
+  - 输入框 + 获取按钮
+  - 加载状态
+  - 按 `owned_by` 分组展示模型
+  - 保留手动输入兜底
+- `frontend/src/components/SettingsCurrentTab.tsx`
+  - 当前 Settings 页面集成位置
+  - API Key、Base URL、Provider、Web Research 配置应走同一 settings/preset 保存链路
 
-**推荐方案**：替换现有的 Select 组件为 `ModelInputWithFetch`
+## 功能特性
 
-```tsx
-import ModelInputWithFetch from './ModelInputWithFetch';
+- 支持 OpenAI 兼容的 `/v1/models` 与 `/models` 协议。
+- 支持自定义 `models_url`。
+- 支持兼容路径剥离，例如 `/anthropic`、`/api/anthropic`、`/coding`、`/step_plan`。
+- 支持按 `owned_by` 分组返回模型。
+- 对认证失败、端点不存在、超时、网络错误提供稳定错误类型。
+- 前端允许用户在动态获取失败时继续手动输入模型名称。
 
-// 在 Form.Item 中
-<Form.Item
-  label="模型名称"
-  name="llm_model"
-  rules={[{ required: true, message: '请输入或选择模型名称' }]}
->
-  <ModelInputWithFetch
-    apiKey={form.getFieldValue('api_key')}
-    apiBaseUrl={form.getFieldValue('api_base_url')}
-    provider={form.getFieldValue('api_provider')}
-  />
-</Form.Item>
+## 支持场景
+
+理论上支持所有 OpenAI 兼容模型列表接口：
+
+- OpenAI
+- Azure OpenAI 兼容端点
+- DeepSeek
+- 智谱 GLM
+- Kimi
+- 阶跃星辰
+- 豆包
+- 百炼
+- 硅基流动
+- OpenRouter
+- NewAPI / Sub2API 等聚合代理
+
+## 验证方式
+
+当前推荐验证不再使用已删除的 Python `test_fetch_models.py`。
+
+后端 Rust focused validation：
+
+```powershell
+cargo test api::settings --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/settings-fetch-models"
 ```
 
-## 技术亮点
+Rust 全量类型检查：
 
-### 1. 智能端点发现
-- 自动尝试多个候选端点
-- 支持 `/v1/models` 和 `/models` 两种路径
-- 自动剥离提供商子路径（如 `/anthropic`、`/openai`）
+```powershell
+cargo check --manifest-path "backend-rs/Cargo.toml" --target-dir "E:/Code/ProjectsCode/WorkSpace/Codex/NovelAi/MuMuNovel/.codex-targets/story-continuity-ledger-owner"
+```
 
-### 2. 预设模型支持
-- 为 Anthropic、Gemini 等不支持 `/v1/models` 的提供商提供预设模型列表
-- 避免 403 错误，提升用户体验
-- 用户仍可手动输入其他模型名称
+Gateway manifest 验证：
 
-**Anthropic 预设模型**：
-- claude-3-5-sonnet-20241022
-- claude-3-5-haiku-20241022
-- claude-3-opus-20240229
-- claude-3-sonnet-20240229
-- claude-3-haiku-20240307
+```powershell
+python -X utf8 "backend/tools/run_strangler_gateway_smoke.py" --manifest "deploy/strangler-gateway-probes.json" --validate-manifest-only
+```
 
-**Google Gemini 预设模型**：
-- gemini-2.0-flash-exp
-- gemini-1.5-pro
-- gemini-1.5-flash
-- gemini-1.0-pro
+前端构建：
 
-### 3. 错误处理
-- 401/403：立即返回认证错误，不再尝试其他端点
-- 404/405：所有端点失败后返回"不支持模型列表接口"
-- Timeout：返回超时错误
-- 其他：返回通用网络错误
-
-### 4. 用户体验
-- 按提供商分组显示模型
-- 加载状态反馈
-- 友好的错误提示
-- 支持手动输入兜底
-
-## 支持的提供商
-
-理论上支持所有 OpenAI 兼容的提供商：
-- ✅ OpenAI
-- ✅ Azure OpenAI
-- ✅ Anthropic（通过兼容代理）
-- ✅ Google Gemini（通过兼容代理）
-- ✅ 第三方代理（NewAPI、Sub2API 等）
+```powershell
+cd frontend
+npm run build
+```
 
 ## 残留风险
 
-### 低风险
-- ✅ 后端 Schema 和 API 端点已验证
-- ✅ 前端组件已创建
-- ✅ API 服务方法已添加
+- 真实外部 provider 模型列表接口差异较大，仍需要按实际代理站点验证。
+- `api_key + api_base_url + provider` 的缓存策略尚未统一落地。
+- Python migrator/Alembic 仍存在，但与该功能的生产 API runtime 无关。
 
-### 需要注意
-- ⚠️ 前端组件尚未集成到 Settings 页面
-- ⚠️ 需要测试不同 AI 提供商的兼容性
-- ⚠️ 可能需要根据实际使用情况调整候选端点顺序
+## 后续优化
 
-## 下一步建议
-
-### 立即执行
-1. 在 `SettingsCurrentTab.tsx` 中集成 `ModelInputWithFetch` 组件
-2. 重新构建前端：`cd frontend && npm run build`
-3. 测试不同提供商的模型获取功能
-
-### 后续优化
-1. **缓存机制**：对相同配置的结果缓存 5-10 分钟
-2. **预设集成**：在预设管理中也添加模型获取按钮
-3. **模型过滤**：允许按模型类型过滤（GPT-4、GPT-3.5 等）
-4. **模型详情**：显示上下文长度、价格等信息
-5. **批量测试**：测试多个模型的可用性
-
-## 相关文件清单
-
-### 后端
-- ✅ `backend/app/schemas/settings.py` - 新增 3 个模型
-- ✅ `backend/app/api/settings.py` - 新增 1 个端点
-- ✅ `backend/test_fetch_models.py` - 测试脚本
-
-### 前端
-- ✅ `frontend/src/services/modules/settings.ts` - 新增 1 个方法
-- ✅ `frontend/src/components/ModelInputWithFetch.tsx` - 新组件
-- ⏳ `frontend/src/components/SettingsCurrentTab.tsx` - 待集成
-
-### 文档
-- ✅ `INTEGRATION_GUIDE.md` - 完整集成指南
-
-## 参考资料
-
-- cc-switch 项目路径：`E:\Code\ProjectsCode\WorkSpace\Codex\NovelAi\cc-switch`
-- 核心参考文件：
-  - `src/lib/api/model-fetch.ts` - 后端逻辑参考
-  - `src/components/providers/forms/shared/ModelInputWithFetch.tsx` - UI 参考
+1. 对相同 provider/base URL 的模型列表结果增加短时缓存。
+2. 在预设管理中复用同一模型获取组件。
+3. 对错误类型提供更细的 UI 引导，例如认证错误、路径错误、代理不支持模型列表。
+4. 增加 provider-specific 兼容测试，避免真实代理返回格式漂移。
 
 ---
 
-**实施日期**：2026-05-05  
-**状态**：后端完成，前端待集成  
-**测试状态**：后端测试通过 ✅
+**实施状态**：Rust-owned production API
+**最后更新**：2026-06-25

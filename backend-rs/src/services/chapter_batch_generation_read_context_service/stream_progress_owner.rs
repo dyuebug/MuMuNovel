@@ -6,10 +6,7 @@ pub(crate) fn build_batch_generation_stream_progress_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation_read_context_service::stream_progress_owner",
         "scope": "batch_generation_stream_progress_event_projection",
-        "python_source_map": [
-            "backend/app/services/chapter_candidate_event_service.py",
-            "backend/app/services/batch_generation/status_response_builder.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_read_context_service.rs",
             "backend-rs/src/services/chapter_batch_generation_read_context_service/stream_progress_owner.rs",
@@ -32,7 +29,7 @@ pub(crate) fn build_batch_generation_stream_progress_owner_contract() -> Value {
         },
         "active_consumers": [
             "chapter_batch_generation_read_context_service",
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         ],
         "validation_boundary": [
             "cargo test chapter_batch_generation_read_context_service",
@@ -50,12 +47,12 @@ pub(crate) fn build_batch_generation_stream_progress_owner_contract() -> Value {
             "event_type": "progress",
             "candidate_gateway_projection_owner": "BatchGenerationStreamProgressEventInput.candidate_gateway",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_batch_generation_stream_progress_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "batch-generation read-context source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/projection source-map packages",
+            "status": "rust_batch_generation_stream_progress_owner_source_map_deleted"
         },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_candidate_event_projection_as_source_map_until_same_round_route_readiness_closeout",
+            "source_map_policy": "batch_generation_stream_progress_owner_is_rust_only_and_surviving_candidate_event_projection_surfaces_are_tracked_by_external_runtime_contracts",
             "runtime_state_keys": [
                 "progress",
                 "phase",

@@ -5,10 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.api import chapters as chapters_api
-from app.api import chapter_analysis_task_routes as chapter_analysis_task_routes_api
-from app.services.chapter_quality_context_service import StoryPacket
+from tests.test_support.story_packet_test_support import StoryPacket
 from tests.test_api.chapters_test_support import (
+    chapter_analysis_routes_api,
     chapters_client,
     chapters_session_factory,
     create_chapter,
@@ -22,7 +21,7 @@ pytestmark = pytest.mark.asyncio
 
 async def test_should_return_empty_batch_analysis_status_when_chapter_ids_missing(
 ):
-    response = await chapter_analysis_task_routes_api.get_batch_analysis_task_status(
+    response = await chapter_analysis_routes_api.get_batch_analysis_task_status(
         SimpleNamespace(chapter_ids=None),
         request=None,  # type: ignore[arg-type]
         db=None,  # type: ignore[arg-type]
@@ -59,7 +58,7 @@ async def test_should_trigger_manual_analysis_task_creation(
         return None
 
     monkeypatch.setattr(
-        chapter_analysis_task_routes_api,
+        chapter_analysis_routes_api,
         "execute_chapter_analysis_background",
         fake_analyze_chapter_background,
     )
@@ -95,7 +94,7 @@ async def test_should_delegate_trigger_analysis_route_to_compat_service(
         }
 
     monkeypatch.setattr(
-        chapter_analysis_task_routes_api,
+        chapter_analysis_routes_api,
         "trigger_chapter_analysis_with_default_route_wiring",
         fake_trigger_chapter_analysis_with_default_route_wiring,
     )
@@ -127,7 +126,7 @@ async def test_should_delegate_analysis_status_route_to_compat_service(
         }
 
     monkeypatch.setattr(
-        chapter_analysis_task_routes_api,
+        chapter_analysis_routes_api,
         "get_analysis_task_status_with_default_route_wiring",
         fake_get_analysis_task_status_with_default_route_wiring,
     )
@@ -157,7 +156,7 @@ async def test_should_delegate_can_generate_route_to_compat_service(
         }
 
     monkeypatch.setattr(
-        chapter_analysis_task_routes_api,
+        chapter_analysis_routes_api,
         "check_can_generate_with_default_route_wiring",
         fake_check_can_generate_with_default_route_wiring,
     )
@@ -187,7 +186,7 @@ async def test_should_delegate_batch_analysis_status_route_to_compat_service(
         }
 
     monkeypatch.setattr(
-        chapter_analysis_task_routes_api,
+        chapter_analysis_routes_api,
         "get_batch_analysis_task_status_with_default_route_wiring",
         fake_get_batch_analysis_task_status_with_default_route_wiring,
     )

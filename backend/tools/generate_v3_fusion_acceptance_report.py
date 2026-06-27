@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import subprocess
@@ -25,7 +26,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 BACKEND_ROOT = SCRIPT_DIR.parent
 REPO_ROOT = BACKEND_ROOT.parent
 PROMPT_SERVICE_PATH = BACKEND_ROOT / "app/services/prompt_service.py"
-SYNC_RULES_PATH = BACKEND_ROOT / "app/services/prompt_template_sync_service.py"
+SYNC_RULES_PATH = BACKEND_ROOT / "tests/test_support/prompt_template_sync_test_support.py"
 V3_TAG = "rule_v3_fusion_20260303"
 
 REQUIRED_TEMPLATES = [
@@ -114,22 +115,31 @@ def run_command(command: List[str], cwd: Path) -> CommandResult:
 
 
 def _extract_template_block(source: str, template_key: str) -> str:
-    triple_pattern = re.compile(
-        rf"^\s*{re.escape(template_key)}\s*=\s*\"\"\"(.*?)\"\"\"",
-        re.S | re.M,
-    )
-    single_pattern = re.compile(
-        rf"^\s*{re.escape(template_key)}\s*=\s*\"([^\n]*)\"",
-        re.M,
-    )
+    module = ast.parse(source)
+    namespace: dict[str, str] = {}
 
-    triple_match = triple_pattern.search(source)
-    if triple_match:
-        return triple_match.group(1)
-
-    single_match = single_pattern.search(source)
-    if single_match:
-        return single_match.group(1)
+    for node in module.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in {
+                    "CREATIVE_STORY_ENGINE_GUIDE",
+                    "CREATIVE_LOW_AI_GUARD",
+                }:
+                    exec(  # noqa: S102 - tooling-only evaluation of constant assignments
+                        compile(ast.Module(body=[node], type_ignores=[]), str(PROMPT_SERVICE_PATH), "exec"),
+                        namespace,
+                        namespace,
+                    )
+        if isinstance(node, ast.ClassDef) and node.name == "PromptService":
+            for item in node.body:
+                if isinstance(item, ast.Assign):
+                    for target in item.targets:
+                        if isinstance(target, ast.Name) and target.id == template_key:
+                            return eval(  # noqa: S307 - tooling-only evaluation of template constants
+                                compile(ast.Expression(body=item.value), str(PROMPT_SERVICE_PATH), "eval"),
+                                namespace,
+                                namespace,
+                            )
 
     raise ValueError(f"模板未找到: {template_key}")
 

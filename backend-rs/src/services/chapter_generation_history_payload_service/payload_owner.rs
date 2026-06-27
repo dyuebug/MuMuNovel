@@ -11,10 +11,7 @@ pub(crate) fn build_chapter_generation_history_payload_owner_contract() -> Value
         "owner": "chapter_generation_history_payload_service",
         "scope": "generated_history_payload_projection_runtime_snapshot_contract_and_quality_metrics_normalization",
         "python_source_map": [
-            "backend/app/services/chapter_generation/stream/candidate_service.py",
-            "backend/app/services/chapter_generation/stream/finalize_service.py",
-            "backend/app/services/story_repair_payload_service.py",
-            "backend/app/models/generation_history.py"
+            "backend/migrator_app/models/generation_history.py"
         ],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_generation_history_payload_service.rs",
@@ -51,17 +48,38 @@ pub(crate) fn build_chapter_generation_history_payload_owner_contract() -> Value
             "chapter_quality_metrics_query_service",
             "chapter_single_generation_result_lifecycle_service"
         ],
+        "source_map_closeout_status": {
+            "default_python_module_consumers": [
+                "backend/tests/test_support/database_test_support.py"
+            ],
+            "dedicated_python_regression_surfaces": [
+                "backend/tests/test_api/test_chapters.py",
+                "backend/tests/test_api/test_chapters_batch_generation.py",
+                "backend/tests/test_api/test_chapters_quality_views.py",
+                "backend/tests/test_api/test_chapters_stream_routes.py"
+            ],
+            "shared_test_support_consumers": [
+                "backend/tests/test_support/chapter_generation_history_test_support.py",
+                "backend/tests/test_support/chapter_quality_metrics_query_test_support.py"
+            ],
+            "physical_python_closeout_completed": true,
+            "shared_schema_hold_status": {
+                "generation_history_model": "shared_python_database_metadata_and_regression_reference",
+                "default_python_module_consumers": [
+                    "backend/tests/test_support/database_test_support.py"
+                ],
+                "physical_closeout_ready": false
+            }
+        },
         "validation_boundary": [
             "cargo test chapter_generation_runtime_service",
             "cargo test chapter_quality_metrics_query_service",
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_generation_history_payload_and_query_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "production_generated_history_payload_owner_is_rust_only_surviving_python_generation_history_closeout_is_limited_to_shared_metadata_registration_and_regression_reference",
             "rollback_files": [
-                "backend/app/services/chapter_generation/stream/candidate_service.py",
-                "backend/app/services/chapter_generation/stream/finalize_service.py",
-                "backend/app/models/generation_history.py"
+                "backend/migrator_app/models/generation_history.py"
             ]
         }
     })
@@ -372,4 +390,177 @@ pub(crate) fn build_generated_chapter_history_payload_with_quality_metrics(
         attempt_state,
         created_at,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{
+        build_chapter_generation_history_payload_owner_contract, generated_history_payload_view,
+        generated_history_runtime_snapshot_from_payload,
+        normalize_generated_history_quality_metrics, CHAPTER_GENERATION_HISTORY_PREVIEW_LENGTH,
+    };
+
+    #[test]
+    fn should_publish_history_payload_owner_contract_with_generation_history_source_map_only() {
+        let contract = build_chapter_generation_history_payload_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_generation_history_payload_service"
+        );
+        assert_eq!(
+            contract["scope"],
+            "generated_history_payload_projection_runtime_snapshot_contract_and_quality_metrics_normalization"
+        );
+        assert_eq!(
+            contract["python_source_map"][0],
+            "backend/migrator_app/models/generation_history.py"
+        );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .map(|items| items.len()),
+            Some(1)
+        );
+        assert_eq!(
+            contract["rust_owner_map"][1],
+            "backend-rs/src/services/chapter_generation_history_payload_service/payload_owner.rs"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["history_payload_fields"][9],
+            "candidate_gateway"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["preview_limit"],
+            CHAPTER_GENERATION_HISTORY_PREVIEW_LENGTH
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["default_python_module_consumers"],
+            json!(["backend/tests/test_support/database_test_support.py"])
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["shared_test_support_consumers"],
+            json!([
+                "backend/tests/test_support/chapter_generation_history_test_support.py",
+                "backend/tests/test_support/chapter_quality_metrics_query_test_support.py"
+            ])
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["physical_python_closeout_completed"],
+            json!(true)
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["shared_schema_hold_status"]
+                ["generation_history_model"],
+            "shared_python_database_metadata_and_regression_reference"
+        );
+        assert_eq!(
+            contract["source_map_closeout_status"]["shared_schema_hold_status"]
+                ["physical_closeout_ready"],
+            json!(false)
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["rollback_files"][0],
+            "backend/migrator_app/models/generation_history.py"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "production_generated_history_payload_owner_is_rust_only_surviving_python_generation_history_closeout_is_limited_to_shared_metadata_registration_and_regression_reference"
+        );
+    }
+
+    #[test]
+    fn should_normalize_generated_history_quality_metrics_with_runtime_snapshot_context() {
+        let normalized = normalize_generated_history_quality_metrics(&json!({
+            "quality_metrics": {
+                "overall_score": 88.0,
+                "repair_guidance": {
+                    "summary": "压缩说明段",
+                    "repair_targets": ["压缩说明"],
+                    "preserve_strengths": ["悬念"],
+                    "focus_areas": ["pacing"]
+                },
+                "quality_gate": {
+                    "decision": "auto_repair",
+                    "failed_metrics": [{"label": "Pacing"}]
+                }
+            },
+            "story_runtime_snapshot": {
+                "character_state_ledger": [{"label": "主角", "summary": "情绪收紧"}]
+            }
+        }))
+        .expect("normalized metrics");
+
+        assert_eq!(
+            normalized["quality_runtime_context"]["character_state_ledger"][0]["label"],
+            "主角"
+        );
+        assert_eq!(normalized["repair_guidance"]["summary"], "压缩说明段");
+        assert_eq!(normalized["quality_gate"]["decision"], "auto_repair");
+    }
+
+    #[test]
+    fn should_build_generated_history_payload_view_with_runtime_snapshot_fallback() {
+        let view = generated_history_payload_view(
+            Some(&json!({
+                "story_runtime_contract": {
+                    "guidance": {
+                        "creative_mode": "balanced"
+                    },
+                    "blueprint": {
+                        "chapter_count": 12,
+                        "character_state_ledger": [{"label": "主角", "summary": "收紧"}]
+                    }
+                }
+            })),
+            Some(&json!({
+                "execution_path": "rust_candidate_executor"
+            })),
+        );
+
+        assert_eq!(
+            view.story_runtime_snapshot
+                .as_ref()
+                .expect("runtime snapshot")["creative_mode"],
+            "balanced"
+        );
+        assert_eq!(
+            view.story_runtime_snapshot
+                .as_ref()
+                .expect("runtime snapshot")["chapter_count"],
+            12
+        );
+        assert_eq!(
+            view.story_runtime_snapshot
+                .as_ref()
+                .expect("runtime snapshot")["character_state_ledger"][0]["label"],
+            "主角"
+        );
+        assert_eq!(
+            view.candidate_gateway_metadata
+                .as_ref()
+                .expect("gateway metadata")["execution_path"],
+            "rust_candidate_executor"
+        );
+    }
+
+    #[test]
+    fn should_restore_runtime_snapshot_from_payload_story_runtime_contract() {
+        let snapshot = generated_history_runtime_snapshot_from_payload(&json!({
+            "story_runtime_contract": {
+                "guidance": {
+                    "creative_mode": "tight"
+                },
+                "blueprint": {
+                    "target_word_count": 2400
+                }
+            }
+        }))
+        .expect("runtime snapshot");
+
+        assert_eq!(snapshot["creative_mode"], "tight");
+        assert_eq!(snapshot["target_word_count"], 2400);
+    }
 }

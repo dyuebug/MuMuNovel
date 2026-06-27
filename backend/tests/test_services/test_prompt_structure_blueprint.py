@@ -1,47 +1,59 @@
 import logging
-from app.api.outlines import _merge_outline_requirements
-from app.services.chapter_quality_context_service import StoryBlueprint, StoryGenerationGuidance, StoryPacket
-from app.services.prompt_service import (
-    QUALITY_PREFERENCE_SPECS,
-    QUALITY_RUNTIME_TRACKING_TAG,
+from tests.test_support.outlines_route_test_adapter import _merge_outline_requirements
+from tests.test_support.story_packet_test_support import (
+    StoryBlueprint,
+    StoryGenerationGuidance,
+    StoryPacket,
+)
+from tests.test_support.story_prompt_block_test_support import (
+    apply_quality_optional_block_budget,
+    build_quality_runtime_blocks,
+    build_quality_preference_block,
     build_story_acceptance_card_block,
+    build_story_action_rendering_card_block,
+    build_story_career_state_ledger_block,
     build_story_character_arc_card_block,
+    build_story_character_focus_anchor_block,
+    build_story_character_state_ledger_block,
     build_story_cliffhanger_card_block,
     build_story_creation_brief_block,
-    build_quality_preference_block,
     build_story_dialogue_advancement_card_block,
     build_story_emotion_landing_card_block,
     build_story_execution_checklist_block,
+    build_story_foreshadow_payoff_plan_block,
+    build_story_foreshadow_state_ledger_block,
     build_story_information_release_card_block,
+    build_story_long_term_goal_block,
+    build_story_objective_card_block,
     build_story_opening_hook_card_block,
+    build_story_organization_state_ledger_block,
+    build_story_pacing_budget_block,
     build_story_payoff_chain_card_block,
-    build_story_action_rendering_card_block,
+    build_story_relationship_state_ledger_block,
+    build_story_repair_target_block,
     build_story_repetition_control_card_block,
+    build_story_repetition_risk_block,
+    build_story_result_card_block,
     build_story_rule_grounding_card_block,
     build_story_scene_anchor_card_block,
     build_story_scene_density_card_block,
     build_story_summary_tone_control_card_block,
     build_story_viewpoint_discipline_card_block,
-    PromptService,
-    build_story_objective_card_block,
-    build_story_repair_target_block,
-    build_story_repetition_risk_block,
-    build_story_result_card_block,
-    build_story_long_term_goal_block,
-    build_story_character_focus_anchor_block,
-    build_story_foreshadow_payoff_plan_block,
-    build_story_pacing_budget_block,
-    build_story_character_state_ledger_block,
-    build_story_relationship_state_ledger_block,
-    build_story_foreshadow_state_ledger_block,
-    build_story_organization_state_ledger_block,
-    build_story_career_state_ledger_block,
     build_volume_pacing_block,
+    QUALITY_OPTIONAL_CARD_BLOCK_BUDGETS,
+    QUALITY_OPTIONAL_CARD_DEFAULT_BUDGET,
+    QUALITY_OPTIONAL_CARD_DROP_ORDER,
+    QUALITY_PREFERENCE_SPECS,
+    QUALITY_REGENERATION_OPTIONAL_CARD_BUDGET,
+    resolve_quality_optional_block_budget,
+)
+from tests.test_support.story_prompt_template_support_test_support import (
+    QUALITY_RUNTIME_TRACKING_TAG,
 )
 
 
 def test_should_inject_narrative_blueprint_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="hook",
         story_focus="advance_plot",
@@ -54,7 +66,7 @@ def test_should_inject_narrative_blueprint_block_into_chapter_quality_contract()
 
 
 def test_should_inject_story_volume_pacing_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         chapter_count=12,
         plot_stage="development",
@@ -66,7 +78,7 @@ def test_should_inject_story_volume_pacing_block_into_chapter_quality_contract()
 
 
 def test_should_inject_story_quality_trend_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         quality_metrics_summary={
             "chapter_count": 3,
@@ -125,7 +137,7 @@ def test_should_inject_story_quality_trend_block_into_chapter_quality_contract()
     assert ".\u3002" not in blocks["story_quality_trend_block"]
 
 def test_should_trim_low_priority_story_quality_trend_lines_when_budget_is_tight():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         quality_metrics_summary={
             "chapter_count": 9,
@@ -203,7 +215,7 @@ def test_should_trim_low_priority_story_quality_trend_lines_when_budget_is_tight
 def test_should_emit_story_quality_trend_budget_debug_log_when_optional_lines_are_folded(caplog):
     caplog.set_level(logging.DEBUG, logger="app.services.prompt_service")
 
-    PromptService._build_quality_runtime_blocks(
+    build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         quality_metrics_summary={
             "chapter_count": 9,
@@ -313,7 +325,7 @@ def test_should_build_story_objective_card_block_with_stage_hint():
 
 
 def test_should_inject_story_objective_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="suspense",
         story_focus="relationship_shift",
@@ -337,7 +349,7 @@ def test_should_build_story_creation_brief_block():
 
 
 def test_should_inject_story_creation_brief_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="hook",
         story_focus="advance_plot",
@@ -378,7 +390,7 @@ def test_should_split_multi_line_quality_notes_into_prompt_bullets():
     assert "  - 强化章尾牵引" in block
 def test_should_inject_quality_preference_block_into_chapter_quality_contract():
     notes = "make endings snap harder"
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="hook",
         story_focus="advance_plot",
@@ -406,7 +418,7 @@ def test_should_build_story_repair_target_block():
 
 
 def test_should_inject_story_repair_target_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="hook",
         story_focus="advance_plot",
@@ -440,7 +452,7 @@ def test_should_build_story_result_card_block_with_stage_hint():
 
 
 def test_should_inject_story_result_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="payoff",
         story_focus="foreshadow_payoff",
@@ -472,7 +484,7 @@ def test_should_build_story_execution_checklist_block_with_stage_hint():
 
 
 def test_should_inject_story_execution_checklist_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="hook",
         story_focus="advance_plot",
@@ -501,7 +513,7 @@ def test_should_build_story_scene_anchor_card_block_with_stage_hint():
 
 
 def test_should_inject_story_scene_anchor_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="suspense",
         story_focus="reveal_mystery",
@@ -530,7 +542,7 @@ def test_should_build_story_repetition_risk_block_with_stage_hint():
 
 
 def test_should_inject_story_repetition_risk_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="suspense",
         story_focus="reveal_mystery",
@@ -559,7 +571,7 @@ def test_should_build_story_acceptance_card_block_with_stage_hint():
 
 
 def test_should_inject_story_acceptance_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="payoff",
         story_focus="foreshadow_payoff",
@@ -592,7 +604,7 @@ def test_should_build_story_rule_grounding_card_block_with_stage_hint():
 
 
 def test_should_inject_story_rule_grounding_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="suspense",
         story_focus="reveal_mystery",
@@ -623,7 +635,7 @@ def test_should_build_story_information_release_card_block_with_stage_hint():
 
 
 def test_should_inject_story_information_release_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="emotion",
         story_focus="deepen_character",
@@ -654,7 +666,7 @@ def test_should_build_story_emotion_landing_card_block_with_stage_hint():
 
 
 def test_should_inject_story_emotion_landing_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="emotion",
         story_focus="deepen_character",
@@ -685,7 +697,7 @@ def test_should_build_story_action_rendering_card_block_with_stage_hint():
 
 
 def test_should_inject_story_action_rendering_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="hook",
         story_focus="escalate_conflict",
@@ -716,7 +728,7 @@ def test_should_build_story_summary_tone_control_card_block_with_stage_hint():
 
 
 def test_should_inject_story_summary_tone_control_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="payoff",
         story_focus="foreshadow_payoff",
@@ -747,7 +759,7 @@ def test_should_build_story_repetition_control_card_block_with_stage_hint():
 
 
 def test_should_inject_story_repetition_control_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="suspense",
         story_focus="reveal_mystery",
@@ -778,7 +790,7 @@ def test_should_build_story_viewpoint_discipline_card_block_with_stage_hint():
 
 
 def test_should_inject_story_viewpoint_discipline_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="suspense",
         story_focus="reveal_mystery",
@@ -809,7 +821,7 @@ def test_should_build_story_dialogue_advancement_card_block_with_stage_hint():
 
 
 def test_should_inject_story_dialogue_advancement_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="relationship",
         story_focus="relationship_shift",
@@ -840,7 +852,7 @@ def test_should_build_story_scene_density_card_block_with_stage_hint():
 
 
 def test_should_inject_story_scene_density_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="hook",
         story_focus="advance_plot",
@@ -871,7 +883,7 @@ def test_should_build_story_payoff_chain_card_block_with_stage_hint():
 
 
 def test_should_inject_story_payoff_chain_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="payoff",
         story_focus="foreshadow_payoff",
@@ -904,7 +916,7 @@ def test_should_build_story_opening_hook_card_block_with_stage_hint():
 
 
 def test_should_inject_story_opening_hook_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="hook",
         story_focus="advance_plot",
@@ -933,7 +945,7 @@ def test_should_build_story_character_arc_card_block_with_stage_hint():
 
 
 def test_should_inject_story_character_arc_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="emotion",
         story_focus="deepen_character",
@@ -965,7 +977,7 @@ def test_should_build_story_cliffhanger_card_block_with_stage_hint():
 
 
 def test_should_inject_story_cliffhanger_card_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="suspense",
         story_focus="reveal_mystery",
@@ -1273,7 +1285,7 @@ def test_should_build_volume_pacing_block_with_stage_hint():
 
 
 def test_should_inject_story_repair_diagnostic_block_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         story_repair_diagnostic_block="\u3010\u8bca\u65ad\u4f18\u5148\u7ea7\u5361\u3011\n- \u5f53\u524d\u6700\u5f31\u9879\uff1a\u56de\u62a5\u5151\u73b0\uff08\u5f53\u524d\u503c\uff1a58\uff09",
     )
@@ -1393,7 +1405,7 @@ def test_should_build_story_blueprint_blocks():
 
 
 def test_should_inject_story_blueprint_blocks_into_chapter_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         story_long_term_goal="The lead must seize the capital before the enemy closes in.",
         story_character_focus=["Lin", "Su"],
@@ -1436,7 +1448,7 @@ def test_should_build_story_continuity_ledger_blocks():
 
 
 def test_should_trim_low_priority_optional_cards_when_budget_is_tight():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="hook",
         story_focus="advance_plot",
@@ -1467,7 +1479,7 @@ def test_should_trim_low_priority_optional_cards_when_budget_is_tight():
 
 
 def test_should_keep_focus_area_blocks_longer_when_budget_is_tight():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="balanced",
         story_focus="advance_plot",
@@ -1501,7 +1513,7 @@ def test_should_keep_focus_area_blocks_longer_when_budget_is_tight():
 
 
 def test_should_keep_focus_protected_optional_cards_when_budget_is_tight():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         creative_mode="hook",
         story_focus="advance_plot",
@@ -1547,11 +1559,15 @@ def test_should_keep_focus_protected_optional_blocks_under_budget():
     }
     template_insertion = "".join(f"{{{key}}}" for key in blocks)
 
-    trimmed = PromptService._apply_quality_optional_block_budget(
+    trimmed = apply_quality_optional_block_budget(
         blocks,
         template_key="CHAPTER_GENERATION_ONE_TO_ONE",
         template_insertion=template_insertion,
         plot_stage="ending",
+        optional_card_block_budgets=QUALITY_OPTIONAL_CARD_BLOCK_BUDGETS,
+        optional_card_default_budget=QUALITY_OPTIONAL_CARD_DEFAULT_BUDGET,
+        regeneration_optional_card_budget=QUALITY_REGENERATION_OPTIONAL_CARD_BUDGET,
+        optional_card_drop_order=QUALITY_OPTIONAL_CARD_DROP_ORDER,
         budget_override=600,
         quality_metrics_summary={
             "recent_focus_areas": ["payoff", "dialogue"],
@@ -1590,16 +1606,22 @@ def test_should_inject_continuity_handoff_into_execution_checklist():
 
 def test_should_use_tighter_optional_budget_for_regeneration_templates():
     template_insertion = "{story_objective_card_block}{story_payoff_chain_card_block}"
-    generation_budget = PromptService._resolve_quality_optional_block_budget(
+    generation_budget = resolve_quality_optional_block_budget(
         "CHAPTER_GENERATION_ONE_TO_ONE",
         template_insertion,
         "climax",
+        optional_card_block_budgets=QUALITY_OPTIONAL_CARD_BLOCK_BUDGETS,
+        optional_card_default_budget=QUALITY_OPTIONAL_CARD_DEFAULT_BUDGET,
+        regeneration_optional_card_budget=QUALITY_REGENERATION_OPTIONAL_CARD_BUDGET,
         continuity_density=3,
     )
-    regeneration_budget = PromptService._resolve_quality_optional_block_budget(
+    regeneration_budget = resolve_quality_optional_block_budget(
         "CHAPTER_REGENERATION_SYSTEM",
         template_insertion,
         "climax",
+        optional_card_block_budgets=QUALITY_OPTIONAL_CARD_BLOCK_BUDGETS,
+        optional_card_default_budget=QUALITY_OPTIONAL_CARD_DEFAULT_BUDGET,
+        regeneration_optional_card_budget=QUALITY_REGENERATION_OPTIONAL_CARD_BUDGET,
         continuity_density=3,
     )
 
@@ -1609,7 +1631,7 @@ def test_should_use_tighter_optional_budget_for_regeneration_templates():
 
 
 def test_should_inject_story_quality_hard_guard_block_into_generation_quality_contract():
-    blocks = PromptService._build_quality_runtime_blocks(
+    blocks = build_quality_runtime_blocks(
         "CHAPTER_GENERATION_ONE_TO_MANY",
         creative_mode="hook",
         story_focus="advance_plot",

@@ -1119,7 +1119,7 @@ def test_deploy_manifest_tracks_single_generation_active_readiness_owner():
         in covered_rust_owners
     )
     assert 'chapter_candidate_record_service' in covered_rust_owners
-    assert 'chapter_single_generation_runtime_restore_service' in covered_rust_owners
+    assert 'chapter_single_generation_runtime_restore_workflow_service' in covered_rust_owners
     assert 'chapter_single_generation_write_workflow_service' not in covered_rust_owners
     assert 'chapter_generation_task_semantics_service' not in covered_rust_owners
     assert 'chapter_candidate_provider_stream_service' not in covered_rust_owners
@@ -1127,18 +1127,7 @@ def test_deploy_manifest_tracks_single_generation_active_readiness_owner():
     assert 'chapter_single_generation_stream_success_response_service' not in covered_rust_owners
     assert 'chapter_single_generation_background_response_service' not in covered_rust_owners
     assert 'chapter_single_generation_terminal_state_service' not in covered_rust_owners
-    assert expected_probe['readiness_evidence']['python_source_map'][:4] == [
-        'backend/app/api/chapter_generation_routes.py',
-        'backend/app/api/chapters.py',
-        'backend/app/services/chapter_generation/route_wiring_service.py',
-        'backend/app/services/compat/chapter_generation_route_compat_service.py',
-    ]
-    assert expected_probe['readiness_evidence']['python_source_map'][4:8] == [
-        'backend/app/services/chapter_generation/stream/entry_service.py',
-        'backend/app/services/chapter_generation/stream/candidate_service.py',
-        'backend/app/services/chapter_generation/stream/finalize_service.py',
-        'backend/app/services/chapter_generation/stream/wiring_service.py',
-    ]
+    assert expected_probe['readiness_evidence']['python_source_map'] == []
     assert (
         expected_probe['readiness_evidence']['python_source_map_policy']['status']
         == 'source_map_only'
@@ -1146,16 +1135,31 @@ def test_deploy_manifest_tracks_single_generation_active_readiness_owner():
     assert (
         expected_probe['readiness_evidence']['python_source_map_policy']
         ['python_bootstrap_status']
-        == 'lazy_imported_and_registered_for_explicit_gateway_rollback_only'
+        == 'bootstrap_registration_retired_test_only_route_wiring_loader_remains'
     )
     assert (
         expected_probe['readiness_evidence']['active_gateway_cutover']
         ['python_bootstrap_registration']
-        == 'lazy_imported_and_registered_for_explicit_gateway_rollback_only'
+        == 'bootstrap_registration_deleted_no_route_wiring_loader_remains'
+    )
+    assert (
+        expected_probe['readiness_evidence']['python_source_map_policy']
+        ['final_frozen_boundary']
+        == 'single_generation_active_route_source_map_surface_empty_prepare_query_source_maps_deleted'
+    )
+    assert (
+        expected_probe['readiness_evidence']['python_source_map_policy']
+        ['shared_prepare_query_source_maps']
+        == []
     )
     assert (
         expected_probe['readiness_evidence']['rollback_policy']['manifest_owner_baseline']
         == 'rust = 131, python-fallback = 0'
+    )
+    assert (
+        expected_probe['readiness_evidence']['rollback_policy']
+        ['python_source_map_action']
+        == 'single_generation_active_route_source_maps_deleted_prerequisite_logic_rehomed_to_shared_chapter_query_source_map'
     )
     assert (
         expected_probe['readiness_evidence']['background_response']['message']
@@ -1176,6 +1180,26 @@ def test_deploy_manifest_tracks_single_generation_active_readiness_owner():
         freeze_probe['readiness_evidence']['fallback_shrink_readiness']
         ['python_fallback_removal_ready']
         is True
+    )
+    assert freeze_probe['readiness_evidence']['shared_candidate_runtime_owner_contract'][
+        'python_source_map'
+    ] == []
+    assert freeze_probe['readiness_evidence']['shared_candidate_runtime_owner_contract'][
+        'rollback_boundary'
+    ]['single_generation_entry_source_maps'] == []
+    assert (
+        freeze_probe['readiness_evidence']['python_source_map_policy']
+        ['final_frozen_boundary']
+        == 'single_generation_active_route_source_map_surface_empty_prepare_query_source_maps_deleted'
+    )
+    assert (
+        freeze_probe['readiness_evidence']['python_source_map_policy']
+        ['shared_prepare_query_source_maps']
+        == []
+    )
+    assert (
+        probe['expected_json']['probes'][1]['readiness_evidence']['next_cutover_gate']
+        == 'single-generation route entry source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/candidate and prepare/orchestration source-map packages'
     )
 
     batch_generation = summary['route_group_readiness']['chapter_batch_generation']
@@ -1243,17 +1267,48 @@ def test_deploy_manifest_tracks_single_generation_active_readiness_owner():
     assert (
         expected_batch_probe['readiness_evidence']['python_source_map_policy']
         ['python_bootstrap_status']
-        == 'lazy_imported_and_registered_for_explicit_gateway_rollback_only'
+        == 'bootstrap_registration_deleted_no_route_wiring_loader_remains'
     )
     assert (
         expected_batch_probe['readiness_evidence']['active_gateway_cutover']
         ['python_bootstrap_registration']
-        == 'lazy_imported_and_registered_for_explicit_gateway_rollback_only'
+        == 'bootstrap_registration_deleted_no_route_wiring_loader_remains'
     )
     assert (
         expected_batch_probe['readiness_evidence']['python_source_map_policy']
         ['full_module_freeze_ready']
         is True
+    )
+    assert expected_batch_probe['readiness_evidence']['python_source_map'] == []
+    assert (
+        expected_batch_probe['readiness_evidence']['python_source_map_policy']
+        ['freeze_scope']
+        == 'batch_generation_route_package_source_map_surface'
+    )
+    assert (
+        expected_batch_probe['readiness_evidence']['python_source_map_policy']
+        ['read_context_source_maps']
+        == []
+    )
+    assert (
+        expected_batch_probe['readiness_evidence']['python_source_map_policy']
+        ['shared_candidate_runtime_source_maps']
+        == []
+    )
+    assert (
+        expected_batch_probe['readiness_evidence']['python_source_map_policy']
+        ['shared_projection_source_maps']
+        == []
+    )
+    assert (
+        expected_batch_probe['readiness_evidence']['python_source_map_policy']
+        ['delete_candidate_boundary']
+        == 'batch_generation_route_package_delete_completed_after_logged_in_db_smoke_and_test_seam_migration'
+    )
+    assert (
+        expected_batch_probe['readiness_evidence']['python_source_map_policy']
+        .get('frozen_module_files', [])
+        == []
     )
     batch_freeze_probe = expected_batch_probes[1]
     assert (
@@ -1488,7 +1543,7 @@ def test_deploy_manifest_promotes_chapters_candidate_gateway_business_readiness(
     assert (
         expected_probes[1]['readiness_evidence']['fallback_shrink_readiness']
         ['python_fallback_removal_ready']
-        is False
+        is True
     )
     covered_rust_owners = expected_probes[0]['readiness_evidence'][
         'covered_rust_owners'
@@ -1942,6 +1997,25 @@ def test_deploy_manifest_promotes_chapter_regeneration_stream_workflow_readiness
         'chapter-regeneration-fixture-delete-project-business-rust'
         in regeneration['probe_names_by_profile']['business']
     )
+    tasks_probe = next(
+        item
+        for item in manifest['probes']
+        if item['name'] == 'chapter-regeneration-tasks-business-rust'
+    )
+    assert tasks_probe['expected_json'] == {
+        'chapter_id': '{{chapter_regeneration_business_chapter_id}}',
+        'total': 1,
+        'tasks': [
+            {
+                'status': 'completed',
+            }
+        ],
+    }
+    assert tasks_probe['expected_json_has_keys'] == [
+        'chapter_id',
+        'total',
+        'tasks',
+    ]
 
     probe = next(
         item
@@ -1961,10 +2035,48 @@ def test_deploy_manifest_promotes_chapter_regeneration_stream_workflow_readiness
     expected_probe = probe['expected_json']['probes'][0]
     assert expected_probe['result']['full_stream_owner_consumed'] is True
     assert expected_probe['result']['partial_stream_owner_consumed'] is True
+    assert expected_probe['readiness_evidence']['python_source_map'] == []
     assert (
         expected_probe['readiness_evidence']['source_map_policy']
         ['full_module_freeze_ready']
-        is False
+        is True
+    )
+    assert (
+        expected_probe['readiness_evidence']['source_map_policy']['freeze_scope']
+        == 'chapter_regeneration_route_package_source_map_surface'
+    )
+    assert (
+        expected_probe['readiness_evidence']['source_map_policy']
+        ['stream_orchestration_source_maps']
+        == []
+    )
+    assert (
+        expected_probe['readiness_evidence']['source_map_policy']
+        ['prepare_owner_source_maps']
+        == []
+    )
+    assert (
+        expected_probe['readiness_evidence']['source_map_policy']
+        ['shared_prepare_dependency_source_maps']
+        == []
+    )
+    assert (
+        expected_probe['readiness_evidence']['source_map_policy']
+        ['shared_context_compaction_source_maps']
+        == []
+    )
+    assert (
+        expected_probe['readiness_evidence']['source_map_policy']
+        ['query_owner_source_maps']
+        == []
+    )
+    assert (
+        expected_probe['readiness_evidence']['source_map_policy']['freeze_reason']
+        == 'Rust regeneration route group has dedicated owner-profile business probes for full stream, partial stream, apply partial, task list, and cleanup; the production chapter_regeneration route shell is now physically deleted, and the surviving Python follow-up work sits outside this direct route/workflow source-map package.'
+    )
+    assert (
+        expected_probe['readiness_evidence']['next_cutover_gate']
+        == 'chapter-regeneration route/workflow source-map package is physically closed out; any surviving Python work is outside this direct regeneration package'
     )
 
 

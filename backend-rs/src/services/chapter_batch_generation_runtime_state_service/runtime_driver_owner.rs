@@ -20,13 +20,7 @@ pub(crate) fn build_batch_generation_runtime_driver_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation_runtime_state_service::runtime_driver_execution_chain",
         "scope": "runtime_lifecycle_step_execution_post_write_guard_post_analysis_terminal_and_follow_up_loop",
-        "python_source_map": [
-            "backend/app/services/batch_generation_orchestration_service.py",
-            "backend/app/services/batch_generation_run_service.py",
-            "backend/app/services/batch_generation_analysis_service.py",
-            "backend/app/services/task_workflow_runtime_service.py",
-            "backend/app/api/chapter_batch_generation_routes.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service/runtime_driver_owner.rs",
@@ -83,7 +77,7 @@ pub(crate) fn build_batch_generation_runtime_driver_owner_contract() -> Value {
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_batch_runtime_driver_orchestration_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_runtime_driver_owner_is_rust_only_and_surviving_driver_orchestration_surfaces_are_tracked_by_external_runtime_contracts",
             "runtime_state_keys": [
                 "phase",
                 "progress",

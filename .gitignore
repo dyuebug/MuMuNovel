@@ -142,3 +142,5 @@ backend/.instance_id
 backend-rs/target/
 backend-rs/data/runtime/
 .codex-targets/
+.cargo-target/
+backend/.migration-singleflight.lock

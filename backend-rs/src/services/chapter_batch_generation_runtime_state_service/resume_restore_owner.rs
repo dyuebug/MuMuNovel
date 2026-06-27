@@ -37,13 +37,7 @@ pub(crate) fn build_batch_generation_resume_restore_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation_runtime_state_service::resume_restore_runtime_projection",
         "scope": "resume_restore_runtime_state_seed_quality_context_and_launch_projection",
-        "python_source_map": [
-            "backend/app/services/batch_generation/resume_service.py",
-            "backend/app/services/batch_generation/query_service.py",
-            "backend/app/services/story_repair_payload_service.py",
-            "backend/app/services/task_workflow_runtime_service.py",
-            "backend/app/api/chapter_batch_generation_routes.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service/resume_restore_owner.rs",
@@ -102,7 +96,7 @@ pub(crate) fn build_batch_generation_resume_restore_owner_contract() -> Value {
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_resume_restore_story_repair_runtime_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_resume_restore_owner_is_rust_only_and_surviving_story_repair_runtime_surfaces_are_tracked_by_external_runtime_contracts",
             "runtime_state_keys": [
                 "batch_request_runtime_state",
                 "active_story_repair_payload",

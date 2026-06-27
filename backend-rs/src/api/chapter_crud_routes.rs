@@ -134,28 +134,17 @@ fn build_chapter_crud_route_owner_contract() -> Value {
             "manifest_profile": "phase5-chapter-crud-owner",
             "profile_kind": "successful_result_business_readiness"
         },
-        "source_map_files": [
-            "backend/app/api/chapters.py",
-            "backend/app/services/chapter_crud_workflow_service.py",
-            "backend/app/services/chapter_crud_query_service.py",
-            "backend/app/schemas/chapter.py"
-        ],
+        "source_map_files": [],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_chapter_route_service_schema_files_as_source_map_until_explicit_freeze_delete_round",
-            "python_route_files_status": "source_map_only_for_chapter_crud_route_group",
+            "source_map_policy": "chapter_crud_route_service_and_schema_source_maps_deleted_after_explicit_closeout_round",
+            "python_route_files_status": "chapter_crud_route_service_and_schema_source_maps_deleted",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ],
-            "freeze_reason": "Rust chapter_crud route owner covers route handlers, private CRUD workflow, private error mapper, auth-guard manifest probes for list/project-list, logged-in not-found probes, and successful fixture-backed business probes for project-list/detail/navigation/annotations/can-generate/quality-trend. Final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy.",
-            "rollback_files": [
-                "backend/app/api/chapters.py",
-                "backend/app/services/chapter_crud_workflow_service.py",
-                "backend/app/services/chapter_crud_query_service.py",
-                "backend/app/schemas/chapter.py"
-            ]
+            "full_module_freeze_ready": true,
+            "python_bootstrap_status": "chapter_crud_route_runtime_registration_deleted_no_python_route_shell_remains",
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "freeze_reason": "Rust chapter_crud route owner covers route handlers, private CRUD workflow, private error mapper, auth-guard manifest probes for list/project-list, logged-in not-found probes, and successful fixture-backed business probes for project-list/detail/navigation/annotations/can-generate/quality-trend. The Python chapter CRUD route shells, query source-map file, schema source-map file, and bootstrap rollback registration have all been deleted; rollback now stays at Rust route ownership and deployment policy.",
+            "rollback_files": []
         },
         "business_smoke_status": {
             "owner_profile": "phase5-chapter-crud-owner",
@@ -165,8 +154,8 @@ fn build_chapter_crud_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Chapter CRUD route business smoke is covered by phase5-chapter-crud-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+        "next_cutover_gate": "chapter CRUD route, query, and schema source maps are physically deleted; remaining work is only broader Python exit outside the chapter CRUD package",
+        "migration_policy": "Chapter CRUD route business smoke is covered by phase5-chapter-crud-owner; the Python chapter CRUD route shells, query source-map file, schema source-map file, and explicit bootstrap rollback registration have been physically deleted."
     })
 }
 
@@ -1396,20 +1385,25 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_bootstrap_status"],
+            "chapter_crud_route_runtime_registration_deleted_no_python_route_shell_remains"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "chapter_crud_route_service_and_schema_source_maps_deleted"
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
-            contract["rollback_boundary"]["remaining_blockers"][0],
-            "explicit source-map freeze/delete/repoint approval"
+            contract["rollback_boundary"]["remaining_blockers"],
+            json!([])
         );
-        assert_eq!(
-            contract["source_map_files"][0],
-            "backend/app/api/chapters.py"
-        );
+        assert_eq!(contract["source_map_files"], json!([]));
         assert_eq!(
             contract["business_smoke_status"]["status"],
             "covered_by_dedicated_rust_owner_profile"
@@ -1428,20 +1422,12 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "chapter CRUD route, query, and schema source maps are physically deleted; remaining work is only broader Python exit outside the chapter CRUD package"
         );
-        assert!(contract["migration_policy"]
-            .as_str()
-            .expect("migration policy")
-            .contains("business smoke is covered"));
-        assert!(!contract["migration_policy"]
-            .as_str()
-            .expect("migration policy")
-            .contains("Do not count python-fallback = 0 as completion"));
-        assert!(!contract["migration_policy"]
-            .as_str()
-            .expect("migration policy")
-            .contains("business smoke is present"));
+        assert_eq!(
+            contract["migration_policy"],
+            "Chapter CRUD route business smoke is covered by phase5-chapter-crud-owner; the Python chapter CRUD route shells, query source-map file, schema source-map file, and explicit bootstrap rollback registration have been physically deleted."
+        );
     }
 
     #[test]

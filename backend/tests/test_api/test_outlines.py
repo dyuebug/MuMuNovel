@@ -1,11 +1,15 @@
-from app.api.outlines import _dump_model_like_payload
-from app.schemas.outline import BatchOutlineExpansionRequest, ChapterPlanItem, OutlineExpansionRequest
+from tests.test_support.outlines_route_test_adapter import _dump_model_like_payload
+from tests.test_support.outline_schema_test_support import (
+    BatchOutlineExpansionRequest,
+    ChapterPlanItem,
+    OutlineExpansionRequest,
+)
 import json
 from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
-from app.models.generation_history import GenerationHistory
+from migrator_app.models import GenerationHistory
 
 
 def test_should_dump_chapter_plan_item_payload_from_pydantic_model():
@@ -474,15 +478,20 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api import outlines as outlines_api
+from tests.test_support import outlines_route_test_adapter as outlines_api
 from types import SimpleNamespace
-from app.database import Base
-from app.models.chapter import Chapter
-from app.models.outline import Outline
-from app.models.project import Project
-from app.models.character import Character
-from app.models.career import Career, CharacterCareer
-from app.models.relationship import CharacterRelationship, Organization, OrganizationMember
+from tests.test_support.database_test_support import Base
+from migrator_app.models import (
+    Career,
+    CharacterCareer,
+    CharacterRelationship,
+    Organization,
+    OrganizationMember,
+)
+from migrator_app.models.chapter import Chapter
+from migrator_app.models.outline import Outline
+from migrator_app.models.project import Project
+from migrator_app.models.character import Character
 
 
 @pytest.fixture(autouse=True)
@@ -829,11 +838,11 @@ async def test_should_create_outline_stream_without_duplicate_story_packet_chapt
     from httpx import ASGITransport, AsyncClient
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from app.api import outlines as outlines_api
-    from app.database import Base
-    from app.models.outline import Outline
-    from app.models.project import Project
-    from app.services.chapter_quality_context_service import (
+    from tests.test_support import outlines_route_test_adapter as outlines_api
+    from tests.test_support.database_test_support import Base
+    from migrator_app.models.outline import Outline
+    from migrator_app.models.project import Project
+    from tests.test_support.story_packet_test_support import (
         StoryBlueprint,
         StoryGenerationGuidance,
         StoryPacket,
@@ -909,8 +918,8 @@ async def test_should_create_outline_stream_without_duplicate_story_packet_chapt
     async def fake_check_organizations(**kwargs):
         return {"created_count": 0, "created_organizations": []}
 
-    monkeypatch.setattr(outlines_api.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(outlines_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(outlines_api, "get_template", fake_get_template)
+    monkeypatch.setattr(outlines_api, "format_prompt", fake_format_prompt)
     monkeypatch.setattr(
         outlines_api,
         "build_story_generation_packet_with_project_continuity",
@@ -975,11 +984,11 @@ async def test_should_include_web_research_assets_in_new_outline_prompt(
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from app.api import outlines as outlines_api
-    from app.database import Base
-    from app.models.outline import Outline
-    from app.models.project import Project
-    from app.services.chapter_quality_context_service import (
+    from tests.test_support import outlines_route_test_adapter as outlines_api
+    from tests.test_support.database_test_support import Base
+    from migrator_app.models.outline import Outline
+    from migrator_app.models.project import Project
+    from tests.test_support.story_packet_test_support import (
         StoryBlueprint,
         StoryGenerationGuidance,
         StoryPacket,
@@ -1072,8 +1081,8 @@ async def test_should_include_web_research_assets_in_new_outline_prompt(
     async def fake_check_organizations(**kwargs):
         return {"created_count": 0, "created_organizations": []}
 
-    monkeypatch.setattr(outlines_api.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(outlines_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(outlines_api, "get_template", fake_get_template)
+    monkeypatch.setattr(outlines_api, "format_prompt", fake_format_prompt)
     monkeypatch.setattr(
         outlines_api,
         "build_story_generation_packet_with_project_continuity",
@@ -1150,10 +1159,10 @@ async def test_should_continue_generate_stream_without_duplicate_chapter_count_a
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from app.api import outlines as outlines_api
-    from app.database import Base
-    from app.models.outline import Outline
-    from app.models.project import Project
+    from tests.test_support import outlines_route_test_adapter as outlines_api
+    from tests.test_support.database_test_support import Base
+    from migrator_app.models.outline import Outline
+    from migrator_app.models.project import Project
 
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -1200,7 +1209,7 @@ async def test_should_continue_generate_stream_without_duplicate_chapter_count_a
         request.state.user_id = mock_user.user_id
         return await call_next(request)
 
-    from app.services.chapter_quality_context_service import (
+    from tests.test_support.story_packet_test_support import (
         StoryBlueprint,
         StoryGenerationGuidance,
         StoryPacket,
@@ -1240,8 +1249,8 @@ async def test_should_continue_generate_stream_without_duplicate_chapter_count_a
             },
         }
 
-    monkeypatch.setattr(outlines_api.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(outlines_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(outlines_api, "get_template", fake_get_template)
+    monkeypatch.setattr(outlines_api, "format_prompt", fake_format_prompt)
     monkeypatch.setattr(
         outlines_api,
         "build_story_generation_packet_with_project_continuity",
@@ -1322,11 +1331,11 @@ async def test_should_include_web_research_assets_in_continue_outline_prompt(
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from app.api import outlines as outlines_api
-    from app.database import Base
-    from app.models.outline import Outline
-    from app.models.project import Project
-    from app.services.chapter_quality_context_service import (
+    from tests.test_support import outlines_route_test_adapter as outlines_api
+    from tests.test_support.database_test_support import Base
+    from migrator_app.models.outline import Outline
+    from migrator_app.models.project import Project
+    from tests.test_support.story_packet_test_support import (
         StoryBlueprint,
         StoryGenerationGuidance,
         StoryPacket,
@@ -1428,8 +1437,8 @@ async def test_should_include_web_research_assets_in_continue_outline_prompt(
             "archive_path": "outline_continue_research.json",
         }
 
-    monkeypatch.setattr(outlines_api.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(outlines_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(outlines_api, "get_template", fake_get_template)
+    monkeypatch.setattr(outlines_api, "format_prompt", fake_format_prompt)
     monkeypatch.setattr(
         outlines_api,
         "build_story_generation_packet_with_project_continuity",
@@ -1513,11 +1522,11 @@ async def test_should_build_story_packet_once_across_multiple_continue_batches(
     from httpx import ASGITransport, AsyncClient
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from app.api import outlines as outlines_api
-    from app.database import Base
-    from app.models.outline import Outline
-    from app.models.project import Project
-    from app.services.chapter_quality_context_service import (
+    from tests.test_support import outlines_route_test_adapter as outlines_api
+    from tests.test_support.database_test_support import Base
+    from migrator_app.models.outline import Outline
+    from migrator_app.models.project import Project
+    from tests.test_support.story_packet_test_support import (
         StoryBlueprint,
         StoryGenerationGuidance,
         StoryPacket,
@@ -1637,8 +1646,8 @@ async def test_should_build_story_packet_once_across_multiple_continue_batches(
     def fake_schedule_postprocess(**kwargs):
         captured["scheduled"] += 1
 
-    monkeypatch.setattr(outlines_api.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(outlines_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(outlines_api, "get_template", fake_get_template)
+    monkeypatch.setattr(outlines_api, "format_prompt", fake_format_prompt)
     monkeypatch.setattr(
         outlines_api,
         "build_story_generation_packet_with_project_continuity",
@@ -1718,11 +1727,11 @@ async def test_should_defer_final_continue_outline_postprocess_to_background(tes
     from httpx import ASGITransport, AsyncClient
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from app.api import outlines as outlines_api
-    from app.database import Base
-    from app.models.outline import Outline
-    from app.models.project import Project
-    from app.services.chapter_quality_context_service import (
+    from tests.test_support import outlines_route_test_adapter as outlines_api
+    from tests.test_support.database_test_support import Base
+    from migrator_app.models.outline import Outline
+    from migrator_app.models.project import Project
+    from tests.test_support.story_packet_test_support import (
         StoryBlueprint,
         StoryGenerationGuidance,
         StoryPacket,
@@ -1824,8 +1833,8 @@ async def test_should_defer_final_continue_outline_postprocess_to_background(tes
     def fake_schedule_outline_postprocess_background(**kwargs):
         captured["scheduled_kwargs"] = kwargs
 
-    monkeypatch.setattr(outlines_api.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(outlines_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(outlines_api, "get_template", fake_get_template)
+    monkeypatch.setattr(outlines_api, "format_prompt", fake_format_prompt)
     monkeypatch.setattr(
         outlines_api,
         "build_story_generation_packet_with_project_continuity",

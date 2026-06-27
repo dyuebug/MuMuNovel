@@ -1,0 +1,12 @@
+# Database migration image dependencies only.
+#
+# Keep this file narrower than requirements.txt: Python no longer owns the
+# long-running backend runtime in strangler deployments.
+
+sqlalchemy==2.0.25
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+alembic==1.14.0
+pydantic==2.12.4
+pydantic-settings==2.11.0
+python-dotenv==1.1.0

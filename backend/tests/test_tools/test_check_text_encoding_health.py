@@ -49,9 +49,9 @@ def test_should_not_flag_nullish_coalescing_operator():
 
 
 def test_should_use_only_explicit_roots_when_root_is_provided():
-    roots = resolve_roots(["backend/app/main.py"])
+    roots = resolve_roots(["backend/tools/check_text_encoding_health.py"])
 
-    assert roots == [(REPO_ROOT / "backend/app/main.py").resolve()]
+    assert roots == [(REPO_ROOT / "backend/tools/check_text_encoding_health.py").resolve()]
 
 
 def test_should_exclude_docs_from_default_roots():

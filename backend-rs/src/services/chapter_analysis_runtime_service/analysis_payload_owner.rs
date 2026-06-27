@@ -739,10 +739,9 @@ pub(crate) fn build_chapter_analysis_payload_owner_contract() -> Value {
     json!({
         "owner": "chapter_analysis_runtime_service::analysis_payload_owner",
         "scope": "analysis_payload_memory_quality_metrics_override_and_foreshadow_sync_projection",
-        "python_source_map": [
-            "backend/app/services/chapter_analysis_response_service.py",
-            "backend/app/services/manual_chapter_analysis_execution_service.py",
-            "backend/app/services/memory_service.py"
+        "python_source_map": [],
+        "historical_python_test_support": [
+            "backend/tests/test_support/memory_service_test_support.py"
         ],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_analysis_runtime_service.rs",
@@ -791,8 +790,8 @@ pub(crate) fn build_chapter_analysis_payload_owner_contract() -> Value {
             "chapter_analysis_runtime_service::analyze_generated_chapter_follow_up"
         ],
         "rollback_boundary": {
-            "python_source_map_retained": true,
-            "approval_required_before_python_edit": true
+            "python_source_map_retained": false,
+            "approval_required_before_python_edit": false
         }
     })
 }

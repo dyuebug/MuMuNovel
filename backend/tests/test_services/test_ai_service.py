@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.services.ai_gateway import ai_service
+from tests.test_support.ai_gateway import ai_service
 
 pytestmark = pytest.mark.asyncio
 
@@ -324,7 +324,7 @@ async def test_should_skip_loading_tools_when_enable_mcp_is_false(runtime_servic
     runtime_service._cached_tools = [{"type": "function"}]
     runtime_service._tools_loaded = True
     get_user_tools_mock = mocker.patch(
-        "app.services.mcp_tools_loader.mcp_tools_loader.get_user_tools",
+        "tests.test_support.ai_gateway.mcp_tools_loader.mcp_tools_loader.get_user_tools",
         new_callable=AsyncMock,
     )
 
@@ -341,7 +341,7 @@ async def test_should_skip_loading_tools_when_auto_mcp_is_false(runtime_service,
     runtime_service._cached_tools = [{"type": "function"}]
     runtime_service._tools_loaded = True
     get_user_tools_mock = mocker.patch(
-        "app.services.mcp_tools_loader.mcp_tools_loader.get_user_tools",
+        "tests.test_support.ai_gateway.mcp_tools_loader.mcp_tools_loader.get_user_tools",
         new_callable=AsyncMock,
     )
 
@@ -356,7 +356,7 @@ async def test_should_skip_loading_tools_when_auto_mcp_is_false(runtime_service,
 async def test_should_skip_loading_tools_when_user_id_missing(runtime_service, mocker):
     runtime_service.user_id = None
     get_user_tools_mock = mocker.patch(
-        "app.services.mcp_tools_loader.mcp_tools_loader.get_user_tools",
+        "tests.test_support.ai_gateway.mcp_tools_loader.mcp_tools_loader.get_user_tools",
         new_callable=AsyncMock,
     )
 
@@ -369,7 +369,7 @@ async def test_should_skip_loading_tools_when_user_id_missing(runtime_service, m
 async def test_should_skip_loading_tools_when_db_session_missing(runtime_service, mocker):
     runtime_service.db_session = None
     get_user_tools_mock = mocker.patch(
-        "app.services.mcp_tools_loader.mcp_tools_loader.get_user_tools",
+        "tests.test_support.ai_gateway.mcp_tools_loader.mcp_tools_loader.get_user_tools",
         new_callable=AsyncMock,
     )
 
@@ -383,7 +383,7 @@ async def test_should_return_cached_tools_when_tools_already_loaded(runtime_serv
     runtime_service._cached_tools = [{"type": "function", "function": {"name": "cached"}}]
     runtime_service._tools_loaded = True
     get_user_tools_mock = mocker.patch(
-        "app.services.mcp_tools_loader.mcp_tools_loader.get_user_tools",
+        "tests.test_support.ai_gateway.mcp_tools_loader.mcp_tools_loader.get_user_tools",
         new_callable=AsyncMock,
     )
 
@@ -396,7 +396,7 @@ async def test_should_return_cached_tools_when_tools_already_loaded(runtime_serv
 async def test_should_cache_tools_when_loading_tools_successful(runtime_service, mocker):
     loaded_tools = [{"type": "function", "function": {"name": "search"}}]
     get_user_tools_mock = mocker.patch(
-        "app.services.mcp_tools_loader.mcp_tools_loader.get_user_tools",
+        "tests.test_support.ai_gateway.mcp_tools_loader.mcp_tools_loader.get_user_tools",
         new_callable=AsyncMock,
         return_value=loaded_tools,
     )
@@ -419,7 +419,7 @@ async def test_should_cache_tools_when_loading_tools_successful(runtime_service,
 
 async def test_should_return_none_when_loading_tools_failed(runtime_service, mocker):
     get_user_tools_mock = mocker.patch(
-        "app.services.mcp_tools_loader.mcp_tools_loader.get_user_tools",
+        "tests.test_support.ai_gateway.mcp_tools_loader.mcp_tools_loader.get_user_tools",
         new_callable=AsyncMock,
         side_effect=RuntimeError("load failed"),
     )
@@ -759,4 +759,3 @@ def test_should_return_transport_diagnostics_from_provider_client(runtime_servic
     assert result == diagnostics
     runtime_service._get_provider.assert_called_once_with("sub2api")
     provider_client.get_transport_diagnostics.assert_called_once_with()
-

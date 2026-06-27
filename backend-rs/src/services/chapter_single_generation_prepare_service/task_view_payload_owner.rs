@@ -11,11 +11,7 @@ pub(crate) fn build_single_generation_task_view_payload_owner_contract() -> Valu
     json!({
         "owner": "chapter_single_generation_prepare_service::task_view_payload_owner",
         "scope": "single_generation_runtime_payload_base_task_view_projection_and_candidate_gateway_metadata",
-        "python_source_map": [
-            "backend/app/services/chapter_generation/stream/service.py",
-            "backend/app/services/chapter_generation/stream/execution_service.py",
-            "backend/app/api/chapter_generation_routes.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_single_generation_prepare_service.rs",
             "backend-rs/src/services/chapter_single_generation_runtime_restore_workflow_service.rs",
@@ -53,6 +49,11 @@ pub(crate) fn build_single_generation_task_view_payload_owner_contract() -> Valu
             "candidate_gateway_contract": [
                 "single_generation_runtime_candidate_gateway_metadata",
                 "candidate_gateway metadata is forwarded only when runtime state carries an object payload"
+            ],
+            "background_existing_task_contract": [
+                "load_existing_single_chapter_background_task_payload",
+                "estimated_time_minutes",
+                "active_story_repair_payload snapshot is forwarded from workflow runtime state"
             ]
         },
         "active_consumers": [

@@ -1,6 +1,6 @@
 import pytest
 
-from app.services import batch_generation_run_wiring_service as wiring_service
+from tests.test_support import batch_generation_run_wiring_test_adapter as wiring_service
 
 
 @pytest.mark.asyncio

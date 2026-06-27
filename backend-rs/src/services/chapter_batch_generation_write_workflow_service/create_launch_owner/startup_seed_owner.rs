@@ -28,13 +28,7 @@ pub(crate) fn build_batch_generation_create_startup_seed_owner_contract() -> Val
     json!({
         "owner": "chapter_batch_generation_write_workflow_service::create_launch_startup_seed_owner",
         "scope": "create_runtime_startup_seed_style_resolution_and_runtime_state_payload_projection",
-        "python_source_map": [
-            "backend/app/api/chapter_batch_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/batch_generation/create_service.py",
-            "backend/app/services/task_workflow_runtime_service.py",
-            "backend/app/services/batch_generation/status_response_builder.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_write_workflow_service/create_launch_owner.rs",
             "backend-rs/src/services/chapter_batch_generation_write_workflow_service/create_launch_owner/startup_seed_owner.rs",
@@ -75,7 +69,7 @@ pub(crate) fn build_batch_generation_create_startup_seed_owner_contract() -> Val
         ],
         "rollback_boundary": {
             "runtime_knob": "python_candidate_executor_fallback",
-            "source_map_policy": "keep_python_batch_create_route_and_service_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_create_startup_seed_owner_is_rust_only_and_surviving_startup_seed_surfaces_are_tracked_by_external_runtime_contracts",
             "delete_or_freeze_requires": "same_round_rollback_policy_and_active_batch_create_route_smoke"
         }
     })

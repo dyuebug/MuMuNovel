@@ -2,8 +2,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.models.chapter import Chapter
-from app.services import chapter_regeneration_stream_service as regeneration_stream_service
+import tests.test_support.database_test_support as app_database
+from migrator_app.models.chapter import Chapter
+from tests.test_support import (
+    chapter_regeneration_route_test_adapter as regeneration_stream_service,
+)
 
 
 def test_should_resolve_regeneration_estimated_total_from_effective_request_first():

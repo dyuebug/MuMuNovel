@@ -11,11 +11,7 @@ pub(crate) fn build_batch_generation_task_recovery_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation_read_context_service::task_recovery_owner",
         "scope": "task_recovery_owner",
-        "python_source_map": [
-            "backend/app/services/batch_generation/query_service.py",
-            "backend/app/services/batch_generation_orchestration_service.py",
-            "backend/app/models/batch_generation_task.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_read_context_service.rs",
             "backend-rs/src/services/chapter_batch_generation_read_context_service/task_recovery_owner.rs"
@@ -51,9 +47,27 @@ pub(crate) fn build_batch_generation_task_recovery_owner_contract() -> Value {
             "running_timeout_minutes": RUNNING_TASK_AUTO_RECOVERY_TIMEOUT_MINUTES,
             "pending_timeout_minutes": PENDING_TASK_AUTO_RECOVERY_TIMEOUT_MINUTES,
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_batch_generation_task_recovery_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "batch-generation task-recovery source-map package deleted; surviving Python closeout work is now limited to shared batch-generation-task schema/runtime/API/test-support packages",
+            "status": "rust_batch_generation_task_recovery_owner_source_map_deleted"
+        },
+        "shared_schema_hold_status": {
+            "batch_generation_task_model": "shared_python_runtime_api_and_test_support_reference",
+            "default_python_module_consumers": [
+                "backend/tests/test_support/database_test_support.py",
+                "backend/tests/test_support/task_system/snapshot_runtime_persistence.py"
+            ],
+            "dedicated_python_regression_surfaces": [
+                "backend/tests/test_api/test_chapters.py",
+                "backend/tests/test_api/test_chapters_batch_generation.py",
+                "backend/tests/test_api/test_chapters_batch_status_resume.py"
+            ],
+            "test_support_consumers": [
+                "backend/tests/test_support/batch_generation_status_read_owner_test_adapter.py",
+                "backend/tests/test_support/batch_generation_orchestration_test_adapter.py",
+                "backend/tests/test_support/batch_generation_route_test_adapter.py"
+            ],
+            "physical_closeout_ready": false
         },
         "rollback_boundary": "batch_generation_package_query_source_map"
     })

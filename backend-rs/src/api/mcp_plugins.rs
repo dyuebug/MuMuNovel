@@ -110,24 +110,23 @@ fn build_mcp_plugins_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "source_map_files": [
-            "backend/app/api/mcp_plugins.py",
-            "backend/app/models/mcp_plugin.py",
-            "backend/app/schemas/mcp_plugin.py",
-            "backend/app/services/mcp_test_service.py",
-            "backend/app/mcp/__init__.py"
-        ],
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "MCP plugins route business smoke is covered by phase5-mcp-plugins-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy.",
+        "source_map_files": [],
+        "next_cutover_gate": "mcp-plugins route source-map shell deleted; remaining Python closeout work is limited to backend/migrator_app/models/mcp_plugin.py",
+        "migration_policy": "MCP plugins route business smoke is covered by phase5-mcp-plugins-business-owner; the Python route shell, MCP test service facade, legacy Pydantic schema shell, and old runtime-store facade are no longer needed in the active production route boundary, and the remaining Python closeout work is limited to backend/migrator_app/models/mcp_plugin.py.",
         "rollback_boundary": {
-            "source_map_policy": "keep_python_mcp_plugin_route_model_schema_test_service_facade_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "mcp_plugins_route_source_map_deleted_remaining_python_closeout_is_mcp_plugin_model_only",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
+            "python_route_files_status": "mcp_plugins_route_source_map_deleted_no_direct_route_group_python_source_maps_remain",
+            "python_bootstrap_status": "mcp_plugins_route_runtime_registration_deleted_no_python_route_shell_remains",
+            "source_map_freeze_status": "physical_closeout_completed",
+            "source_map_physical_closeout_action": "delete_completed",
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
             "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
+                "surviving mcp_plugin.py model source-map still needs its own separate physical closeout review"
             ],
-            "freeze_reason": "phase5-mcp-plugins-business-owner covers simple create, list, detail, status, delete, and missing-detail probes with zero Python fallback probes."
+            "freeze_reason": "phase5-mcp-plugins-business-owner covers simple create, list, detail, status, delete, and missing-detail probes with zero Python fallback probes, the Python MCP plugins route shell plus MCP test facade, legacy Pydantic schema shell, and old runtime-store facade have been removed from the production path, and the surviving mcp_plugin.py model now sits outside the direct route-group boundary.",
+            "rollback_files": []
         }
     })
 }
@@ -944,8 +943,9 @@ mod tests {
                 .as_array()
                 .expect("source map files should be present")
                 .len(),
-            5
+            0
         );
+        assert!(contract["source_map_files"].get(0).is_none());
         assert_eq!(
             contract["owner_profile"]["name"],
             "phase5-mcp-plugins-business-owner"
@@ -984,23 +984,50 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "mcp-plugins route source-map shell deleted; remaining Python closeout work is limited to backend/migrator_app/models/mcp_plugin.py"
         );
         assert!(contract["migration_policy"]
             .as_str()
             .unwrap()
             .contains("phase5-mcp-plugins-business-owner"));
+        assert!(contract["migration_policy"]
+            .as_str()
+            .unwrap()
+            .contains("legacy Pydantic schema shell"));
+        assert!(contract["migration_policy"].as_str().unwrap().contains(
+            "remaining Python closeout work is limited to backend/migrator_app/models/mcp_plugin.py"
+        ));
         assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
             true
         );
         assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "mcp_plugins_route_source_map_deleted_no_direct_route_group_python_source_maps_remain"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_bootstrap_status"],
+            "mcp_plugins_route_runtime_registration_deleted_no_python_route_shell_remains"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_freeze_status"],
+            "physical_closeout_completed"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_physical_closeout_action"],
+            "delete_completed"
+        );
+        assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"][0],
+            "surviving mcp_plugin.py model source-map still needs its own separate physical closeout review"
         );
     }
 

@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.services.ai_gateway.ai_providers.openai_provider import OpenAIProvider
+from tests.test_support.ai_gateway.ai_providers.openai_provider import OpenAIProvider
 
 pytestmark = pytest.mark.asyncio
 

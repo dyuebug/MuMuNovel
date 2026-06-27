@@ -1,12 +1,30 @@
+from asyncio import Lock
 from typing import Any
 
 import pytest
 from sqlalchemy import select
 
-from app.api import chapters as chapters_api
-from app.models.chapter import Chapter
-from app.models.generation_history import GenerationHistory
-from app.services import batch_generation_single_chapter_entry_service
+import tests.test_support.database_test_support as _app_database  # noqa: F401
+
+from migrator_app.models.chapter import Chapter
+from migrator_app.models import GenerationHistory
+from tests.test_support import (
+    batch_generation_retry_test_adapter as batch_generation_retry_service,
+)
+from tests.test_support import (
+    batch_generation_single_chapter_wiring_test_adapter as batch_generation_single_chapter_entry_service,
+)
+from tests.test_support import chapter_prompt_quality_test_support as chapter_quality_profile_service
+from tests.test_support import (
+    single_generation_stream_entry_test_adapter as stream_entry_service,
+)
+from tests.test_support.chapter_web_research_test_support import (
+    chapter_web_research_service,
+)
+from tests.test_support.story_repair_payload_test_support import (
+    normalize_story_repair_payload,
+    resolve_quality_gate_execution_plan,
+)
 from tests.test_api.chapters_test_support import (
     chapters_client,
     chapters_session_factory,
@@ -19,6 +37,111 @@ from tests.test_api.chapters_test_support import (
 )
 
 pytestmark = pytest.mark.asyncio
+
+
+class _ChaptersCandidateRerankFacade:
+    _SINGLE_MODULE_ATTRS = {
+        "_generate_best_ranked_candidate": (stream_entry_service, "_generate_best_ranked_candidate"),
+    }
+    _MULTI_MODULE_ATTRS = {
+        "_resolve_quality_gate_execution_plan": (
+            (stream_entry_service, "resolve_quality_gate_execution_plan"),
+            (batch_generation_single_chapter_entry_service, "resolve_quality_gate_execution_plan"),
+        ),
+        "compute_story_quality_metrics": (
+            (stream_entry_service, "compute_story_quality_metrics"),
+            (batch_generation_single_chapter_entry_service, "compute_story_quality_metrics"),
+        ),
+        "_build_chapter_runtime_system_prompt": (
+            (stream_entry_service, "build_chapter_runtime_system_prompt"),
+            (batch_generation_single_chapter_entry_service, "build_chapter_runtime_system_prompt"),
+        ),
+        "OneToManyContextBuilder": (
+            (stream_entry_service, "OneToManyContextBuilder"),
+            (batch_generation_single_chapter_entry_service, "OneToManyContextBuilder"),
+        ),
+        "OneToOneContextBuilder": (
+            (stream_entry_service, "OneToOneContextBuilder"),
+            (batch_generation_single_chapter_entry_service, "OneToOneContextBuilder"),
+        ),
+        "resolve_chapter_quality_profile": (
+            (chapter_quality_profile_service, "resolve_chapter_quality_profile"),
+            (batch_generation_single_chapter_entry_service, "resolve_chapter_quality_profile"),
+        ),
+        "chapter_web_research_service": (
+            (batch_generation_single_chapter_entry_service, "chapter_web_research_service"),
+        ),
+        "stream_get_template": (
+            (stream_entry_service, "get_template"),
+        ),
+        "stream_format_prompt": (
+            (stream_entry_service, "format_prompt"),
+        ),
+        "batch_get_template": (
+            (batch_generation_single_chapter_entry_service, "get_template"),
+        ),
+        "batch_format_prompt": (
+            (batch_generation_single_chapter_entry_service, "format_prompt"),
+        ),
+    }
+    _LOCAL_ATTRS = {
+        "normalize_story_repair_payload": normalize_story_repair_payload,
+        "stream_get_template": stream_entry_service.get_template,
+        "stream_format_prompt": stream_entry_service.format_prompt,
+        "batch_get_template": batch_generation_single_chapter_entry_service.get_template,
+        "batch_format_prompt": batch_generation_single_chapter_entry_service.format_prompt,
+        "chapter_web_research_service": chapter_web_research_service,
+        "Lock": Lock,
+    }
+
+    def __getattr__(self, name: str):
+        if name in self._LOCAL_ATTRS:
+            return self._LOCAL_ATTRS[name]
+        module_attr = self._SINGLE_MODULE_ATTRS.get(name)
+        if module_attr is None:
+            module_attrs = self._MULTI_MODULE_ATTRS.get(name)
+            if module_attrs is None:
+                raise AttributeError(name)
+            module, attr_name = module_attrs[0]
+            return getattr(module, attr_name)
+        module, attr_name = module_attr
+        return getattr(module, attr_name)
+
+    def __setattr__(self, name: str, value):
+        if name in {"_SINGLE_MODULE_ATTRS", "_MULTI_MODULE_ATTRS", "_LOCAL_ATTRS"}:
+            object.__setattr__(self, name, value)
+            return
+        module_attr = self._SINGLE_MODULE_ATTRS.get(name)
+        if module_attr is not None:
+            module, attr_name = module_attr
+            setattr(module, attr_name, value)
+            return
+        module_attrs = self._MULTI_MODULE_ATTRS.get(name)
+        if module_attrs is not None:
+            original_values = _ORIGINAL_MULTI_ATTR_VALUES.get(name)
+            if (
+                original_values is not None
+                and len(original_values) == len(module_attrs)
+                and value is original_values[0]
+            ):
+                for (module, attr_name), original_value in zip(module_attrs, original_values):
+                    setattr(module, attr_name, original_value)
+                if name in self._LOCAL_ATTRS:
+                    self._LOCAL_ATTRS[name] = original_values[0]
+                return
+            for module, attr_name in module_attrs:
+                setattr(module, attr_name, value)
+            if name in self._LOCAL_ATTRS:
+                self._LOCAL_ATTRS[name] = value
+            return
+        self._LOCAL_ATTRS[name] = value
+
+
+chapters_api = _ChaptersCandidateRerankFacade()
+_ORIGINAL_MULTI_ATTR_VALUES = {
+    name: tuple(getattr(module, attr_name) for module, attr_name in module_attrs)
+    for name, module_attrs in _ChaptersCandidateRerankFacade._MULTI_MODULE_ATTRS.items()
+}
 
 async def test_should_use_near_target_word_budget_repair_candidate_as_targeted_final_repair_seed():
     class StubAIService:
@@ -1497,8 +1620,8 @@ async def test_should_rerank_generate_stream_candidates_and_save_best_winner(
 
     monkeypatch.setattr(chapters_api, "OneToManyContextBuilder", FakeOneToManyBuilder)
     monkeypatch.setattr(chapters_api, "OneToOneContextBuilder", FakeOneToOneBuilder)
-    monkeypatch.setattr(chapters_api.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(chapters_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(chapters_api, "stream_get_template", fake_get_template)
+    monkeypatch.setattr(chapters_api, "stream_format_prompt", fake_format_prompt)
     monkeypatch.setattr(chapters_api, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
     monkeypatch.setattr(chapters_api, "_resolve_quality_gate_execution_plan", fake_resolve_quality_gate_execution_plan)
     monkeypatch.setattr(fake_ai_service, "generate_text_stream", fake_generate_text_stream)
@@ -1667,8 +1790,8 @@ async def test_generate_single_chapter_for_batch_should_rerank_candidates_before
     monkeypatch.setattr(chapters_api.chapter_web_research_service, "is_enabled", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(chapters_api, "OneToManyContextBuilder", FakeOneToManyBuilder)
     monkeypatch.setattr(chapters_api, "resolve_chapter_quality_profile", fake_resolve_chapter_quality_profile)
-    monkeypatch.setattr(chapters_api.PromptService, "get_template", fake_get_template)
-    monkeypatch.setattr(chapters_api.PromptService, "format_prompt", fake_format_prompt)
+    monkeypatch.setattr(chapters_api, "batch_get_template", fake_get_template)
+    monkeypatch.setattr(chapters_api, "batch_format_prompt", fake_format_prompt)
     monkeypatch.setattr(chapters_api, "_build_chapter_runtime_system_prompt", fake_build_chapter_runtime_system_prompt)
     monkeypatch.setattr(chapters_api, "compute_story_quality_metrics", fake_compute_story_quality_metrics)
     monkeypatch.setattr(chapters_api, "_resolve_quality_gate_execution_plan", fake_resolve_quality_gate_execution_plan)

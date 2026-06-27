@@ -19,14 +19,7 @@ pub(crate) fn build_batch_generation_runtime_persistence_owner_contract() -> Val
     json!({
         "owner": "chapter_batch_generation_runtime_state_service::runtime_persistence_task_mutation_projection",
         "scope": "task_stage_mutation_failed_entry_quality_gate_metrics_and_runtime_checkpoint_persistence",
-        "python_source_map": [
-            "backend/app/services/batch_generation_orchestration_service.py",
-            "backend/app/services/task_workflow_runtime_service.py",
-            "backend/app/services/batch_generation_retry_service.py",
-            "backend/app/services/batch_generation_candidate_service.py",
-            "backend/app/api/chapter_batch_generation_routes.py",
-            "backend/app/api/chapters.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service/runtime_persistence_owner.rs",
@@ -88,7 +81,7 @@ pub(crate) fn build_batch_generation_runtime_persistence_owner_contract() -> Val
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_runtime_persistence_and_failed_entry_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_runtime_persistence_owner_is_rust_only_and_surviving_task_mutation_failed_entry_surfaces_are_tracked_by_external_persistence_contracts",
             "task_fields": [
                 "status",
                 "started_at",

@@ -64,11 +64,7 @@ pub(crate) fn build_batch_generation_read_context_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation_read_context_service",
         "scope": "batch_generation_status_stream_active_query_and_owned_read_state",
-        "python_source_map": [
-            "backend/app/services/batch_generation/query_service.py",
-            "backend/app/services/batch_generation/status_response_builder.py",
-            "backend/app/api/chapter_batch_generation_routes.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_read_context_service.rs",
             "backend-rs/src/services/chapter_batch_generation_task_payload_base_service.rs",
@@ -117,7 +113,7 @@ pub(crate) fn build_batch_generation_read_context_owner_contract() -> Value {
         "active_consumers": [
             "chapter_batch_generation",
             "chapter_batch_generation_runtime_state_service",
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         ],
         "task_payload_owner_contract": build_chapter_batch_generation_task_payload_base_owner_contract(),
         "snapshot_persistence_owner_contract": build_chapter_generation_snapshot_owner_contract(),
@@ -142,9 +138,9 @@ pub(crate) fn build_batch_generation_read_context_owner_contract() -> Value {
             "snapshot_owner": "snapshot_persistence_owner::load_chapter_generation_snapshot_map",
             "response_payload_owner": "build_batch_generation_status_task_payload_from_task_and_snapshot_projection",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_batch_generation_read_context_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "batch-generation read-context source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/projection source-map packages",
+            "status": "rust_batch_generation_read_context_owner_source_map_deleted"
         },
         "validation_boundary": [
             "cargo test chapter_batch_generation_read_context_service",
@@ -154,7 +150,7 @@ pub(crate) fn build_batch_generation_read_context_owner_contract() -> Value {
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_batch_query_status_route_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_generation_read_context_owner_is_rust_only_and_surviving_python_query_status_surfaces_are_tracked_by_external_shared_runtime_projection_contracts",
             "runtime_state_keys": [
                 "progress",
                 "phase",
@@ -298,11 +294,16 @@ mod tests {
         );
         assert_eq!(
             contract["active_consumers"][2],
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         );
         assert_eq!(
             contract["task_payload_owner_contract"]["owner"],
             "chapter_batch_generation_task_payload_base_service"
+        );
+        assert_eq!(
+            contract["task_payload_owner_contract"]["shared_schema_hold_status"]
+                ["batch_generation_task_model"],
+            "shared_python_runtime_api_and_test_support_reference"
         );
         assert_eq!(
             contract["task_payload_owner_contract"]["quality_terminal_status_owner_contract"]
@@ -329,6 +330,23 @@ mod tests {
         assert_eq!(
             contract["rollback_boundary"]["runtime_state_keys"][3],
             "selected_candidate_events"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_read_context_owner_is_rust_only_and_surviving_python_query_status_surfaces_are_tracked_by_external_shared_runtime_projection_contracts"
+        );
+        assert_eq!(
+            contract["owned_task_read_state_owner_contract"]["rollback_boundary"]
+                ["source_map_policy"],
+            "batch_generation_read_context_owner_is_rust_only_and_surviving_python_query_status_surfaces_are_tracked_by_external_shared_runtime_projection_contracts"
+        );
+        assert_eq!(
+            contract["active_query_owner_contract"]["rollback_boundary"]["source_map_policy"],
+            "batch_generation_read_context_owner_is_rust_only_and_surviving_python_query_status_surfaces_are_tracked_by_external_shared_runtime_projection_contracts"
+        );
+        assert_eq!(
+            contract["stream_state_owner_contract"]["rollback_boundary"]["source_map_policy"],
+            "batch_generation_read_context_owner_is_rust_only_and_surviving_python_query_status_surfaces_are_tracked_by_external_shared_runtime_projection_contracts"
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profile"],
@@ -364,15 +382,15 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "batch-generation read-context source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/projection source-map packages"
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_batch_generation_read_context_owner_ready_for_source_map_closeout_review"
+            "rust_batch_generation_read_context_owner_source_map_deleted"
         );
     }
 
@@ -385,10 +403,7 @@ mod tests {
             "chapter_batch_generation_read_context_service::task_recovery_owner"
         );
         assert_eq!(contract["scope"], "task_recovery_owner");
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/services/batch_generation/query_service.py"
-        );
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/services/chapter_batch_generation_read_context_service.rs"
@@ -441,11 +456,46 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_batch_generation_task_recovery_owner_ready_for_source_map_closeout_review"
+            "rust_batch_generation_task_recovery_owner_source_map_deleted"
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "batch-generation task-recovery source-map package deleted; surviving Python closeout work is now limited to shared batch-generation-task schema/runtime/API/test-support packages"
+        );
+        assert_eq!(
+            contract["shared_schema_hold_status"]["batch_generation_task_model"],
+            "shared_python_runtime_api_and_test_support_reference"
+        );
+        assert_eq!(
+            contract["shared_schema_hold_status"]["default_python_module_consumers"],
+            json!([
+                "backend/tests/test_support/database_test_support.py",
+                "backend/tests/test_support/task_system/snapshot_runtime_persistence.py"
+            ])
+        );
+        assert_eq!(
+            contract["shared_schema_hold_status"]["dedicated_python_regression_surfaces"],
+            json!([
+                "backend/tests/test_api/test_chapters.py",
+                "backend/tests/test_api/test_chapters_batch_generation.py",
+                "backend/tests/test_api/test_chapters_batch_status_resume.py"
+            ])
+        );
+        assert_eq!(
+            contract["shared_schema_hold_status"]["test_support_consumers"],
+            json!([
+                "backend/tests/test_support/batch_generation_status_read_owner_test_adapter.py",
+                "backend/tests/test_support/batch_generation_orchestration_test_adapter.py",
+                "backend/tests/test_support/batch_generation_route_test_adapter.py"
+            ])
+        );
+        assert_eq!(
+            contract["shared_schema_hold_status"]["physical_closeout_ready"],
+            false
         );
     }
 
@@ -468,7 +518,7 @@ mod tests {
         );
         assert_eq!(
             contract["active_consumers"][1],
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profile"],
@@ -500,11 +550,19 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "batch-generation read-context source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/projection source-map packages"
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_batch_generation_stream_progress_owner_ready_for_source_map_closeout_review"
+            "rust_batch_generation_stream_progress_owner_source_map_deleted"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_generation_stream_progress_owner_is_rust_only_and_surviving_candidate_event_projection_surfaces_are_tracked_by_external_runtime_contracts"
         );
     }
 

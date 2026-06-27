@@ -1,9 +1,11 @@
 import pytest
 from types import SimpleNamespace
 
-from app.services.auto_character_service import AutoCharacterService
-from app.services.auto_organization_service import AutoOrganizationService
-from app.services.prompt_service import PromptService
+from tests.test_support.outlines_route_test_adapter import (
+    AutoCharacterService,
+    AutoOrganizationService,
+)
+from tests.test_support import outlines_route_test_adapter as outlines_api
 
 
 pytestmark = pytest.mark.asyncio
@@ -25,8 +27,8 @@ async def test_should_forward_enable_mcp_to_character_json_retry(monkeypatch):
             captured.update(kwargs)
             return {"name": "Lin", "relationships": []}
 
-    monkeypatch.setattr(PromptService, "get_template", _fake_get_template)
-    monkeypatch.setattr(PromptService, "format_prompt", _fake_format_prompt)
+    monkeypatch.setattr(outlines_api, "get_template", _fake_get_template)
+    monkeypatch.setattr(outlines_api, "format_prompt", _fake_format_prompt)
 
     service = AutoCharacterService(FakeAIService())
 
@@ -66,8 +68,8 @@ async def test_should_forward_enable_mcp_to_organization_json_retry(monkeypatch)
             captured.update(kwargs)
             return {"name": "Guild"}
 
-    monkeypatch.setattr(PromptService, "get_template", _fake_get_template)
-    monkeypatch.setattr(PromptService, "format_prompt", _fake_format_prompt)
+    monkeypatch.setattr(outlines_api, "get_template", _fake_get_template)
+    monkeypatch.setattr(outlines_api, "format_prompt", _fake_format_prompt)
 
     service = AutoOrganizationService(FakeAIService())
 

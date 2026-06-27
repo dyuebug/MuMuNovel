@@ -20,6 +20,8 @@ import asyncio
 from pathlib import Path
 from getpass import getpass
 import logging
+import os
+import subprocess
 
 # 添加项目根目录到Python路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -45,6 +47,25 @@ logging.basicConfig(
     format='%(message)s'
 )
 logger = logging.getLogger(__name__)
+
+BACKEND_ROOT = Path(__file__).parent.parent
+REPO_ROOT = BACKEND_ROOT.parent
+DEFAULT_RUST_MIGRATION_EXECUTOR_COMMAND = [
+    "cargo",
+    "run",
+    "--manifest-path",
+    str(REPO_ROOT / "backend-rs" / "Cargo.toml"),
+    "--",
+    "migration-executor",
+]
+
+
+def build_rust_migration_executor_command() -> list[str]:
+    """Return the Rust migration executor command for local setup."""
+    raw_command = os.getenv("RUST_MIGRATION_EXECUTOR_COMMAND", "").strip()
+    if raw_command:
+        return raw_command.split()
+    return DEFAULT_RUST_MIGRATION_EXECUTOR_COMMAND.copy()
 
 
 class PostgreSQLSetup:
@@ -278,24 +299,32 @@ class PostgreSQLSetup:
             return False
     
     async def initialize_tables(self) -> bool:
-        """初始化数据库表结构（使用 Alembic）"""
+        """初始化数据库表结构（使用 Rust migration-executor）"""
         try:
-            import subprocess
-            logger.info(f"📋 使用 Alembic 初始化数据库表结构...")
+            logger.info(f"📋 使用 Rust migration-executor 初始化数据库表结构...")
             
-            # 运行 Alembic 迁移
+            database_url = (
+                f"postgresql://{self.db_user}:{self.db_password}"
+                f"@{self.host}:{self.port}/{self.db_name}"
+            )
+            env = os.environ.copy()
+            env["DATABASE_URL"] = database_url
+
+            # 运行 Rust 迁移执行器
+            command = build_rust_migration_executor_command()
             result = subprocess.run(
-                ["alembic", "upgrade", "head"],
+                command,
                 capture_output=True,
                 text=True,
-                cwd=Path(__file__).parent.parent
+                cwd=REPO_ROOT,
+                env=env,
             )
             
             if result.returncode == 0:
                 logger.info(f"✅ 表结构初始化成功")
                 return True
             else:
-                logger.error(f"❌ Alembic 迁移失败: {result.stderr}")
+                logger.error(f"❌ Rust migration-executor 迁移失败: {result.stderr}")
                 return False
                 
         except Exception as e:
@@ -408,9 +437,9 @@ async def main():
     if success:
         print("🎉 PostgreSQL设置完成!\n")
         print("下一步:")
-        print("1. 启动应用: python -m app.main")
-        print("2. 访问: http://localhost:8000")
-        print("3. 查看API文档: http://localhost:8000/docs")
+        print("1. 启动服务: deploy-strangler.bat")
+        print("2. 访问: http://localhost:8005")
+        print("3. 查看网关健康检查: http://localhost:8005/health")
     else:
         print("❌ 设置过程中出现错误，请检查日志")
         print("\n故障排查:")

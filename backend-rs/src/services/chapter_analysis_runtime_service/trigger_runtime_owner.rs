@@ -485,11 +485,7 @@ pub(crate) fn build_chapter_analysis_trigger_runtime_owner_contract() -> Value {
     json!({
         "owner": "chapter_analysis_runtime_service::trigger_runtime_owner",
         "scope": "analysis_task_create_prompt_build_ai_trigger_and_background_execution",
-        "python_source_map": [
-            "backend/app/api/chapter_analysis_routes.py",
-            "backend/app/api/chapter_analysis_task_routes.py",
-            "backend/app/services/manual_chapter_analysis_execution_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_analysis_runtime_service.rs",
             "backend-rs/src/services/chapter_analysis_runtime_service/trigger_runtime_owner.rs",
@@ -513,7 +509,7 @@ pub(crate) fn build_chapter_analysis_trigger_runtime_owner_contract() -> Value {
             "cargo check"
         ],
         "rollback_boundary": {
-            "python_source_map_retained": true,
+            "python_source_map_retained": false,
             "same_round_python_edit_required": false
         }
     })

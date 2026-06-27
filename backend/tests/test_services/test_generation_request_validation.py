@@ -1,9 +1,12 @@
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.chapter import BatchGenerateRequest, ChapterGenerateRequest
-from app.schemas.outline import OutlineGenerateRequest
-from app.schemas.project import ProjectCreate, ProjectUpdate
+from tests.test_support.chapter_schema_test_support import (
+    BatchGenerateRequest,
+    ChapterGenerateRequest,
+)
+from tests.test_support.outline_schema_test_support import OutlineGenerateRequest
+from tests.test_support.project_schema_test_support import ProjectCreate, ProjectUpdate
 
 
 def test_should_validate_chapter_generate_request_quality_fields():

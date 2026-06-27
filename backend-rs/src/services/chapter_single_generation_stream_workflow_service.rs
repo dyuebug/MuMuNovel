@@ -21,6 +21,7 @@ pub(crate) use success_owner::SingleGenerationStreamSuccessArtifacts;
 pub(crate) use success_owner::{
     attach_single_generation_stream_story_runtime_contract,
     build_single_generation_stream_story_runtime_contract,
+    build_single_generation_stream_story_runtime_contract_with_metrics,
     map_single_generation_stream_quality_gate_action,
     persist_single_generation_stream_followup_candidate_draft, SingleGenerationStreamEmissionStep,
     SingleGenerationStreamSuccessEventPayload,
@@ -30,17 +31,7 @@ pub(crate) fn build_single_generation_stream_workflow_owner_contract() -> Value 
     json!({
         "owner": "chapter_single_generation_stream_workflow_service",
         "scope": "single_generation_sse_stream_lifecycle_success_payload_quality_gate_and_story_runtime_contract",
-        "python_source_map": [
-            "backend/app/api/chapter_generation_routes.py",
-            "backend/app/api/chapters.py",
-            "backend/app/services/chapter_generation/route_wiring_service.py",
-            "backend/app/services/chapter_generation/stream/entry_service.py",
-            "backend/app/services/chapter_generation/stream/service.py",
-            "backend/app/services/chapter_generation/stream/execution_service.py",
-            "backend/app/services/chapter_generation/stream/finalize_service.py",
-            "backend/app/services/chapter_generation/stream/candidate_service.py",
-            "backend/app/services/compat/chapter_generation_route_compat_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs",
             "backend-rs/src/api/chapter_generation_routes.rs",
@@ -112,7 +103,7 @@ pub(crate) fn build_single_generation_stream_workflow_owner_contract() -> Value 
         },
         "active_consumers": [
             "chapter_generation_routes::generate_chapter_stream",
-            "chapter_single_generation_active_gateway_smoke_service",
+            "chapter-single-generation-active-gateway-smoke-rust",
             "chapter_single_generation_runtime_state_service",
             "chapter_generation_runtime_service",
             "chapter_generation_runtime_service::story_repair_quality_context_owner"
@@ -141,23 +132,17 @@ pub(crate) fn build_single_generation_stream_workflow_owner_contract() -> Value 
             "rust_manifest_probe_count": 6,
             "python_fallback_probe_count": 0,
             "source_map_closeout_ready": true,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_stream_workflow_owner_ready_for_source_map_closeout_review"
+            "remaining_cutover_gate": "single-generation stream orchestration source-map package deleted; surviving Python closeout work is now limited to separate prepare and shared runtime/candidate source-map packages",
+            "status": "rust_stream_workflow_owner_source_map_deleted"
         },
         "rollback_boundary": {
             "runtime_knobs": [
                 "legacy_single_generation_direct_ai",
                 "python_candidate_executor_fallback"
             ],
-            "source_map_policy": "keep_python_single_generation_stream_route_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "python_stream_orchestration_shell_deleted_after_test_seam_migration",
             "python_fallback_removal_ready": true,
-            "rollback_files": [
-                "backend/app/services/chapter_generation/stream/entry_service.py",
-                "backend/app/services/chapter_generation/stream/service.py",
-                "backend/app/services/chapter_generation/stream/execution_service.py",
-                "backend/app/services/chapter_generation/stream/finalize_service.py",
-                "backend/app/services/chapter_generation/stream/candidate_service.py"
-            ]
+            "rollback_files": []
         }
     })
 }
@@ -177,6 +162,7 @@ mod tests {
         build_single_generation_runtime_restore_owner_contract,
         build_single_generation_runtime_state_owner_contract,
         build_single_generation_stream_story_runtime_contract,
+        build_single_generation_stream_story_runtime_contract_with_metrics,
         build_single_generation_stream_workflow_owner_contract,
         build_story_repair_quality_context_owner_contract,
         map_single_generation_stream_quality_gate_action,
@@ -236,11 +222,15 @@ mod tests {
             contract["owner"],
             "chapter_single_generation_stream_workflow_service"
         );
-        assert!(contract["python_source_map"]
+        assert!(!contract["python_source_map"]
             .as_array()
             .expect("python source map array")
             .iter()
-            .any(|path| path == "backend/app/services/chapter_generation/stream/entry_service.py"));
+            .any(|path| path
+                .as_str()
+                .unwrap_or_default()
+                .ends_with("entry_service.py")));
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/services/chapter_single_generation_stream_workflow_service.rs"
@@ -259,7 +249,7 @@ mod tests {
         );
         assert_eq!(
             contract["active_consumers"][1],
-            "chapter_single_generation_active_gateway_smoke_service"
+            "chapter-single-generation-active-gateway-smoke-rust"
         );
         assert_eq!(
             contract["prepare_owner_contract"]["owner"],
@@ -272,6 +262,10 @@ mod tests {
         assert_eq!(
             contract["runtime_state_owner_contract"]["owner"],
             build_single_generation_runtime_state_owner_contract()["owner"]
+        );
+        assert_eq!(
+            contract["lifecycle_owner_contract"]["python_source_map"],
+            json!([])
         );
         assert_eq!(
             contract["shared_candidate_runtime_owner_contract"]["owner"],
@@ -297,6 +291,7 @@ mod tests {
             contract["rollback_boundary"]["python_fallback_removal_ready"],
             true
         );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profile"],
             "phase5-single-generation-owner"
@@ -326,8 +321,12 @@ mod tests {
             true
         );
         assert_eq!(
+            contract["service_runtime_closeout_status"]["remaining_cutover_gate"],
+            "single-generation stream orchestration source-map package deleted; surviving Python closeout work is now limited to separate prepare and shared runtime/candidate source-map packages"
+        );
+        assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_stream_workflow_owner_ready_for_source_map_closeout_review"
+            "rust_stream_workflow_owner_source_map_deleted"
         );
     }
 
@@ -959,6 +958,64 @@ mod tests {
         assert_eq!(contract["blueprint"]["target_word_count"], 3200);
         assert_eq!(contract["guidance"]["creative_mode"], "suspense");
         assert_eq!(contract["request_overrides"]["quality_preset"], "immersive");
+    }
+
+    #[test]
+    fn should_restore_single_generation_story_runtime_contract_blueprint_from_quality_runtime_context(
+    ) {
+        let compat = SingleChapterGenerationCompatOptions {
+            creative_mode: Some("suspense".to_string()),
+            story_focus: Some("advance_plot".to_string()),
+            ..empty_compat_options()
+        };
+
+        let contract = build_single_generation_stream_story_runtime_contract_with_metrics(
+            8,
+            3200,
+            &compat,
+            Some(&json!({
+                "quality_runtime_context": {
+                    "creative_mode": "hook",
+                    "plot_stage": "climax",
+                    "story_long_term_goal": "追回失落线索",
+                    "chapter_count": 12,
+                    "current_chapter_number": 5,
+                    "target_word_count": 2600,
+                    "character_focus": ["沈砚", "苏槿"],
+                    "foreshadow_payoff_plan": ["回收暗号"],
+                    "character_state_ledger": [{"label": "沈砚", "summary": "情绪收紧"}],
+                    "relationship_state_ledger": [{"label": "沈砚/苏槿", "summary": "互相试探"}],
+                    "foreshadow_state_ledger": [{"label": "暗号", "summary": "等待兑现"}],
+                    "organization_state_ledger": [{"label": "夜巡司", "summary": "开始施压"}],
+                    "career_state_ledger": [{"label": "沈砚/夜巡人", "summary": "晋升受阻"}]
+                }
+            })),
+        )
+        .expect("story runtime contract");
+
+        assert_eq!(contract["guidance"]["creative_mode"], "hook");
+        assert_eq!(contract["guidance"]["story_focus"], "advance_plot");
+        assert_eq!(contract["guidance"]["plot_stage"], "climax");
+        assert_eq!(contract["blueprint"]["long_term_goal"], "追回失落线索");
+        assert_eq!(contract["blueprint"]["chapter_count"], 12);
+        assert_eq!(contract["blueprint"]["current_chapter_number"], 5);
+        assert_eq!(contract["blueprint"]["target_word_count"], 2600);
+        assert_eq!(
+            contract["blueprint"]["character_focus_names"],
+            json!(["沈砚", "苏槿"])
+        );
+        assert_eq!(
+            contract["blueprint"]["foreshadow_payoff_plan"],
+            json!(["回收暗号"])
+        );
+        assert_eq!(
+            contract["blueprint"]["organization_state_ledger"][0]["label"],
+            "夜巡司"
+        );
+        assert_eq!(
+            contract["blueprint"]["career_state_ledger"][0]["summary"],
+            "晋升受阻"
+        );
     }
 
     #[test]

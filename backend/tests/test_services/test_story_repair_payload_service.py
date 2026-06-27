@@ -1,4 +1,4 @@
-from app.services.story_repair_payload_service import (
+from tests.test_support.story_repair_payload_test_support import (
     build_story_repair_runtime_state,
     normalize_story_repair_payload,
     resolve_quality_gate_execution_plan,

@@ -1,4 +1,4 @@
-from app.services.chapter_candidate_rerank_service import (
+from tests.test_support.chapter_candidate_rerank_test_support import (
     build_candidate_pool_summary,
     build_candidate_selection_metadata,
     build_candidate_retry_strategy_suffix,

@@ -71,10 +71,7 @@ fn build_relationships_route_owner_contract() -> Value {
             "relationships-missing-detail-business-rust"
         ],
         "source_map_files": [
-            "backend/app/api/relationships.py",
-            "backend/app/models/relationship.py",
-            "backend/app/schemas/relationship.py",
-            "backend/app/init_relationship_types.py"
+            "backend/migrator_app/models/relationship.py"
         ],
         "owner_profile": {
             "name": "phase5-relationships-business-owner",
@@ -95,14 +92,15 @@ fn build_relationships_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0
         },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_relationships_route_model_schema_init_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "relationships_route_source_map_deleted_remaining_relationship_model_requires_separate_closeout",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ],
-            "freeze_reason": "Rust relationships route group has dedicated phase5-relationships-business-owner probes for setup, type lookup, create/list/project-list/graph/detail/update/delete, and missing-detail behavior; final Python source-map freeze/delete/repoint still requires explicit approval and rollback policy."
+            "full_module_freeze_ready": true,
+            "python_bootstrap_status": "relationships_route_runtime_registration_deleted_no_python_route_shell_remains",
+            "python_route_files_status": "relationships_route_source_map_deleted_remaining_relationship_model_only",
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "freeze_reason": "Rust relationships route group has dedicated phase5-relationships-business-owner probes for setup, type lookup, create/list/project-list/graph/detail/update/delete, and missing-detail behavior; the Python relationships route shell is no longer registered in app bootstrap, the detached Python relationship schema shell and relationship-type init script have been physically deleted, and the remaining persistence source map has been narrowed to the dedicated relationship model file.",
+            "rollback_files": []
         },
         "business_smoke_status": {
             "owner_profile": "phase5-relationships-business-owner",
@@ -110,8 +108,8 @@ fn build_relationships_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Relationships route business smoke is covered by phase5-relationships-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+        "next_cutover_gate": "explicit relationship model source-map freeze/delete/repoint approval with same-round rollback policy",
+        "migration_policy": "Relationships route business smoke is covered by phase5-relationships-business-owner; the Python route shell is no longer registered in app bootstrap, the detached Python relationship schema shell plus relationship-type init script have been physically deleted, and final completion now requires explicit relationship model source-map freeze/delete/repoint approval with same-round rollback policy."
     })
 }
 
@@ -587,7 +585,12 @@ mod tests {
             contract["readiness_probes"][13],
             "relationships-missing-detail-business-rust"
         );
-        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 4);
+        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            contract["source_map_files"][0],
+            "backend/migrator_app/models/relationship.py"
+        );
+        assert!(contract["source_map_files"].get(1).is_none());
         assert_eq!(
             contract["owner_profile"]["name"],
             "phase5-relationships-business-owner"
@@ -603,11 +606,19 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_bootstrap_status"],
+            "relationships_route_runtime_registration_deleted_no_python_route_shell_remains"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "relationships_route_source_map_deleted_remaining_relationship_model_only"
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["business_smoke_status"]["status"],
@@ -619,12 +630,25 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "explicit relationship model source-map freeze/delete/repoint approval with same-round rollback policy"
         );
+        assert_eq!(
+            contract["rollback_boundary"]["remaining_blockers"],
+            json!([])
+        );
+        assert_eq!(contract["rollback_boundary"]["rollback_files"], json!([]));
         assert!(contract["migration_policy"]
             .as_str()
             .expect("migration policy")
             .contains("business smoke is covered"));
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("migration policy")
+            .contains("Python route shell is no longer registered in app bootstrap"));
+        assert!(contract["migration_policy"]
+            .as_str()
+            .expect("migration policy")
+            .contains("relationship schema shell plus relationship-type init script have been physically deleted"));
         assert!(!contract["migration_policy"]
             .as_str()
             .expect("migration policy")

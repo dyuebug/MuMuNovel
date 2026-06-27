@@ -31,14 +31,7 @@ pub(crate) fn build_batch_generation_resume_task_command_owner_contract() -> Val
     json!({
         "owner": "chapter_batch_generation_resume_task_command_service::resume_task_command_owner",
         "scope": "batch_generation_resume_route_facing_command_and_owned_source_loading",
-        "python_source_map": [
-            "backend/app/services/batch_generation/resume_service.py",
-            "backend/app/services/batch_generation/query_service.py",
-            "backend/app/services/batch_generation/status_response_builder.py",
-            "backend/app/api/chapter_batch_generation_routes.py",
-            "backend/app/services/chapter_generation/stream/candidate_service.py",
-            "backend/app/services/compat/chapter_generation_route_compat_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs",
             "backend-rs/src/services/chapter_batch_generation_resume_task_command_service/resume_task_command_owner.rs",
@@ -90,7 +83,7 @@ pub(crate) fn build_batch_generation_resume_task_command_owner_contract() -> Val
         "active_consumers": [
             "chapter_batch_generation::resume_batch_generation",
             "chapter_batch_generation_resume_task_command_service::resume_owned_batch_generation_task_command",
-            "chapter_batch_generation_active_gateway_smoke_service",
+            "chapter-batch-generation-active-gateway-smoke-rust",
             "chapter_batch_generation_runtime_state_service",
             "chapter_single_generation_runtime_state_service"
         ],
@@ -112,9 +105,9 @@ pub(crate) fn build_batch_generation_resume_task_command_owner_contract() -> Val
             "single_generation_gateway_owner": "SingleGenerationRuntimeLifecyclePlan::from_runtime_launch_with_gateway_config",
             "batch_runtime_gateway_owner": "BatchGenerationExecutionInput.candidate_gateway_config",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_batch_generation_resume_task_command_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "batch-generation resume command source-map package deleted; surviving Python closeout work is now limited to separate shared runtime/projection source-map packages",
+            "status": "rust_batch_generation_resume_task_command_owner_source_map_deleted"
         },
         "validation_boundary": [
             "cargo test chapter_batch_generation_resume_task_command_service",
@@ -124,12 +117,9 @@ pub(crate) fn build_batch_generation_resume_task_command_owner_contract() -> Val
         ],
         "rollback_boundary": {
             "runtime_knob": "python_candidate_executor_fallback",
-            "source_map_policy": "keep_python_resume_route_and_service_shells_as_source_map_until_explicit_freeze_delete_round",
-            "python_fallback_removal_ready": false,
-            "rollback_files": [
-                "backend/app/services/batch_generation/resume_service.py",
-                "backend/app/api/chapter_batch_generation_routes.py"
-            ]
+            "source_map_policy": "batch_generation_resume_task_command_owner_is_rust_only_and_surviving_resume_route_service_surfaces_are_tracked_by_external_command_contracts",
+            "python_fallback_removal_ready": true,
+            "rollback_files": []
         }
     })
 }

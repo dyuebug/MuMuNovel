@@ -47,7 +47,7 @@ const CHAPTER_DRAFT_RUST_OWNER: &str = "backend-rs/src/api/chapter_draft_routes.
 #[allow(dead_code)]
 const CHAPTER_DRAFT_ROUTE_OWNER: &str = "backend-rs/src/api/chapter_draft_routes.rs";
 #[allow(dead_code)]
-const CHAPTER_DRAFT_FALLBACK_SHELL: &str = "backend/app/api/chapter_draft_routes.py";
+const CHAPTER_DRAFT_FALLBACK_SHELL: &str = "";
 #[allow(dead_code)]
 const CHAPTER_DRAFT_ROLLBACK_BOUNDARY: &str = "python_chapter_draft_routes_fallback";
 
@@ -750,8 +750,8 @@ pub(crate) fn build_chapter_draft_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "source-map has been repointed to the Rust route owner; final physical deletion still requires a separate same-round approval and rollback policy",
-        "migration_policy": "Chapter draft business smoke is covered by phase5-chapter-draft-owner; the Python route shell has been repointed to rollback/source-map-only status, and final physical deletion still requires a separate same-round approval.",
+        "next_cutover_gate": "chapter-draft route source-map shell deleted; remaining Python closeout work is limited to separate shared history/view/source-map contracts",
+        "migration_policy": "Chapter draft business smoke is covered by phase5-chapter-draft-owner; the Python rollback route shell has been physically deleted, and surviving Python closeout work is limited to separate shared history/view/source-map contracts.",
         "validation_boundary": [
             "cargo test api::chapter_draft_routes",
             "python backend/tools/run_strangler_gateway_smoke.py --validate-manifest-only --profile phase5-chapter-draft-owner",
@@ -761,16 +761,17 @@ pub(crate) fn build_chapter_draft_route_owner_contract() -> Value {
             "runtime_knob": CHAPTER_DRAFT_ROLLBACK_BOUNDARY,
             "fallback_shell": CHAPTER_DRAFT_FALLBACK_SHELL,
             "python_source_map_policy": "source_map_and_explicit_route_rollback_only",
-            "source_map_freeze_status": "frozen_source_map_rollback_only",
-            "source_map_physical_closeout_action": "repoint",
+            "python_route_files_status": "chapter_draft_route_source_map_deleted_after_frozen_closeout",
+            "python_bootstrap_status": "draft_route_runtime_registration_deleted_no_python_route_shell_remains",
+            "source_map_freeze_status": "physical_closeout_completed",
+            "source_map_physical_closeout_action": "delete_completed",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "freeze_or_delete_requires_same_round_rollback_policy": true,
-            "python_fallback_removal_ready": false,
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
             "remaining_blockers": [
-                "explicit delete approval for the repointed source-map shell"
+                "shared chapter draft history/view/source-map contracts still need their own separate closeout rounds"
             ],
-            "freeze_reason": "Rust chapter_draft route owner validates all internal auto-revision/candidate load/apply paths, logged-in not-found route probes, a successful auto-revision load/apply smoke prepared through the Rust project import owner, and a successful candidate-draft load/apply smoke produced through the Rust single-generation owner while keeping the Python fallback shell repointed as rollback/source-map-only material."
+            "rollback_files": []
         }
     })
 }
@@ -1394,7 +1395,7 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "source-map has been repointed to the Rust route owner; final physical deletion still requires a separate same-round approval and rollback policy"
+            "chapter-draft route source-map shell deleted; remaining Python closeout work is limited to separate shared history/view/source-map contracts"
         );
         assert!(contract["migration_policy"]
             .as_str()
@@ -1406,23 +1407,24 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_status"],
-            "frozen_source_map_rollback_only"
+            "physical_closeout_completed"
         );
         assert_eq!(
             contract["rollback_boundary"]["source_map_physical_closeout_action"],
-            "repoint"
+            "delete_completed"
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            false
+            true
         );
         assert_eq!(
-            contract["rollback_boundary"]["fallback_shell"],
-            "backend/app/api/chapter_draft_routes.py"
+            contract["rollback_boundary"]["python_fallback_removal_ready"],
+            true
         );
+        assert_eq!(contract["rollback_boundary"]["fallback_shell"], "");
         assert_eq!(
             contract["rollback_boundary"]["remaining_blockers"][0],
-            "explicit delete approval for the repointed source-map shell"
+            "shared chapter draft history/view/source-map contracts still need their own separate closeout rounds"
         );
     }
 
@@ -1694,7 +1696,7 @@ mod owner_tests {
             .contains(&json!("chapter-draft-candidate-load-business-rust")));
         assert_eq!(
             contract["rollback_boundary"]["remaining_blockers"][0],
-            "explicit delete approval for the repointed source-map shell"
+            "shared chapter draft history/view/source-map contracts still need their own separate closeout rounds"
         );
     }
 

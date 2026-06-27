@@ -91,7 +91,7 @@ logs/
 
 Conventions:
 
-- `redeploy.ps1` writes to `logs/ops/redeploy.log`
+- `redeploy.ps1` is a compatibility wrapper for `deploy-strangler.ps1` and writes through `logs/ops/deploy-strangler.log`
 - `release.ps1` writes to `logs/ops/release.log`
 
 ### 4. `docs/architecture/`

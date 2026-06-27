@@ -354,16 +354,7 @@ fn build_chapter_regeneration_route_owner_contract() -> Value {
             "chapter-regeneration-tasks-business-rust",
             "chapter-regeneration-fixture-delete-project-business-rust"
         ],
-        "source_map_files": [
-            "backend/app/api/chapter_regeneration_routes.py",
-            "backend/app/api/chapter_partial_regeneration_routes.py",
-            "backend/app/schemas/regeneration.py",
-            "backend/app/services/regeneration_task_service.py",
-            "backend/app/services/partial_regeneration_service.py",
-            "backend/app/services/chapter_regeneration_stream_service.py",
-            "backend/app/services/chapter_regeneration_query_service.py",
-            "backend/app/services/chapter_regeneration_context_service.py"
-        ],
+        "source_map_files": [],
         "behavior_contract": {
             "regenerate_stream": "full chapter regeneration SSE route consumes normalized regeneration prepare request",
             "partial_regenerate_stream": "partial regeneration SSE route consumes normalized selection/range/context request",
@@ -408,20 +399,25 @@ fn build_chapter_regeneration_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "source-map has been repointed to the Rust route owner; final physical deletion still requires a separate same-round approval and rollback policy",
-        "migration_policy": "Chapter regeneration business smoke is covered by phase5-chapter-regeneration-owner; the Python route shells have been repointed to rollback/source-map-only status, and final physical deletion still requires a separate same-round approval.",
-        "smoke_gap": "Deterministic logged-in full/partial SSE, apply, task-list business smoke, and current-source owner-profile live proof now exist; remaining gap is explicit Python source-map delete/repoint approval.",
+        "next_cutover_gate": "chapter-regeneration route source-map shell deleted; surviving Python closeout work is outside this route group",
+        "migration_policy": "Chapter regeneration business smoke is covered by phase5-chapter-regeneration-owner; the Python chapter_regeneration route shell and its explicit bootstrap rollback registration have been physically deleted, and any surviving Python follow-up now lives outside this direct route-group boundary in separate model or shared-owner closeout work.",
+        "smoke_gap": "Deterministic logged-in full/partial SSE, apply, task-list business smoke, and current-source owner-profile live proof now exist; the production chapter-regeneration route shell has been physically deleted, and the surviving Python follow-up work now lives outside this direct route-group boundary in separate model or shared-owner closeout work.",
         "rollback_boundary": {
-            "source_map_policy": "keep_python_regeneration_route_schema_and_service_files_as_source_map_until_explicit_freeze_delete_round",
-            "source_map_freeze_status": "frozen_source_map_rollback_only",
-            "source_map_physical_closeout_action": "repoint",
+            "source_map_policy": "chapter_regeneration_route_group_no_longer_carries_direct_python_source_maps_shared_prompt_review_moves_to_separate_owner_contract",
+            "source_map_physical_closeout_action": "delete_completed",
+            "python_bootstrap_status": "chapter_regeneration_route_runtime_registration_deleted_no_python_route_shell_remains",
+            "python_route_files_status": "chapter_regeneration_route_source_map_deleted_no_direct_route_group_python_source_maps_remain",
+            "stream_orchestration_source_maps": [],
+            "prepare_owner_source_maps": [],
+            "shared_prepare_dependency_source_maps": [],
+            "query_owner_source_maps": [],
+            "apply_owner_source_maps": [],
+            "shared_context_compaction_source_maps": [],
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit delete approval for the repointed source-map shell"
-            ],
-            "rollback_reference": "Keep Python regeneration route/schema/service files as repointed rollback/source-map-only references until explicit delete approval is granted."
+            "full_module_freeze_ready": true,
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
+            "rollback_files": []
         }
     })
 }
@@ -431,13 +427,7 @@ fn build_chapter_regeneration_query_owner_contract() -> Value {
     json!({
         "owner": "chapter_regeneration_routes",
         "scope": "regeneration_tasks_query_and_payload_owner",
-        "python_source_map": [
-            "backend/app/api/chapter_regeneration_routes.py",
-            "backend/app/services/chapter_regeneration_query_service.py",
-            "backend/app/services/regeneration_task_service.py",
-            "backend/app/models/regeneration_task.py",
-            "backend/app/models/chapter.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/api/chapter_regeneration_routes.rs",
             "backend-rs/src/services/chapter_access_service.rs",
@@ -501,9 +491,15 @@ fn build_chapter_regeneration_query_owner_contract() -> Value {
             "chapters-regeneration-tasks-auth-guard-rust"
         ],
         "rollback_boundary": {
-            "python_source_map": "chapter_regeneration_query_service_python_source_map",
-            "python_fallback_removal_ready": false,
-            "approval_required": "explicit delete/repoint approval for the frozen source-map shell"
+            "python_source_map": "chapter_regeneration_routes_query_owner_python_source_map",
+            "route_shell_source_maps": [],
+            "query_owner_source_maps": [],
+            "retired_python_model_source_maps": [
+                "backend/migrator_app/models/regeneration_task.py",
+                "backend/migrator_app/models/chapter.py"
+            ],
+            "python_fallback_removal_ready": true,
+            "approval_required": "route source-map delete completed"
         }
     })
 }
@@ -513,12 +509,7 @@ fn build_chapter_regeneration_apply_owner_contract() -> Value {
     json!({
         "owner": "chapter_regeneration_routes",
         "scope": "partial_regeneration_apply_payload_and_persistence_owner",
-        "python_source_map": [
-            "backend/app/api/chapter_partial_regeneration_routes.py",
-            "backend/app/services/chapter_content_apply_service.py",
-            "backend/app/services/partial_regeneration_service.py",
-            "backend/app/models/chapter.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/api/chapter_regeneration_routes.rs",
             "backend-rs/src/services/chapter_access_service.rs",
@@ -580,9 +571,15 @@ fn build_chapter_regeneration_apply_owner_contract() -> Value {
             "chapters-apply-partial-regenerate-auth-guard-rust"
         ],
         "rollback_boundary": {
-            "python_source_map": "chapter_partial_regeneration_routes_python_source_map",
-            "python_fallback_removal_ready": false,
-            "approval_required": "explicit delete/repoint approval for the frozen source-map shell"
+            "python_source_map": "chapter_regeneration_routes_partial_apply_python_source_map",
+            "route_shell_source_maps": [],
+            "apply_owner_source_maps": [],
+            "prepare_owner_source_maps": [],
+            "retired_python_model_source_maps": [
+                "backend/migrator_app/models/chapter.py"
+            ],
+            "python_fallback_removal_ready": true,
+            "approval_required": "route source-map delete completed"
         }
     })
 }
@@ -834,33 +831,68 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "source-map has been repointed to the Rust route owner; final physical deletion still requires a separate same-round approval and rollback policy"
+            "chapter-regeneration route source-map shell deleted; surviving Python closeout work is outside this route group"
         );
         assert_eq!(
             contract["migration_policy"],
-            "Chapter regeneration business smoke is covered by phase5-chapter-regeneration-owner; the Python route shells have been repointed to rollback/source-map-only status, and final physical deletion still requires a separate same-round approval."
+            "Chapter regeneration business smoke is covered by phase5-chapter-regeneration-owner; the Python chapter_regeneration route shell and its explicit bootstrap rollback registration have been physically deleted, and any surviving Python follow-up now lives outside this direct route-group boundary in separate model or shared-owner closeout work."
         );
         assert_eq!(
             contract["rollback_boundary"]["source_map_freeze_candidate_ready"],
             json!(true)
         );
         assert_eq!(
-            contract["rollback_boundary"]["source_map_freeze_status"],
-            "frozen_source_map_rollback_only"
-        );
-        assert_eq!(
             contract["rollback_boundary"]["source_map_physical_closeout_action"],
-            "repoint"
+            "delete_completed"
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            json!(false)
+            json!(true)
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            json!(false)
+            json!(true)
         );
-        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 8);
+        assert_eq!(contract["source_map_files"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            contract["rollback_boundary"]["stream_orchestration_source_maps"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["prepare_owner_source_maps"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["shared_prepare_dependency_source_maps"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["query_owner_source_maps"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["apply_owner_source_maps"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["python_route_files_status"],
+            "chapter_regeneration_route_source_map_deleted_no_direct_route_group_python_source_maps_remain"
+        );
         assert!(contract["smoke_gap"]
             .as_str()
             .unwrap_or_default()
@@ -876,7 +908,11 @@ mod tests {
         assert!(contract["smoke_gap"]
             .as_str()
             .unwrap_or_default()
-            .contains("source-map delete/repoint approval"));
+            .contains("physically deleted"));
+        assert!(contract["smoke_gap"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("outside this direct route-group boundary"));
     }
 
     #[test]
@@ -966,10 +1002,7 @@ mod tests {
             contract["scope"],
             "regeneration_tasks_query_and_payload_owner"
         );
-        assert_eq!(
-            contract["python_source_map"][1],
-            "backend/app/services/chapter_regeneration_query_service.py"
-        );
+        assert_eq!(contract["python_source_map"].as_array().unwrap().len(), 0);
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/api/chapter_regeneration_routes.rs"
@@ -1000,7 +1033,11 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["retired_python_model_source_maps"][0],
+            "backend/migrator_app/models/regeneration_task.py"
         );
     }
 
@@ -1142,10 +1179,7 @@ mod tests {
             contract["scope"],
             "partial_regeneration_apply_payload_and_persistence_owner"
         );
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/api/chapter_partial_regeneration_routes.py"
-        );
+        assert_eq!(contract["python_source_map"].as_array().unwrap().len(), 0);
         assert_eq!(
             contract["rust_owner_map"][0],
             "backend-rs/src/api/chapter_regeneration_routes.rs"
@@ -1172,13 +1206,21 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["prepare_owner_source_maps"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
         );
     }
 
     #[test]
     fn should_build_full_chapter_regeneration_stream_request_from_route_payload() {
         let route_request = FullChapterRegenerationStreamRouteRequest {
+            modification_source: Some(" mixed ".to_string()),
             target_word_count: Some(2200),
             custom_instructions: Some("补强冲突".to_string()),
             selected_suggestion_indices: vec![json!(2), json!("skip"), json!(4)],
@@ -1200,10 +1242,14 @@ mod tests {
             })),
             story_repair_targets: vec![json!("逻辑"), json!(7), json!("节奏")],
             story_preserve_strengths: vec![json!("悬念"), json!(false)],
+            style_id: Some(9),
+            version_note: Some(" 第二版 ".to_string()),
+            auto_apply: Some(true),
         };
         let request =
             build_full_chapter_regeneration_stream_request_from_route_payload(route_request);
 
+        assert_eq!(request.modification_source(), "mixed");
         assert_eq!(request.target_word_count(), 2200);
         assert_eq!(request.custom_instructions(), "补强冲突");
         assert_eq!(
@@ -1232,6 +1278,9 @@ mod tests {
             &["逻辑".to_string(), "节奏".to_string()]
         );
         assert_eq!(request.story_preserve_strengths(), &["悬念".to_string()]);
+        assert_eq!(request.style_id(), Some(9));
+        assert_eq!(request.version_note(), Some("第二版"));
+        assert!(request.auto_apply());
     }
 
     #[test]
@@ -1240,6 +1289,7 @@ mod tests {
         let request =
             build_full_chapter_regeneration_stream_request_from_route_payload(route_request);
 
+        assert_eq!(request.modification_source(), "custom");
         assert_eq!(request.target_word_count(), 3000);
         assert_eq!(request.custom_instructions(), "");
         assert!(request.selected_suggestion_indices().is_empty());
@@ -1259,6 +1309,9 @@ mod tests {
         assert!(request.preserve_character_traits());
         assert!(request.story_repair_targets().is_empty());
         assert!(request.story_preserve_strengths().is_empty());
+        assert_eq!(request.style_id(), None);
+        assert_eq!(request.version_note(), None);
+        assert!(!request.auto_apply());
     }
 
     #[test]

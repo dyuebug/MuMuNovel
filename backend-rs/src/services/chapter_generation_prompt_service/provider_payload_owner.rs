@@ -78,11 +78,7 @@ pub(crate) fn build_prompt_context_provider_owner_contract() -> Value {
     serde_json::json!({
         "owner": "chapter_generation_prompt_service",
         "scope": "provider_payload_owner",
-        "python_source_map": [
-            "backend/app/api/chapters.py",
-            "backend/app/services/batch_generation_prompt_service.py",
-            "backend/app/services/chapter_generation/runtime/service.py"
-        ],
+        "python_source_map": [],
         "rust_target_map": [
             "backend-rs/src/services/chapter_generation_prompt_service.rs",
             "backend-rs/src/services/chapter_generation_prompt_service/provider_payload_owner.rs",
@@ -129,8 +125,8 @@ pub(crate) fn build_prompt_context_provider_owner_contract() -> Value {
             "chapter_generation_runtime_service::context_compaction_owner",
             "chapter_single_generation_prepare_service",
             "chapter_batch_generation_runtime_state_service",
-            "chapter_single_generation_active_gateway_smoke_service",
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-single-generation-active-gateway-smoke-rust",
+            "chapter-batch-generation-active-gateway-smoke-rust"
         ],
         "validation_boundary": [
             "cargo test chapter_generation_prompt_service",
@@ -138,7 +134,7 @@ pub(crate) fn build_prompt_context_provider_owner_contract() -> Value {
             "cargo check --manifest-path backend-rs/Cargo.toml"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_legacy_python_prompt_builders_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "production_python_prompt_builders_deleted_test_fixtures_only",
             "runtime_knob": "ChapterCandidateRouteGatewayConfig",
             "compatibility_note": "Prompt provider payload keys and placeholder defaults remain stable for single, batch, and regeneration prompt consumers"
         }

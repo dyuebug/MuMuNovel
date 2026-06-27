@@ -155,11 +155,6 @@ pub(crate) fn build_chapter_candidate_output_owner_contract() -> Value {
         "owner": "chapter_candidate_output_service",
         "scope": "candidate_provider_output_stream_chunk_runtime_state_owner",
         "python_source_map": [
-            "backend/app/services/chapter_candidate_output_service.py",
-            "backend/app/services/chapter_candidate_generation_service.py",
-            "backend/app/services/chapter_candidate_executor_service.py",
-            "backend/app/services/chapter_candidate_runtime_state_service.py",
-            "backend/app/services/chapter_generated_text_service.py",
             "backend/tests/test_services/test_chapter_candidate_output_service.py"
         ],
         "rust_owner_map": [
@@ -233,8 +228,8 @@ pub(crate) fn build_chapter_candidate_output_owner_contract() -> Value {
         "rollback_boundary": {
             "python_source_map": "chapter_candidate_output_python_source_map",
             "runtime_state_owner": "chapter_candidate_runtime_state_service",
-            "trimming_owner": "chapter_generated_text_service / chapter_narrative_cleaner_service",
-            "python_fallback_removal_ready": false,
+            "trimming_owner": "chapter_narrative_cleaner_service",
+            "python_fallback_removal_ready": true,
             "approval_required": "explicit source-map freeze/delete/repoint approval"
         },
         "candidate_runtime_state_owner_contract": build_chapter_candidate_runtime_state_owner_contract(),
@@ -254,9 +249,9 @@ pub(crate) fn build_chapter_candidate_output_owner_contract() -> Value {
             "runtime_state_snapshot_owner": "snapshot_chapter_candidate_runtime_state",
             "trimming_owner": "trim_text_to_sentence_boundary",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_chapter_candidate_output_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "candidate output production python source-map deleted; surviving Python closeout work for this owner is now limited to focused Python regression coverage",
+            "status": "rust_chapter_candidate_output_owner_executor_source_map_deleted"
         }
     })
 }
@@ -431,9 +426,37 @@ mod tests {
         assert_eq!(runtime_state["current_chars"], 2);
     }
 
+    fn assert_no_deleted_python_service_source_map(contract: &serde_json::Value) {
+        for key in ["python_source_map", "source_map_files", "rollback_files"] {
+            let Some(items) = contract.get(key).and_then(|value| value.as_array()) else {
+                continue;
+            };
+            assert!(
+                !items.iter().any(|item| item
+                    .as_str()
+                    .is_some_and(|path| path.starts_with("backend/app/services/"))),
+                "{key} must not retain deleted backend/app/services source-map paths"
+            );
+        }
+
+        if let Some(rollback_files) = contract
+            .get("rollback_boundary")
+            .and_then(|value| value.get("rollback_files"))
+            .and_then(|value| value.as_array())
+        {
+            assert!(
+                !rollback_files.iter().any(|item| item
+                    .as_str()
+                    .is_some_and(|path| path.starts_with("backend/app/services/"))),
+                "rollback_boundary.rollback_files must not retain deleted backend/app/services paths"
+            );
+        }
+    }
+
     #[test]
     fn should_publish_chapter_candidate_output_owner_contract() {
         let contract = build_chapter_candidate_output_owner_contract();
+        assert_no_deleted_python_service_source_map(&contract);
 
         assert_eq!(contract["owner"], "chapter_candidate_output_service");
         assert_eq!(
@@ -442,7 +465,13 @@ mod tests {
         );
         assert_eq!(
             contract["python_source_map"][0],
-            "backend/app/services/chapter_candidate_output_service.py"
+            "backend/tests/test_services/test_chapter_candidate_output_service.py"
+        );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .map(|items| items.len()),
+            Some(1)
         );
         assert_eq!(
             contract["rust_owner_map"][0],
@@ -470,7 +499,7 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["candidate_runtime_state_owner_contract"]["owner"],
@@ -479,7 +508,7 @@ mod tests {
         assert_eq!(
             contract["candidate_runtime_state_owner_contract"]["service_runtime_closeout_status"]
                 ["status"],
-            "rust_chapter_candidate_runtime_state_owner_ready_for_source_map_closeout_review"
+            "rust_chapter_candidate_runtime_state_owner_source_map_deleted"
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profiles"][0],
@@ -515,11 +544,11 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_chapter_candidate_output_owner_ready_for_source_map_closeout_review"
+            "rust_chapter_candidate_output_owner_executor_source_map_deleted"
         );
     }
 }

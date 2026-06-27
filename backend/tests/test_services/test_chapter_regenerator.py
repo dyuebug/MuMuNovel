@@ -1,9 +1,16 @@
 import pytest
 from types import SimpleNamespace
 
-from app.schemas.regeneration import ChapterRegenerateRequest, PreserveElementsConfig
-from app.services.chapter_regenerator import ChapterRegenerator
-from app.services.prompt_service import PromptService
+from tests.test_support.chapter_regeneration_prompt_test_support import (
+    build_chapter_regeneration_prompt,
+)
+from tests.test_support.chapter_regeneration_route_test_adapter import (
+    ChapterRegenerator,
+)
+from tests.test_support.chapter_regeneration_schema_test_support import (
+    ChapterRegenerateRequest,
+    PreserveElementsConfig,
+)
 
 
 def test_should_merge_story_repair_guidance_and_auto_focus_areas():
@@ -51,7 +58,7 @@ def test_should_merge_story_repair_guidance_and_auto_focus_areas():
 
 @pytest.mark.asyncio
 async def test_should_inject_story_generation_guidance_into_regeneration_prompt():
-    prompt = await PromptService.get_chapter_regeneration_prompt(
+    prompt = await build_chapter_regeneration_prompt(
         chapter_number=7,
         title="试炼夜",
         word_count=2800,

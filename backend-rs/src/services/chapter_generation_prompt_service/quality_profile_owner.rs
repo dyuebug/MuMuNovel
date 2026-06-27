@@ -211,11 +211,7 @@ pub(crate) fn build_quality_profile_owner_contract() -> Value {
     json!({
         "owner": "chapter_generation_prompt_service::quality_profile_owner",
         "scope": "shared_generation_prompt_quality_profile_owner",
-        "python_source_map": [
-            "backend/app/services/chapter_generation/runtime/prompt_service.py",
-            "backend/app/services/batch_generation_prompt_service.py",
-            "backend/app/services/prompt_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_generation_prompt_service/quality_profile_owner.rs",
             "backend-rs/src/services/chapter_generation_prompt_service.rs",
@@ -254,8 +250,8 @@ pub(crate) fn build_quality_profile_owner_contract() -> Value {
             "cargo check --manifest-path backend-rs/Cargo.toml"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_legacy_python_quality_prompt_builders_as_source_map_until_explicit_freeze_delete_round",
-            "compatibility_note": "quality profile blocks, weight policy, gate profile, and external asset summary rules remain stable for single, batch, and regeneration prompt consumers"
+            "source_map_policy": "production_python_quality_profile_source_map_deleted_after_rust_owner_validation",
+            "compatibility_note": "quality profile blocks, weight policy, gate profile, external asset summary rules, quality-focus protected block resolution, shared runtime prompt helper normalization, and profile derivation stay stable for single, batch, and regeneration prompt consumers; historical Python behavior lives only under backend/tests/test_support/story_prompt_block_test_support.py"
         }
     })
 }

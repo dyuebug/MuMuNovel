@@ -5,17 +5,22 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from app.database import Base
-from app.models.chapter import Chapter
-from app.models.character import Character
-from app.models.career import Career, CharacterCareer
-from app.models.memory import PlotAnalysis, StoryMemory
-from app.models.project import Project
-from app.models.relationship import CharacterRelationship, Organization
-from app.services.chapter_quality_context_service import (
+from tests.test_support.database_test_support import Base
+from migrator_app.models import (
+    Career,
+    CharacterCareer,
+    CharacterRelationship,
+    Organization,
+    PlotAnalysis,
+    StoryMemory,
+)
+from migrator_app.models.chapter import Chapter
+from migrator_app.models.character import Character
+from migrator_app.models.project import Project
+from tests.test_support.story_continuity_ledger_test_support import (
+    build_project_continuity_ledger,
     build_story_generation_packet_with_project_continuity,
 )
-from app.services.project_continuity_ledger_service import build_project_continuity_ledger
 
 pytestmark = pytest.mark.asyncio
 

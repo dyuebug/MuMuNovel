@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.services import batch_generation_run_service as run_service
+from tests.test_support import batch_generation_run_wiring_test_adapter as run_service
 
 
 @pytest.mark.asyncio
@@ -62,4 +62,3 @@ async def test_should_cancel_generation_when_task_marked_cancelled():
         )
 
     assert db_session.refresh_count >= 1
-

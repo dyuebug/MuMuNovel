@@ -30,18 +30,7 @@ pub(crate) fn build_generation_quality_runtime_owner_contract() -> Value {
     json!({
         "owner": "chapter_generation_runtime_service::quality_runtime_context_owner",
         "scope": "shared_generation_quality_runtime_context",
-        "python_source_map": [
-            "backend/app/services/chapter_generation/runtime/service.py",
-            "backend/app/services/chapter_generation/stream/candidate_service.py",
-            "backend/app/services/batch_generation_status_read_owner_service.py",
-            "backend/app/services/chapter_quality_context_service.py",
-            "backend/app/services/story_repair_payload_service.py",
-            "backend/app/services/quality_domain/story_quality_feedback_service.py",
-            "backend/app/services/batch_generation/status_response_builder.py",
-            "backend/app/services/batch_generation_chapter_failure_state_service.py",
-            "backend/app/services/batch_generation_chapter_success_state_service.py",
-            "backend/app/services/chapter_generation/stream/finalize_service.py"
-        ],
+        "python_source_map": [],
         "rust_target_file": "backend-rs/src/services/chapter_generation_runtime_service/quality_runtime_context_owner.rs",
         "rust_owner_map": [
             "resolve_generation_quality_runtime_context_from_current_quality",
@@ -109,12 +98,12 @@ pub(crate) fn build_generation_quality_runtime_owner_contract() -> Value {
         ],
         "validation_boundary": {
             "focused_test": "chapter_generation_runtime_service::quality_runtime_context_owner",
-            "active_single_gateway_smoke": "chapter_single_generation_active_gateway_smoke_service",
-            "active_batch_gateway_smoke": "chapter_batch_generation_active_gateway_smoke_service"
+            "active_single_gateway_smoke": "chapter-single-generation-active-gateway-smoke-rust",
+            "active_batch_gateway_smoke": "chapter-batch-generation-active-gateway-smoke-rust"
         },
         "rollback_boundary": {
-            "source_map_policy": "keep_python_quality_context_shells_as_source_map_until_explicit_freeze_delete_round",
-            "rollback_owner": "legacy_generation_quality_runtime_context"
+            "source_map_policy": "shared_generation_quality_runtime_owner_no_longer_tracks_python_query_owner_source_map",
+            "rollback_owner": "legacy_generation_quality_runtime_context_contract_only"
         }
     })
 }
@@ -1511,10 +1500,7 @@ mod tests {
             contract["scope"],
             "shared_generation_quality_runtime_context"
         );
-        assert_eq!(
-            contract["python_source_map"][0],
-            "backend/app/services/chapter_generation/runtime/service.py"
-        );
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(
             contract["rust_owner_map"][0],
             "resolve_generation_quality_runtime_context_from_current_quality"
@@ -1540,7 +1526,15 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["source_map_policy"],
-            "keep_python_quality_context_shells_as_source_map_until_explicit_freeze_delete_round"
+            "shared_generation_quality_runtime_owner_no_longer_tracks_python_query_owner_source_map"
+        );
+        assert_eq!(
+            contract["validation_boundary"]["active_single_gateway_smoke"],
+            "chapter-single-generation-active-gateway-smoke-rust"
+        );
+        assert_eq!(
+            contract["validation_boundary"]["active_batch_gateway_smoke"],
+            "chapter-batch-generation-active-gateway-smoke-rust"
         );
     }
 

@@ -186,14 +186,7 @@ fn build_auth_route_owner_contract() -> Value {
     json!({
         "owner": "auth",
         "scope": "auth_login_oauth_session_password_route_group",
-        "python_source_map": [
-            "backend/app/api/auth.py",
-            "backend/app/middleware/auth_middleware.py",
-            "backend/app/user_manager.py",
-            "backend/app/user_password.py",
-            "backend/app/services/oauth_service.py",
-            "backend/app/services/integrations/oauth_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/api/auth.rs",
             "backend-rs/src/middleware/auth.rs",
@@ -308,14 +301,12 @@ fn build_auth_route_owner_contract() -> Value {
             "cargo check"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_auth_route_middleware_user_password_oauth_files_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "auth_route_group_python_source_map_surface_empty_after_default_fastapi_auth_middleware_closeout",
             "source_map_freeze_candidate_ready": true,
-            "full_module_freeze_ready": false,
-            "python_route_files_status": "source_map_only_for_auth_route_group",
-            "python_fallback_removal_ready": false,
-            "remaining_blockers": [
-                "explicit source-map freeze/delete/repoint approval"
-            ],
+            "full_module_freeze_ready": true,
+            "python_route_files_status": "python_auth_route_shells_and_default_fastapi_auth_middleware_deleted",
+            "python_fallback_removal_ready": true,
+            "remaining_blockers": [],
             "retired_manifest_fallbacks": [
                 "auth-logout-public-python-fallback",
                 "auth-user-auth-guard-python-fallback",
@@ -326,7 +317,8 @@ fn build_auth_route_owner_contract() -> Value {
                 "auth-callback-missing-code-python-fallback",
                 "auth-local-login-invalid-credentials-python-fallback",
                 "auth-bind-login-invalid-credentials-python-fallback"
-            ]
+            ],
+            "freeze_reason": "Rust auth route group has dedicated phase5-auth-business-owner probes for config, logout, LinuxDo URL misconfiguration, current user, password status/set/initialize, refresh, callback missing-code, and invalid local/bind login. The Python auth route shell, detached OAuth service shell, and default FastAPI local cookie auth middleware have now been physically deleted, so the auth route-group Python source map surface is empty."
         },
         "business_smoke_status": {
             "owner_profile": "phase5-auth-business-owner",
@@ -335,8 +327,8 @@ fn build_auth_route_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "status": "covered_by_dedicated_rust_owner_profile"
         },
-        "next_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-        "migration_policy": "Auth route business smoke is covered by phase5-auth-business-owner; final completion now requires explicit source-map freeze/delete/repoint approval with same-round rollback policy."
+        "next_cutover_gate": "auth route-group python source-map surface empty; any future rollback must be an explicit source restoration decision outside the default FastAPI runtime path",
+        "migration_policy": "Auth route business smoke is covered by phase5-auth-business-owner; the Python auth route shell, detached OAuth service shell, and default FastAPI local cookie auth middleware have been physically deleted, so auth has entered Python-exit completed state for the route-group source map surface."
     })
 }
 
@@ -615,7 +607,7 @@ async fn login(
 
             let mut response = (StatusCode::OK, Json(body)).into_response();
             set_cookie(&mut response, "token", &token);
-            // Python 后端 AuthMiddleware 依赖 user_id cookie
+            // user_id cookie 仍保留给前端与兼容会话链路使用
             set_cookie_with_max_age(&mut response, "user_id", &user.user_id, 7200);
             // session_expire_at 供前端 sessionManager 判断会话过期
             let expire_at = chrono::Utc::now().timestamp() + 7200;
@@ -1120,7 +1112,7 @@ mod tests {
             contract["scope"],
             "auth_login_oauth_session_password_route_group"
         );
-        assert_eq!(contract["python_source_map"][0], "backend/app/api/auth.py");
+        assert_eq!(contract["python_source_map"], json!([]));
         assert_eq!(contract["rust_owner_map"][0], "backend-rs/src/api/auth.rs");
         assert_eq!(contract["route_contract"]["login"], AUTH_LOGIN_ROUTE);
         assert_eq!(
@@ -1170,11 +1162,11 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["full_module_freeze_ready"],
-            json!(false)
+            json!(true)
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["business_smoke_status"]["status"],
@@ -1194,7 +1186,7 @@ mod tests {
         );
         assert_eq!(
             contract["next_cutover_gate"],
-            "explicit source-map freeze/delete/repoint approval with same-round rollback policy"
+            "auth route-group python source-map surface empty; any future rollback must be an explicit source restoration decision outside the default FastAPI runtime path"
         );
         assert!(contract["migration_policy"]
             .as_str()

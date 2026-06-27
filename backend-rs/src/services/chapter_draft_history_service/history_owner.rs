@@ -225,12 +225,7 @@ pub(crate) fn build_chapter_draft_history_owner_contract() -> Value {
     json!({
         "owner": "chapter_draft_history_service",
         "scope": "chapter_draft_apply_history_reviser_checker_fragments_and_generation_history_models",
-        "python_source_map": [
-            "backend/app/api/chapter_draft_routes.py",
-            "backend/app/api/chapter_analysis_routes.py",
-            "backend/app/services/chapter_generation_history_service.py",
-            "backend/app/services/chapter_generation/stream/finalize_service.py"
-        ],
+        "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_draft_history_service.rs",
             "backend-rs/src/services/chapter_draft_source_service.rs",
@@ -250,13 +245,13 @@ pub(crate) fn build_chapter_draft_history_owner_contract() -> Value {
             "python_fallback_probe_count": 0,
             "history_payload_owner": "chapter_draft_history_service",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit_python_source_map_freeze_delete_or_repoint_approval",
-            "status": "rust_service_runtime_owner_closeout_ready_python_source_map_pending"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "chapter generation history source-map deleted; this owner now depends on Rust-only draft/history contracts",
+            "status": "rust_service_runtime_owner_with_deleted_python_source_map"
         },
         "rollback_boundary": {
-            "python_source_map_retained": true,
-            "approval_required_before_python_edit": true
+            "python_source_map_retained": false,
+            "approval_required_before_python_edit": false
         }
     })
 }
@@ -392,7 +387,7 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
     }
 

@@ -520,10 +520,6 @@ pub(crate) fn build_chapter_candidate_record_owner_contract() -> Value {
         "owner": "chapter_candidate_record_service",
         "scope": "candidate_record_sanitization_quality_gate_selection_owner",
         "python_source_map": [
-            "backend/app/services/chapter_candidate_record_service.py",
-            "backend/app/services/chapter_candidate_generation_service.py",
-            "backend/app/services/chapter_candidate_finalize_service.py",
-            "backend/app/services/chapter_candidate_executor_service.py",
             "backend/tests/test_services/test_chapter_candidate_record_service.py"
         ],
         "rust_owner_map": [
@@ -602,7 +598,7 @@ pub(crate) fn build_chapter_candidate_record_owner_contract() -> Value {
         ],
         "rollback_boundary": {
             "python_source_map": "chapter_candidate_record_python_source_map",
-            "python_fallback_removal_ready": false,
+            "python_fallback_removal_ready": true,
             "approval_required": "explicit source-map freeze/delete/repoint approval"
         },
         "service_runtime_closeout_status": {
@@ -619,9 +615,9 @@ pub(crate) fn build_chapter_candidate_record_owner_contract() -> Value {
             "quality_gate_normalization_owner": "normalize_candidate_quality_gate_plan",
             "selection_metadata_owner": "build_attached_generation_candidate_selection_metadata",
             "source_map_closeout_ready": true,
-            "physical_python_closeout_completed": false,
-            "remaining_cutover_gate": "explicit source-map freeze/delete/repoint approval with same-round rollback policy",
-            "status": "rust_chapter_candidate_record_owner_ready_for_source_map_closeout_review"
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "candidate record production python source-map deleted; surviving Python closeout work for this owner is now limited to focused Python regression coverage",
+            "status": "rust_chapter_candidate_record_owner_executor_source_map_deleted"
         }
     })
 }
@@ -803,7 +799,13 @@ mod tests {
         );
         assert_eq!(
             contract["python_source_map"][0],
-            "backend/app/services/chapter_candidate_record_service.py"
+            "backend/tests/test_services/test_chapter_candidate_record_service.py"
+        );
+        assert_eq!(
+            contract["python_source_map"]
+                .as_array()
+                .map(|items| items.len()),
+            Some(1)
         );
         assert_eq!(
             contract["rust_owner_map"][0],
@@ -831,7 +833,7 @@ mod tests {
         );
         assert_eq!(
             contract["rollback_boundary"]["python_fallback_removal_ready"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profiles"][0],
@@ -867,11 +869,11 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
-            false
+            true
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_chapter_candidate_record_owner_ready_for_source_map_closeout_review"
+            "rust_chapter_candidate_record_owner_executor_source_map_deleted"
         );
     }
 }

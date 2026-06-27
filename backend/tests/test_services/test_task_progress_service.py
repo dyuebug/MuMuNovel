@@ -1,6 +1,6 @@
 import pytest
 
-from app.services.task_system.task_progress_service import (
+from tests.test_support.task_system import (
     infer_workflow_phase,
     resolve_progress_phase,
     resolve_stage_code_for_phase,

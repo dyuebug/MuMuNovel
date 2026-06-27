@@ -122,11 +122,7 @@ pub(crate) fn build_batch_request_runtime_state_owner_contract() -> Value {
     json!({
         "owner": "chapter_generation_execution_contract_service::request_runtime_state",
         "scope": "batch_request_runtime_state_payload_and_story_repair_projection",
-        "python_source_map": [
-            "backend/app/services/batch_generation/create_service.py",
-            "backend/app/services/batch_generation_orchestration_service.py",
-            "backend/app/services/story_repair_payload_service.py"
-        ],
+        "python_source_map": [],
         "rust_target_map": [
             "backend-rs/src/services/chapter_generation_execution_contract_service.rs",
             "backend-rs/src/services/chapter_generation_execution_contract_service/request_runtime_state_owner.rs",
@@ -159,8 +155,19 @@ pub(crate) fn build_batch_request_runtime_state_owner_contract() -> Value {
             "chapter_batch_generation_write_workflow_service",
             "chapter_batch_generation_runtime_state_service",
             "chapter_batch_generation_resume_task_command_service",
-            "chapter_batch_generation_active_gateway_smoke_service"
+            "chapter-batch-generation-active-gateway-smoke-rust"
         ],
+        "service_runtime_closeout_status": {
+            "owner_profiles": [
+                "phase5-batch-generation-owner"
+            ],
+            "batch_generation_manifest_probe_count": 11,
+            "python_fallback_probe_count": 0,
+            "source_map_closeout_ready": true,
+            "physical_python_closeout_completed": true,
+            "remaining_cutover_gate": "batch_request_runtime_state_owner_is_rust_only_and_surviving_python_closeout_work_now_lives_in_shared_schema_and_regression_surfaces_outside_this_direct_contract_package",
+            "status": "rust_batch_request_runtime_state_owner_direct_package_closed_out"
+        },
         "validation_boundary": [
             "cargo test chapter_generation_execution_contract_service",
             "cargo test chapter_batch_generation_write_workflow_service",
@@ -170,9 +177,55 @@ pub(crate) fn build_batch_request_runtime_state_owner_contract() -> Value {
             "cargo check --manifest-path backend-rs/Cargo.toml"
         ],
         "rollback_boundary": {
-            "source_map_policy": "keep_python_batch_request_runtime_state_shells_as_source_map_until_explicit_freeze_delete_round",
+            "source_map_policy": "batch_request_runtime_state_owner_is_rust_only_and_no_longer_tracks_direct_python_request_runtime_state_shell_source_maps",
             "runtime_knob": "BatchGenerationRequestRuntimeState plus active story repair payload projection",
             "compatibility_note": "Batch request runtime-state key and active story-repair payload extraction remain stable for batch create, runtime, and resume flows"
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::build_batch_request_runtime_state_owner_contract;
+
+    #[test]
+    fn should_publish_batch_request_runtime_state_owner_contract_as_closed_out() {
+        let contract = build_batch_request_runtime_state_owner_contract();
+
+        assert_eq!(
+            contract["owner"],
+            "chapter_generation_execution_contract_service::request_runtime_state"
+        );
+        assert_eq!(contract["python_source_map"], json!([]));
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["owner_profiles"],
+            json!(["phase5-batch-generation-owner"])
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["batch_generation_manifest_probe_count"],
+            11
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["python_fallback_probe_count"],
+            0
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["source_map_closeout_ready"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["physical_python_closeout_completed"],
+            true
+        );
+        assert_eq!(
+            contract["service_runtime_closeout_status"]["status"],
+            "rust_batch_request_runtime_state_owner_direct_package_closed_out"
+        );
+        assert_eq!(
+            contract["rollback_boundary"]["source_map_policy"],
+            "batch_request_runtime_state_owner_is_rust_only_and_no_longer_tracks_direct_python_request_runtime_state_shell_source_maps"
+        );
+    }
 }

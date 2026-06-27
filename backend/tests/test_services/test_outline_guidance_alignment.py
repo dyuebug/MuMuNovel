@@ -1,11 +1,11 @@
-from app.api.outlines import (
+from tests.test_support.outlines_route_test_adapter import (
     _build_outline_memory_guidance,
     _build_outline_story_quality_trend_guidance_from_summary,
     _merge_outline_requirements,
+    _merge_wizard_outline_requirements,
 )
-from app.api.wizard_stream import _merge_wizard_outline_requirements
-from app.schemas.outline import OutlineGenerateRequest
-from app.services.chapter_quality_context_service import StoryGenerationGuidance, StoryPacket
+from tests.test_support.outline_schema_test_support import OutlineGenerateRequest
+from tests.test_support.story_packet_test_support import StoryGenerationGuidance, StoryPacket
 
 
 def test_should_normalize_story_creation_brief_in_outline_generate_request():
