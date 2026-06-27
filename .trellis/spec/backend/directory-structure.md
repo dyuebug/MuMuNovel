@@ -6,14 +6,15 @@
 
 ## Overview
 
-The backend is a FastAPI application rooted at `backend/app/`, with a
-thin-entry pattern at the top and most behavior split into bootstrap, API,
-service, ORM, and schema layers.
+The production backend runtime is now the Rust service under `backend-rs/`,
+served through the strangler Nginx gateway on port `8005`.
 
-The real application entrypoint is `backend/app/main.py`, but startup
-composition now happens in `backend/app/bootstrap/app_factory.py`. New code
-should usually land below `app/`, not in top-level scripts, unless it is
-explicitly a migration, operations, or tooling concern.
+The retired Python FastAPI tree under `backend/app/` is no longer a production
+entrypoint. Any remaining Python runtime references must be treated as one of:
+test support, migrator/schema metadata support, historical source maps, or
+explicit rollback documentation. Do not introduce new production behavior under
+`backend/app/`, and do not use `uvicorn app.main:app` as a current deploy
+instruction.
 
 ---
 
@@ -45,50 +46,58 @@ backend/
 
 ## Module Organization
 
-### Entry and bootstrap
+### Production runtime and bootstrap
 
-- Keep `backend/app/main.py` minimal. It should instantiate the app and keep
-  local `uvicorn.run(...)` support only.
-- Put startup composition, global exception handlers, middleware wiring,
-  health routes, router registration, and static mounting in
-  `backend/app/bootstrap/`.
-- Example: `backend/app/main.py`, `backend/app/bootstrap/app_factory.py`.
+- Current production runtime lives in `backend-rs/` and is exposed by
+  `docker-compose.strangler.yml` / `docker-compose.yml` through
+  `rust-backend` and `nginx`.
+- Current deployment and smoke validation should target
+  `http://localhost:8005`.
+- Do not restore `python-backend`, `mumunovel-python`, or
+  `uvicorn app.main:app` as production entrypoints unless the same change also
+  rolls back the Rust gateway and documents the rollback boundary.
 
-### API layer
+### Retired Python runtime boundaries
 
-- Put HTTP and SSE endpoints in `backend/app/api/`.
-- Routers should stay thin: parse request data, resolve auth/access, call
-  services, and translate results into response models or streams.
-- Shared route helpers belong in route-adjacent helpers such as
-  `backend/app/api/common.py` and `backend/app/api/chapter_route_helpers.py`.
-- Example: `backend/app/api/background_tasks.py`.
+- `backend/tests/test_support/app_runtime/` may provide a test-only FastAPI app
+  for legacy API/support tests.
+- `backend/migrator_app/`, `backend/scripts/`, and `backend/tools/` may keep
+  Python code for Alembic/schema migration and diagnostics.
+- Tests may keep negative assertions for deleted `app.*` modules. These
+  assertions prove production Python modules are not importable; they are not
+  active runtime owners.
 
-### Service layer
+### Rust API layer
 
-- Put business logic in `backend/app/services/`.
-- This repository prefers many narrowly named service files over one giant
-  service module. Common suffixes include:
-  `*_entry_service.py`, `*_runtime_service.py`, `*_workflow_service.py`,
-  `*_query_service.py`, `*_compat_service.py`.
-- Before editing, confirm whether a file is the real implementation, a
-  facade, or a compatibility shim.
-- Example: `backend/app/services/background_task_manager.py`,
-  `backend/app/services/chapter_crud_query_service.py`.
+- Put active HTTP and SSE endpoints under `backend-rs/src/api/`.
+- Route handlers should stay thin: parse request data, resolve auth/access,
+  call services, and translate results into response models or streams.
+- Keep retired Python route files as historical/source-map references only;
+  do not add fresh production behavior there.
+
+### Rust service layer
+
+- Put active business logic under `backend-rs/src/services/`.
+- This repository prefers focused service owners over catch-all modules.
+  Common Rust owner boundaries include route owners, runtime-state owners,
+  task payload owners, query/read-context owners, and workflow owners.
+- Before editing a Python service reference, confirm whether it is a deleted
+  production source map, test fixture, migrator support, or historical
+  rollback note.
 
 ### ORM and schema layers
 
-- SQLAlchemy models live in `backend/app/models/`.
-- Pydantic request/response contracts live in `backend/app/schemas/`.
+- Active runtime models and DTOs should be owned from `backend-rs/`.
+- Python SQLAlchemy/Pydantic files may remain only as migrator/test-support
+  fixtures or historical source maps.
 - Keep persistence structure and API contract structure separate even when
   they model the same domain.
-- Example: `backend/app/models/chapter.py` vs
-  `backend/app/schemas/chapter.py`.
 
 ### Database, migrations, and tooling
 
-- Database engine/session lifecycle stays in `backend/app/database.py`.
-- Schema evolution is handled by Alembic and related scripts under
-  `backend/alembic/` and `backend/scripts/`.
+- Runtime database access belongs to Rust service owners.
+- Schema evolution is handled by Alembic and related migrator support under
+  `backend/alembic/`, `backend/migrator_app/`, and `backend/scripts/`.
 - Do not introduce ad hoc startup-time schema mutation in feature code.
 
 ### Tests
@@ -97,6 +106,8 @@ backend/
 - Existing suites are organized by concern, especially `test_api/`,
   `test_services/`, and `test_schemas/`.
 - Follow that split instead of creating flat, mixed-purpose test files.
+- Use `backend/tests/test_support/` for retired Python runtime shims and
+  fixtures when a legacy test still needs them.
 
 ---
 

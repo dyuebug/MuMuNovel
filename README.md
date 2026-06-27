@@ -201,11 +201,11 @@ cp backend/.env.example .env
 # - .env（配置文件，必需挂载到容器）
 # - backend/scripts/init_postgres.sql（数据库初始化脚本）
 
-# 4. 启动服务
-docker-compose up -d
+# 4. 启动 Rust runtime + Rust db-migrator + Nginx gateway
+docker compose -f docker-compose.strangler.yml up -d --build
 
 # 5. 访问应用
-# 打开浏览器访问 http://localhost:8000
+# 打开浏览器访问 http://localhost:8005
 ```
 
 > **📌 注意事项**
@@ -214,159 +214,33 @@ docker-compose up -d
 > 2. **数据库初始化**: `init_postgres.sql` 会在首次启动时自动执行，安装必要的PostgreSQL扩展
 > 3. **自行构建**: 如需从源码构建，请先下载 embedding 模型文件（[加群获取](frontend/public/qq.jpg)）
 
-### 使用 Docker Hub 镜像（推荐新手）
+### 使用 Docker Hub 镜像（旧单容器镜像，不再推荐）
+
+当前生产入口已经迁移到 Rust runtime + Rust db-migrator + Nginx gateway。
+旧 Docker Hub 单容器镜像示例仍保留作历史参考，但它不是当前推荐部署路径。
+新部署请优先使用仓库内 `docker-compose.strangler.yml` 或 `deploy-strangler.bat`。
 
 ```bash
-# 1. 拉取最新镜像（已包含模型文件）
+# 旧镜像路径：仅作历史参考，不作为当前 Rust runtime 部署入口
 docker pull mumujie/mumuainovel:latest
 
 # 2. 创建 docker-compose.yml（点击下方展开查看完整配置）
 ```
 
-<details>
-<summary>📄 点击展开 docker-compose.yml 完整配置</summary>
-
-```yaml
-services:
-  postgres:
-    image: postgres:18-alpine
-    container_name: mumunovel-postgres
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-mumuai_novel}
-      POSTGRES_USER: ${POSTGRES_USER:-mumuai}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456}
-      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
-      TZ: ${TZ:-Asia/Shanghai}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./backend/scripts/init_postgres.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mumuai} -d ${POSTGRES_DB:-mumuai_novel}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    networks:
-      - ai-story-network
-    command:
-      - postgres
-      - -c
-      - max_connections=${POSTGRES_MAX_CONNECTIONS:-200}
-      - -c
-      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}
-      - -c
-      - effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-1GB}
-      - -c
-      - maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-64MB}
-      - -c
-      - checkpoint_completion_target=${POSTGRES_CHECKPOINT_COMPLETION_TARGET:-0.9}
-      - -c
-      - wal_buffers=${POSTGRES_WAL_BUFFERS:-16MB}
-      - -c
-      - default_statistics_target=${POSTGRES_DEFAULT_STATISTICS_TARGET:-100}
-      - -c
-      - random_page_cost=${POSTGRES_RANDOM_PAGE_COST:-1.1}
-      - -c
-      - effective_io_concurrency=${POSTGRES_EFFECTIVE_IO_CONCURRENCY:-200}
-      - -c
-      - work_mem=${POSTGRES_WORK_MEM:-4MB}
-      - -c
-      - min_wal_size=${POSTGRES_MIN_WAL_SIZE:-1GB}
-      - -c
-      - max_wal_size=${POSTGRES_MAX_WAL_SIZE:-4GB}
-
-  mumunovel:
-    image: mumujie/mumuainovel:latest
-    container_name: mumunovel
-    depends_on:
-      postgres:
-        condition: service_healthy
-    ports:
-      - "${APP_PORT:-8000}:8000"
-    volumes:
-      - ./logs:/app/logs
-      - ./.env:/app/.env:ro
-    environment:
-      # 应用配置
-      - APP_NAME=${APP_NAME:-MuMuNovel}
-      - APP_VERSION=${APP_VERSION:-1.0.0}
-      - APP_HOST=${APP_HOST:-0.0.0.0}
-      - APP_PORT=8000
-      - DEBUG=${DEBUG:-false}
-      # 数据库配置
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-mumuai}:${POSTGRES_PASSWORD:-123456}@postgres:5432/${POSTGRES_DB:-mumuai_novel}
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-123456}
-      # PostgreSQL 连接池配置
-      - DATABASE_POOL_SIZE=${DATABASE_POOL_SIZE:-30}
-      - DATABASE_MAX_OVERFLOW=${DATABASE_MAX_OVERFLOW:-20}
-      - DATABASE_POOL_TIMEOUT=${DATABASE_POOL_TIMEOUT:-60}
-      - DATABASE_POOL_RECYCLE=${DATABASE_POOL_RECYCLE:-1800}
-      - DATABASE_POOL_PRE_PING=${DATABASE_POOL_PRE_PING:-True}
-      - DATABASE_POOL_USE_LIFO=${DATABASE_POOL_USE_LIFO:-True}
-      # 代理配置（可选）
-      - HTTP_PROXY=${HTTP_PROXY:-}
-      - HTTPS_PROXY=${HTTPS_PROXY:-}
-      - NO_PROXY=${NO_PROXY:-localhost,127.0.0.1}
-      # AI 服务配置
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - GEMINI_BASE_URL=${GEMINI_BASE_URL:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
-      - DEFAULT_AI_PROVIDER=${DEFAULT_AI_PROVIDER:-openai}
-      - DEFAULT_MODEL=${DEFAULT_MODEL:-gpt-4o-mini}
-      - DEFAULT_TEMPERATURE=${DEFAULT_TEMPERATURE:-0.7}
-      - DEFAULT_MAX_TOKENS=${DEFAULT_MAX_TOKENS:-32000}
-      # LinuxDO OAuth 配置
-      - LINUXDO_CLIENT_ID=${LINUXDO_CLIENT_ID:-11111}
-      - LINUXDO_CLIENT_SECRET=${LINUXDO_CLIENT_SECRET:-11111}
-      - LINUXDO_REDIRECT_URI=${LINUXDO_REDIRECT_URI:-http://localhost:8000/api/auth/linuxdo/callback}
-      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:8000}
-      # 本地账户登录配置
-      - LOCAL_AUTH_ENABLED=${LOCAL_AUTH_ENABLED:-true}
-      - LOCAL_AUTH_USERNAME=${LOCAL_AUTH_USERNAME:-admin}
-      - LOCAL_AUTH_PASSWORD=${LOCAL_AUTH_PASSWORD:-admin123}
-      - LOCAL_AUTH_DISPLAY_NAME=${LOCAL_AUTH_DISPLAY_NAME:-本地管理员}
-      # 会话配置
-      - SESSION_EXPIRE_MINUTES=${SESSION_EXPIRE_MINUTES:-120}
-      - SESSION_REFRESH_THRESHOLD_MINUTES=${SESSION_REFRESH_THRESHOLD_MINUTES:-30}
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    networks:
-      - ai-story-network
-
-volumes:
-  postgres_data:
-    driver: local
-
-networks:
-  ai-story-network:
-    driver: bridge
-```
-
-</details>
+当前仓库已内置 Rust runtime Compose 配置：`docker-compose.strangler.yml`。
+不要复制旧 Python 单容器 compose 示例；它会重新引入退役的 `app.main`
+启动路径。
 
 ```bash
-# 3. 启动服务
-docker-compose up -d
+# 3. 启动当前 Rust runtime 栈
+docker compose -f docker-compose.strangler.yml up -d --build
 
 # 4. 查看日志
-docker-compose logs -f
+docker compose -f docker-compose.strangler.yml logs -f
 
 # 5. 更新到最新版本
-docker-compose pull
-docker-compose up -d
+git pull
+docker compose -f docker-compose.strangler.yml up -d --build
 ```
 
 > **💡 提示**: Docker Hub 镜像已包含所有依赖和模型文件，无需额外下载
@@ -386,27 +260,15 @@ docker-compose up -d
 # - Linux DO：https://linux.do/t/topic/1100112
 ```
 
-#### 后端
+#### 后端 / 生产 runtime
 
 ```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+# 当前生产后端是 Rust，不再通过 uvicorn/app.main 启动 Python runtime。
+# Windows 推荐：
+deploy-strangler.bat -NoPause
 
-# 配置 .env 文件
-cp .env.example .env
-# 编辑 .env 填入必要配置
-
-# 启动 PostgreSQL（可使用 Docker）
-docker run -d --name postgres \
-  -e POSTGRES_PASSWORD=your_password \
-  -e POSTGRES_DB=mumuai_novel \
-  -p 5432:5432 \
-  postgres:18-alpine
-
-# 启动后端
-python -m uvicorn app.main:app --host localhost --port ${APP_PORT:-8000} --reload
+# 或直接使用 Compose：
+docker compose -f docker-compose.strangler.yml up -d --build
 ```
 
 #### 前端
@@ -454,7 +316,7 @@ LOCAL_AUTH_PASSWORD=your_password
 # LinuxDO OAuth
 LINUXDO_CLIENT_ID=your_client_id
 LINUXDO_CLIENT_SECRET=your_client_secret
-LINUXDO_REDIRECT_URI=http://localhost:8000/api/auth/callback
+LINUXDO_REDIRECT_URI=http://localhost:8005/api/auth/callback
 
 # PostgreSQL 连接池（高并发优化）
 DATABASE_POOL_SIZE=30
@@ -484,12 +346,18 @@ OPENAI_BASE_URL=https://your-proxy-service.com/v1
   - 初始化脚本: `backend/scripts/init_postgres.sql`（自动挂载）
   - 优化配置: 支持 80-150 并发用户
 
-- **mumunovel**: 主应用服务
-  - 端口: 8000
-  - 日志目录: `./logs`
-  - 配置挂载: `.env` 文件
-  - 自动等待数据库就绪
-  - 健康检查: 每 30 秒检测一次
+- **db-migrator**: Rust 一次性数据库迁移服务
+  - 命令: `migration-executor`
+  - 职责: 显式执行 PostgreSQL schema 迁移
+
+- **rust-backend**: Rust 生产后端
+  - 端口: 容器内 `8001`
+  - 职责: API、SSE、后台任务、静态资源回退
+  - 健康检查: `http://localhost:8001/health`
+
+- **nginx**: 统一入口
+  - 端口: `8005` -> `80`
+  - 职责: 对外网关，转发到 Rust backend
 
 ### 重要文件说明
 
@@ -506,19 +374,19 @@ OPENAI_BASE_URL=https://your-proxy-service.com/v1
 
 ```bash
 # 启动服务
-docker-compose up -d
+docker compose -f docker-compose.strangler.yml up -d --build
 
 # 查看状态
-docker-compose ps
+docker compose -f docker-compose.strangler.yml ps
 
 # 查看日志
-docker-compose logs -f
+docker compose -f docker-compose.strangler.yml logs -f
 
 # 停止服务
-docker-compose down
+docker compose -f docker-compose.strangler.yml down
 
 # 重启服务
-docker-compose restart
+docker compose -f docker-compose.strangler.yml restart
 
 # 查看资源使用
 docker stats
@@ -535,24 +403,20 @@ docker stats
 
 ```yaml
 ports:
-  - "8800:8000"  # 宿主机:容器
+  - "8800:80"  # 宿主机:Nginx 容器
 ```
 
 ## 📁 项目结构
 
 ```
 MuMuNovel/
-├── backend/                 # 后端服务
-│   ├── app/
-│   │   ├── api/            # API 路由
-│   │   ├── models/         # 数据模型
-│   │   ├── services/       # 业务逻辑
-│   │   ├── middleware/     # 中间件
-│   │   ├── database.py     # 数据库连接
-│   │   └── main.py         # 应用入口
-│   ├── scripts/            # 部署 / 数据库脚本
-│   ├── tools/              # 开发辅助工具
-│   └── requirements.txt    # Python 依赖
+├── backend-rs/              # Rust 生产后端：API、SSE、任务、数据库访问、静态资源回退
+├── backend/                 # Python 迁移/测试/运维支撑，不再是生产 runtime
+│   ├── alembic/             # PostgreSQL Alembic source-map
+│   ├── migrator_app/        # 冻结的迁移 metadata 包
+│   ├── scripts/             # 部署 / 数据库脚本
+│   ├── tests/               # Python 回归测试支撑
+│   └── tools/               # 诊断、smoke、编码体检工具
 ├── frontend/               # 前端应用
 │   ├── src/
 │   │   ├── pages/         # 页面组件
@@ -560,14 +424,15 @@ MuMuNovel/
 │   │   ├── services/      # API 服务
 │   │   └── store/         # 状态管理
 │   └── package.json
-├── docker-compose.yml      # Docker Compose 配置
-├── Dockerfile             # Docker 镜像构建
+├── docker-compose.strangler.yml # Rust runtime Compose 配置
+├── docker-compose.yml           # 当前同样指向 Rust runtime 栈
+├── deploy-strangler.bat         # Windows 一键部署入口
 └── README.md
 ```
 
 ## 🛠️ 技术栈
 
-**后端**: FastAPI • PostgreSQL • SQLAlchemy • OpenAI/Claude/Gemini SDK
+**后端**: Rust/Axum • PostgreSQL • SeaORM/SQLx • OpenAI/Claude/Gemini SDK
 
 **前端**: React 18 • TypeScript • Ant Design • Zustand • Vite
 
@@ -580,8 +445,8 @@ MuMuNovel/
 
 ### API 文档
 
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
+当前生产入口是 Rust + Nginx：`http://localhost:8005`。
+旧 FastAPI Swagger/ReDoc 入口已随 Python runtime 退役，不作为当前部署能力。
 
 ## 🤝 贡献
 

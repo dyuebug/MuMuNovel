@@ -500,7 +500,7 @@
 
 ### 官方资源
 - **项目仓库**：https://github.com/dyuebug/MuMuNovel
-- **API 文档**：http://localhost:8000/docs
+- **API 文档**：http://localhost:8005/docs
 - **Linux DO 讨论**：https://linux.do/t/topic/1106333
 
 ### 技术文档
