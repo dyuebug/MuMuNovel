@@ -838,7 +838,7 @@ export default function SettingsCurrentTab(props: any) {
                                   <Text style={{ display: 'block', color: 'var(--color-text-secondary)', marginBottom: 14 }}>
                                     更适合抓取可追溯来源、链接与事实型资料。
                                   </Text>
-                                  <Form.Item name="web_research_exa_api_key" label="Exa ????">
+                                  <Form.Item name="web_research_exa_api_key" label="Exa API Key">
                                     <Input.Password placeholder="填写 Exa API Key" autoComplete="new-password" />
                                   </Form.Item>
                                   <Form.Item
@@ -892,7 +892,7 @@ export default function SettingsCurrentTab(props: any) {
                                   <Text style={{ display: 'block', color: 'var(--color-text-secondary)', marginBottom: 14 }}>
                                     更适合实时讨论、趋势摘要与表达参考；启用 GrokSearch 后会优先走当前项目内置的深度联网搜索逻辑。
                                   </Text>
-                                  <Form.Item name="web_research_grok_api_key" label="Grok ????">
+                                  <Form.Item name="web_research_grok_api_key" label="Grok API Key">
                                     <Input.Password placeholder="填写 Grok API Key" autoComplete="new-password" />
                                   </Form.Item>
                                   <Form.Item

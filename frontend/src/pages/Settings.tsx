@@ -218,6 +218,19 @@ const buildSettingsPayload = (values: SettingsFormValues): SettingsUpdate => {
     web_research_grok_search_enabled: Boolean(values.web_research_grok_search_enabled),
   };
 };
+
+const buildWebResearchPayload = (values: WebResearchFormValues): SettingsUpdate => ({
+  web_research_enabled: Boolean(values.web_research_enabled),
+  web_research_exa_enabled: Boolean(values.web_research_exa_enabled),
+  web_research_grok_enabled: Boolean(values.web_research_grok_enabled),
+  web_research_exa_api_key: String(values.web_research_exa_api_key || '').trim() || undefined,
+  web_research_exa_base_url: String(values.web_research_exa_base_url || '').trim() || undefined,
+  web_research_grok_api_key: String(values.web_research_grok_api_key || '').trim() || undefined,
+  web_research_grok_base_url: String(values.web_research_grok_base_url || '').trim() || undefined,
+  web_research_grok_model: String(values.web_research_grok_model || '').trim() || undefined,
+  web_research_grok_search_enabled: Boolean(values.web_research_grok_search_enabled),
+});
+
 const buildPresetConfig = (values: PresetFormValues): APIKeyPresetConfig => {
   const provider = (values.api_provider || 'openai') as ProviderValue;
   return {
@@ -502,6 +515,35 @@ export default function SettingsPage() {
       }
       console.error('save settings failed', error);
       message.error('保存设置失败');
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  const handleSaveWebResearchSettings = async () => {
+    try {
+      const values = await webResearchForm.validateFields();
+      const payload = buildWebResearchPayload(values);
+      setSavingSettings(true);
+      const saved = settingsRecord
+        ? await settingsApi.updateSettings(payload)
+        : await settingsApi.saveSettings(payload);
+      const normalizedSaved = {
+        ...saved,
+        llm_model: String(saved.llm_model || settingsForm.getFieldValue('llm_model') || providerHint.model || '').trim(),
+        has_api_key: Boolean(saved.has_api_key),
+      };
+      setSettingsRecord(normalizedSaved);
+      webResearchForm.setFieldsValue(settingsToWebResearchFormValues(normalizedSaved));
+      settingsForm.setFieldsValue(settingsToMainFormValues(normalizedSaved));
+      setWebResearchAlert(null);
+      message.success('Web Research 设置已保存');
+    } catch (error) {
+      if (error && typeof error === 'object' && 'errorFields' in error) {
+        return;
+      }
+      console.error('save web research settings failed', error);
+      message.error('保存 Web Research 设置失败');
     } finally {
       setSavingSettings(false);
     }
@@ -1080,6 +1122,9 @@ export default function SettingsPage() {
                       </Row>
                     </Form>
                     <Space wrap>
+                      <Button type="primary" icon={<SaveOutlined />} loading={savingSettings} onClick={() => void handleSaveWebResearchSettings()}>
+                        保存 Web Research 设置
+                      </Button>
                       <Button icon={<ExperimentOutlined />} loading={testingWebResearch} onClick={() => void handleTestWebResearch()}>
                         测试 Web Research
                       </Button>
