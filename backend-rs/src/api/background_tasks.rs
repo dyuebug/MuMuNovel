@@ -9,17 +9,25 @@ use futures::StreamExt;
 use sea_orm::DatabaseConnection;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
+use tokio::task::JoinHandle;
 use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::api::careers::execute_career_system_request;
 use crate::api::careers::CareerSystemRequest;
 use crate::api::characters::GenerateCharacterRequest;
+use crate::api::inspiration::{
+    execute_generate_options_task, execute_quick_generate_task, execute_refine_options_task,
+};
 use crate::api::organizations::GenerateOrganizationRequest;
 use crate::api::outlines::{
     build_outline_batch_expand_execution_request, build_outline_expand_execution_request,
     execute_outline_batch_expand_request, execute_outline_expand_request, execute_outline_request,
+};
+use crate::api::polish::{
+    execute_polish_batch_task, execute_polish_text_task, PolishBatchRequest, PolishRequest,
 };
 use crate::api::wizard::{
     execute_characters_request, execute_regenerate_world_building_request,
@@ -27,6 +35,15 @@ use crate::api::wizard::{
     RegenerateWorldBuildingRequest, WorldBuildingRequest,
 };
 use crate::services::auth::Claims;
+use crate::services::book_import_service::BookImportService;
+use crate::services::chapter_regeneration_prepare_service::{
+    build_full_chapter_regeneration_stream_request_from_route_payload,
+    build_partial_regeneration_stream_workflow_request_from_route_payload,
+    FullChapterRegenerationStreamRouteRequest, PartialRegenerationStreamRouteRequest,
+};
+use crate::services::chapter_regeneration_stream_workflow_service::{
+    execute_chapter_regeneration_task, execute_partial_regeneration_task,
+};
 use crate::tasks::checkpoint::touch_checkpoint;
 use crate::tasks::registry::TaskRegistry;
 use crate::tasks::stream::TaskStreamHub;
@@ -318,9 +335,21 @@ pub async fn create_task(
     Extension(db): Extension<DatabaseConnection>,
     Extension(registry): Extension<TaskRegistry>,
     Extension(stream_hub): Extension<TaskStreamHub>,
+    Extension(book_import_service): Extension<Arc<BookImportService>>,
     Json(req): Json<TaskCreateRequest>,
 ) -> impl IntoResponse {
-    if req.task_type != "wizard_world_building" && req.project_id.trim().is_empty() {
+    let allows_empty_project = matches!(
+        req.task_type.as_str(),
+        "wizard_world_building"
+            | "inspiration_generate_options"
+            | "inspiration_refine_options"
+            | "inspiration_quick_generate"
+            | "book_import_apply"
+            | "book_import_retry_failed_steps"
+            | "polish_text"
+            | "polish_batch"
+    );
+    if !allows_empty_project && req.project_id.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"success": false, "message": "project_id is required for this task type"})),
@@ -376,6 +405,7 @@ pub async fn create_task(
         db,
         registry.clone(),
         stream_hub.clone(),
+        book_import_service,
         record.clone(),
         payload,
     );
@@ -387,12 +417,21 @@ fn spawn_task_execution(
     db: DatabaseConnection,
     registry: TaskRegistry,
     stream_hub: TaskStreamHub,
+    book_import_service: Arc<BookImportService>,
     record: TaskRecord,
     payload: serde_json::Value,
 ) {
     tokio::spawn(async move {
         mark_task_running(&registry, &stream_hub, &record.task_id, "任务已开始执行").await;
-        let result = execute_task(&db, &registry, &stream_hub, &record, payload).await;
+        let result = execute_task(
+            &db,
+            &registry,
+            &stream_hub,
+            &book_import_service,
+            &record,
+            payload,
+        )
+        .await;
 
         if let Err(error) = result {
             fail_task(&registry, &stream_hub, &record.task_id, &error).await;
@@ -562,10 +601,84 @@ async fn sync_channel_state_to_task(
     result.ok_or_else(|| "后台任务未返回结果".to_string())
 }
 
+fn spawn_channel_progress_bridge(
+    registry: TaskRegistry,
+    stream_hub: TaskStreamHub,
+    task_id: String,
+    state_capture: Arc<Mutex<SseTaskCapture>>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut last_message: Option<String> = None;
+        let mut last_progress: Option<i32> = None;
+        let mut last_status: Option<String> = None;
+
+        loop {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+
+            let state = state_capture.lock().await.clone();
+            let progress = state.progress.map(|value| value.clamp(0, 100) as i32);
+            let has_update =
+                state.message.is_some() || progress.is_some() || state.status.is_some();
+            let changed = state.message != last_message
+                || progress != last_progress
+                || state.status != last_status;
+            let should_stop = state.done || state.error.is_some();
+
+            if has_update && changed {
+                let mut should_emit = false;
+                let updated = registry
+                    .update(&task_id, |record| {
+                        if record.status.is_terminal() {
+                            return;
+                        }
+
+                        if let Some(message) = &state.message {
+                            record.message = message.clone();
+                        }
+                        if let Some(progress) = progress {
+                            record.progress = record.progress.max(progress);
+                        }
+                        record.updated_at = Utc::now();
+                        should_emit = true;
+                    })
+                    .await;
+
+                if should_emit {
+                    if let Some(record) = updated {
+                        stream_hub.fanout(
+                            &task_id,
+                            &TaskEvent {
+                                event_type: "progress".into(),
+                                task_id: Some(task_id.clone()),
+                                message: Some(record.message),
+                                progress: Some(record.progress),
+                                status: Some(record.status.to_string()),
+                                data: None,
+                                error: None,
+                            },
+                        );
+                    }
+                } else {
+                    break;
+                }
+
+                last_message = state.message.clone();
+                last_progress = progress;
+                last_status = state.status.clone();
+            }
+
+            if should_stop {
+                break;
+            }
+        }
+    })
+}
+
 async fn execute_task(
     db: &DatabaseConnection,
     registry: &TaskRegistry,
     stream_hub: &TaskStreamHub,
+    book_import_service: &BookImportService,
     record: &TaskRecord,
     payload: serde_json::Value,
 ) -> Result<(), String> {
@@ -671,6 +784,121 @@ async fn execute_task(
             )
             .await;
         }
+        "inspiration_generate_options" => {
+            let result = run_inspiration_generate_options(db, record, payload).await?;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("灵感选项生成完成".to_string()),
+            )
+            .await;
+        }
+        "inspiration_refine_options" => {
+            let result = run_inspiration_refine_options(db, record, payload).await?;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("灵感选项优化完成".to_string()),
+            )
+            .await;
+        }
+        "inspiration_quick_generate" => {
+            let result = run_inspiration_quick_generate(db, record, payload).await?;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("灵感补全完成".to_string()),
+            )
+            .await;
+        }
+        "chapter_partial_regenerate" => {
+            let result = run_chapter_partial_regenerate(db, record, payload).await?;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("局部重写完成".to_string()),
+            )
+            .await;
+        }
+        "chapter_regenerate" => {
+            let result = run_chapter_regenerate(db, record, payload).await?;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("章节重生成完成".to_string()),
+            )
+            .await;
+        }
+        "book_import_apply" => {
+            let result = run_book_import_apply(
+                db,
+                book_import_service,
+                registry,
+                stream_hub,
+                record,
+                payload,
+            )
+            .await?;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("拆书导入完成".to_string()),
+            )
+            .await;
+        }
+        "book_import_retry_failed_steps" => {
+            let result = run_book_import_retry_failed_steps(
+                db,
+                book_import_service,
+                registry,
+                stream_hub,
+                record,
+                payload,
+            )
+            .await?;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("拆书失败步骤重试完成".to_string()),
+            )
+            .await;
+        }
+        "polish_text" => {
+            let result = run_polish_text(db, record, payload).await?;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("AI 去味完成".to_string()),
+            )
+            .await;
+        }
+        "polish_batch" => {
+            let result = run_polish_batch(db, record, payload).await?;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("批量 AI 去味完成".to_string()),
+            )
+            .await;
+        }
         other => {
             return Err(format!("unsupported task type: {}", other));
         }
@@ -692,6 +920,12 @@ async fn run_wizard_world_building(
     let result_capture = Arc::new(Mutex::new(None));
     let state_capture = Arc::new(Mutex::new(SseTaskCapture::default()));
     let channel = SseChannel::with_captures(tx, result_capture.clone(), state_capture.clone());
+    let progress_bridge_handle = spawn_channel_progress_bridge(
+        registry.clone(),
+        stream_hub.clone(),
+        record.task_id.clone(),
+        state_capture.clone(),
+    );
 
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
@@ -699,6 +933,8 @@ async fn run_wizard_world_building(
 
     drop(channel);
     let _ = drain_handle.await;
+    progress_bridge_handle.abort();
+    let _ = progress_bridge_handle.await;
     sync_channel_state_to_task(
         registry,
         stream_hub,
@@ -722,12 +958,20 @@ async fn run_wizard_career_system(
     let result_capture = Arc::new(Mutex::new(None));
     let state_capture = Arc::new(Mutex::new(SseTaskCapture::default()));
     let channel = SseChannel::with_captures(tx, result_capture.clone(), state_capture.clone());
+    let progress_bridge_handle = spawn_channel_progress_bridge(
+        registry.clone(),
+        stream_hub.clone(),
+        record.task_id.clone(),
+        state_capture.clone(),
+    );
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
     execute_career_system_request(db, &channel, &record.user_id, body).await;
 
     drop(channel);
     let _ = drain_handle.await;
+    progress_bridge_handle.abort();
+    let _ = progress_bridge_handle.await;
     sync_channel_state_to_task(
         registry,
         stream_hub,
@@ -751,12 +995,20 @@ async fn run_wizard_characters(
     let result_capture = Arc::new(Mutex::new(None));
     let state_capture = Arc::new(Mutex::new(SseTaskCapture::default()));
     let channel = SseChannel::with_captures(tx, result_capture.clone(), state_capture.clone());
+    let progress_bridge_handle = spawn_channel_progress_bridge(
+        registry.clone(),
+        stream_hub.clone(),
+        record.task_id.clone(),
+        state_capture.clone(),
+    );
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
     execute_characters_request(db, &channel, &record.user_id, body).await;
 
     drop(channel);
     let _ = drain_handle.await;
+    progress_bridge_handle.abort();
+    let _ = progress_bridge_handle.await;
     sync_channel_state_to_task(
         registry,
         stream_hub,
@@ -780,12 +1032,20 @@ async fn run_wizard_outline(
     let result_capture = Arc::new(Mutex::new(None));
     let state_capture = Arc::new(Mutex::new(SseTaskCapture::default()));
     let channel = SseChannel::with_captures(tx, result_capture.clone(), state_capture.clone());
+    let progress_bridge_handle = spawn_channel_progress_bridge(
+        registry.clone(),
+        stream_hub.clone(),
+        record.task_id.clone(),
+        state_capture.clone(),
+    );
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
     execute_outline_request(db, &channel, &record.user_id, body).await;
 
     drop(channel);
     let _ = drain_handle.await;
+    progress_bridge_handle.abort();
+    let _ = progress_bridge_handle.await;
     sync_channel_state_to_task(
         registry,
         stream_hub,
@@ -809,6 +1069,12 @@ async fn run_world_regenerate(
     let result_capture = Arc::new(Mutex::new(None));
     let state_capture = Arc::new(Mutex::new(SseTaskCapture::default()));
     let channel = SseChannel::with_captures(tx, result_capture.clone(), state_capture.clone());
+    let progress_bridge_handle = spawn_channel_progress_bridge(
+        registry.clone(),
+        stream_hub.clone(),
+        record.task_id.clone(),
+        state_capture.clone(),
+    );
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
     execute_regenerate_world_building_request(
@@ -822,6 +1088,8 @@ async fn run_world_regenerate(
 
     drop(channel);
     let _ = drain_handle.await;
+    progress_bridge_handle.abort();
+    let _ = progress_bridge_handle.await;
     sync_channel_state_to_task(
         registry,
         stream_hub,
@@ -881,6 +1149,260 @@ async fn run_organization_generate(
     super::organizations::generate_organization_task(db, &record.user_id, body)
         .await
         .map_err(|error| error.to_string())
+}
+
+async fn run_inspiration_generate_options(
+    db: &DatabaseConnection,
+    record: &TaskRecord,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    execute_generate_options_task(db, &record.user_id, payload).await
+}
+
+async fn run_inspiration_refine_options(
+    db: &DatabaseConnection,
+    record: &TaskRecord,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    execute_refine_options_task(db, &record.user_id, payload).await
+}
+
+async fn run_inspiration_quick_generate(
+    db: &DatabaseConnection,
+    record: &TaskRecord,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    execute_quick_generate_task(db, &record.user_id, payload).await
+}
+
+async fn run_chapter_partial_regenerate(
+    db: &DatabaseConnection,
+    record: &TaskRecord,
+    mut payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let chapter_id = payload
+        .get("chapter_id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "chapter_id is required for chapter_partial_regenerate".to_string())?
+        .to_string();
+
+    if let Some(map) = payload.as_object_mut() {
+        map.remove("chapter_id");
+    }
+
+    let route_request = serde_json::from_value::<PartialRegenerationStreamRouteRequest>(payload)
+        .map_err(|error| format!("无效的局部重写任务参数: {}", error))?;
+    let request =
+        build_partial_regeneration_stream_workflow_request_from_route_payload(route_request);
+
+    execute_partial_regeneration_task(db, &record.user_id, &chapter_id, request)
+        .await
+        .map_err(|error| match error {
+            crate::services::chapter_regeneration_stream_workflow_service::CreateRegenerationStreamWorkflowError::Chapter(_) => {
+                "章节访问失败".to_string()
+            }
+            crate::services::chapter_regeneration_stream_workflow_service::CreateRegenerationStreamWorkflowError::Prepare(_) => {
+                "局部重写准备失败".to_string()
+            }
+            crate::services::chapter_regeneration_stream_workflow_service::CreateRegenerationStreamWorkflowError::TaskLifecycle(_) => {
+                "局部重写任务状态失败".to_string()
+            }
+        })
+}
+
+async fn run_chapter_regenerate(
+    db: &DatabaseConnection,
+    record: &TaskRecord,
+    mut payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let chapter_id = take_required_string(&mut payload, "chapter_id", "chapter_regenerate")?;
+    let route_request =
+        serde_json::from_value::<FullChapterRegenerationStreamRouteRequest>(payload)
+            .map_err(|error| format!("无效的章节重生成任务参数: {}", error))?;
+    let request = build_full_chapter_regeneration_stream_request_from_route_payload(route_request);
+
+    execute_chapter_regeneration_task(db, &record.user_id, &chapter_id, request)
+        .await
+        .map_err(|error| match error {
+            crate::services::chapter_regeneration_stream_workflow_service::CreateRegenerationStreamWorkflowError::Chapter(_) => {
+                "章节访问失败".to_string()
+            }
+            crate::services::chapter_regeneration_stream_workflow_service::CreateRegenerationStreamWorkflowError::Prepare(_) => {
+                "章节重生成准备失败".to_string()
+            }
+            crate::services::chapter_regeneration_stream_workflow_service::CreateRegenerationStreamWorkflowError::TaskLifecycle(_) => {
+                "章节重生成任务状态失败".to_string()
+            }
+        })
+}
+
+async fn run_book_import_apply(
+    db: &DatabaseConnection,
+    service: &BookImportService,
+    registry: &TaskRegistry,
+    stream_hub: &TaskStreamHub,
+    record: &TaskRecord,
+    mut payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let book_import_task_id =
+        take_required_string(&mut payload, "book_import_task_id", "book_import_apply")?;
+    let project_suggestion = payload
+        .get("project_suggestion")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let chapters = payload
+        .get("chapters")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let outlines = payload
+        .get("outlines")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let import_mode = payload
+        .get("import_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("append")
+        .to_string();
+
+    let (tx, mut rx) = mpsc::channel(256);
+    let result_capture = Arc::new(Mutex::new(None));
+    let state_capture = Arc::new(Mutex::new(SseTaskCapture::default()));
+    let channel = SseChannel::with_captures(tx, result_capture.clone(), state_capture.clone());
+    let progress_bridge_handle = spawn_channel_progress_bridge(
+        registry.clone(),
+        stream_hub.clone(),
+        record.task_id.clone(),
+        state_capture.clone(),
+    );
+    let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+    service
+        .apply_import_stream(
+            db,
+            &book_import_task_id,
+            &record.user_id,
+            &project_suggestion,
+            &chapters,
+            &outlines,
+            &import_mode,
+            &channel,
+        )
+        .await;
+
+    drop(channel);
+    let _ = drain_handle.await;
+    progress_bridge_handle.abort();
+    let _ = progress_bridge_handle.await;
+    sync_channel_state_to_task(
+        registry,
+        stream_hub,
+        &record.task_id,
+        state_capture,
+        result_capture,
+    )
+    .await
+}
+
+async fn run_book_import_retry_failed_steps(
+    db: &DatabaseConnection,
+    service: &BookImportService,
+    registry: &TaskRegistry,
+    stream_hub: &TaskStreamHub,
+    record: &TaskRecord,
+    mut payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let book_import_task_id = take_required_string(
+        &mut payload,
+        "book_import_task_id",
+        "book_import_retry_failed_steps",
+    )?;
+    let steps = payload
+        .get("steps")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|value| value.as_str().map(ToString::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    if steps.is_empty() {
+        return Err("steps is required for book_import_retry_failed_steps".to_string());
+    }
+
+    let (tx, mut rx) = mpsc::channel(256);
+    let result_capture = Arc::new(Mutex::new(None));
+    let state_capture = Arc::new(Mutex::new(SseTaskCapture::default()));
+    let channel = SseChannel::with_captures(tx, result_capture.clone(), state_capture.clone());
+    let progress_bridge_handle = spawn_channel_progress_bridge(
+        registry.clone(),
+        stream_hub.clone(),
+        record.task_id.clone(),
+        state_capture.clone(),
+    );
+    let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
+
+    service
+        .retry_stream(db, &book_import_task_id, &record.user_id, &steps, &channel)
+        .await;
+
+    drop(channel);
+    let _ = drain_handle.await;
+    progress_bridge_handle.abort();
+    let _ = progress_bridge_handle.await;
+    sync_channel_state_to_task(
+        registry,
+        stream_hub,
+        &record.task_id,
+        state_capture,
+        result_capture,
+    )
+    .await
+}
+
+async fn run_polish_text(
+    db: &DatabaseConnection,
+    record: &TaskRecord,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let body = serde_json::from_value::<PolishRequest>(payload)
+        .map_err(|error| format!("无效的 AI 去味任务参数: {}", error))?;
+    execute_polish_text_task(db, &record.user_id, body).await
+}
+
+async fn run_polish_batch(
+    db: &DatabaseConnection,
+    record: &TaskRecord,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let body = serde_json::from_value::<PolishBatchRequest>(payload)
+        .map_err(|error| format!("无效的批量 AI 去味任务参数: {}", error))?;
+    execute_polish_batch_task(db, &record.user_id, body).await
+}
+
+fn take_required_string(
+    payload: &mut Value,
+    field_name: &str,
+    task_type: &str,
+) -> Result<String, String> {
+    let value = payload
+        .get(field_name)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{} is required for {}", field_name, task_type))?
+        .to_string();
+
+    if let Some(map) = payload.as_object_mut() {
+        map.remove(field_name);
+    }
+
+    Ok(value)
 }
 
 /// GET /api/background-tasks

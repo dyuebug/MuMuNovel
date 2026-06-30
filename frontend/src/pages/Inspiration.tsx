@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { useBusyNavigationGuard } from '../hooks/useBusyNavigationGuard';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Card, Input, Button, Space, Typography, message, Spin, Modal, Switch, theme } from 'antd';
 import { SendOutlined, ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons';
-import { backgroundTaskApi, inspirationApi } from '../services/modularApi';
+import { backgroundTaskApi, inspirationApi, type BackgroundTaskStatus } from '../services/modularApi';
 import { AIProjectGenerator, type GenerationConfig } from '../components/AIProjectGenerator';
 import {
   GenerationExecutionSettingsPanel,
@@ -12,6 +12,8 @@ import {
 import { syncProjectToStoreById } from '../store/hooks';
 import { invalidateAllProjectCollectionFreshness } from '../store/projectCollectionRefresh';
 import { invalidateProjectCareers } from '../services/projectCareers';
+import type { InspirationOptionResponse, InspirationQuickGenerateResponse } from '../services/modules/inspiration';
+import { waitForBackgroundTaskCompletion } from '../utils/taskPolling';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -32,14 +34,6 @@ type InspirationOptionRequest = {
   };
   enable_web_research?: boolean;
   web_research_query?: string;
-};
-
-type InspirationOptionResponse = {
-  prompt?: string;
-  options: string[];
-  error?: string;
-  research_query?: string;
-  research_assets?: InspirationResearchAsset[];
 };
 
 type InspirationResearchBundle = {
@@ -86,8 +80,113 @@ const CACHE_KEY = 'inspiration_conversation_cache';
 // 缓存有效期：24小时
 const CACHE_EXPIRY = 24 * 60 * 60 * 1000;
 
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+);
+
+const isInspirationOptionStep = (value: unknown): value is InspirationOptionStep => (
+  value === 'title' || value === 'description' || value === 'theme' || value === 'genre'
+);
+
+const toStringArray = (value: unknown): string[] => {
+  if (typeof value === 'string') {
+    return value
+      .split(/[、,\n]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean);
+};
+
+const normalizeInspirationOptionResponse = (value: unknown): InspirationOptionResponse | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const options = toStringArray(value.options);
+  return {
+    prompt: typeof value.prompt === 'string' ? value.prompt : undefined,
+    options,
+    error: typeof value.error === 'string' ? value.error : undefined,
+    research_query: typeof value.research_query === 'string' ? value.research_query : undefined,
+    research_assets: Array.isArray(value.research_assets)
+      ? value.research_assets
+        .filter(isRecord)
+        .map((asset) => ({
+          title: typeof asset.title === 'string' ? asset.title : '',
+          source: typeof asset.source === 'string' ? asset.source : undefined,
+          summary: typeof asset.summary === 'string' ? asset.summary : undefined,
+        }))
+      : undefined,
+  };
+};
+
+const normalizeInspirationQuickGenerateResponse = (value: unknown): InspirationQuickGenerateResponse | null => {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return {
+    title: typeof value.title === 'string' ? value.title : '',
+    description: typeof value.description === 'string' ? value.description : '',
+    theme: typeof value.theme === 'string' ? value.theme : '',
+    genre: toStringArray(value.genre),
+    narrative_perspective: typeof value.narrative_perspective === 'string'
+      ? value.narrative_perspective
+      : '',
+    error: typeof value.error === 'string' ? value.error : undefined,
+  };
+};
+
+const getInspirationTaskStep = (
+  task: BackgroundTaskStatus,
+  fallbackRequest?: InspirationOptionRequest | null,
+): InspirationOptionStep | null => {
+  const checkpointStep = task.checkpoint?.inspiration_step;
+  if (isInspirationOptionStep(checkpointStep)) {
+    return checkpointStep;
+  }
+
+  if (isInspirationOptionStep(fallbackRequest?.step)) {
+    return fallbackRequest.step;
+  }
+
+  return null;
+};
+
+const areSameStringArray = (left?: string[], right?: string[]) => (
+  JSON.stringify(left ?? []) === JSON.stringify(right ?? [])
+);
+
+const formatInspirationPrompt = (fallbackPrompt: string, response?: InspirationOptionResponse) => {
+  const prompt = response?.prompt?.trim() || fallbackPrompt;
+  const query = response?.research_query?.trim();
+  const assets = Array.isArray(response?.research_assets) ? response.research_assets : [];
+  if (!query && assets.length === 0) {
+    return prompt;
+  }
+
+  const assetTitles = assets
+    .map((asset) => asset.title?.trim() || asset.source?.trim() || '')
+    .filter(Boolean)
+    .slice(0, 2);
+  const notes = [`已结合联网检索${query ? `：${query}` : ''}`];
+  if (assetTitles.length > 0) {
+    notes.push(`参考资料：${assetTitles.join(' / ')}`);
+  }
+  return `${prompt}\n\n${notes.join('\n')}`;
+};
+
 const Inspiration: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [currentStep, setCurrentStep] = useState<Step>('idea');
   const {
     setBusy: setIsGenerationBusy,
@@ -151,6 +250,7 @@ const Inspiration: React.FC = () => {
   const [modal, contextHolder] = Modal.useModal();
   const mountedRef = useRef(true);
   const requestEpochRef = useRef(0);
+  const restoredTaskIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     return () => {
@@ -454,18 +554,186 @@ const Inspiration: React.FC = () => {
     }
   }, [clearCache, isAsyncRequestActive]);
 
+  const restoreInspirationTaskFromUrl = useCallback(async (requestId: number): Promise<boolean> => {
+    const taskId = new URLSearchParams(location.search).get('task_id')?.trim();
+    if (!taskId || restoredTaskIdRef.current === taskId) {
+      return false;
+    }
+
+    try {
+      setLoading(true);
+      let task = await backgroundTaskApi.getTaskStatus(taskId);
+      if (!isAsyncRequestActive(requestId)) {
+        return false;
+      }
+
+      if (task.error === 'task_missing' || task.task_type === 'unknown') {
+        message.warning('这个灵感后台任务已失效，请重新生成', 2);
+        navigate('/inspiration', { replace: true });
+        return true;
+      }
+
+      if (!task.task_type.startsWith('inspiration_')) {
+        return false;
+      }
+
+      restoreFromCache(requestId);
+      if (!isAsyncRequestActive(requestId)) {
+        return false;
+      }
+
+      if (task.status === 'pending' || task.status === 'running') {
+        message.info('灵感任务仍在后台执行，完成后会自动恢复选项', 2);
+        task = await waitForBackgroundTaskCompletion<typeof task, BackgroundTaskStatus>(task, {
+          pollTask: backgroundTaskApi.getTaskStatus,
+          progressMessage: '正在等待灵感任务完成',
+          resolveValue: (latestTask) => latestTask,
+        });
+        if (!isAsyncRequestActive(requestId)) {
+          return false;
+        }
+      }
+
+      if (task.status === 'failed' || task.status === 'cancelled') {
+        const fallback = task.status === 'cancelled' ? '灵感任务已取消' : '灵感任务执行失败';
+        message.error(task.error || task.message || fallback);
+        navigate('/inspiration', { replace: true });
+        return true;
+      }
+
+      if (task.task_type === 'inspiration_quick_generate') {
+        const response = normalizeInspirationQuickGenerateResponse(task.result);
+        if (!response) {
+          message.warning('灵感补全任务结果格式异常，请重新生成', 2);
+          navigate('/inspiration', { replace: true });
+          return true;
+        }
+
+        if (response.error) {
+          message.error(response.error);
+          navigate('/inspiration', { replace: true });
+          return true;
+        }
+
+        const restoredData: WizardData = {
+          title: response.title || wizardData.title || '',
+          description: response.description || wizardData.description || '',
+          theme: response.theme || wizardData.theme || '',
+          genre: response.genre.length > 0 ? response.genre : wizardData.genre || [],
+          narrative_perspective: response.narrative_perspective || wizardData.narrative_perspective || '第三人称',
+          outline_mode: wizardData.outline_mode || 'one-to-one',
+        };
+        setWizardData(restoredData);
+        setCurrentStep('confirm');
+        setMessages((prev) => {
+          const content = `灵感补全任务已完成，下面按补全后的设定继续：\n\n📖 书名：${restoredData.title}\n📝 简介：${restoredData.description}\n🎯 主题：${restoredData.theme}\n🏷️ 类型：${restoredData.genre.join('、')}\n👁️ 视角：${restoredData.narrative_perspective}\n\n请选择下一步操作：`;
+          if (prev.some((item) => item.type === 'ai' && item.content === content)) {
+            return prev;
+          }
+          return [...prev, {
+            type: 'ai',
+            content,
+            options: ['✅ 确认创建', '⚡ 智能补全并创建', '🔄 重新开始'],
+          }];
+        });
+        restoredTaskIdRef.current = taskId;
+        message.success('已恢复灵感补全结果', 2);
+        navigate('/inspiration', { replace: true });
+        return true;
+      }
+
+      const response = normalizeInspirationOptionResponse(task.result);
+      const step = getInspirationTaskStep(task, lastFailedRequest);
+      if (!response || !step) {
+        message.warning('灵感任务结果缺少步骤信息，请重新生成', 2);
+        navigate('/inspiration', { replace: true });
+        return true;
+      }
+
+      if (response.error) {
+        message.error(response.error);
+        navigate('/inspiration', { replace: true });
+        return true;
+      }
+
+      if (response.options.length === 0) {
+        message.warning('灵感任务没有返回可选项，请重新生成', 2);
+        navigate('/inspiration', { replace: true });
+        return true;
+      }
+
+      mergeInspirationResearch(response);
+      const aiMessage: Message = {
+        type: 'ai',
+        content: formatInspirationPrompt('任务已完成，请选择一个选项，或者输入你自己的：', response),
+        options: response.options,
+        isMultiSelect: step === 'genre',
+        canRefine: true,
+        step,
+      };
+
+      setMessages((prev) => {
+        const alreadyRestored = prev.some((item) => (
+          item.type === 'ai'
+          && item.step === step
+          && areSameStringArray(item.options, aiMessage.options)
+        ));
+        if (alreadyRestored) {
+          return prev;
+        }
+        return [...prev, aiMessage];
+      });
+      setCurrentStep(step);
+      setSelectedOptions([]);
+      setLastFailedRequest(null);
+      restoredTaskIdRef.current = taskId;
+      message.success('已恢复灵感选项结果', 2);
+      navigate('/inspiration', { replace: true });
+      return true;
+    } catch (error) {
+      if (!isAsyncRequestActive(requestId)) {
+        return false;
+      }
+      console.error('恢复灵感后台任务失败:', error);
+      message.error('恢复灵感后台任务失败，请稍后重试');
+      navigate('/inspiration', { replace: true });
+      return true;
+    } finally {
+      if (isAsyncRequestActive(requestId)) {
+        setLoading(false);
+      }
+    }
+  }, [
+    isAsyncRequestActive,
+    lastFailedRequest,
+    location.search,
+    mergeInspirationResearch,
+    navigate,
+    restoreFromCache,
+    wizardData.description,
+    wizardData.genre,
+    wizardData.narrative_perspective,
+    wizardData.outline_mode,
+    wizardData.theme,
+    wizardData.title,
+  ]);
+
   // ==================== Restore cache on mount ====================
 
   useEffect(() => {
     if (!cacheLoaded) {
       const requestId = startAsyncRequest();
       void (async () => {
-        const restoredGenerating = await restoreGenerationFromStorage(requestId);
+        const restoredTask = await restoreInspirationTaskFromUrl(requestId);
         if (!isAsyncRequestActive(requestId)) {
           return;
         }
-        const restoredConversation = !restoredGenerating && restoreFromCache(requestId);
-        if (!restoredGenerating && !restoredConversation) {
+        const restoredGenerating = !restoredTask && await restoreGenerationFromStorage(requestId);
+        if (!isAsyncRequestActive(requestId)) {
+          return;
+        }
+        const restoredConversation = !restoredTask && !restoredGenerating && restoreFromCache(requestId);
+        if (!restoredTask && !restoredGenerating && !restoredConversation) {
           await loadExecutionDefaults({ syncWebResearch: true }, requestId);
         }
         if (!isAsyncRequestActive(requestId)) {
@@ -480,6 +748,26 @@ const Inspiration: React.FC = () => {
     loadExecutionDefaults,
     restoreFromCache,
     restoreGenerationFromStorage,
+    restoreInspirationTaskFromUrl,
+    startAsyncRequest,
+  ]);
+
+  useEffect(() => {
+    if (!cacheLoaded) {
+      return;
+    }
+
+    const taskId = new URLSearchParams(location.search).get('task_id')?.trim();
+    if (!taskId || restoredTaskIdRef.current === taskId) {
+      return;
+    }
+
+    const requestId = startAsyncRequest();
+    void restoreInspirationTaskFromUrl(requestId);
+  }, [
+    cacheLoaded,
+    location.search,
+    restoreInspirationTaskFromUrl,
     startAsyncRequest,
   ]);
 
@@ -556,22 +844,7 @@ const Inspiration: React.FC = () => {
 
   const buildInspirationPrompt = useCallback(
     (fallbackPrompt: string, response?: InspirationOptionResponse) => {
-      const prompt = response?.prompt?.trim() || fallbackPrompt;
-      const query = response?.research_query?.trim();
-      const assets = Array.isArray(response?.research_assets) ? response.research_assets : [];
-      if (!query && assets.length === 0) {
-        return prompt;
-      }
-
-      const assetTitles = assets
-        .map((asset) => asset.title?.trim() || asset.source?.trim() || '')
-        .filter(Boolean)
-        .slice(0, 2);
-      const notes = [`已结合联网检索${query ? `：${query}` : ''}`];
-      if (assetTitles.length > 0) {
-        notes.push(`参考资料：${assetTitles.join(' / ')}`);
-      }
-      return `${prompt}\n\n${notes.join('\n')}`;
+      return formatInspirationPrompt(fallbackPrompt, response);
     },
     []
   );
@@ -583,7 +856,7 @@ const Inspiration: React.FC = () => {
     const requestId = startAsyncRequest();
     setLoading(true);
     try {
-      const response = await inspirationApi.generateOptions(lastFailedRequest);
+      const response = await inspirationApi.generateOptionsInBackground(lastFailedRequest);
       if (!isAsyncRequestActive(requestId)) {
         return;
       }
@@ -675,7 +948,7 @@ const Inspiration: React.FC = () => {
       };
 
       // 调用refine接口
-      const response = await inspirationApi.refineOptions({
+      const response = await inspirationApi.refineOptionsInBackground({
         step,
         context,
         feedback,
@@ -749,7 +1022,7 @@ const Inspiration: React.FC = () => {
           description: userInput,
         });
 
-        const response = await inspirationApi.generateOptions(requestData);
+        const response = await inspirationApi.generateOptionsInBackground(requestData);
         if (!isAsyncRequestActive(requestId)) {
           return;
         }
@@ -795,6 +1068,14 @@ const Inspiration: React.FC = () => {
 
   const handleSelectOption = async (option: string, optionStep?: Step, messageIndex?: number) => {
     const activeStep = optionStep ?? currentStep;
+    const openExecutionSettings = async (activeRequestId = startAsyncRequest()) => {
+      await loadExecutionDefaults(undefined, activeRequestId);
+      if (!isAsyncRequestActive(activeRequestId)) {
+        return;
+      }
+      setExecutionModalOpen(true);
+    };
+
     if (option === '重新生成' && lastFailedRequest) {
       await handleRetry();
       return;
@@ -892,7 +1173,7 @@ const Inspiration: React.FC = () => {
       const aiMessage: Message = {
         type: 'ai',
         content: summary,
-        options: ['✅ 确认创建', '🔄 重新开始']
+        options: ['✅ 确认创建', '⚡ 智能补全并创建', '🔄 重新开始']
       };
       setMessages(prev => [...prev, aiMessage]);
       setCurrentStep('confirm');
@@ -913,14 +1194,66 @@ const Inspiration: React.FC = () => {
         };
         setMessages(prev => [...prev, aiMessage]);
 
-        // 先加载执行设置，再进入生成阶段
-        const requestId = startAsyncRequest();
-        await loadExecutionDefaults(undefined, requestId);
-        if (!isAsyncRequestActive(requestId)) {
-          return;
-        }
-        setExecutionModalOpen(true);
+        await openExecutionSettings();
         return;
+      } else if (option === '⚡ 智能补全并创建') {
+        const requestId = startAsyncRequest();
+        const userMessage: Message = {
+          type: 'user',
+          content: '智能补全并创建',
+        };
+        setMessages(prev => [...prev, userMessage]);
+        setLoading(true);
+
+        try {
+          const response = await inspirationApi.quickGenerateInBackground({
+            title: wizardData.title,
+            description: wizardData.description,
+            theme: wizardData.theme,
+            genre: wizardData.genre,
+            narrative_perspective: wizardData.narrative_perspective,
+          });
+          if (!isAsyncRequestActive(requestId)) {
+            return;
+          }
+          if (response.error) {
+            message.error(response.error);
+            return;
+          }
+
+          const completedData: WizardData = {
+            title: response.title || wizardData.title || '',
+            description: response.description || wizardData.description || '',
+            theme: response.theme || wizardData.theme || '',
+            genre: Array.isArray(response.genre)
+              ? response.genre
+              : response.genre
+                ? [response.genre]
+                : wizardData.genre || [],
+            narrative_perspective: response.narrative_perspective || wizardData.narrative_perspective || '第三人称',
+            outline_mode: wizardData.outline_mode || 'one-to-one',
+          };
+          setWizardData(completedData);
+
+          const aiMessage: Message = {
+            type: 'ai',
+            content: `已完成智能补全，下面按补全后的设定创建项目：\n\n📖 书名：${completedData.title}\n📝 简介：${completedData.description}\n🎯 主题：${completedData.theme}\n🏷️ 类型：${completedData.genre.join('、')}\n👁️ 视角：${completedData.narrative_perspective}\n\n请先确认执行设置，然后开始创建项目。`,
+          };
+          setMessages(prev => [...prev, aiMessage]);
+          await openExecutionSettings(requestId);
+        } catch (error: unknown) {
+          if (!isAsyncRequestActive(requestId)) {
+            return;
+          }
+          console.error('智能补全失败:', error);
+          const errMsg = error instanceof Error ? error.message : '智能补全失败，请重试';
+          const axiosError = error as { response?: { data?: { detail?: string } } };
+          message.error(axiosError.response?.data?.detail || errMsg);
+        } finally {
+          if (isAsyncRequestActive(requestId)) {
+            setLoading(false);
+          }
+        }
         return;
       } else if (option === '🔄 重新开始') {
         handleRestart();
@@ -1098,7 +1431,7 @@ const Inspiration: React.FC = () => {
         initial_idea: initialIdea,
         title: data.title,
       });
-      const response = await inspirationApi.generateOptions(requestData);
+      const response = await inspirationApi.generateOptionsInBackground(requestData);
       if (!isAsyncRequestActive(activeRequestId)) {
         return;
       }
@@ -1136,7 +1469,7 @@ const Inspiration: React.FC = () => {
         title: data.title,
         description: data.description,
       });
-      const response = await inspirationApi.generateOptions(requestData);
+      const response = await inspirationApi.generateOptionsInBackground(requestData);
       if (!isAsyncRequestActive(activeRequestId)) {
         return;
       }
@@ -1175,7 +1508,7 @@ const Inspiration: React.FC = () => {
         description: data.description,
         theme: data.theme,
       });
-      const response = await inspirationApi.generateOptions(requestData);
+      const response = await inspirationApi.generateOptionsInBackground(requestData);
       if (!isAsyncRequestActive(activeRequestId)) {
         return;
       }

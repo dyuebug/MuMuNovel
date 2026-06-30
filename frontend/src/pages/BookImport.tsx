@@ -22,8 +22,6 @@ import { syncProjectToStoreById } from '../store/hooks';
 import type {
   BookImportApplyPayload,
   BookImportPreview,
-  BookImportResult,
-  BookImportRetryResult,
   BookImportStepFailure,
   BookImportTask,
 } from '../types';
@@ -543,81 +541,34 @@ export default function BookImport() {
       setIsApplyComplete(false);
       setFailedSteps([]);
 
-      await bookImportApi.applyImportStream(
-        taskId,
-        payload,
-        {
-          onProgress: (msg: string, prog: number, status?: string) => {
-            if (!isApplyRunActive(runId)) {
-              return;
-            }
-            // 检查是否是步骤失败的特殊消息
-            if (status === 'step_failures') {
-              try {
-                const parsed = JSON.parse(msg);
-                if (parsed.failed_steps && Array.isArray(parsed.failed_steps)) {
-                  setFailedSteps(parsed.failed_steps as BookImportStepFailure[]);
-                }
-              } catch {
-                // 不是JSON，忽略
-              }
-              return;
-            }
-            setApplyProgress(prog);
-            setApplyMessage(msg);
-          },
-          onResult: (result: BookImportResult) => {
-            if (!isApplyRunActive(runId)) {
-              return;
-            }
-            importedProjectId.current = result.project_id;
-            const generatedCareers = result.statistics?.generated_careers ?? 0;
-            const generatedEntities = result.statistics?.generated_entities ?? 0;
+      const result = await bookImportApi.applyImportInBackground(taskId, payload);
+      if (!isApplyRunActive(runId)) {
+        return;
+      }
 
-            // 检查最终是否有失败步骤
-            setIsApplyComplete(true);
+      importedProjectId.current = result.project_id;
+      const generatedCareers = result.statistics?.generated_careers ?? 0;
+      const generatedEntities = result.statistics?.generated_entities ?? 0;
+      const nextFailedSteps = Array.isArray(result.failed_steps) ? result.failed_steps : [];
 
-            // 如果没有失败步骤才自动跳转
-            // 注意：这里需要延迟一帧来等待 failedSteps 的更新
-            setTimeout(() => {
-              if (!isApplyRunActive(runId)) {
-                return;
-              }
-              setFailedSteps(prev => {
-                if (prev.length === 0) {
-                  message.success(`导入成功：已生成职业${generatedCareers}个，角色/组织${generatedEntities}个`);
-                  clearBookImportCache();
-                  void syncCompletedProjectToStore(result.project_id);
-                  setTimeout(() => {
-                    if (isApplyRunActive(runId)) {
-                      navigate(`/project/${result.project_id}/chapters`);
-                    }
-                  }, 1000);
-                } else {
-                  message.warning(`导入完成，但有 ${prev.length} 个生成步骤失败，可点击重试`);
-                }
-                return prev;
-              });
-            }, 100);
-          },
-          onError: (error: string) => {
-            if (!isApplyRunActive(runId)) {
-              return;
-            }
-            console.error('导入过程发生错误:', error);
-            setApplyError(`导入失败: ${error}`);
-            message.error(`导入失败: ${error}`);
-            setApplying(false);
-          },
-          onComplete: () => {
-            if (!isApplyRunActive(runId)) {
-              return;
-            }
-            setApplyProgress(100);
-            setApplyMessage('导入完成！');
+      setApplyProgress(100);
+      setApplyMessage(nextFailedSteps.length > 0 ? '导入完成，但部分生成步骤失败' : '导入完成！');
+      setFailedSteps(nextFailedSteps);
+      setIsApplyComplete(true);
+      setApplying(false);
+
+      if (nextFailedSteps.length === 0) {
+        message.success(`导入成功：已生成职业${generatedCareers}个，角色/组织${generatedEntities}个`);
+        clearBookImportCache();
+        void syncCompletedProjectToStore(result.project_id);
+        setTimeout(() => {
+          if (isApplyRunActive(runId)) {
+            navigate(`/project/${result.project_id}/chapters`);
           }
-        }
-      );
+        }, 1000);
+      } else {
+        message.warning(`导入完成，但有 ${nextFailedSteps.length} 个生成步骤失败，可点击重试`);
+      }
     } catch (error) {
       if (!isApplyRunActive(runId)) {
         return;
@@ -640,67 +591,32 @@ export default function BookImport() {
       setRetryProgress(0);
       setRetryMessage('正在重试失败的生成步骤...');
 
-      await bookImportApi.retryFailedStepsStream(
-        taskId,
-        stepsToRetry,
-        {
-          onProgress: (msg: string, prog: number, status?: string) => {
-            if (!isRetryRunActive(runId)) {
-              return;
+      const result = await bookImportApi.retryFailedStepsInBackground(taskId, stepsToRetry);
+      if (!isRetryRunActive(runId)) {
+        return;
+      }
+
+      setRetrying(false);
+      setRetryProgress(100);
+      setRetryMessage('重试完成');
+
+      if (result.still_failed && result.still_failed.length > 0) {
+        setFailedSteps(result.still_failed);
+        message.warning(`重试完成，仍有 ${result.still_failed.length} 个步骤失败`);
+      } else {
+        setFailedSteps([]);
+        message.success('所有步骤重试成功！');
+        clearBookImportCache();
+        const projectId = result.project_id || importedProjectId.current;
+        if (projectId) {
+          void syncCompletedProjectToStore(projectId);
+          setTimeout(() => {
+            if (isRetryRunActive(runId)) {
+              navigate(`/project/${projectId}/chapters`);
             }
-            if (status === 'step_failures') {
-              try {
-                const parsed = JSON.parse(msg);
-                if (parsed.failed_steps && Array.isArray(parsed.failed_steps)) {
-                  setFailedSteps(parsed.failed_steps as BookImportStepFailure[]);
-                }
-              } catch {
-                // 不是JSON，忽略
-              }
-              return;
-            }
-            setRetryProgress(prog);
-            setRetryMessage(msg);
-          },
-          onResult: (result: BookImportRetryResult) => {
-            if (!isRetryRunActive(runId)) {
-              return;
-            }
-            if (result.still_failed && result.still_failed.length > 0) {
-              setFailedSteps(result.still_failed);
-              message.warning(`重试完成，仍有 ${result.still_failed.length} 个步骤失败`);
-            } else {
-              setFailedSteps([]);
-              message.success('所有步骤重试成功！');
-              clearBookImportCache();
-              const projectId = result.project_id || importedProjectId.current;
-              if (projectId) {
-                void syncCompletedProjectToStore(projectId);
-                setTimeout(() => {
-                  if (isRetryRunActive(runId)) {
-                    navigate(`/project/${projectId}/chapters`);
-                  }
-                }, 1000);
-              }
-            }
-          },
-          onError: (error: string) => {
-            if (!isRetryRunActive(runId)) {
-              return;
-            }
-            console.error('重试失败:', error);
-            message.error(`重试失败: ${error}`);
-          },
-          onComplete: () => {
-            if (!isRetryRunActive(runId)) {
-              return;
-            }
-            setRetrying(false);
-            setRetryProgress(100);
-            setRetryMessage('重试完成');
-          }
+          }, 1000);
         }
-      );
+      }
     } catch (error) {
       if (!isRetryRunActive(runId)) {
         return;

@@ -1637,6 +1637,7 @@ export interface BookImportResult {
     generated_world_building?: number;
   };
   warnings: BookImportWarning[];
+  failed_steps?: BookImportStepFailure[];
 }
 
 export interface BookImportStepFailure {

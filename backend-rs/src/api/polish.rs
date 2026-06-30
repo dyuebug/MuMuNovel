@@ -297,7 +297,7 @@ fn default_true() -> bool {
 }
 
 #[derive(Deserialize)]
-struct PolishRequest {
+pub(crate) struct PolishRequest {
     #[serde(alias = "text")]
     original_text: String,
     project_id: Option<i64>,
@@ -314,7 +314,7 @@ struct PolishRequest {
 }
 
 #[derive(Deserialize)]
-struct PolishBatchRequest {
+pub(crate) struct PolishBatchRequest {
     texts: Vec<String>,
     #[allow(dead_code)]
     project_id: Option<i64>,
@@ -330,22 +330,19 @@ struct PolishBatchRequest {
     retain_hooks: bool,
 }
 
-async fn polish_text(
-    Extension(db): Extension<DatabaseConnection>,
-    Extension(claims): Extension<Claims>,
-    Json(body): Json<PolishRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+pub(crate) async fn execute_polish_text_task(
+    db: &DatabaseConnection,
+    user_id: &str,
+    body: PolishRequest,
+) -> Result<Value, String> {
     let original = body.original_text.trim().to_string();
     if original.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({"detail": "original_text 或 text 不能为空"})),
-        ));
+        return Err("original_text 或 text 不能为空".to_string());
     }
 
-    match PolishService::polish_text(
-        &db,
-        &claims.sub,
+    PolishService::polish_text(
+        db,
+        user_id,
         body.project_id,
         &original,
         body.style.as_deref(),
@@ -357,20 +354,14 @@ async fn polish_text(
         body.temperature,
     )
     .await
-    {
-        Ok(data) => Ok(Json(data)),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"detail": format!("AI去味失败: {}", e)})),
-        )),
-    }
+    .map_err(|error| format!("AI去味失败: {}", error))
 }
 
-async fn polish_batch(
-    Extension(db): Extension<DatabaseConnection>,
-    Extension(claims): Extension<Claims>,
-    Json(body): Json<PolishBatchRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+pub(crate) async fn execute_polish_batch_task(
+    db: &DatabaseConnection,
+    user_id: &str,
+    body: PolishBatchRequest,
+) -> Result<Value, String> {
     let normalized: Vec<String> = body
         .texts
         .iter()
@@ -379,15 +370,12 @@ async fn polish_batch(
         .collect();
 
     if normalized.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({"detail": "texts 不能为空"})),
-        ));
+        return Err("texts 不能为空".to_string());
     }
 
-    match PolishService::polish_batch(
-        &db,
-        &claims.sub,
+    PolishService::polish_batch(
+        db,
+        user_id,
         &normalized,
         body.style.as_deref(),
         &body.focus_mode,
@@ -398,12 +386,42 @@ async fn polish_batch(
         body.temperature,
     )
     .await
-    {
+    .map_err(|error| format!("批量AI去味失败: {}", error))
+}
+
+async fn polish_text(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Json(body): Json<PolishRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    match execute_polish_text_task(&db, &claims.sub, body).await {
         Ok(data) => Ok(Json(data)),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"detail": format!("批量AI去味失败: {}", e)})),
-        )),
+        Err(e) => {
+            let status = if e.contains("不能为空") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            Err((status, Json(json!({"detail": e}))))
+        }
+    }
+}
+
+async fn polish_batch(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Json(body): Json<PolishBatchRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    match execute_polish_batch_task(&db, &claims.sub, body).await {
+        Ok(data) => Ok(Json(data)),
+        Err(e) => {
+            let status = if e.contains("不能为空") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            Err((status, Json(json!({"detail": e}))))
+        }
     }
 }
 

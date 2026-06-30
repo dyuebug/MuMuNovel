@@ -1,4 +1,11 @@
 const routeOwnedBackgroundTaskTypes = new Set<string>([
+  'book_import_apply',
+  'book_import_retry_failed_steps',
+  'polish_text',
+  'polish_batch',
+  'inspiration_generate_options',
+  'inspiration_refine_options',
+  'inspiration_quick_generate',
   'careers_generate_system',
   'wizard_career_system',
   'character_generate',
@@ -13,6 +20,8 @@ const routeOwnedBackgroundTaskTypes = new Set<string>([
   'chapters_batch_generate',
   'chapter_single_generate',
   'chapter_analysis',
+  'chapter_regenerate',
+  'chapter_partial_regenerate',
 ]);
 
 export type BackgroundTaskCategory =
@@ -43,9 +52,16 @@ export const isRouteOwnedBackgroundTaskType = (taskType: string): boolean => (
 export const getBackgroundTaskDestination = (
   taskType: string,
   projectId?: string | null,
+  taskId?: string | null,
 ): string | null => {
   if (!projectId) {
-    return taskType.startsWith('wizard_') ? '/wizard' : null;
+    if (taskType.startsWith('wizard_')) return '/wizard';
+    if (taskType.startsWith('inspiration_')) {
+      return taskId ? `/inspiration?task_id=${encodeURIComponent(taskId)}` : '/inspiration';
+    }
+    if (taskType.startsWith('book_import_')) return '/projects?view=book-import';
+    if (taskType.startsWith('polish_')) return '/projects';
+    return null;
   }
 
   switch (taskType) {
@@ -67,13 +83,24 @@ export const getBackgroundTaskDestination = (
     case 'chapters_batch_generate':
     case 'chapter_single_generate':
     case 'chapter_analysis':
+    case 'chapter_regenerate':
+    case 'chapter_partial_regenerate':
       return `/project/${projectId}/chapters`;
+    case 'book_import_apply':
+    case 'book_import_retry_failed_steps':
+      return `/project/${projectId}/chapters`;
+    case 'polish_text':
+    case 'polish_batch':
+      return `/project/${projectId}`;
     default:
       return `/project/${projectId}`;
   }
 };
 
 export const getBackgroundTaskCategory = (taskType: string): BackgroundTaskCategory => {
+  if (taskType.startsWith('polish_')) return 'other';
+  if (taskType.startsWith('book_import_')) return 'other';
+  if (taskType.startsWith('inspiration_')) return 'other';
   if (taskType.startsWith('chapter_') || taskType === 'chapters_batch_generate') return 'chapter';
   if (taskType.startsWith('outline_') || taskType === 'wizard_outline') return 'outline';
   if (taskType === 'world_regenerate' || taskType === 'wizard_world_building') return 'world';

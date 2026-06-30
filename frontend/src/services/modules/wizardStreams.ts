@@ -159,9 +159,10 @@ export const wizardStreamApi = {
       model?: string;
     },
     options?: SSEClientOptions<WorldBuildingResponse>,
-  ) => ssePost<WorldBuildingResponse>(
-    `/api/wizard-stream/world-building/${projectId}/regenerate`,
-    data || {},
+  ) => runBackgroundTaskWithPolling<WorldBuildingResponse>(
+    'world_regenerate',
+    projectId,
+    (data || {}) as Record<string, unknown>,
     options,
   ),
 

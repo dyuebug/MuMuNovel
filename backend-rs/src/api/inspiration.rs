@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use axum::{extract::Extension, http::StatusCode, response::Json, routing::post, Router};
 use sea_orm::DatabaseConnection;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::ai::service::AIService;
@@ -440,9 +440,20 @@ impl InspirationService {
                 ));
             }
 
-            let content = Self::call_ai_for_json(db, user_id, &prompt, &user_prompt, temperature)
-                .await
-                .map_err(|error| format!("AI调用失败: {}", error))?;
+            let content =
+                match Self::call_ai_for_json(db, user_id, &prompt, &user_prompt, temperature).await
+                {
+                    Ok(content) => content,
+                    Err(error) if Self::is_temporary_ai_gateway_error(&error) => {
+                        return Ok(Self::temporary_ai_unavailable_options_response(
+                            step,
+                            &research_query,
+                            enable_web_research,
+                            &error,
+                        ));
+                    }
+                    Err(error) => return Err(format!("AI调用失败: {}", error)),
+                };
 
             let cleaned = Self::clean_json_response(&content);
             let result: Value = serde_json::from_str(&cleaned)
@@ -535,9 +546,20 @@ impl InspirationService {
                 ));
             }
 
-            let content = Self::call_ai_for_json(db, user_id, &prompt, &user_prompt, temperature)
-                .await
-                .map_err(|error| format!("AI调用失败: {}", error))?;
+            let content =
+                match Self::call_ai_for_json(db, user_id, &prompt, &user_prompt, temperature).await
+                {
+                    Ok(content) => content,
+                    Err(error) if Self::is_temporary_ai_gateway_error(&error) => {
+                        return Ok(Self::temporary_ai_unavailable_options_response(
+                            step,
+                            &research_query,
+                            enable_web_research,
+                            &error,
+                        ));
+                    }
+                    Err(error) => return Err(format!("AI调用失败: {}", error)),
+                };
 
             let cleaned = Self::clean_json_response(&content);
             let result: Value = serde_json::from_str(&cleaned)
@@ -703,6 +725,44 @@ impl InspirationService {
         items.retain(|item| seen.insert(item.clone()));
         items
     }
+
+    fn is_temporary_ai_gateway_error(error: &str) -> bool {
+        let lower = error.to_lowercase();
+        lower.contains("openai stream http 502")
+            || lower.contains("openai http 502")
+            || lower.contains("http 502")
+            || lower.contains("http 503")
+            || lower.contains("http 504")
+            || lower.contains("bad gateway")
+            || lower.contains("service unavailable")
+            || lower.contains("gateway timeout")
+    }
+
+    fn temporary_ai_unavailable_options_response(
+        step: &str,
+        research_query: &str,
+        enable_web_research: bool,
+        error: &str,
+    ) -> Value {
+        let manual_option = match step {
+            "title" => "我自己输入书名",
+            "description" => "我自己输入简介",
+            "theme" => "我自己输入主题",
+            "genre" => "我自己输入类型",
+            _ => "我自己输入",
+        };
+
+        json!({
+            "prompt": format!("请为【{}】提供内容：", step),
+            "options": ["重新生成", manual_option, "暂时关闭联网搜索后再试"],
+            "error": format!(
+                "AI上游服务暂时不可用，已保留本次灵感上下文。你可以稍后重新生成，或先手动输入继续创作。（原始错误：{}）",
+                error
+            ),
+            "research_query": if enable_web_research { research_query } else { "" },
+            "research_assets": []
+        })
+    }
 }
 
 fn inspiration_error_status(detail: &str) -> StatusCode {
@@ -725,7 +785,7 @@ fn inspiration_error_status(detail: &str) -> StatusCode {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(untagged)]
 enum GenreInput {
     Single(String),
@@ -741,7 +801,7 @@ impl GenreInput {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct GenerateOptionsRequest {
     step: String,
     context: Value,
@@ -749,7 +809,7 @@ struct GenerateOptionsRequest {
     web_research_query: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct RefineOptionsRequest {
     step: String,
     context: Value,
@@ -760,7 +820,7 @@ struct RefineOptionsRequest {
     web_research_query: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct QuickGenerateRequest {
     title: Option<String>,
     description: Option<String>,
@@ -769,21 +829,75 @@ struct QuickGenerateRequest {
     narrative_perspective: Option<String>,
 }
 
-async fn generate_options(
-    Extension(db): Extension<DatabaseConnection>,
-    Extension(claims): Extension<Claims>,
-    Json(body): Json<GenerateOptionsRequest>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    match InspirationService::generate_options(
-        &db,
-        &claims.sub,
+pub(crate) async fn execute_generate_options_task(
+    db: &DatabaseConnection,
+    user_id: &str,
+    payload: Value,
+) -> Result<Value, String> {
+    let body = serde_json::from_value::<GenerateOptionsRequest>(payload)
+        .map_err(|error| format!("无效的灵感选项任务参数: {}", error))?;
+
+    InspirationService::generate_options(
+        db,
+        user_id,
         &body.step,
         &body.context,
         body.enable_web_research.unwrap_or(false),
         body.web_research_query.as_deref(),
     )
     .await
-    {
+}
+
+pub(crate) async fn execute_refine_options_task(
+    db: &DatabaseConnection,
+    user_id: &str,
+    payload: Value,
+) -> Result<Value, String> {
+    let body = serde_json::from_value::<RefineOptionsRequest>(payload)
+        .map_err(|error| format!("无效的灵感优化任务参数: {}", error))?;
+
+    InspirationService::refine_options(
+        db,
+        user_id,
+        &body.step,
+        &body.context,
+        &body.feedback,
+        &body.previous_options,
+        body.enable_web_research.unwrap_or(false),
+        body.web_research_query.as_deref(),
+    )
+    .await
+}
+
+pub(crate) async fn execute_quick_generate_task(
+    db: &DatabaseConnection,
+    user_id: &str,
+    payload: Value,
+) -> Result<Value, String> {
+    let body = serde_json::from_value::<QuickGenerateRequest>(payload)
+        .map_err(|error| format!("无效的灵感补全任务参数: {}", error))?;
+    let normalized_genre = body.genre.as_ref().map(GenreInput::as_vec);
+    let genre_ref: Option<&[String]> = normalized_genre.as_deref();
+
+    InspirationService::quick_generate(
+        db,
+        user_id,
+        body.title.as_deref(),
+        body.description.as_deref(),
+        body.theme.as_deref(),
+        genre_ref,
+        body.narrative_perspective.as_deref(),
+    )
+    .await
+}
+
+async fn generate_options(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Json(body): Json<GenerateOptionsRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let payload = serde_json::to_value(body).unwrap_or_else(|_| json!({}));
+    match execute_generate_options_task(&db, &claims.sub, payload).await {
         Ok(data) => Ok(Json(data)),
         Err(e) => {
             let detail = format!("生成选项失败: {}", e);
@@ -800,18 +914,8 @@ async fn refine_options(
     Extension(claims): Extension<Claims>,
     Json(body): Json<RefineOptionsRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    match InspirationService::refine_options(
-        &db,
-        &claims.sub,
-        &body.step,
-        &body.context,
-        &body.feedback,
-        &body.previous_options,
-        body.enable_web_research.unwrap_or(false),
-        body.web_research_query.as_deref(),
-    )
-    .await
-    {
+    let payload = serde_json::to_value(body).unwrap_or_else(|_| json!({}));
+    match execute_refine_options_task(&db, &claims.sub, payload).await {
         Ok(data) => Ok(Json(data)),
         Err(e) => {
             let detail = format!("生成选项失败: {}", e);
@@ -828,19 +932,8 @@ async fn quick_generate(
     Extension(claims): Extension<Claims>,
     Json(body): Json<QuickGenerateRequest>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let normalized_genre = body.genre.as_ref().map(GenreInput::as_vec);
-    let genre_ref: Option<&[String]> = normalized_genre.as_deref();
-    match InspirationService::quick_generate(
-        &db,
-        &claims.sub,
-        body.title.as_deref(),
-        body.description.as_deref(),
-        body.theme.as_deref(),
-        genre_ref,
-        body.narrative_perspective.as_deref(),
-    )
-    .await
-    {
+    let payload = serde_json::to_value(body).unwrap_or_else(|_| json!({}));
+    match execute_quick_generate_task(&db, &claims.sub, payload).await {
         Ok(data) => Ok(Json(data)),
         Err(e) => {
             let detail = format!("智能补全失败: {}", e);
@@ -986,6 +1079,65 @@ mod tests {
         assert_eq!(
             inspiration_error_status("智能补全失败: 请先在设置中配置模型"),
             StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn should_classify_openai_stream_gateway_errors_as_temporary() {
+        assert!(InspirationService::is_temporary_ai_gateway_error(
+            "OpenAI stream HTTP 502 Bad Gateway: error code: 502"
+        ));
+        assert!(InspirationService::is_temporary_ai_gateway_error(
+            "OpenAI HTTP 503: service unavailable"
+        ));
+        assert!(InspirationService::is_temporary_ai_gateway_error(
+            "OpenAI stream HTTP 504 Gateway Timeout"
+        ));
+        assert!(!InspirationService::is_temporary_ai_gateway_error(
+            "api key missing"
+        ));
+        assert!(!InspirationService::is_temporary_ai_gateway_error(
+            "OpenAI HTTP 401: unauthorized"
+        ));
+    }
+
+    #[test]
+    fn should_build_temporary_ai_unavailable_options_response_with_research_context() {
+        let response = InspirationService::temporary_ai_unavailable_options_response(
+            "title",
+            "小说书名创意 | 我穿越到了18岁",
+            true,
+            "OpenAI stream HTTP 502 Bad Gateway: error code: 502",
+        );
+
+        assert_eq!(
+            response["research_query"],
+            json!("小说书名创意 | 我穿越到了18岁")
+        );
+        assert_eq!(response["research_assets"], json!([]));
+        assert!(response["error"]
+            .as_str()
+            .expect("error")
+            .contains("AI上游服务暂时不可用"));
+        assert_eq!(
+            response["options"],
+            json!(["重新生成", "我自己输入书名", "暂时关闭联网搜索后再试"])
+        );
+    }
+
+    #[test]
+    fn should_keep_research_query_empty_when_web_research_disabled_for_temporary_fallback() {
+        let response = InspirationService::temporary_ai_unavailable_options_response(
+            "description",
+            "小说简介与冲突设计 | 前世被诬陷",
+            false,
+            "OpenAI stream HTTP 502 Bad Gateway",
+        );
+
+        assert_eq!(response["research_query"], json!(""));
+        assert_eq!(
+            response["options"],
+            json!(["重新生成", "我自己输入简介", "暂时关闭联网搜索后再试"])
         );
     }
 

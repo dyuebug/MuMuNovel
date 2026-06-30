@@ -1,10 +1,19 @@
 import { useCallback } from 'react';
-import { outlineApi } from '../../services/modularApi';
+import { backgroundTaskApi, outlineApi } from '../../services/modularApi';
 import type { GenerateOutlineRequest, Outline, OutlineCreate, OutlineUpdate } from '../../types';
 import { useStore } from '../../store';
 import { useEntityCrudSync } from '../../store/entityCrudSyncHooks';
-import { normalizeStoreItems, runStoreMutation } from '../../store/storeMutationHelpers';
+import { runStoreMutation } from '../../store/storeMutationHelpers';
 import { loadProjectOutlines } from './queries';
+import { waitForBackgroundTaskCompletion } from '../../utils/taskPolling';
+
+const normalizeGeneratedOutlines = (value: unknown): Outline[] => {
+  if (Array.isArray(value)) return value as Outline[];
+  if (value && typeof value === 'object' && Array.isArray((value as { items?: unknown }).items)) {
+    return (value as { items: Outline[] }).items;
+  }
+  return [];
+};
 
 export function useOutlineCommands() {
   const addOutline = useStore((state) => state.addOutline);
@@ -30,7 +39,18 @@ export function useOutlineCommands() {
 
   const generateOutlines = useCallback(async (data: GenerateOutlineRequest) => {
     return runStoreMutation({
-      request: async () => normalizeStoreItems<Outline>(await outlineApi.generateOutline(data)),
+      request: async () => {
+        const task = await backgroundTaskApi.createTask({
+          task_type: 'outline_generate',
+          project_id: data.project_id,
+          payload: data as unknown as Record<string, unknown>,
+        });
+        const result = await waitForBackgroundTaskCompletion<typeof task, { items?: Outline[]; total?: number } | Outline[]>(task, {
+          pollTask: backgroundTaskApi.getTaskStatus,
+          progressMessage: '大纲生成任务已创建，正在后台执行',
+        });
+        return normalizeGeneratedOutlines(result);
+      },
       onSuccess: (outlines) => {
         outlines.forEach((outline) => addOutline(outline));
       },

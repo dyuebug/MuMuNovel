@@ -43,6 +43,15 @@ const TASK_TYPE_LABELS: Record<string, string> = {
   chapters_batch_generate: '批量章节生成',
   chapter_single_generate: '单章生成',
   chapter_analysis: '章节分析',
+  chapter_regenerate: '章节重生成',
+  chapter_partial_regenerate: '章节局部重写',
+  book_import_apply: '拆书导入执行',
+  book_import_retry_failed_steps: '拆书失败步骤重试',
+  polish_text: 'AI 去味',
+  polish_batch: '批量 AI 去味',
+  inspiration_generate_options: '灵感选项生成',
+  inspiration_refine_options: '灵感选项优化',
+  inspiration_quick_generate: '灵感快速补全',
   careers_generate_system: '职业生成',
   character_generate: '角色生成',
   organization_generate: '组织生成',
@@ -57,7 +66,11 @@ const TASK_TYPE_LABELS: Record<string, string> = {
 };
 
 const isChapterManagedTask = (taskType: string) =>
-  taskType === 'chapters_batch_generate' || taskType === 'chapter_single_generate' || taskType === 'chapter_analysis';
+  taskType === 'chapters_batch_generate'
+  || taskType === 'chapter_single_generate'
+  || taskType === 'chapter_analysis'
+  || taskType === 'chapter_regenerate'
+  || taskType === 'chapter_partial_regenerate';
 
 export const matchesActiveTaskScope = (task: TrackedBackgroundTask, scope?: ActiveTaskScope) => {
   if (!scope) {

@@ -1750,6 +1750,7 @@ impl BookImportService {
                     "total_words": total_words,
                     "outlines_imported": outline_count,
                 },
+                "failed_steps": failed_steps,
             }))
             .await;
 

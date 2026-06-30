@@ -60,6 +60,9 @@ type BackgroundTaskGroupKey =
   | 'other';
 
 const getBackgroundTaskCategory = (taskType: string): BackgroundTaskGroupKey => {
+  if (taskType.startsWith('polish_')) return 'other';
+  if (taskType.startsWith('book_import_')) return 'other';
+  if (taskType.startsWith('inspiration_')) return 'other';
   if (taskType.startsWith('chapter_') || taskType === 'chapters_batch_generate') return 'chapter';
   if (taskType.startsWith('outline_')) return 'outline';
   if (taskType === 'world_regenerate' || taskType === 'wizard_world_building') return 'world';

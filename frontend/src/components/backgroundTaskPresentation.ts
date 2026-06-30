@@ -239,6 +239,9 @@ export const getTaskCheckpointTags = (task: TrackedBackgroundTask): FailureReaso
 export const getTaskDestination = (task: TrackedBackgroundTask): string | null => {
   if (!task.projectId) {
     if (task.taskType.startsWith('wizard_')) return '/wizard';
+    if (task.taskType.startsWith('inspiration_')) return `/inspiration?task_id=${encodeURIComponent(task.taskId)}`;
+    if (task.taskType.startsWith('book_import_')) return '/projects?view=book-import';
+    if (task.taskType.startsWith('polish_')) return '/projects';
     return null;
   }
 
@@ -259,9 +262,17 @@ export const getTaskDestination = (task: TrackedBackgroundTask): string | null =
     case 'outline_batch_expand':
     case 'wizard_outline':
       return `/project/${task.projectId}/outline`;
+    case 'book_import_apply':
+    case 'book_import_retry_failed_steps':
+      return `/project/${task.projectId}/chapters`;
+    case 'polish_text':
+    case 'polish_batch':
+      return `/project/${task.projectId}`;
     case 'chapters_batch_generate':
     case 'chapter_single_generate':
     case 'chapter_analysis':
+    case 'chapter_regenerate':
+    case 'chapter_partial_regenerate':
       return `/project/${task.projectId}/chapters`;
     default:
       return `/project/${task.projectId}`;

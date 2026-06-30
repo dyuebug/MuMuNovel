@@ -32,7 +32,6 @@ import type {
   StoryQualityGateDecision,
   StoryRepairGuidance,
 } from '../types';
-import { ssePost } from '../utils/sseClient';
 import {
   getQualityGateRecommendedDefaults,
   getQualityTrendLabel,
@@ -44,6 +43,8 @@ import {
   QUALITY_PRESET_OPTIONS,
   STORY_FOCUS_OPTIONS,
 } from '../utils/generationPreferenceOptions';
+import { chapterPartialRegenerationApi } from '../services/modules/chapterPartialRegeneration';
+import { useStore } from '../store';
 import { SSEProgressModal } from './SSEProgressModal';
 
 const { TextArea } = Input;
@@ -133,7 +134,7 @@ interface RegenerationFormValues {
 }
 
 interface RegenerationRequest {
-  modification_source: string;
+  modification_source: ModificationSource;
   custom_instructions?: string;
   selected_suggestion_indices: number[];
   preserve_elements: {
@@ -171,6 +172,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
   qualityMetricsSummary = null,
   qualityGate = null,
 }) => {
+  const currentProjectId = useStore((state) => state.currentProject?.id);
   const [form] = Form.useForm<RegenerationFormValues>();
   const [modal, contextHolder] = Modal.useModal();
   const [loading, setLoading] = useState(false);
@@ -380,65 +382,58 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
           : undefined,
       };
 
-      let accumulatedContent = '';
-      let currentWordCount = 0;
-
-      await ssePost(`/api/chapters/${chapterId}/regenerate-stream`, requestData, {
-        signal: abortController.signal,
-        inactivityTimeoutMs: REGENERATION_STREAM_INACTIVITY_TIMEOUT_MS,
-        onProgress: (msg: string, nextProgress: number, _status: string, nextWordCount?: number) => {
-          if (!isRequestActive(requestId)) {
-            return;
-          }
-          setProgress(nextProgress);
-          setProgressMessage(msg || '正在重新生成...');
-          if (nextWordCount !== undefined) {
-            setWordCount(nextWordCount);
-            currentWordCount = nextWordCount;
-          }
-        },
-        onHeartbeat: () => {
-          if (!isRequestActive(requestId)) {
-            return;
-          }
-          setProgressMessage((prev) => appendRegenerationHeartbeatHint(prev || '正在重新生成...'));
-        },
-        onChunk: (content: string) => {
-          if (!isRequestActive(requestId)) {
-            return;
-          }
-          accumulatedContent += content;
-          currentWordCount = accumulatedContent.length;
-        },
-        onResult: (data: { word_count?: number }) => {
-          if (!isRequestActive(requestId)) {
-            return;
-          }
-          setProgress(100);
-          setStatus('success');
-          setProgressMessage('生成完成');
-          const finalWordCount = data.word_count || currentWordCount;
-          setWordCount(finalWordCount);
-          message.success('重新生成完成。');
-
-          successTimeoutRef.current = window.setTimeout(() => {
+      const result = await chapterPartialRegenerationApi.regenerateChapterInBackground(
+        chapterId,
+        requestData,
+        {
+          signal: abortController.signal,
+          inactivityTimeoutMs: REGENERATION_STREAM_INACTIVITY_TIMEOUT_MS,
+          onProgress: (msg: string, nextProgress: number, _status: string, nextWordCount?: number) => {
             if (!isRequestActive(requestId)) {
               return;
             }
-            onSuccess(accumulatedContent, finalWordCount);
-          }, 500);
+            setProgress(nextProgress);
+            setProgressMessage(msg || '正在重新生成...');
+            if (nextWordCount !== undefined) {
+              setWordCount(nextWordCount);
+            }
+          },
+          onHeartbeat: () => {
+            if (!isRequestActive(requestId)) {
+              return;
+            }
+            setProgressMessage((prev) => appendRegenerationHeartbeatHint(prev || '正在重新生成...'));
+          },
+          onError: (error: string, code?: number) => {
+            if (!isRequestActive(requestId)) {
+              return;
+            }
+            console.error('SSE Error:', error, code);
+            setStatus('error');
+            setErrorMessage(error || '生成失败');
+            message.error(`生成失败: ${error || '生成失败'}`);
+          },
         },
-        onComplete: () => undefined,
-        onError: (error: string, code?: number) => {
-          if (!isRequestActive(requestId)) {
-            return;
-          }
-          console.error('SSE Error:', error, code);
-          setStatus('error');
-          setErrorMessage(error || '生成失败');
-          message.error(`生成失败: ${error || '生成失败'}`);
-        },
-      });
+        currentProjectId,
+      );
+
+      if (!isRequestActive(requestId)) {
+        return;
+      }
+      const regeneratedContent = result.content || '';
+      const finalWordCount = result.word_count || regeneratedContent.length;
+      setProgress(100);
+      setStatus('success');
+      setProgressMessage('生成完成');
+      setWordCount(finalWordCount);
+      message.success('重新生成完成。');
+
+      successTimeoutRef.current = window.setTimeout(() => {
+        if (!isRequestActive(requestId)) {
+          return;
+        }
+        onSuccess(regeneratedContent, finalWordCount);
+      }, 500);
     } catch (error: unknown) {
       const err = error as Error;
       if (requestCancelledRef.current || err.name === 'AbortError') {

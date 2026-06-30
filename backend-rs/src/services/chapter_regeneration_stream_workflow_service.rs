@@ -711,6 +711,152 @@ pub type CreateChapterRegenerationStreamWorkflowError =
 pub type CreatePartialRegenerationStreamWorkflowError =
     CreateRegenerationStreamWorkflowError<PreparePartialRegenerationStreamError>;
 
+pub async fn execute_partial_regeneration_task(
+    db: &sea_orm::DatabaseConnection,
+    user_id: &str,
+    chapter_id: &str,
+    request: PartialRegenerationStreamWorkflowRequest,
+) -> Result<Value, CreatePartialRegenerationStreamWorkflowError> {
+    validate_partial_regeneration_stream_request_bounds(&request)
+        .map_err(PreparePartialRegenerationStreamError::Input)
+        .map_err(CreatePartialRegenerationStreamWorkflowError::Prepare)?;
+
+    let chapter = load_accessible_chapter(db, chapter_id, user_id)
+        .await
+        .map_err(CreatePartialRegenerationStreamWorkflowError::Chapter)?;
+    let stream_input = prepare_partial_regeneration_stream(db, user_id, &chapter, &request)
+        .await
+        .map_err(CreatePartialRegenerationStreamWorkflowError::Prepare)?;
+    let (launch_input, _, original_word_count, start_position, end_position) =
+        build_partial_chapter_regeneration_stream_launch_input(stream_input);
+
+    let output = collect_generation_candidate_output(
+        ChapterCandidateOutputRequest {
+            ai_service: launch_input.ai_service,
+            prompt: launch_input.prompt,
+            system_prompt: None,
+            tools: None,
+            candidate_index: 1,
+            max_output_chars: None,
+            runtime_state: None,
+        },
+        |_chunk_content, _progress| async { Ok(()) },
+    )
+    .await
+    .map_err(|error| {
+        CreatePartialRegenerationStreamWorkflowError::Prepare(
+            PreparePartialRegenerationStreamError::Config(
+                BuildRegenerationAiServiceError::InvalidConfig(error),
+            ),
+        )
+    })?;
+
+    finalize_partial_regeneration_result(
+        &output.full_content,
+        original_word_count,
+        start_position,
+        end_position,
+    )
+    .map_err(|error| {
+        CreatePartialRegenerationStreamWorkflowError::Prepare(
+            PreparePartialRegenerationStreamError::Config(
+                BuildRegenerationAiServiceError::InvalidConfig(
+                    describe_regeneration_finalize_error(&error).to_string(),
+                ),
+            ),
+        )
+    })
+}
+
+pub async fn execute_chapter_regeneration_task(
+    db: &sea_orm::DatabaseConnection,
+    user_id: &str,
+    chapter_id: &str,
+    request: FullChapterRegenerationStreamRequest,
+) -> Result<Value, CreateChapterRegenerationStreamWorkflowError> {
+    validate_full_chapter_regeneration_stream_request_bounds(&request)
+        .map_err(CreateChapterRegenerationStreamWorkflowError::Prepare)?;
+
+    let chapter = load_accessible_chapter(db, chapter_id, user_id)
+        .await
+        .map_err(CreateChapterRegenerationStreamWorkflowError::Chapter)?;
+    let analysis = load_latest_chapter_analysis(db, chapter_id, request.modification_source())
+        .await
+        .map_err(|error| {
+            CreateChapterRegenerationStreamWorkflowError::TaskLifecycle(
+                FullRegenerationTaskLifecycleError::Internal(error),
+            )
+        })?;
+    if matches!(
+        request.modification_source(),
+        "analysis_suggestions" | "mixed"
+    ) && analysis.is_none()
+    {
+        return Err(CreateChapterRegenerationStreamWorkflowError::TaskLifecycle(
+            FullRegenerationTaskLifecycleError::AnalysisMissing,
+        ));
+    }
+
+    let stream_input = prepare_chapter_regeneration_stream(db, user_id, &chapter, &request)
+        .await
+        .map_err(CreateChapterRegenerationStreamWorkflowError::Prepare)?;
+    let task_seed = build_full_regeneration_task_seed(
+        &chapter,
+        analysis.as_ref(),
+        user_id,
+        &stream_input.request,
+        stream_input.resolved_style_id,
+    );
+    let task = create_full_regeneration_task(db, task_seed)
+        .await
+        .map_err(|error| {
+            CreateChapterRegenerationStreamWorkflowError::TaskLifecycle(
+                FullRegenerationTaskLifecycleError::Internal(error),
+            )
+        })?;
+
+    let launch_input = build_full_chapter_regeneration_stream_launch_input(stream_input);
+    let output = collect_generation_candidate_output(
+        ChapterCandidateOutputRequest {
+            ai_service: launch_input.ai_service,
+            prompt: launch_input.prompt,
+            system_prompt: None,
+            tools: None,
+            candidate_index: 1,
+            max_output_chars: None,
+            runtime_state: None,
+        },
+        |_chunk_content, _progress| async { Ok(()) },
+    )
+    .await
+    .map_err(|error| {
+        CreateChapterRegenerationStreamWorkflowError::Prepare(
+            BuildRegenerationAiServiceError::InvalidConfig(error),
+        )
+    })?;
+
+    let payload = match finalize_chapter_regeneration_result(&output.full_content, &task.id) {
+        Ok(payload) => payload,
+        Err(error) => {
+            let detail = describe_regeneration_finalize_error(&error);
+            let _ = mark_regeneration_task_failed(db, &task.id, detail).await;
+            return Err(CreateChapterRegenerationStreamWorkflowError::Prepare(
+                BuildRegenerationAiServiceError::InvalidConfig(detail.to_string()),
+            ));
+        }
+    };
+
+    mark_regeneration_task_completed(db, &task.id, &output.full_content)
+        .await
+        .map_err(|error| {
+            CreateChapterRegenerationStreamWorkflowError::TaskLifecycle(
+                FullRegenerationTaskLifecycleError::Internal(error),
+            )
+        })?;
+
+    Ok(payload)
+}
+
 pub async fn create_chapter_regeneration_stream_workflow(
     db: &sea_orm::DatabaseConnection,
     user_id: &str,

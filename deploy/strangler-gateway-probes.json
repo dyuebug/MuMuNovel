@@ -532,7 +532,7 @@
               "rollback_policy": {
                 "active_boundary": "python_candidate_executor_fallback",
                 "operator_knob": "CHAPTER_CANDIDATE_RUST_EXECUTOR_ENABLED / CHAPTER_CANDIDATE_RUST_EXECUTOR_FALLBACK_ON_ERROR",
-                "python_source_map_action": "keep_as_source_map_until_explicit_freeze_delete_round",
+                "python_source_map_action": "production_python_source_maps_deleted_shared_test_support_and_reference_contracts_remain",
                 "manifest_owner_baseline": "rust = 131, python-fallback = 0"
               }
             }

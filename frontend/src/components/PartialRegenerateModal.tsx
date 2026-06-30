@@ -200,7 +200,7 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
     abortControllerRef.current = new AbortController();
 
     try {
-      await chapterApi.partialRegenerateStream(
+      const result = await chapterApi.partialRegenerateInBackground(
         chapterId,
         {
           selected_text: selectedText,
@@ -232,20 +232,13 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
             }
             setProgressMessage((previous) => appendPartialRegenerateHeartbeatHint(previous || '正在持续生成...'));
           },
-          onChunk: (content) => {
+          onResult: (data) => {
             if (!mountedRef.current || generateRequestIdRef.current !== requestId) {
               return;
             }
-            setGeneratedText((previous) => {
-              const next = previous + content;
-              generatedTextValueRef.current = next;
-              return next;
-            });
-          },
-          onResult: () => {
-            if (!mountedRef.current || generateRequestIdRef.current !== requestId) {
-              return;
-            }
+            const nextText = data.new_text || '';
+            generatedTextValueRef.current = nextText;
+            setGeneratedText(nextText);
             setProgress(100);
             setProgressMessage('生成完成');
             setHasGenerated(true);
@@ -269,6 +262,17 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
           },
         }
       );
+      if (!mountedRef.current || generateRequestIdRef.current !== requestId) {
+        return;
+      }
+      const nextText = result.new_text || '';
+      generatedTextValueRef.current = nextText;
+      setGeneratedText(nextText);
+      setProgress(100);
+      setProgressMessage('生成完成');
+      setHasGenerated(nextText.trim().length > 0);
+      setIsGenerating(false);
+      abortControllerRef.current = null;
     } catch (error) {
       if (!mountedRef.current || generateRequestIdRef.current !== requestId) {
         return;
