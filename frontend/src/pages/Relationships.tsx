@@ -1,14 +1,17 @@
 import { Suspense, lazy, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Tag, Button, Space, message, Modal, Form, Select, Slider, Input, Tabs, AutoComplete, theme } from 'antd';
-import { PlusOutlined, ApartmentOutlined, UserOutlined, EditOutlined } from '@ant-design/icons';
+import { Card, Tag, Button, Space, message, Modal, Form, Select, Slider, Input, Tabs, AutoComplete, theme, Typography, Row, Col, Divider } from 'antd';
+import { PlusOutlined, UserOutlined, EditOutlined } from '@ant-design/icons';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../store';
 import { useCharacterSync } from '../store/hooks';
 import axios from 'axios';
 import { useDeferredMount } from '../hooks/useDeferredMount';
+import InlineDeferredPanel from '../components/InlineDeferredPanel';
+import { designDisplayFont } from '../theme/themeConfig';
 
 const { TextArea } = Input;
+const { Title, Paragraph, Text } = Typography;
 
 const LazyDeferredAntdTable = lazy(() => import('../components/DeferredAntdTable'));
 
@@ -341,23 +344,151 @@ export default function Relationships() {
     return acc;
   }, {} as Record<string, RelationshipType[]>), [relationshipTypes]);
 
+  const heroBackground = `linear-gradient(135deg,
+    color-mix(in srgb, ${token.colorPrimary} 72%, #6f4537 28%) 0%,
+    color-mix(in srgb, ${token.colorInfo} 32%, #18242d 68%) 100%)`;
+  const editorialInk = '#fff9f0';
+  const actionButtonStyle = {
+    borderRadius: 999,
+    height: 42,
+    paddingInline: 16,
+    borderColor: 'rgba(255,255,255,0.18)',
+    background: 'rgba(255,255,255,0.08)',
+    color: editorialInk,
+    boxShadow: 'none',
+  } as const;
+  const panelBackground = `linear-gradient(180deg,
+    color-mix(in srgb, ${token.colorBgContainer} 94%, white 6%) 0%,
+    color-mix(in srgb, ${token.colorFillAlter} 48%, ${token.colorBgContainer} 52%) 100%)`;
+  const panelBorder = `1px solid color-mix(in srgb, ${token.colorBorderSecondary} 88%, white 12%)`;
+  const quietPanelBackground = `linear-gradient(180deg,
+    color-mix(in srgb, ${token.colorBgContainer} 98%, white 2%) 0%,
+    color-mix(in srgb, ${token.colorBgContainer} 93%, ${token.colorFillAlter} 7%) 100%)`;
+  const modalSurfaceStyles = {
+    header: { padding: '22px 24px 0', borderBottom: 'none' },
+    body: { padding: '0 24px 24px' },
+    footer: { padding: '0 24px 24px', borderTop: 'none' },
+  } as const;
+  const activeRelationships = relationships.filter((relationship) => relationship.status === 'active').length;
+  const aiRelationships = relationships.filter((relationship) => relationship.source === 'ai').length;
+  const averageIntimacy = relationships.length > 0
+    ? Math.round(relationships.reduce((sum, relationship) => sum + relationship.intimacy_level, 0) / relationships.length)
+    : 0;
+  const categoryStats = Object.entries(groupedTypes).map(([category, types]) => ({
+    category,
+    label: categoryLabels[category] || category,
+    count: types.length,
+  }));
+  const relationshipSummary = [
+    { label: '关系总数', value: relationships.length, accent: editorialInk },
+    { label: '活跃关系', value: activeRelationships, accent: token.colorSuccess },
+    { label: '类型词典', value: relationshipTypes.length, accent: token.colorInfo },
+    { label: '平均亲密度', value: averageIntimacy, accent: editorialInk },
+  ] as const;
+  const workspaceGuideItems = [
+    {
+      label: 'Step 1',
+      title: '先看关系清单',
+      description: '优先确认当前有哪些有效连线，再决定是否需要新增或修订。',
+    },
+    {
+      label: 'Step 2',
+      title: '再对齐命名体系',
+      description: '把关系类型页当作词典，统一关系名称、反向称谓和分类口径。',
+    },
+    {
+      label: 'Step 3',
+      title: '最后回到图谱',
+      description: '当列表稳定后再切到关系图谱，更容易观察整体网络结构。',
+    },
+  ];
+  const focusItems = [
+    {
+      label: '当前面板',
+      value: activeTabKey === 'list' ? '关系列表' : '关系类型',
+      detail: activeTabKey === 'list' ? '适合逐条维护人物连线' : '适合校正关系命名与分类',
+    },
+    {
+      label: 'AI 参与',
+      value: `${aiRelationships} 条`,
+      detail: '可快速区分模型生成与手动建立的关系来源',
+    },
+    {
+      label: '网络密度',
+      value: `${averageIntimacy}`,
+      detail: '当前关系平均亲密度，用来粗看整体关系张力',
+    },
+  ];
+
   return (
     <>
       {contextHolder}
-      <div>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 16, overflow: 'hidden', paddingBottom: 24 }}>
         <Card
-        title={
-          <Space wrap>
-            <ApartmentOutlined />
-            <span style={{ fontSize: isMobile ? 14 : 16 }}>关系管理</span>
-            {!isMobile && <Tag color="blue">{currentProject?.title}</Tag>}
-          </Space>
-        }
-        extra={
-          <Space>
+          variant="borderless"
+          style={{
+            background: heroBackground,
+            borderRadius: 28,
+            border: `1px solid color-mix(in srgb, ${token.colorBgContainer} 12%, transparent)`,
+            boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
+            overflow: 'hidden',
+            position: 'relative',
+          }}
+          styles={{ body: { padding: isMobile ? 20 : 24 } }}
+        >
+          <div style={{ position: 'absolute', top: -52, right: -26, width: 168, height: 168, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', pointerEvents: 'none' }} />
+          <div style={{ position: 'absolute', bottom: -28, left: isMobile ? '56%' : '28%', width: 120, height: 120, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', pointerEvents: 'none' }} />
+          <Row gutter={[24, 18]} align="middle" style={{ position: 'relative', zIndex: 1 }}>
+            <Col xs={24} lg={14}>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase' }}>
+                  Relationship Atlas
+                </Text>
+                <Title level={2} style={{ margin: 0, color: editorialInk, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+                  关系管理
+                </Title>
+                <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.82)', fontSize: 15, lineHeight: 1.8 }}>
+                  这一页更像人物关系的编辑台账。你能一边维护可操作的关系清单，一边保留关系类型词典和图谱入口，让角色网络保持结构清晰、叙事可追踪。
+                </Paragraph>
+                <Space wrap size={[10, 10]}>
+                  <Tag style={{ borderRadius: 999, paddingInline: 12, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.08)', color: editorialInk }}>
+                    {currentProject ? `当前项目：${currentProject.title}` : '当前项目未命名'}
+                  </Tag>
+                  <Tag style={{ borderRadius: 999, paddingInline: 12, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.08)', color: editorialInk }}>
+                    AI 生成关系 {aiRelationships} 条
+                  </Tag>
+                </Space>
+              </Space>
+            </Col>
+            <Col xs={24} lg={10}>
+              <Row gutter={[12, 12]}>
+                {relationshipSummary.map((item) => (
+                  <Col xs={12} key={item.label}>
+                    <div
+                      style={{
+                        minHeight: 92,
+                        borderRadius: 18,
+                        padding: '12px 14px',
+                        background: 'rgba(255,255,255,0.08)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        backdropFilter: 'blur(10px)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                      }}
+                    >
+                      <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, display: 'block' }}>{item.label}</Text>
+                      <Text style={{ color: item.accent, fontWeight: 700, fontSize: 24 }}>{item.value}</Text>
+                    </div>
+                  </Col>
+                ))}
+              </Row>
+            </Col>
+          </Row>
+          <Space wrap size={[10, 10]} style={{ marginTop: 20, position: 'relative', zIndex: 1 }}>
             <Button
               onClick={() => projectId && navigate(`/project/${projectId}/relationships-graph`)}
-              size={isMobile ? 'small' : 'middle'}
+              style={actionButtonStyle}
             >
               关系图谱
             </Button>
@@ -365,98 +496,292 @@ export default function Relationships() {
               type="primary"
               icon={<PlusOutlined />}
               onClick={() => setIsModalOpen(true)}
-              size={isMobile ? 'small' : 'middle'}
+              style={{ borderRadius: 999, paddingInline: 16 }}
             >
-              {isMobile ? '添加' : '添加关系'}
+              {isMobile ? '添加关系' : '添加新关系'}
             </Button>
           </Space>
-        }
-      >
-        <Tabs
-          activeKey={activeTabKey}
-          onChange={setActiveTabKey}
-          items={[
-            {
-              key: 'list',
-              label: `关系列表 (${relationships.length})`,
-              children: relationshipListReady ? (
-                  <Suspense fallback={null}>
-                    <LazyDeferredAntdTable
-                      columns={columns}
-                      dataSource={relationships}
-                      rowKey="id"
-                      loading={loading}
-                      pagination={{
-                        current: currentPage,
-                        pageSize: isMobile ? 10 : pageSize,
-                        pageSizeOptions: ['10', '20', '50', '100'],
-                        position: ['bottomCenter'],
-                        showSizeChanger: !isMobile,
-                        showQuickJumper: !isMobile,
-                        showTotal: (total: number) => `共 ${total} 条`,
-                        simple: isMobile,
-                        onChange: (page: number, size: number) => {
-                          setCurrentPage(page);
-                          if (size !== pageSize) {
-                            setPageSize(size);
-                            setCurrentPage(1);
-                          }
-                        },
-                        onShowSizeChange: (_: number, size: number) => {
-                          setPageSize(size);
-                          setCurrentPage(1);
-                        }
-                      }}
-                      scroll={{
-                        x: 700,
-                        y: isMobile ? 'calc(100vh - 360px)' : 'calc(100vh - 440px)'
-                      }}
-                      size={isMobile ? 'small' : 'middle'}
-                    />
-                  </Suspense>
-                ) : (
-                  <div style={{ padding: '24px 0', textAlign: 'center', color: token.colorTextTertiary }}>
-                    正在加载关系列表...
-                  </div>
-                ),
-            },
-            {
-              key: 'types',
-              label: `关系类型 (${relationshipTypes.length})`,
-              children: (
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(200px, 1fr))',
-                  gap: isMobile ? '12px' : '16px',
-                  maxHeight: isMobile ? 'calc(100vh - 400px)' : 'calc(100vh - 350px)',
-                  overflow: 'auto'
-                }}>
-                  {Object.entries(groupedTypes).map(([category, types]) => (
-                    <Card
-                      key={category}
-                      size="small"
-                      title={categoryLabels[category] || category}
-                      headStyle={{ backgroundColor: token.colorFillAlter }}
-                    >
-                      <Space direction="vertical" style={{ width: '100%' }}>
-                        {types.map(type => (
-                          <Tag key={type.id} color={getCategoryColor(category)}>
-                            {type.icon} {type.name}
-                            {type.reverse_name && ` ↔ ${type.reverse_name}`}
-                          </Tag>
-                        ))}
-                      </Space>
-                    </Card>
-                  ))}
-                </div>
-              ),
-            },
-          ]}
-        />
-      </Card>
+        </Card>
 
-      <Modal
-        title={isEditMode ? '编辑关系' : '添加关系'}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.15fr) minmax(300px, 0.9fr)',
+            gap: 16,
+          }}
+        >
+          <Card
+            variant="borderless"
+            style={{
+              background: quietPanelBackground,
+              borderRadius: 22,
+              border: panelBorder,
+              boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+            }}
+            styles={{ body: { padding: isMobile ? 14 : 18 } }}
+          >
+            <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+              Workspace Guide
+            </Text>
+            <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+              关系页阅读顺序
+            </Title>
+            <Paragraph type="secondary" style={{ marginBottom: 14, lineHeight: 1.8 }}>
+              这页更像人物关系账本。先确认正在发生的连线，再回头统一类型词典，最后才适合跳到关系图谱看整体结构。
+            </Paragraph>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+              {workspaceGuideItems.map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    borderRadius: 16,
+                    padding: '12px 14px',
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    background: token.colorBgContainer,
+                  }}
+                >
+                  <Text style={{ display: 'block', fontSize: 11, color: token.colorTextTertiary, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                    {item.label}
+                  </Text>
+                  <Text strong style={{ display: 'block', margin: '6px 0 4px' }}>
+                    {item.title}
+                  </Text>
+                  <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.7 }}>
+                    {item.description}
+                  </Text>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <Card
+            variant="borderless"
+            style={{
+              background: quietPanelBackground,
+              borderRadius: 22,
+              border: panelBorder,
+              boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+            }}
+            styles={{ body: { padding: isMobile ? 14 : 18 } }}
+          >
+            <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+              Current Focus
+            </Text>
+            <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+              当前网络焦点
+            </Title>
+            <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              {focusItems.map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    borderRadius: 16,
+                    padding: '12px 14px',
+                    background: token.colorBgContainer,
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                  }}
+                >
+                  <Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
+                    {item.label}
+                  </Text>
+                  <Text strong style={{ display: 'block', lineHeight: 1.7 }}>
+                    {item.value}
+                  </Text>
+                  <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.7 }}>
+                    {item.detail}
+                  </Text>
+                </div>
+              ))}
+            </Space>
+          </Card>
+        </div>
+
+        <Card
+          variant="borderless"
+          style={{
+            flex: 1,
+            overflow: 'hidden',
+            background: panelBackground,
+            borderRadius: 24,
+            border: panelBorder,
+            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+          }}
+          styles={{ body: { height: '100%', padding: isMobile ? 16 : 20 } }}
+        >
+          <Space direction="vertical" size={16} style={{ width: '100%', height: '100%' }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: isMobile ? 'flex-start' : 'center',
+                gap: 12,
+                flexDirection: isMobile ? 'column' : 'row',
+              }}
+            >
+              <Space direction="vertical" size={4}>
+                <Text style={{ fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                  Network Workspace
+                </Text>
+                <Title level={4} style={{ margin: 0, fontFamily: designDisplayFont, color: token.colorTextBase }}>
+                  关系台账与类型词典
+                </Title>
+                <Paragraph style={{ margin: 0, color: token.colorTextSecondary }}>
+                  列表页适合逐条维护人物连线，类型页适合统一管理命名方式、反向称谓和关系分类。
+                </Paragraph>
+              </Space>
+              <Space wrap size={[8, 8]}>
+                {categoryStats.slice(0, 3).map((item) => (
+                  <Tag key={item.category} color={getCategoryColor(item.category)} style={{ borderRadius: 999, paddingInline: 10 }}>
+                    {item.label} {item.count}
+                  </Tag>
+                ))}
+              </Space>
+            </div>
+
+            <Divider style={{ margin: 0, borderColor: token.colorBorderSecondary }} />
+
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <Tabs
+                activeKey={activeTabKey}
+                onChange={setActiveTabKey}
+                style={{ height: '100%' }}
+                items={[
+                  {
+                    key: 'list',
+                    label: `关系列表 (${relationships.length})`,
+                    children: relationshipListReady ? (
+                      <Suspense
+                        fallback={(
+                          <InlineDeferredPanel
+                            eyebrow="Relationship Table"
+                            title="正在整理关系列表工作区"
+                            message="关系列表正在接入排序、分页与筛选列。这里只补充表格级过渡说明，不改变关系数据与编辑操作逻辑。"
+                            tags={[
+                              { label: '关系列表', color: 'blue' },
+                              { label: '排序分页恢复中', color: 'processing' },
+                            ]}
+                          />
+                        )}
+                      >
+                        <LazyDeferredAntdTable
+                          columns={columns}
+                          dataSource={relationships}
+                          rowKey="id"
+                          loading={loading}
+                          pagination={{
+                            current: currentPage,
+                            pageSize: isMobile ? 10 : pageSize,
+                            pageSizeOptions: ['10', '20', '50', '100'],
+                            position: ['bottomCenter'],
+                            showSizeChanger: !isMobile,
+                            showQuickJumper: !isMobile,
+                            showTotal: (total: number) => `共 ${total} 条`,
+                            simple: isMobile,
+                            onChange: (page: number, size: number) => {
+                              setCurrentPage(page);
+                              if (size !== pageSize) {
+                                setPageSize(size);
+                                setCurrentPage(1);
+                              }
+                            },
+                            onShowSizeChange: (_: number, size: number) => {
+                              setPageSize(size);
+                              setCurrentPage(1);
+                            },
+                          }}
+                          scroll={{
+                            x: 700,
+                            y: isMobile ? 'calc(100vh - 470px)' : 'calc(100vh - 560px)',
+                          }}
+                          size={isMobile ? 'small' : 'middle'}
+                        />
+                      </Suspense>
+                    ) : (
+                      <InlineDeferredPanel
+                        eyebrow="Relationship Workspace"
+                        title="正在接管关系列表工作区"
+                        message="系统正在准备关系列表、类型分组与分页区域，原有关系列表查询、筛选与编辑逻辑保持不变。"
+                        minHeight={220}
+                        tags={[
+                          { label: '关系列表接管中', color: 'processing' },
+                          { label: `当前 ${relationships.length} 条`, color: 'blue' },
+                          { label: '关系逻辑保持原样', color: 'green' },
+                        ]}
+                      />
+                    ),
+                  },
+                  {
+                    key: 'types',
+                    label: `关系类型 (${relationshipTypes.length})`,
+                    children: (
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(220px, 1fr))',
+                          gap: isMobile ? '12px' : '16px',
+                          maxHeight: isMobile ? 'calc(100vh - 470px)' : 'calc(100vh - 470px)',
+                          overflow: 'auto',
+                          paddingRight: isMobile ? 0 : 4,
+                        }}
+                      >
+                        {Object.entries(groupedTypes).map(([category, types]) => (
+                          <Card
+                            key={category}
+                            size="small"
+                            title={categoryLabels[category] || category}
+                            style={{
+                              borderRadius: 20,
+                              border: `1px solid ${token.colorBorderSecondary}`,
+                              boxShadow: `0 14px 24px color-mix(in srgb, ${token.colorText} 5%, transparent)`,
+                            }}
+                            headStyle={{
+                              backgroundColor: token.colorFillAlter,
+                              borderTopLeftRadius: 20,
+                              borderTopRightRadius: 20,
+                            }}
+                          >
+                            <Space direction="vertical" style={{ width: '100%' }}>
+                              {types.map((type) => (
+                                <Tag
+                                  key={type.id}
+                                  color={getCategoryColor(category)}
+                                  style={{
+                                    whiteSpace: 'normal',
+                                    marginInlineEnd: 0,
+                                    borderRadius: 999,
+                                    padding: '4px 10px',
+                                  }}
+                                >
+                                  {type.icon} {type.name}
+                                  {type.reverse_name && ` ↔ ${type.reverse_name}`}
+                                </Tag>
+                              ))}
+                            </Space>
+                          </Card>
+                        ))}
+                      </div>
+                    ),
+                  },
+                ]}
+              />
+            </div>
+          </Space>
+        </Card>
+
+        <Modal
+        title={(
+          <Space direction="vertical" size={2}>
+            <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+              Relationship Editor
+            </Text>
+            <Title level={4} style={{ margin: 0, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+              {isEditMode ? '编辑关系' : '添加关系'}
+            </Title>
+            <Text type="secondary">
+              这里维护的是人物连线本身。优先确定双方对象、关系名称和当前状态，再补亲密度与背景描述。
+            </Text>
+          </Space>
+        )}
         open={isModalOpen}
         onCancel={() => {
           setIsModalOpen(false);
@@ -468,8 +793,17 @@ export default function Relationships() {
         centered={!isMobile}
         width={isMobile ? '100%' : 600}
         style={isMobile ? { top: 0, paddingBottom: 0, maxWidth: '100vw' } : undefined}
-        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 110px)', overflowY: 'auto' } } : undefined}
+        styles={isMobile ? { ...modalSurfaceStyles, body: { ...modalSurfaceStyles.body, maxHeight: 'calc(100vh - 110px)', overflowY: 'auto' } } : modalSurfaceStyles}
       >
+        <Card
+          size="small"
+          variant="borderless"
+          style={{ marginBottom: 16, borderRadius: 14, background: 'color-mix(in srgb, var(--ant-color-info-bg) 82%, var(--ant-color-bg-container) 18%)' }}
+        >
+          <Text type="secondary">
+            如果你还不确定关系命名，先在“关系类型”面板确认已有词典，再回来创建或更新关系会更一致。
+          </Text>
+        </Card>
         <Form
           form={form}
           layout="vertical"

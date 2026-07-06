@@ -1,7 +1,7 @@
 import { Suspense, lazy, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { MutableRefObject } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Card, Tag, Button, Space, message, Typography, theme } from 'antd';
+import { Card, Tag, Button, Space, message, Typography, theme, Row, Col } from 'antd';
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import type { Node, Edge } from '@xyflow/react';
@@ -21,8 +21,10 @@ import {
   type RelationshipGraphThemeToken,
   type RelationshipType,
 } from '../components/relationship-graph/types';
+import WorkflowEntryFallback from '../components/WorkflowEntryFallback';
+import { designDisplayFont } from '../theme/themeConfig';
 
-const { Text } = Typography;
+const { Text, Title, Paragraph } = Typography;
 const RelationshipGraphCanvas = lazy(() => import('../components/relationship-graph/RelationshipGraphCanvas'));
 const RelationshipGraphDetailPanel = lazy(() => import('../components/relationship-graph/RelationshipGraphDetailPanel'));
 
@@ -345,6 +347,29 @@ export default function RelationshipGraph() {
     </div>
   );
 
+  const editorialInk = token.colorText;
+  const heroBackground = `linear-gradient(135deg, #171411 0%, color-mix(in srgb, #171411 68%, ${token.colorPrimary} 32%) 100%)`;
+  const panelBackground = `linear-gradient(180deg, color-mix(in srgb, ${token.colorBgContainer} 96%, ${token.colorPrimary} 4%) 0%, color-mix(in srgb, ${token.colorBgContainer} 92%, ${token.colorWarning} 8%) 100%)`;
+  const quietPanelBackground = `linear-gradient(180deg, color-mix(in srgb, ${token.colorBgContainer} 98%, ${token.colorBgLayout} 2%) 0%, color-mix(in srgb, ${token.colorBgContainer} 92%, ${token.colorBgLayout} 8%) 100%)`;
+  const panelBorder = `1px solid color-mix(in srgb, ${token.colorPrimary} 12%, ${token.colorBorder} 88%)`;
+  const outlineButtonStyle = {
+    borderRadius: 999,
+    background: 'color-mix(in srgb, var(--ant-color-bg-container) 14%, transparent)',
+    border: '1px solid color-mix(in srgb, var(--ant-color-bg-container) 20%, transparent)',
+    color: editorialInk,
+    boxShadow: `0 10px 18px color-mix(in srgb, ${token.colorText} 18%, transparent)`,
+    backdropFilter: 'blur(8px)',
+  } as const;
+  const graphReadingSequence = [
+    '先看节点与关系总量',
+    '再筛选连线类型',
+    '然后点选节点查看侧栏',
+    '最后回到角色或组织页继续补设定',
+  ];
+  const graphFocusNote = selectedNodeId
+    ? '当前已选中节点，可同时利用侧栏与图谱位置判断它在整个网络里的角色。'
+    : '当前还没有选中节点，建议先从关键角色或核心组织开始进入网络。';
+
   return (
     <div
       style={{
@@ -354,118 +379,291 @@ export default function RelationshipGraph() {
         flexDirection: 'column',
         backgroundColor: token.colorBgLayout,
         overflow: 'hidden',
+        gap: 16,
+        paddingBottom: 24,
       }}
     >
       <Card
-        size="small"
+        variant="borderless"
+        style={{
+          background: heroBackground,
+          borderRadius: 28,
+          border: `1px solid color-mix(in srgb, ${token.colorBgContainer} 12%, transparent)`,
+          boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
+          overflow: 'hidden',
+          position: 'relative',
+        }}
+        styles={{ body: { padding: 24 } }}
+      >
+        <div style={{ position: 'absolute', top: -56, right: -40, width: 180, height: 180, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', bottom: -30, left: '24%', width: 110, height: 110, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', pointerEvents: 'none' }} />
+        <Row gutter={[24, 18]} align="middle" style={{ position: 'relative', zIndex: 1 }}>
+          <Col xs={24} lg={15}>
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase' }}>
+                Relationship Atlas
+              </Text>
+              <Title level={2} style={{ margin: 0, color: editorialInk, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+                关系图谱
+              </Title>
+              <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.82)', fontSize: 15, lineHeight: 1.8 }}>
+                把角色、组织与职业体系放进同一张关系地图里浏览。这里更强调可读性和筛选感，让你既能俯瞰结构，又能从节点侧栏回到具体人物与组织设定。
+              </Paragraph>
+            </Space>
+          </Col>
+          <Col xs={24} lg={9}>
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              {[
+                { label: '节点数', value: `${graphData?.nodes?.length || 0}` },
+                { label: '关系数', value: `${graphData?.links?.length || 0}` },
+                { label: '已选节点', value: selectedNodeId ? '查看中' : '未选择' },
+              ].map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 12,
+                    borderRadius: 18,
+                    padding: '12px 14px',
+                    background: 'rgba(255,255,255,0.08)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    backdropFilter: 'blur(10px)',
+                  }}
+                >
+                  <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12 }}>{item.label}</Text>
+                  <Text style={{ color: editorialInk, fontWeight: 600 }}>{item.value}</Text>
+                </div>
+              ))}
+            </Space>
+          </Col>
+        </Row>
+        <Space wrap size={[10, 10]} style={{ marginTop: 20, position: 'relative', zIndex: 1 }}>
+          <Button icon={<ArrowLeftOutlined />} onClick={goBack} style={outlineButtonStyle}>
+            返回
+          </Button>
+          <Tag color="processing" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 12, lineHeight: '28px' }}>
+            {graphData?.nodes?.length || 0} 节点 / {graphData?.links?.length || 0} 关系
+          </Tag>
+        </Space>
+      </Card>
+
+      <Card
+        variant="borderless"
         style={{
           flex: 1,
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
+          background: panelBackground,
+          borderRadius: 24,
+          border: panelBorder,
+          boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
         }}
-        bodyStyle={{
-          flex: 1,
-          minHeight: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          padding: 12,
+        styles={{
+          body: {
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            padding: 16,
+          }
         }}
-        title={
-          <Space>
-            <Button type="text" icon={<ArrowLeftOutlined />} onClick={goBack}>
-              返回
-            </Button>
-            <span>关系图谱</span>
-            <Tag color="processing" style={{ marginInlineStart: 4 }}>
-              {graphData?.nodes?.length || 0} 节点 / {graphData?.links?.length || 0} 关系
-            </Tag>
-          </Space>
-        }
-        extra={
-          <Space direction="vertical" size={6} style={{ alignItems: 'flex-end' }}>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 14, fontSize: 12, flexWrap: 'wrap' }}>
-              {/* 节点图例 */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ color: token.colorInfo, fontWeight: 'bold' }}>●</span>
-                <span>角色（圆形）</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ color: token.colorSuccess, fontWeight: 'bold' }}>■</span>
-                <span>组织（方形）</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ color: token.colorWarning, fontWeight: 'bold' }}>▭</span>
-                <span>主职业</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ color: token.colorInfo, fontWeight: 'bold' }}>▭</span>
-                <span>副职业</span>
-              </div>
-
-              <span style={{ color: token.colorBorder }}>|</span>
-
-              {/* 连线图例 */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ color: token.colorPrimary, fontWeight: 'bold' }}>- -</span>
-                <span>组织成员</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ color: token.colorWarning, fontWeight: 'bold' }}>—</span>
-                <span>主职业关联</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ color: token.colorInfo, fontWeight: 'bold' }}>- -</span>
-                <span>副职业关联</span>
-              </div>
-            </div>
-
-            {edgeCategoryOptions.length > 0 && (
-              <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  连线显示：
-                </Text>
-                {edgeCategoryOptions.map((option) => {
-                  const isVisible = edgeVisibilityMap[option.category] !== false;
-                  return (
-                    <Button
-                      key={option.category}
-                      size="small"
-                      type={isVisible ? 'primary' : 'default'}
-                      onClick={() => toggleEdgeCategoryVisibility(option.category)}
-                      style={
-                        isVisible
-                          ? { backgroundColor: option.color, borderColor: option.color, color: token.colorWhite }
-                          : { color: token.colorTextSecondary }
-                      }
-                    >
-                      {option.label}（{option.count}）
-                    </Button>
-                  );
-                })}
-              </div>
-            )}
-          </Space>
-        }
       >
-        {loading ? (
-          renderGraphCanvasPlaceholder('关系图谱加载中...')
-        ) : graphData && nodes.length > 0 ? (
-          <Suspense fallback={renderGraphCanvasPlaceholder('图谱引擎加载中...')}>
-            <RelationshipGraphCanvas
-              nodes={nodes}
-              edges={visibleEdges}
-              onNodeClick={handleNodeClick}
-            />
-          </Suspense>
-        ) : (
-          renderGraphCanvasPlaceholder('暂无可渲染的关系图谱数据')
-        )}
+        <Space direction="vertical" size={16} style={{ width: '100%', flex: 1, minHeight: 0 }}>
+          <Card
+            variant="borderless"
+            style={{
+              borderRadius: 20,
+              background: quietPanelBackground,
+              border: `1px solid ${token.colorBorderSecondary}`,
+            }}
+            styles={{ body: { padding: 18 } }}
+          >
+            <Row gutter={[16, 16]}>
+              <Col xs={24} xl={15}>
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <Text style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.14em', textTransform: 'uppercase' }}>
+                    Graph Guide
+                  </Text>
+                  <Title level={4} style={{ margin: 0, color: token.colorTextBase, fontFamily: designDisplayFont }}>
+                    关系图谱阅读顺序
+                  </Title>
+                  <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.8 }}>
+                    这块图谱更适合做结构复核而不是直接编辑。先看全局规模，再筛选关系类型，最后通过节点侧栏回到具体人物、组织与职业信息。
+                  </Paragraph>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {graphReadingSequence.map((item, index) => (
+                      <span
+                        key={item}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          padding: '6px 12px',
+                          borderRadius: 999,
+                          background: token.colorBgContainer,
+                          border: `1px solid ${token.colorBorderSecondary}`,
+                          color: token.colorTextSecondary,
+                          fontSize: 12,
+                        }}
+                      >
+                        <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                </Space>
+              </Col>
+              <Col xs={24} xl={9}>
+                <div
+                  style={{
+                    height: '100%',
+                    borderRadius: 18,
+                    padding: '16px 18px',
+                    background: token.colorBgContainer,
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                  }}
+                >
+                  <Text style={{ display: 'block', color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                    当前图谱焦点
+                  </Text>
+                  <Title level={5} style={{ margin: '8px 0 6px', fontFamily: designDisplayFont, color: token.colorTextBase }}>
+                    {selectedNodeId ? '从已选节点继续追踪结构' : '先挑一个核心节点进入'}
+                  </Title>
+                  <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
+                    {graphFocusNote}
+                  </Paragraph>
+                </div>
+              </Col>
+            </Row>
+          </Card>
+
+          <Card
+            variant="borderless"
+            style={{
+              borderRadius: 20,
+              background: quietPanelBackground,
+              border: `1px solid ${token.colorBorderSecondary}`,
+            }}
+            styles={{ body: { padding: 16 } }}
+          >
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 12, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ color: token.colorInfo, fontWeight: 'bold' }}>●</span>
+                    <span>角色（圆形）</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ color: token.colorSuccess, fontWeight: 'bold' }}>■</span>
+                    <span>组织（方形）</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ color: token.colorWarning, fontWeight: 'bold' }}>▭</span>
+                    <span>主职业</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ color: token.colorInfo, fontWeight: 'bold' }}>▭</span>
+                    <span>副职业</span>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 12, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ color: token.colorPrimary, fontWeight: 'bold' }}>- -</span>
+                    <span>组织成员</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ color: token.colorWarning, fontWeight: 'bold' }}>—</span>
+                    <span>主职业关联</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ color: token.colorInfo, fontWeight: 'bold' }}>- -</span>
+                    <span>副职业关联</span>
+                  </div>
+                </div>
+              </div>
+
+              {edgeCategoryOptions.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    连线显示：
+                  </Text>
+                  {edgeCategoryOptions.map((option) => {
+                    const isVisible = edgeVisibilityMap[option.category] !== false;
+                    return (
+                      <Button
+                        key={option.category}
+                        size="small"
+                        type={isVisible ? 'primary' : 'default'}
+                        onClick={() => toggleEdgeCategoryVisibility(option.category)}
+                        style={
+                          isVisible
+                            ? { backgroundColor: option.color, borderColor: option.color, color: token.colorWhite, borderRadius: 999 }
+                            : { color: token.colorTextSecondary, borderRadius: 999 }
+                        }
+                      >
+                        {option.label}（{option.count}）
+                      </Button>
+                    );
+                  })}
+                </div>
+              )}
+            </Space>
+          </Card>
+
+          <Card
+            variant="borderless"
+            style={{
+              flex: 1,
+              minHeight: 0,
+              borderRadius: 20,
+              background: quietPanelBackground,
+              border: `1px solid ${token.colorBorderSecondary}`,
+            }}
+            styles={{
+              body: {
+                flex: 1,
+                minHeight: 0,
+                display: 'flex',
+                padding: 12,
+              }
+            }}
+          >
+            {loading ? (
+              renderGraphCanvasPlaceholder('关系图谱加载中...')
+            ) : graphData && nodes.length > 0 ? (
+              <Suspense fallback={renderGraphCanvasPlaceholder('图谱引擎加载中...')}>
+                <RelationshipGraphCanvas
+                  nodes={nodes}
+                  edges={visibleEdges}
+                  onNodeClick={handleNodeClick}
+                />
+              </Suspense>
+            ) : (
+              renderGraphCanvasPlaceholder('暂无可渲染的关系图谱数据')
+            )}
+          </Card>
+        </Space>
       </Card>
 
       {selectedNodeId ? (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={(
+            <WorkflowEntryFallback
+              eyebrow="Graph Detail"
+              title="正在展开关系图谱详情侧板"
+              message="系统正在恢复节点详情、职业标签与关闭入口，原有选点、详情计算和侧板逻辑保持不变。"
+              tags={[
+                { label: '节点详情', color: 'geekblue' },
+                { label: '侧板恢复中', color: 'processing' },
+                { label: '图谱逻辑保持原样', color: 'green' },
+              ]}
+            />
+          )}
+        >
           <RelationshipGraphDetailPanel
             selectedNodeId={selectedNodeId}
             nodeDetail={nodeDetail}

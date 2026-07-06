@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Card, Form, Input, InputNumber, Select, Space, Tag } from 'antd';
+import { Button, Card, Form, Input, InputNumber, Select, Space, Tag, Typography, theme } from 'antd';
 import { chapterApi } from '../services/modularApi';
 import type { ChapterQualityMetrics, ChapterQualityProfileSummary, CreativeMode, PlotStage, StoryFocus } from '../types';
 import CompactPromptPreviewPanel from './CompactPromptPreviewPanel';
@@ -61,6 +61,7 @@ import {
 import type { PreferenceOption } from '../utils/generationPreferenceOptions';
 
 const { TextArea } = Input;
+const { Text } = Typography;
 
 type ModelOption = { value?: unknown; label?: unknown };
 type NormalizedModelOption = { value: string; label: string };
@@ -145,6 +146,8 @@ type ChapterEditorAiSectionProps = {
 };
 
 function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
+    const { token } = theme.useToken();
+    const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
     const {
       currentEditingChapterId,
       currentEditingChapterNumber,
@@ -454,6 +457,49 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
       ? (normalizedAvailableModels.find((item) => item.value === selectedModel)?.label || selectedModel)
       : '项目默认';
 
+    const sectionCardStyle = {
+      marginBottom: 12,
+      borderRadius: 22,
+      border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.92)}`,
+      background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.99)} 0%, ${alphaColor(token.colorFillAlter, 0.42)} 100%)`,
+      boxShadow: `0 18px 40px ${alphaColor(token.colorTextBase, 0.04)}`,
+    };
+
+    const accentCardStyle = {
+      ...sectionCardStyle,
+      background: `linear-gradient(135deg, ${alphaColor(token.colorPrimaryBg, 0.92)} 0%, ${alphaColor(token.colorBgContainer, 0.99)} 52%, ${alphaColor(token.colorInfoBg, 0.68)} 100%)`,
+      border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+    };
+
+    const sectionBodyStyle = { padding: isMobile ? 14 : 18 };
+    const panelStyle = {
+      padding: isMobile ? '12px 12px' : '14px 14px',
+      border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.85)}`,
+      borderRadius: 16,
+      background: `linear-gradient(180deg, ${alphaColor(token.colorBgElevated, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.42)} 100%)`,
+    };
+    const summaryCardStyle = {
+      height: '100%',
+      borderRadius: 18,
+      border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.82)}`,
+      background: alphaColor(token.colorBgContainer, 0.98),
+    };
+    const sectionLabelStyle = {
+      display: 'block',
+      fontSize: 11,
+      letterSpacing: '0.08em',
+      textTransform: 'uppercase' as const,
+      color: token.colorTextTertiary,
+      marginBottom: 6,
+    };
+    const sectionTitleStyle = { display: 'block', fontSize: 17, marginBottom: 6 };
+    const sectionDescriptionStyle = {
+      display: 'block',
+      lineHeight: 1.7,
+      color: token.colorTextSecondary,
+      marginBottom: 14,
+    };
+
     const singleAfterScorecard = useMemo(
       () => buildStoryAfterScorecard(chapterQualityMetrics, selectedCreativeMode, selectedStoryFocus, {
         plotStage: selectedPlotStage,
@@ -465,9 +511,26 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
       <>
         <Card
           size="small"
-          title="快速预设"
-          style={{ marginBottom: 12 }}
+          style={accentCardStyle}
+          styles={{ body: sectionBodyStyle }}
         >
+          <Text style={sectionLabelStyle}>
+            Chapter AI Studio
+          </Text>
+          <Text strong style={sectionTitleStyle}>
+            快速预设
+          </Text>
+          <Text style={sectionDescriptionStyle}>
+            先用预设锁定这一章的创作气质，再决定是否手动微调。默认优先保持工作流连续性，避免每次都从零配置。
+          </Text>
+          {renderCompactSelectionSummary(
+            [
+              { label: '模式', value: selectedCreativeModeLabel, color: 'blue' },
+              { label: '聚焦', value: selectedStoryFocusLabel, color: 'purple' },
+              { label: '阶段', value: selectedPlotStageLabel, color: 'gold' },
+            ],
+            { style: { marginBottom: 14 } },
+          )}
           <Space wrap>
             {CREATION_PRESETS.map((preset) => (
               <Button
@@ -500,7 +563,12 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                 })}
 
           {singleScoreDrivenRecommendationCard && (
-            <Card size="small" title={singleScoreDrivenRecommendationCard.title} style={{ marginTop: 12 }}>
+            <Card
+              size="small"
+              title={singleScoreDrivenRecommendationCard.title}
+              style={{ ...summaryCardStyle, marginTop: 14 }}
+              styles={{ body: { padding: 14 } }}
+            >
               <Space direction="vertical" size={10} style={{ display: 'flex' }}>
                 {renderCompactSettingHint(
                   singleScoreDrivenRecommendationCard.summary,
@@ -587,15 +655,21 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                   </Button>
                 </Space>
               )}
-              style={{ marginTop: 12 }}
+              style={{ ...sectionCardStyle, marginTop: 12 }}
+              styles={{ body: sectionBodyStyle }}
             >
-
+              <Text style={sectionLabelStyle}>
+                Story Briefing
+              </Text>
+              <Text type="secondary" style={{ ...sectionDescriptionStyle, marginBottom: 12 }}>
+                这里集中管理本章的创作意图、节拍、场景链路和提示词快照，是进入正文续写前的主控工作台。
+              </Text>
               {renderCompactSettingHint(
                 singleStoryCreationControlCard.summary,
                 singleStoryCreationControlCard.directive,
               )}
               <Space direction="vertical" size={8} style={{ display: 'flex' }}>
-                <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                <div style={panelStyle}>
                   {renderCompactStoryControlHeader(
                     '故事简介',
                     '一句话说明本轮方向。',
@@ -613,7 +687,7 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                     placeholder="请简要描述故事..."
                   />
                 </div>
-                <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                <div style={panelStyle}>
                   {renderCompactStoryControlHeader(
                     '故事节拍',
                     '按五拍锁住节奏。',
@@ -652,7 +726,7 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                     ))}
                   </Space>
                 </div>
-                <div style={{ padding: '10px 12px', border: '1px solid #f0f0f0', borderRadius: 8 }}>
+                <div style={panelStyle}>
                   {renderCompactStoryControlHeader(
                     '场景提纲',
                     '列出场景链路。',
@@ -693,29 +767,43 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                     ))}
                   </Space>
                 </div>
-
-
-<CompactPromptPreviewPanel
-  prompt={resolvedSingleStoryCreationBrief}
-  promptLayerLabels={singleStoryCreationPromptLayerLabels}
-  promptCharCount={singleStoryCreationPromptCharCount}
-  isVerbose={isSingleStoryCreationPromptVerbose}
-  onCopy={() => void copyStoryCreationPrompt(resolvedSingleStoryCreationBrief, 'single')}
-  placeholder="提示词将显示在此"
-/>
-<StoryCreationSnapshotPanel
-  scopeLabel="single"
-  emptyText="还没有快照。"
-  snapshots={singleStoryCreationSnapshots}
-  currentDraft={singleStoryCreationCurrentDraft}
-  canSave={canSaveSingleStoryCreationSnapshot}
-  onSave={() => void saveSingleStoryCreationSnapshot('manual')}
-  onApply={applySingleStoryCreationSnapshot}
-  onDelete={deleteSingleStoryCreationSnapshot}
-  onCopy={copyStoryCreationPrompt}
-  includeNarrativePerspective
-  promptWarnThreshold={STORY_CREATION_PROMPT_WARN_THRESHOLD}
-/>
+                <div style={panelStyle}>
+                  <Text style={sectionLabelStyle}>
+                    Prompt Preview
+                  </Text>
+                  <Text type="secondary" style={{ ...sectionDescriptionStyle, marginBottom: 12 }}>
+                    这里用于检查最终送给模型的提示词层，避免带着模糊意图直接续写。
+                  </Text>
+                  <CompactPromptPreviewPanel
+                    prompt={resolvedSingleStoryCreationBrief}
+                    promptLayerLabels={singleStoryCreationPromptLayerLabels}
+                    promptCharCount={singleStoryCreationPromptCharCount}
+                    isVerbose={isSingleStoryCreationPromptVerbose}
+                    onCopy={() => void copyStoryCreationPrompt(resolvedSingleStoryCreationBrief, 'single')}
+                    placeholder="提示词将显示在此"
+                  />
+                </div>
+                <div style={panelStyle}>
+                  <Text style={sectionLabelStyle}>
+                    Snapshot Memory
+                  </Text>
+                  <Text type="secondary" style={{ ...sectionDescriptionStyle, marginBottom: 12 }}>
+                    保存或回放当前创作配置，适合在多轮生成之间快速对比不同方案。
+                  </Text>
+                  <StoryCreationSnapshotPanel
+                    scopeLabel="single"
+                    emptyText="还没有快照。"
+                    snapshots={singleStoryCreationSnapshots}
+                    currentDraft={singleStoryCreationCurrentDraft}
+                    canSave={canSaveSingleStoryCreationSnapshot}
+                    onSave={() => void saveSingleStoryCreationSnapshot('manual')}
+                    onApply={applySingleStoryCreationSnapshot}
+                    onDelete={deleteSingleStoryCreationSnapshot}
+                    onCopy={copyStoryCreationPrompt}
+                    includeNarrativePerspective
+                    promptWarnThreshold={STORY_CREATION_PROMPT_WARN_THRESHOLD}
+                  />
+                </div>
                 <div
                   style={{
                     display: 'grid',
@@ -745,7 +833,8 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
                 size="small"
                 title={singleStoryRepairTargetCard.title}
                 extra={<Tag color="gold">修复重点</Tag>}
-                style={{ height: '100%' }}
+                style={summaryCardStyle}
+                styles={{ body: { padding: 14 } }}
               >
                 {renderCompactSettingHint(
                   singleStoryRepairTargetCard.repairSummary,
@@ -769,8 +858,8 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
             )}
 
             {singleCreationBlueprint && (
-              <Card size="small" title="创作蓝图" style={{ height: '100%' }}>
-                <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
+              <Card size="small" title="创作蓝图" style={summaryCardStyle} styles={{ body: { padding: 14 } }}>
+                <div style={{ color: token.colorTextSecondary, marginBottom: 10, lineHeight: 1.7 }}>
                   {singleCreationBlueprint.summary}
                 </div>
                 {renderCompactListCard(
@@ -794,7 +883,13 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
 
 
         {singleVolumePacingPlan && (
-          <Card size="small" title="篇幅节奏规划" style={{ marginBottom: 12 }}>
+          <Card size="small" title="篇幅节奏规划" style={sectionCardStyle} styles={{ body: sectionBodyStyle }}>
+            <Text style={sectionLabelStyle}>
+              Pacing Map
+            </Text>
+            <Text type="secondary" style={{ ...sectionDescriptionStyle, marginBottom: 12 }}>
+              用章节段落视角看这一章在整卷中的位置，避免单章情绪和总节奏脱节。
+            </Text>
             {renderCompactSettingHint(
               `当前阶段：${selectedPlotStageLabel}`,
               singleVolumePacingPlan.summary,
@@ -810,7 +905,13 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
           </Card>
         )}
 
-        <Card size="small" title="补充微调（可选）" style={{ marginBottom: 12 }}>
+        <Card size="small" title="补充微调（可选）" style={sectionCardStyle} styles={{ body: sectionBodyStyle }}>
+          <Text style={sectionLabelStyle}>
+            Optional Fine Tuning
+          </Text>
+          <Text type="secondary" style={{ ...sectionDescriptionStyle, marginBottom: 12 }}>
+            只有当你明确想改变这一章的生成倾向时，再手动覆盖推荐项；否则优先保持默认组合。
+          </Text>
           {renderCompactSettingHint(
             "不改则沿用上方推荐；只在你明确想改变生成偏向时再手动调整。",
             "单章通常优先调整模式与聚焦，模型与字数保持默认即可。",
@@ -928,9 +1029,18 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
 
         <Card
           size="small"
-          title="质量画像"
-          style={{ marginBottom: 12 }}
+          style={sectionCardStyle}
+          styles={{ body: sectionBodyStyle }}
         >
+          <Text style={sectionLabelStyle}>
+            Quality Portrait
+          </Text>
+          <Text strong style={sectionTitleStyle}>
+            质量画像
+          </Text>
+          <Text type="secondary" style={{ ...sectionDescriptionStyle, marginBottom: 12 }}>
+            这里偏向“诊断式阅读”，帮你快速判断当前章节的风格特征、维度分布和优先优化方向。
+          </Text>
           {chapterQualityProfileItems.length > 0 ? (
             <>
               {renderCompactSettingHint(
@@ -955,10 +1065,19 @@ function ChapterEditorAiSection({ sectionProps }: ChapterEditorAiSectionProps) {
 
         <Card
           size="small"
-          title="质量指标"
+          style={sectionCardStyle}
           loading={chapterQualityLoading}
-          style={{ marginBottom: 12 }}
+          styles={{ body: sectionBodyStyle }}
         >
+          <Text style={sectionLabelStyle}>
+            Quality Metrics
+          </Text>
+          <Text strong style={sectionTitleStyle}>
+            质量指标
+          </Text>
+          <Text type="secondary" style={{ ...sectionDescriptionStyle, marginBottom: 12 }}>
+            从分数、弱项和修复建议三个层面看这一章的可迭代空间，适合决定下一轮该补什么。
+          </Text>
           {chapterQualityMetrics ? (
             <>
               {singleAfterScorecard && (

@@ -1,5 +1,5 @@
 import { Suspense, lazy, memo, useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Button, Modal, Form, Input, Select, message, Row, Col, Empty, Tabs, Divider, Typography, Space, Checkbox, theme } from 'antd';
+import { Button, Modal, Form, Input, Select, message, Row, Col, Empty, Tabs, Divider, Typography, Space, Checkbox, theme, Card } from 'antd';
 import { ThunderboltOutlined, UserOutlined, TeamOutlined, PlusOutlined, ExportOutlined, ImportOutlined, DownloadOutlined } from '@ant-design/icons';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../store';
@@ -7,6 +7,8 @@ import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgro
 import { useCharacterSync } from '../store/hooks';
 import { charactersPageGridConfig } from '../components/CardStyles';
 import { CharacterCard } from '../components/CharacterCard';
+import WorkflowEntryFallback from '../components/WorkflowEntryFallback';
+import { designDisplayFont } from '../theme/themeConfig';
 import type { CSSProperties } from 'react';
 import type { Character, ApiError } from '../types';
 import { backgroundTaskApi, characterApi } from '../services/modularApi';
@@ -17,7 +19,7 @@ import { isRequestCancelledError } from '../services/core/httpClient';
 
 
 
-const { Title } = Typography;
+const { Title, Paragraph, Text } = Typography;
 const { TextArea } = Input;
 
 
@@ -987,28 +989,39 @@ export default function Characters() {
       width: 600,
       centered: true,
       content: (
-        <Form form={generateForm} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item
-            label="角色名称"
-            name="name"
+        <Space direction="vertical" size={12} style={{ width: '100%', marginTop: 12 }}>
+          <Card
+            size="small"
+            variant="borderless"
+            style={{ borderRadius: 14, background: 'color-mix(in srgb, var(--ant-color-info-bg) 82%, var(--ant-color-bg-container) 18%)' }}
           >
-            <Input placeholder="如：张三、李四（可选，系统会自动生成）" />
-          </Form.Item>
-          <Form.Item
-            label="角色定位"
-            name="role_type"
-            rules={[{ required: true, message: '请选择角色定位' }]}
-          >
-            <Select placeholder="选择角色定位">
-              <Select.Option value="protagonist">主角</Select.Option>
-              <Select.Option value="supporting">配角</Select.Option>
-              <Select.Option value="antagonist">反派</Select.Option>
-            </Select>
-          </Form.Item>
-          <Form.Item label="背景设定" name="background">
-            <TextArea rows={3} placeholder="简要描述角色背景和故事环境..." />
-          </Form.Item>
-        </Form>
+            <Text type="secondary">
+              角色生成更适合用来起草候选人物。先给出角色定位和最基本的背景方向，后续再进入编辑表单细修。
+            </Text>
+          </Card>
+          <Form form={generateForm} layout="vertical">
+            <Form.Item
+              label="角色名称"
+              name="name"
+            >
+              <Input placeholder="如：张三、李四（可选，系统会自动生成）" />
+            </Form.Item>
+            <Form.Item
+              label="角色定位"
+              name="role_type"
+              rules={[{ required: true, message: '请选择角色定位' }]}
+            >
+              <Select placeholder="选择角色定位">
+                <Select.Option value="protagonist">主角</Select.Option>
+                <Select.Option value="supporting">配角</Select.Option>
+                <Select.Option value="antagonist">反派</Select.Option>
+              </Select>
+            </Form.Item>
+            <Form.Item label="背景设定" name="background">
+              <TextArea rows={3} placeholder="简要描述角色背景和故事环境..." />
+            </Form.Item>
+          </Form>
+        </Space>
       ),
       okText: '生成',
       cancelText: '取消',
@@ -1027,26 +1040,37 @@ export default function Characters() {
       width: 600,
       centered: true,
       content: (
-        <Form form={generateOrgForm} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item
-            label="组织名称"
-            name="name"
+        <Space direction="vertical" size={12} style={{ width: '100%', marginTop: 12 }}>
+          <Card
+            size="small"
+            variant="borderless"
+            style={{ borderRadius: 14, background: 'color-mix(in srgb, var(--ant-color-warning-bg) 76%, var(--ant-color-bg-container) 24%)' }}
           >
-            <Input placeholder="如：天剑门、黑龙会（可选，系统会自动生成）" />
-          </Form.Item>
-          <Form.Item
-            label="组织类型"
-            name="organization_type"
-          >
-            <Input placeholder="如：门派、帮派、公司、学院（可选，系统会根据世界观生成）" />
-          </Form.Item>
-          <Form.Item label="背景设定" name="background">
-            <TextArea rows={3} placeholder="简要描述组织的背景和环境..." />
-          </Form.Item>
-          <Form.Item label="其他要求" name="requirements">
-            <TextArea rows={2} placeholder="其他特殊要求..." />
-          </Form.Item>
-        </Form>
+            <Text type="secondary">
+              组织生成适合快速起一个势力草稿。先定义类型和环境，再让模型补足成员结构、口号和组织目的。
+            </Text>
+          </Card>
+          <Form form={generateOrgForm} layout="vertical">
+            <Form.Item
+              label="组织名称"
+              name="name"
+            >
+              <Input placeholder="如：天剑门、黑龙会（可选，系统会自动生成）" />
+            </Form.Item>
+            <Form.Item
+              label="组织类型"
+              name="organization_type"
+            >
+              <Input placeholder="如：门派、帮派、公司、学院（可选，系统会根据世界观生成）" />
+            </Form.Item>
+            <Form.Item label="背景设定" name="background">
+              <TextArea rows={3} placeholder="简要描述组织的背景和环境..." />
+            </Form.Item>
+            <Form.Item label="其他要求" name="requirements">
+              <TextArea rows={2} placeholder="其他特殊要求..." />
+            </Form.Item>
+          </Form>
+        </Space>
       ),
       okText: '生成',
       cancelText: '取消',
@@ -1223,30 +1247,140 @@ export default function Characters() {
 
   if (!currentProject) return null;
 
+  const editorialInk = token.colorText;
+  const heroBackground = `linear-gradient(135deg, #171411 0%, color-mix(in srgb, #171411 68%, ${token.colorPrimary} 32%) 100%)`;
+  const quietPanelBackground = `linear-gradient(180deg, color-mix(in srgb, ${token.colorBgContainer} 98%, ${token.colorBgLayout} 2%) 0%, color-mix(in srgb, ${token.colorBgContainer} 92%, ${token.colorBgLayout} 8%) 100%)`;
+  const panelBackground = `linear-gradient(180deg, color-mix(in srgb, ${token.colorBgContainer} 96%, ${token.colorPrimary} 4%) 0%, color-mix(in srgb, ${token.colorBgContainer} 92%, ${token.colorWarning} 8%) 100%)`;
+  const panelBorder = `1px solid color-mix(in srgb, ${token.colorPrimary} 12%, ${token.colorBorder} 88%)`;
+  const modalSurfaceStyles = {
+    header: { padding: '22px 24px 0', borderBottom: 'none' },
+    body: { padding: '0 24px 24px' },
+    footer: { padding: '0 24px 24px', borderTop: 'none' },
+  } as const;
+  const actionButtonStyle = {
+    borderRadius: 999,
+    background: 'color-mix(in srgb, var(--ant-color-bg-container) 14%, transparent)',
+    border: '1px solid color-mix(in srgb, var(--ant-color-bg-container) 20%, transparent)',
+    color: editorialInk,
+    boxShadow: `0 10px 18px color-mix(in srgb, ${token.colorText} 18%, transparent)`,
+    backdropFilter: 'blur(8px)',
+  } as const;
+  const summaryItems = [
+    { label: '全部条目', value: `${characters.length}` },
+    { label: '角色卡', value: `${characterList.length}` },
+    { label: '组织卡', value: `${organizationList.length}` },
+  ];
+  const workspaceGuideItems = [
+    {
+      label: 'Step 1',
+      title: '先确定对象类型',
+      description: '把人物与组织分开阅读，能更快判断当前需要补的是角色本体还是势力结构。',
+    },
+    {
+      label: 'Step 2',
+      title: '再做创建或生成',
+      description: '手动创建适合核心设定，智能生成适合快速起草，两个入口保持在同一工作台里。',
+    },
+    {
+      label: 'Step 3',
+      title: '最后批量整理',
+      description: '等卡片成形后再做多选、导入导出与集中筛查，避免边建边乱。',
+    },
+  ];
+  const focusItems = [
+    {
+      label: '当前视图',
+      value: activeTab === 'all' ? '全部条目' : activeTab === 'character' ? '角色卡' : '组织卡',
+      detail: '通过顶部标签切换当前阅读维度',
+    },
+    {
+      label: '已选条目',
+      value: `${selectedCharacters.length} 个`,
+      detail: selectedCharacters.length > 0 ? '可继续做批量导出或取消选择' : '当前还没有批量操作目标',
+    },
+    {
+      label: '加载状态',
+      value: isProgressiveRenderPending ? '渐进加载中' : '已稳定',
+      detail: isProgressiveRenderPending ? '其余卡片会逐步进入视图' : '当前卡片已经完成首轮渲染',
+    },
+  ];
+
+  const renderSelectableGrid = (items: Character[]) => (
+    <Row gutter={isMobile ? [8, 8] : [8, 8]}>
+      {items.map((item) => (
+        <SelectableCharacterCard
+          key={item.id}
+          item={item}
+          selected={selectedCharacterIds.has(item.id)}
+          cardColStyle={cardColStyle}
+          onToggle={toggleSelectCharacter}
+          onEdit={handleEditCharacter}
+          onDelete={handleDeleteCharacterWrapper}
+          onExport={handleExportSingle}
+        />
+      ))}
+    </Row>
+  );
+
 
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingBottom: 24 }}>
       {contextHolder}
-      <div style={{
-        position: 'sticky',
-        top: 0,
-        zIndex: 10,
-        backgroundColor: 'var(--color-bg-container)',
-        padding: isMobile ? '12px 0' : '16px 0',
-        marginBottom: isMobile ? 12 : 16,
-        borderBottom: '1px solid var(--color-border-secondary)',
-        display: 'flex',
-        flexDirection: isMobile ? 'column' : 'row',
-        gap: isMobile ? 12 : 0,
-        justifyContent: 'space-between',
-        alignItems: isMobile ? 'stretch' : 'center'
-      }}>
-        <h2 style={{ margin: 0, fontSize: isMobile ? 18 : 24 }}>
-          <TeamOutlined style={{ marginRight: 8 }} />
-          角色与组织管理
-        </h2>
-        <Space wrap>
+      <Card
+        variant="borderless"
+        style={{
+          background: heroBackground,
+          borderRadius: isMobile ? 22 : 28,
+          border: `1px solid color-mix(in srgb, ${token.colorBgContainer} 12%, transparent)`,
+          boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
+          overflow: 'hidden',
+          position: 'relative',
+        }}
+        styles={{ body: { padding: isMobile ? 18 : 24 } }}
+      >
+        <div style={{ position: 'absolute', top: -56, right: -40, width: 180, height: 180, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', bottom: -30, left: '24%', width: 110, height: 110, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', pointerEvents: 'none' }} />
+        <Row gutter={[24, 18]} align="middle" style={{ position: 'relative', zIndex: 1 }}>
+          <Col xs={24} lg={15}>
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase' }}>
+                Character Workspace
+              </Text>
+              <Title level={isMobile ? 3 : 2} style={{ margin: 0, color: editorialInk, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+                <TeamOutlined style={{ marginRight: 8, color: 'rgba(255,255,255,0.9)' }} />
+                角色与组织管理
+              </Title>
+              <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.82)', fontSize: isMobile ? 13 : 15, lineHeight: 1.8 }}>
+                用工作区视图管理项目中的人物与势力结构。这里保留原有创建、智能生成、导入导出与批量操作逻辑，但把内容重新组织成更适合长时间浏览、筛选和比对的页面结构。
+              </Paragraph>
+            </Space>
+          </Col>
+          <Col xs={24} lg={9}>
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              {summaryItems.map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 12,
+                    borderRadius: 18,
+                    padding: '12px 14px',
+                    background: 'rgba(255,255,255,0.08)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    backdropFilter: 'blur(10px)',
+                  }}
+                >
+                  <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12 }}>{item.label}</Text>
+                  <Text style={{ color: editorialInk, fontWeight: 600 }}>{item.value}</Text>
+                </div>
+              ))}
+            </Space>
+          </Col>
+        </Row>
+        <Space wrap size={[10, 10]} style={{ marginTop: 20, position: 'relative', zIndex: 1 }}>
           <Button
             type="primary"
             icon={<PlusOutlined />}
@@ -1256,6 +1390,7 @@ export default function Characters() {
               setIsCreateModalOpen(true);
             }}
             size={isMobile ? 'small' : 'middle'}
+            style={{ borderRadius: 999, paddingInline: 16 }}
           >
             创建角色
           </Button>
@@ -1267,6 +1402,7 @@ export default function Characters() {
               setIsCreateModalOpen(true);
             }}
             size={isMobile ? 'small' : 'middle'}
+            style={{ borderRadius: 999, paddingInline: 16 }}
           >
             创建组织
           </Button>
@@ -1276,6 +1412,7 @@ export default function Characters() {
             onClick={showGenerateModal}
             loading={isGenerating}
             size={isMobile ? 'small' : 'middle'}
+            style={actionButtonStyle}
           >
             智能生成角色
           </Button>
@@ -1285,6 +1422,7 @@ export default function Characters() {
             onClick={showGenerateOrgModal}
             loading={isGenerating}
             size={isMobile ? 'small' : 'middle'}
+            style={actionButtonStyle}
           >
             智能生成组织
           </Button>
@@ -1292,6 +1430,7 @@ export default function Characters() {
             icon={<ImportOutlined />}
             onClick={() => setIsImportModalOpen(true)}
             size={isMobile ? 'small' : 'middle'}
+            style={actionButtonStyle}
           >
             导入
           </Button>
@@ -1300,24 +1439,118 @@ export default function Characters() {
               icon={<ExportOutlined />}
               onClick={handleExportSelected}
               size={isMobile ? 'small' : 'middle'}
+              style={actionButtonStyle}
             >
               批量导出 ({selectedCharacters.length})
             </Button>
           )}
         </Space>
+      </Card>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.15fr) minmax(300px, 0.9fr)',
+          gap: 16,
+        }}
+      >
+        <Card
+          variant="borderless"
+          style={{
+            background: quietPanelBackground,
+            borderRadius: isMobile ? 18 : 22,
+            border: panelBorder,
+            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+          }}
+          styles={{ body: { padding: isMobile ? 14 : 18 } }}
+        >
+          <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+            Workspace Guide
+          </Text>
+          <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+            角色页维护顺序
+          </Title>
+          <Paragraph type="secondary" style={{ marginBottom: 14, lineHeight: 1.8 }}>
+            这一页更像人物与势力档案库。先决定要处理的是“角色”还是“组织”，再进入创建、生成或批量整理，信息会更稳定。
+          </Paragraph>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+            {workspaceGuideItems.map((item) => (
+              <div
+                key={item.label}
+                style={{
+                  borderRadius: 16,
+                  padding: '12px 14px',
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  background: token.colorBgContainer,
+                }}
+              >
+                <Text style={{ display: 'block', fontSize: 11, color: token.colorTextTertiary, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  {item.label}
+                </Text>
+                <Text strong style={{ display: 'block', margin: '6px 0 4px' }}>
+                  {item.title}
+                </Text>
+                <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.7 }}>
+                  {item.description}
+                </Text>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card
+          variant="borderless"
+          style={{
+            background: quietPanelBackground,
+            borderRadius: isMobile ? 18 : 22,
+            border: panelBorder,
+            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+          }}
+          styles={{ body: { padding: isMobile ? 14 : 18 } }}
+        >
+          <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+            Current Focus
+          </Text>
+          <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+            当前工作焦点
+          </Title>
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            {focusItems.map((item) => (
+              <div
+                key={item.label}
+                style={{
+                  borderRadius: 16,
+                  padding: '12px 14px',
+                  background: token.colorBgContainer,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                }}
+              >
+                <Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
+                  {item.label}
+                </Text>
+                <Text strong style={{ display: 'block', lineHeight: 1.7 }}>
+                  {item.value}
+                </Text>
+                <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.7 }}>
+                  {item.detail}
+                </Text>
+              </div>
+            ))}
+          </Space>
+        </Card>
       </div>
 
-
-
       {characters.length > 0 && (
-        <div style={{
-          position: 'sticky',
-          top: isMobile ? 60 : 72,
-          zIndex: 9,
-          backgroundColor: 'var(--color-bg-container)',
-          paddingBottom: 8,
-          borderBottom: '1px solid var(--color-border-secondary)',
-        }}>
+        <Card
+          variant="borderless"
+          style={{
+            background: quietPanelBackground,
+            borderRadius: isMobile ? 18 : 22,
+            border: panelBorder,
+            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+          }}
+          styles={{ body: { padding: isMobile ? 12 : 16 } }}
+        >
           <Tabs
             activeKey={activeTab}
             onChange={(key) => setActiveTab(key as 'all' | 'character' | 'organization')}
@@ -1344,23 +1577,23 @@ export default function Characters() {
               },
             ]}
           />
-        </div>
+        </Card>
       )}
 
 
 
       {/* 批量选择工具栏 */}
       {characters.length > 0 && (
-        <div style={{
-          position: 'sticky',
-          top: isMobile ? 120 : 132,
-          zIndex: 8,
-          backgroundColor: 'var(--color-bg-container)',
-          paddingBottom: 8,
-          paddingTop: 8,
-          marginTop: 8,
-          borderBottom: selectedCharacters.length > 0 ? '1px solid var(--color-border-secondary)' : 'none',
-        }}>
+        <Card
+          variant="borderless"
+          style={{
+            background: panelBackground,
+            borderRadius: isMobile ? 18 : 22,
+            border: panelBorder,
+            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+          }}
+          styles={{ body: { padding: isMobile ? 12 : 14 } }}
+        >
           <Space>
             <Checkbox
               checked={selectedCharacters.length === displayList.length && displayList.length > 0}
@@ -1379,133 +1612,193 @@ export default function Characters() {
               </Button>
             )}
           </Space>
-        </div>
+        </Card>
       )}
 
 
 
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         {characters.length === 0 ? (
-          <Empty description="还没有角色或组织，开始创建吧！" />
+          <Card
+            variant="borderless"
+            style={{
+              background: quietPanelBackground,
+              borderRadius: isMobile ? 18 : 22,
+              border: panelBorder,
+              boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+            }}
+          >
+            <Empty description="还没有角色或组织，开始创建吧！" style={{ padding: '64px 0' }}>
+              <Paragraph type="secondary" style={{ maxWidth: 520, margin: '8px auto 20px', lineHeight: 1.8 }}>
+                角色与组织会成为章节推进、关系图谱和世界细节的主要承载体。你可以先手动建立核心人物，也可以直接用智能生成起一版草稿。
+              </Paragraph>
+              <Space wrap>
+                <Button
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  onClick={() => {
+                    setCreateType('character');
+                    ensureCareersLoaded();
+                    setIsCreateModalOpen(true);
+                  }}
+                >
+                  创建角色
+                </Button>
+                <Button
+                  icon={<ThunderboltOutlined />}
+                  onClick={showGenerateModal}
+                  loading={isGenerating}
+                >
+                  智能生成角色
+                </Button>
+              </Space>
+            </Empty>
+          </Card>
         ) : (
-          <>
-            <Row gutter={isMobile ? [8, 8] : charactersPageGridConfig.gutter}>
-              {activeTab === 'all' && (
-                <>
-                  {characterList.length > 0 && (
-                    <>
-                      <Col span={24}>
-                        <Divider orientation="left">
-                          <Title level={5} style={{ margin: 0 }}>
-                            <UserOutlined style={{ marginRight: 8 }} />
-                            角色 ({characterList.length})
-                          </Title>
-                        </Divider>
-                      </Col>
-                      {visibleCharacterList.map((character) => (
-                        <SelectableCharacterCard
-                          key={character.id}
-                          item={character}
-                          selected={selectedCharacterIds.has(character.id)}
-                          cardColStyle={cardColStyle}
-                          onToggle={toggleSelectCharacter}
-                          onEdit={handleEditCharacter}
-                          onDelete={handleDeleteCharacterWrapper}
-                          onExport={handleExportSingle}
-                        />
-                      ))}
-                    </>
-                  )}
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            {activeTab === 'all' && (
+              <>
+                <Card
+                  variant="borderless"
+                  style={{
+                    background: quietPanelBackground,
+                    borderRadius: isMobile ? 18 : 22,
+                    border: panelBorder,
+                    boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+                  }}
+                  styles={{ body: { padding: isMobile ? 14 : 18 } }}
+                >
+                  <Divider orientation="left" style={{ marginTop: 0 }}>
+                    <Title level={5} style={{ margin: 0, fontFamily: designDisplayFont, letterSpacing: '-0.02em' }}>
+                      <UserOutlined style={{ marginRight: 8 }} />
+                      角色 ({characterList.length})
+                    </Title>
+                  </Divider>
+                  {characterList.length > 0 ? renderSelectableGrid(visibleCharacterList) : <Empty description="暂无角色" />}
+                </Card>
 
+                <Card
+                  variant="borderless"
+                  style={{
+                    background: quietPanelBackground,
+                    borderRadius: isMobile ? 18 : 22,
+                    border: panelBorder,
+                    boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+                  }}
+                  styles={{ body: { padding: isMobile ? 14 : 18 } }}
+                >
+                  <Divider orientation="left" style={{ marginTop: 0 }}>
+                    <Title level={5} style={{ margin: 0, fontFamily: designDisplayFont, letterSpacing: '-0.02em' }}>
+                      <TeamOutlined style={{ marginRight: 8 }} />
+                      组织 ({organizationList.length})
+                    </Title>
+                  </Divider>
+                  {organizationList.length > 0 ? renderSelectableGrid(visibleOrganizationList) : <Empty description="暂无组织" />}
+                </Card>
+              </>
+            )}
 
+            {activeTab === 'character' && (
+              <Card
+                variant="borderless"
+                style={{
+                  background: quietPanelBackground,
+                  borderRadius: isMobile ? 18 : 22,
+                  border: panelBorder,
+                  boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+                }}
+                styles={{ body: { padding: isMobile ? 14 : 18 } }}
+              >
+                <Divider orientation="left" style={{ marginTop: 0 }}>
+                  <Title level={5} style={{ margin: 0, fontFamily: designDisplayFont, letterSpacing: '-0.02em' }}>
+                    <UserOutlined style={{ marginRight: 8 }} />
+                    角色 ({characterList.length})
+                  </Title>
+                </Divider>
+                {characterList.length > 0 ? renderSelectableGrid(visibleCharacterList) : <Empty description="暂无角色" />}
+              </Card>
+            )}
 
-                  {organizationList.length > 0 && (
-                    <>
-                      <Col span={24}>
-                        <Divider orientation="left">
-                          <Title level={5} style={{ margin: 0 }}>
-                            <TeamOutlined style={{ marginRight: 8 }} />
-                            组织 ({organizationList.length})
-                          </Title>
-                        </Divider>
-                      </Col>
-                      {visibleOrganizationList.map((org) => (
-                        <SelectableCharacterCard
-                          key={org.id}
-                          item={org}
-                          selected={selectedCharacterIds.has(org.id)}
-                          cardColStyle={cardColStyle}
-                          onToggle={toggleSelectCharacter}
-                          onEdit={handleEditCharacter}
-                          onDelete={handleDeleteCharacterWrapper}
-                          onExport={handleExportSingle}
-                        />
-                      ))}
-                    </>
-                  )}
-                </>
-              )}
-
-
-
-              {activeTab === 'character' && visibleCharacterList.map((character) => (
-                <SelectableCharacterCard
-                  key={character.id}
-                  item={character}
-                  selected={selectedCharacterIds.has(character.id)}
-                  cardColStyle={cardColStyle}
-                  onToggle={toggleSelectCharacter}
-                  onEdit={handleEditCharacter}
-                  onDelete={handleDeleteCharacterWrapper}
-                  onExport={handleExportSingle}
-                />
-              ))}
-
-
-
-              {activeTab === 'organization' && visibleOrganizationList.map((org) => (
-                <SelectableCharacterCard
-                  key={org.id}
-                  item={org}
-                  selected={selectedCharacterIds.has(org.id)}
-                  cardColStyle={cardColStyle}
-                  onToggle={toggleSelectCharacter}
-                  onEdit={handleEditCharacter}
-                  onDelete={handleDeleteCharacterWrapper}
-                  onExport={handleExportSingle}
-                />
-              ))}
-            </Row>
-
-
+            {activeTab === 'organization' && (
+              <Card
+                variant="borderless"
+                style={{
+                  background: quietPanelBackground,
+                  borderRadius: isMobile ? 18 : 22,
+                  border: panelBorder,
+                  boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+                }}
+                styles={{ body: { padding: isMobile ? 14 : 18 } }}
+              >
+                <Divider orientation="left" style={{ marginTop: 0 }}>
+                  <Title level={5} style={{ margin: 0, fontFamily: designDisplayFont, letterSpacing: '-0.02em' }}>
+                    <TeamOutlined style={{ marginRight: 8 }} />
+                    组织 ({organizationList.length})
+                  </Title>
+                </Divider>
+                {organizationList.length > 0 ? renderSelectableGrid(visibleOrganizationList) : <Empty description="暂无组织" />}
+              </Card>
+            )}
 
             {isProgressiveRenderPending && (
-              <div style={{ textAlign: 'center', padding: '12px 0', color: 'var(--color-text-tertiary)' }}>
-                {'正在加载其余角色与组织...'}
-              </div>
+              <Card
+                variant="borderless"
+                style={{
+                  background: `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimaryBg} 90%, transparent) 0%, ${quietPanelBackground} 100%)`,
+                  borderRadius: isMobile ? 16 : 18,
+                  border: panelBorder,
+                  boxShadow: `0 14px 28px color-mix(in srgb, ${token.colorText} 6%, transparent)`,
+                }}
+                styles={{ body: { padding: isMobile ? '12px 14px' : '14px 16px' } }}
+              >
+                <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                  Progressive Render
+                </Text>
+                <Text strong style={{ display: 'block', marginTop: 6 }}>
+                  正在继续补齐剩余角色与组织卡片
+                </Text>
+                <Text type="secondary" style={{ display: 'block', marginTop: 6, lineHeight: 1.7 }}>
+                  当前页面已经先展示首批内容，系统正在继续接管后续卡片；原有筛选、选择与批量生成逻辑保持不变。
+                </Text>
+              </Card>
             )}
 
-
-
-            {displayList.length === 0 && (
-              <Empty
-                description={
-                  activeTab === 'character'
-                    ? '暂无角色'
-                    : activeTab === 'organization'
-                      ? '暂无组织'
-                      : '暂无数据'
-                }
-              />
+            {displayList.length === 0 && activeTab !== 'all' && (
+              <Card
+                variant="borderless"
+                style={{
+                  background: quietPanelBackground,
+                  borderRadius: isMobile ? 18 : 22,
+                  border: panelBorder,
+                }}
+              >
+                <Empty
+                  description={activeTab === 'character' ? '暂无角色' : '暂无组织'}
+                  style={{ padding: '40px 0' }}
+                />
+              </Card>
             )}
-          </>
+          </Space>
         )}
       </div>
 
 
 
       {isEditModalOpen && editingCharacter ? (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={(
+            <WorkflowEntryFallback
+              eyebrow="Character Workspace"
+              title="正在展开角色 / 组织编辑面板"
+              message="系统正在恢复角色档案字段、职业信息与提交入口，原有编辑表单和保存逻辑保持不变。"
+              tags={[
+                { label: '角色 / 组织编辑', color: 'blue' },
+                { label: '档案面板恢复中', color: 'processing' },
+                { label: '保存逻辑保持原样', color: 'green' },
+              ]}
+            />
+          )}
+        >
           <LazyCharacterFormModal
             open={isEditModalOpen}
             title={editingCharacter.is_organization ? '编辑组织' : '编辑角色'}
@@ -1525,7 +1818,20 @@ export default function Characters() {
 
       {/* 新建角色/组织 */}
       {isCreateModalOpen ? (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={(
+            <WorkflowEntryFallback
+              eyebrow="Character Creation"
+              title="正在展开角色 / 组织创建面板"
+              message="系统正在恢复新建档案字段、职业选项与提交入口，原有创建表单和保存逻辑保持不变。"
+              tags={[
+                { label: '角色 / 组织创建', color: 'purple' },
+                { label: '新建面板恢复中', color: 'processing' },
+                { label: '创建逻辑保持原样', color: 'green' },
+              ]}
+            />
+          )}
+        >
           <LazyCharacterFormModal
             open={isCreateModalOpen}
             title={createType === 'character' ? '新建角色' : '新建组织'}
@@ -1544,13 +1850,35 @@ export default function Characters() {
 
       {isImportModalOpen ? (
       <Modal
-        title="导入角色/组织"
+        title={(
+          <Space direction="vertical" size={2}>
+            <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+              Import Desk
+            </Text>
+            <Title level={4} style={{ margin: 0, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+              导入角色/组织
+            </Title>
+            <Text type="secondary">
+              适合把已经整理过的 JSON 档案带回项目。导入前先确认命名与职业字段是否符合当前世界设定。
+            </Text>
+          </Space>
+        )}
         open={isImportModalOpen}
         onCancel={() => setIsImportModalOpen(false)}
         footer={null}
         width={500}
         centered
+        styles={modalSurfaceStyles}
       >
+        <Card
+          size="small"
+          variant="borderless"
+          style={{ marginBottom: 16, borderRadius: 14, background: 'color-mix(in srgb, var(--ant-color-success-bg) 74%, var(--ant-color-bg-container) 26%)' }}
+        >
+          <Text type="secondary">
+            导入更适合已经清洗过的角色包。重复名称会被跳过，缺失的职业信息会按现有规则忽略。
+          </Text>
+        </Card>
         <div style={{ textAlign: 'center', padding: '40px 20px' }}>
           <DownloadOutlined style={{ fontSize: 48, color: '#1890ff', marginBottom: 16 }} />
           <p style={{ fontSize: 16, marginBottom: 24 }}>
@@ -1594,7 +1922,21 @@ export default function Characters() {
 
       {/* SSE进度显示 */}
       {isGenerating ? (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={(
+            <WorkflowEntryFallback
+              variant="fullscreen"
+              eyebrow="Archive Generation"
+              title="正在接管角色档案生成覆盖层"
+              message="系统正在恢复角色 / 组织生成进度与取消入口，原有生成状态、轮询提示和中断逻辑保持不变。"
+              tags={[
+                { label: '档案生成', color: 'gold' },
+                { label: '覆盖层恢复中', color: 'processing' },
+                { label: '状态逻辑保持原样', color: 'green' },
+              ]}
+            />
+          )}
+        >
           <LazySSELoadingOverlay
             loading={isGenerating}
             progress={progress}

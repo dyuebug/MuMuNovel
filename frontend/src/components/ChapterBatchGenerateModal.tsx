@@ -369,6 +369,30 @@ const batchSelectedModelLabel = batchSelectedModel
   ? (normalizedAvailableModels.find((item) => item.value === batchSelectedModel)?.label || batchSelectedModel)
   : '项目默认';
 const batchQualityAnalysisLabel = batchEnableAnalysis === false ? '关闭' : '开启';
+const batchGenerateGuideSteps = [
+  '先确认起始章节、生成数量与当前创作模式，再决定这轮是在补稿、铺量，还是集中推进某一段剧情。',
+  '再检查模型、剧情阶段、分析开关和联网研究，把“生成策略”放在真正提交任务之前调稳。',
+  '最后再开始批量生成；进入运行态后优先观察进度与质量摘要，不要频繁重开新的批次。',
+];
+const batchGenerateWorkspaceFocus = batchGenerating
+  ? {
+      title: `跟进当前批次：${batchProgress?.completed || 0}/${batchProgress?.total || 0} 章`,
+      note: '当前批量生成已经启动，适合先观察章节推进、质量摘要与修复策略，而不是立即再改动这一轮的生成配置。',
+    }
+  : batchEnableWebResearch
+    ? {
+        title: '确认联网研究是否值得加入本批次',
+        note: '当前已开启外部资料补充，适合优先核查题材、职业或场景细节是否真的需要实时参考，避免为普通章节增加不必要的上下文噪音。',
+      }
+    : batchEnableAnalysis === false
+      ? {
+          title: '本轮以快速铺稿为主',
+          note: '当前已关闭自动分析，更适合先稳定生成正文内容；如果你准备在这一轮做质量回看，可以考虑重新打开分析开关。',
+        }
+      : {
+          title: `从第 ${batchStartChapterNumber || 1} 章发起下一批生成`,
+          note: `当前策略更偏向“${batchSelectedCreativeModeLabel} / ${batchSelectedStoryFocusLabel} / ${batchSelectedPlotStageLabel}”。适合先确认这一段剧情目标是否清晰，再把批量生成交给现有任务链路。`,
+        };
 
 const batchQualityProfileItems = useMemo(
   () => getQualityProfileDisplayItems(batchProgress?.quality_profile_summary),
@@ -507,6 +531,73 @@ const batchStoryInsightCards = useMemo(
         }}
 
       >
+
+        <div
+          style={{
+            marginBottom: 16,
+            borderRadius: 18,
+            padding: isMobile ? '14px 14px 12px' : '16px 18px',
+            background: 'linear-gradient(135deg, color-mix(in srgb, #f5f0ff 86%, white 14%) 0%, white 100%)',
+            border: '1px solid color-mix(in srgb, #722ed1 16%, white 84%)',
+            boxShadow: '0 18px 36px color-mix(in srgb, #1f1f1f 8%, transparent)',
+          }}
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.6fr) minmax(240px, 0.92fr)',
+              gap: 16,
+            }}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ color: '#8c8c8c', fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                Batch Guide
+              </div>
+              <div style={{ color: '#262626', lineHeight: 1.75 }}>
+                这个模态更像章节批量生成的调度台。现有的表单提交、后台任务、取消生成和质量摘要逻辑都保持不变，这里只把配置顺序与当前处理重点提前说明。
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {batchGenerateGuideSteps.map((item, index) => (
+                  <span
+                    key={item}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '6px 12px',
+                      borderRadius: 999,
+                      background: '#ffffff',
+                      border: '1px solid color-mix(in srgb, #722ed1 10%, white 90%)',
+                      color: '#262626',
+                      fontSize: 12,
+                    }}
+                  >
+                    <span style={{ color: '#722ed1', fontWeight: 700 }}>{index + 1}</span>
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div
+              style={{
+                borderRadius: 16,
+                padding: isMobile ? '14px 14px 12px' : '16px 18px 14px',
+                background: 'linear-gradient(180deg, #ffffff 0%, #faf7ff 100%)',
+                border: '1px solid color-mix(in srgb, #722ed1 10%, white 90%)',
+              }}
+            >
+              <div style={{ color: '#8c8c8c', fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                当前工作焦点
+              </div>
+              <div style={{ margin: '8px 0 6px', color: '#262626', fontSize: 18, lineHeight: 1.3, fontWeight: 600 }}>
+                {batchGenerateWorkspaceFocus.title}
+              </div>
+              <div style={{ color: '#595959', lineHeight: 1.75 }}>
+                {batchGenerateWorkspaceFocus.note}
+              </div>
+            </div>
+          </div>
+        </div>
 
         {!batchGenerating ? (
 

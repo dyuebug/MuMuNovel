@@ -1,12 +1,18 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Suspense } from 'react';
-import { Alert, Button, Card, Col, Form, Input, InputNumber, Radio, Row, Segmented, Select, Slider, Space, Spin, Switch, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Col, Form, Input, InputNumber, Radio, Row, Segmented, Select, Slider, Space, Switch, Tag, Typography, theme } from 'antd';
 import { CheckCircleOutlined, CloseCircleOutlined, DeleteOutlined, InfoCircleOutlined, ReloadOutlined, SaveOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { designDisplayFont } from '../theme/themeConfig';
+import InlineDeferredPanel from './InlineDeferredPanel';
+import { renderCompactSettingHint } from './storyCreationCommonUi';
 
 const { Text } = Typography;
 const { TextArea } = Input;
+const alphaColor = (color: string, alpha: number) =>
+  `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
 
 export default function SettingsCurrentTab(props: any) {
+  const { token } = theme.useToken();
   const {
   LazyEndpointListEditor,
   LazyProviderSelector,
@@ -64,12 +70,30 @@ export default function SettingsCurrentTab(props: any) {
   watchedWebResearchEnabled,
   webResearchTestResult
   } = props;
+  const renderModelStatusHint = (
+    title: string,
+    detail: string,
+    tone: 'info' | 'warning' = 'info',
+  ) => (
+    <div style={{ padding: '10px 12px' }}>
+      {renderCompactSettingHint(title, detail, {
+        tone,
+        style: {
+          marginBottom: 0,
+          padding: isMobile ? '10px 12px' : '12px 14px',
+          borderRadius: 16,
+          boxShadow: 'none',
+        },
+      })}
+    </div>
+  );
   const providerHint = props.providerHint ?? {};
 
 
   const apiKeyInputPlaceholder = form.getFieldValue('api_key')
     ? 'sk-...'
     : '已保存密钥；留空表示保持不变，输入新值可覆盖';
+  const watchedModelsEndpoint = form.getFieldValue('models_endpoint_url');
 
   const endpointDiagnostics = testResult?.details?.endpoint_diagnostics as {
     primary_endpoint?: string;
@@ -151,7 +175,19 @@ export default function SettingsCurrentTab(props: any) {
                       )}
 
                       {/* 表单 */}
-                      <Spin spinning={initialLoading}>
+                      {initialLoading ? (
+                        <InlineDeferredPanel
+                          eyebrow="Current Settings"
+                          title="正在恢复当前配置工作区"
+                          message="系统正在准备供应商接入、模型参数与联网研究设置表单，原有读取、保存、测试与重置逻辑保持不变。"
+                          minHeight={isMobile ? 320 : 360}
+                          tags={[
+                            { label: '当前配置同步中', color: 'processing' },
+                            { label: '表单工作区待接管', color: 'gold' },
+                            { label: '设置逻辑保持原样', color: 'green' },
+                          ]}
+                        />
+                      ) : (
                         <Form
                           form={form}
                           layout="vertical"
@@ -286,9 +322,57 @@ export default function SettingsCurrentTab(props: any) {
                             style={sectionCardStyle}
                             styles={sectionCardStyles}
                           >
-                            <Text style={{ ...fieldHintTextStyle, marginBottom: 16 }}>
-                              这里负责最基础的接入信息。若你使用 OpenAI 兼容中转站，建议把基础地址填写到完整的 <code>/v1</code> 路径。
-                            </Text>
+                            <div
+                              style={{
+                                marginBottom: 18,
+                                padding: isMobile ? 16 : 18,
+                                borderRadius: 20,
+                                background: `linear-gradient(135deg, ${alphaColor(token.colorPrimaryBg, 0.88)} 0%, ${alphaColor(token.colorBgElevated, 0.98)} 100%)`,
+                                border: `1px solid ${alphaColor(token.colorPrimary, 0.14)}`,
+                                boxShadow: `0 16px 32px ${alphaColor(token.colorText, 0.05)}`,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: 'grid',
+                                  gridTemplateColumns: isMobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) auto',
+                                  gap: 16,
+                                  alignItems: 'start',
+                                }}
+                              >
+                                <div style={{ minWidth: 0 }}>
+                                  <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+                                    Provider Workspace
+                                  </Text>
+                                  <Text
+                                    strong
+                                    style={{
+                                      display: 'block',
+                                      fontSize: isMobile ? 17 : 18,
+                                      marginBottom: 8,
+                                      fontFamily: designDisplayFont,
+                                      letterSpacing: '-0.03em',
+                                    }}
+                                  >
+                                    先确认协议，再补齐密钥、主地址与模型列表入口
+                                  </Text>
+                                  <Text type="secondary" style={{ display: 'block', lineHeight: 1.75 }}>
+                                    这里负责最基础的接入信息。若你使用 OpenAI 兼容中转站，建议把基础地址填写到完整的 <code>/v1</code> 路径；只有模型列表入口和主地址不一致时，再额外填写模型列表地址。
+                                  </Text>
+                                </div>
+                                <Space wrap size={[8, 8]} style={{ justifyContent: 'flex-end' }}>
+                                  <Tag color="processing" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                    Provider {String(selectedProvider || watchedProvider || 'openai').toUpperCase()}
+                                  </Tag>
+                                  <Tag color="blue" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                    端点 {Math.max(endpoints.length, watchedBaseUrl ? 1 : 0)} 个
+                                  </Tag>
+                                  <Tag color={watchedModelsEndpoint ? 'gold' : 'default'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                    {watchedModelsEndpoint ? '自定义模型列表' : '自动推导模型列表'}
+                                  </Tag>
+                                </Space>
+                              </div>
+                            </div>
 
                             <Row gutter={[16, 16]}>
                               <Col xs={24}>
@@ -568,31 +652,37 @@ export default function SettingsCurrentTab(props: any) {
                                         <>
                                           {menu}
                                           {fetchingModels && (
-                                            <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                              <Spin size="small" /> 正在获取模型列表...
-                                            </div>
+                                            renderModelStatusHint(
+                                              '模型候选正在返回',
+                                              '保持当前 provider 与接口地址即可，返回后仍可沿现有流程选择模型或直接输入名称。',
+                                            )
                                           )}
                                           {!fetchingModels && modelOptions.length === 0 && modelsFetched && (
-                                            <div style={{ padding: '8px 12px', color: '#ff4d4f', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                              未能获取到模型列表，请检查 API 配置
-                                            </div>
+                                            renderModelStatusHint(
+                                              '暂时未取回模型列表',
+                                              '建议先检查 API 配置，或者直接手动输入模型名称，不会影响当前表单里的其他设置。',
+                                              'warning',
+                                            )
                                           )}
                                           {!fetchingModels && modelOptions.length === 0 && !modelsFetched && (
-                                            <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                              点击输入框自动获取模型列表
-                                            </div>
+                                            renderModelStatusHint(
+                                              '点开后会自动拉取模型列表',
+                                              '如果已经知道目标模型，也可以直接输入名称并按回车，先把设置工作流推进下去。',
+                                            )
                                           )}
                                         </>
                                       )}
                                       notFoundContent={
                                         fetchingModels ? (
-                                          <div style={{ padding: '8px 12px', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                            <Spin size="small" /> 加载中...
-                                          </div>
+                                          renderModelStatusHint(
+                                            '还在整理匹配候选',
+                                            '下拉里的模型结果正在返回，稍等片刻即可继续选择；当前输入不会丢失。',
+                                          )
                                         ) : (
-                                          <div style={{ padding: '8px 12px', color: 'var(--color-text-secondary)', textAlign: 'center', fontSize: isMobile ? '12px' : '14px' }}>
-                                            未找到匹配的模型，可直接输入后按回车
-                                          </div>
+                                          renderModelStatusHint(
+                                            '暂时没有匹配项',
+                                            '可以继续搜索，也可以直接输入模型名称后按回车，把当前配置先保存下来。',
+                                          )
                                         )
                                       }
                                       suffixIcon={
@@ -769,22 +859,57 @@ export default function SettingsCurrentTab(props: any) {
                             style={sectionCardStyle}
                             styles={sectionCardStyles}
                           >
-                            <Alert
-                              type="info"
-                              showIcon
-                              message="用于章节 / 世界观 / 角色 / 大纲生成前，自动通过 Exa / Grok 检索资料，并把摘要保存到记忆中。"
-                              style={{ marginBottom: 16, borderRadius: 12 }}
-                            />
-
                             <div
                               style={{
-                                padding: isMobile ? 14 : 16,
-                                borderRadius: 14,
-                                background: 'linear-gradient(135deg, rgba(250, 173, 20, 0.08) 0%, rgba(255, 255, 255, 0.96) 100%)',
-                                border: '1px solid rgba(250, 173, 20, 0.14)',
-                                marginBottom: 16,
+                                padding: isMobile ? 16 : 18,
+                                borderRadius: 20,
+                                background: `linear-gradient(135deg, ${alphaColor(token.colorWarning, 0.12)} 0%, ${alphaColor(token.colorBgElevated, 0.98)} 100%)`,
+                                border: `1px solid ${alphaColor(token.colorWarning, 0.18)}`,
+                                boxShadow: `0 16px 32px ${alphaColor(token.colorText, 0.05)}`,
+                                marginBottom: 18,
                               }}
                             >
+                              <div
+                                style={{
+                                  display: 'grid',
+                                  gridTemplateColumns: isMobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) auto',
+                                  gap: 16,
+                                  alignItems: 'start',
+                                  marginBottom: 14,
+                                }}
+                              >
+                                <div style={{ minWidth: 0 }}>
+                                  <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+                                    Research Workspace
+                                  </Text>
+                                  <Text
+                                    strong
+                                    style={{
+                                      display: 'block',
+                                      fontSize: isMobile ? 17 : 18,
+                                      marginBottom: 8,
+                                      fontFamily: designDisplayFont,
+                                      letterSpacing: '-0.03em',
+                                    }}
+                                  >
+                                    先决定是否联网检索，再分别配置来源抓取与趋势摘要通道
+                                  </Text>
+                                  <Text type="secondary" style={{ display: 'block', lineHeight: 1.75 }}>
+                                    用于章节、世界观、角色和大纲生成前，通过 Exa / Grok 抓取资料并沉淀摘要。这里只重排展示层与阅读顺序，不改变检索开关、测试逻辑或结果写回。
+                                  </Text>
+                                </div>
+                                <Space wrap size={[8, 8]} style={{ justifyContent: 'flex-end' }}>
+                                  <Tag color={watchedWebResearchEnabled ? 'success' : 'default'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                    检索 {watchedWebResearchEnabled ? '已开启' : '已关闭'}
+                                  </Tag>
+                                  <Tag color={watchedExaEnabled ? 'blue' : 'default'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                    Exa {watchedExaEnabled ? '来源抓取' : '未启用'}
+                                  </Tag>
+                                  <Tag color={watchedGrokEnabled ? 'purple' : 'default'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                    Grok {watchedGrokEnabled ? '趋势摘要' : '未启用'}
+                                  </Tag>
+                                </Space>
+                              </div>
                               <Row gutter={[16, 8]} align="middle">
                                 <Col xs={24} md={8}>
                                   <Form.Item name="web_research_enabled" label="启用检索" valuePropName="checked" style={{ marginBottom: 8 }}>
@@ -803,13 +928,13 @@ export default function SettingsCurrentTab(props: any) {
                                 </Col>
                               </Row>
                               <Space wrap size={[8, 8]}>
-                                <Tag color={watchedWebResearchEnabled ? 'success' : 'default'}>
+                                <Tag color={watchedWebResearchEnabled ? 'success' : 'default'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
                                   检索总开关：{watchedWebResearchEnabled ? '开启' : '关闭'}
                                 </Tag>
-                                <Tag color={watchedExaEnabled ? 'blue' : 'default'}>
+                                <Tag color={watchedExaEnabled ? 'blue' : 'default'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
                                   Exa：{watchedExaEnabled ? '已启用' : '未启用'}
                                 </Tag>
-                                <Tag color={watchedGrokEnabled ? 'purple' : 'default'}>
+                                <Tag color={watchedGrokEnabled ? 'purple' : 'default'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
                                   Grok：{watchedGrokEnabled ? '已启用' : '未启用'}
                                 </Tag>
                               </Space>
@@ -819,25 +944,59 @@ export default function SettingsCurrentTab(props: any) {
                               <Col xs={24} xl={12}>
                                 <Card
                                   size="small"
-                                  title={
-                                    <Space wrap size={8}>
-                                      <span style={{ fontWeight: 600 }}>Exa 检索</span>
-                                      <Tag color={watchedExaEnabled ? 'blue' : 'default'} style={{ marginInlineEnd: 0 }}>
-                                        {watchedExaEnabled ? '来源抓取' : '已关闭'}
-                                      </Tag>
-                                    </Space>
-                                  }
                                   style={{
                                     height: '100%',
-                                    borderRadius: 14,
-                                    border: '1px solid #e6f4ff',
-                                    background: 'linear-gradient(180deg, #ffffff 0%, #f8fcff 100%)',
+                                    borderRadius: 20,
+                                    border: `1px solid ${alphaColor(token.colorInfo, 0.18)}`,
+                                    background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorInfo, 0.08)} 100%)`,
+                                    boxShadow: `0 16px 32px ${alphaColor(token.colorText, 0.05)}`,
                                   }}
-                                  styles={{ body: { padding: isMobile ? 14 : 16 } }}
+                                  styles={{ body: { padding: isMobile ? 16 : 18 } }}
                                 >
-                                  <Text style={{ display: 'block', color: 'var(--color-text-secondary)', marginBottom: 14 }}>
-                                    更适合抓取可追溯来源、链接与事实型资料。
-                                  </Text>
+                                  <div style={{ display: 'grid', gap: 14 }}>
+                                    <div
+                                      style={{
+                                        display: 'grid',
+                                        gridTemplateColumns: 'minmax(0, 1fr) auto',
+                                        gap: 14,
+                                        alignItems: 'start',
+                                      }}
+                                    >
+                                      <div style={{ minWidth: 0 }}>
+                                        <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+                                          Research Dossier
+                                        </Text>
+                                        <Text
+                                          strong
+                                          style={{
+                                            display: 'block',
+                                            fontSize: 16,
+                                            marginBottom: 8,
+                                            fontFamily: designDisplayFont,
+                                            letterSpacing: '-0.02em',
+                                          }}
+                                        >
+                                          Exa 检索
+                                        </Text>
+                                        <Text type="secondary" style={{ display: 'block', lineHeight: 1.75 }}>
+                                          更适合抓取可追溯来源、链接与事实型资料，适合把引用型信息提前整理进生成上下文。
+                                        </Text>
+                                      </div>
+                                      <Tag color={watchedExaEnabled ? 'blue' : 'default'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                        {watchedExaEnabled ? '来源抓取' : '已关闭'}
+                                      </Tag>
+                                    </div>
+                                    <div
+                                      style={{
+                                        padding: '12px 14px',
+                                        borderRadius: 16,
+                                        background: alphaColor(token.colorBgElevated, 0.96),
+                                        border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                                      }}
+                                    >
+                                      <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 8 }}>
+                                        Available Actions
+                                      </Text>
                                   <Form.Item name="web_research_exa_api_key" label="Exa API Key">
                                     <Input.Password placeholder="填写 Exa API Key" autoComplete="new-password" />
                                   </Form.Item>
@@ -865,33 +1024,70 @@ export default function SettingsCurrentTab(props: any) {
                                     onClick={() => handleTestWebResearch('exa')}
                                     loading={testingWebResearchProvider === 'exa'}
                                     block={isMobile}
+                                        style={{ borderRadius: 14, minHeight: 42 }}
                                   >
                                     测试 Exa
                                   </Button>
+                                    </div>
+                                  </div>
                                 </Card>
                               </Col>
                               <Col xs={24} xl={12}>
                                 <Card
                                   size="small"
-                                  title={
-                                    <Space wrap size={8}>
-                                      <span style={{ fontWeight: 600 }}>Grok 检索</span>
-                                      <Tag color={watchedGrokEnabled ? 'purple' : 'default'} style={{ marginInlineEnd: 0 }}>
-                                        {watchedGrokEnabled ? '摘要趋势' : '已关闭'}
-                                      </Tag>
-                                    </Space>
-                                  }
                                   style={{
                                     height: '100%',
-                                    borderRadius: 14,
-                                    border: '1px solid #f0e6ff',
-                                    background: 'linear-gradient(180deg, #ffffff 0%, #fcfaff 100%)',
+                                    borderRadius: 20,
+                                    border: `1px solid ${alphaColor(token.colorPrimary, 0.18)}`,
+                                    background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorPrimary, 0.08)} 100%)`,
+                                    boxShadow: `0 16px 32px ${alphaColor(token.colorText, 0.05)}`,
                                   }}
-                                  styles={{ body: { padding: isMobile ? 14 : 16 } }}
+                                  styles={{ body: { padding: isMobile ? 16 : 18 } }}
                                 >
-                                  <Text style={{ display: 'block', color: 'var(--color-text-secondary)', marginBottom: 14 }}>
-                                    更适合实时讨论、趋势摘要与表达参考；启用 GrokSearch 后会优先走当前项目内置的深度联网搜索逻辑。
-                                  </Text>
+                                  <div style={{ display: 'grid', gap: 14 }}>
+                                    <div
+                                      style={{
+                                        display: 'grid',
+                                        gridTemplateColumns: 'minmax(0, 1fr) auto',
+                                        gap: 14,
+                                        alignItems: 'start',
+                                      }}
+                                    >
+                                      <div style={{ minWidth: 0 }}>
+                                        <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+                                          Research Dossier
+                                        </Text>
+                                        <Text
+                                          strong
+                                          style={{
+                                            display: 'block',
+                                            fontSize: 16,
+                                            marginBottom: 8,
+                                            fontFamily: designDisplayFont,
+                                            letterSpacing: '-0.02em',
+                                          }}
+                                        >
+                                          Grok 检索
+                                        </Text>
+                                        <Text type="secondary" style={{ display: 'block', lineHeight: 1.75 }}>
+                                          更适合实时讨论、趋势摘要与表达参考；启用 GrokSearch 后会优先走当前项目内置的深度联网搜索逻辑。
+                                        </Text>
+                                      </div>
+                                      <Tag color={watchedGrokEnabled ? 'purple' : 'default'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                        {watchedGrokEnabled ? '摘要趋势' : '已关闭'}
+                                      </Tag>
+                                    </div>
+                                    <div
+                                      style={{
+                                        padding: '12px 14px',
+                                        borderRadius: 16,
+                                        background: alphaColor(token.colorBgElevated, 0.96),
+                                        border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                                      }}
+                                    >
+                                      <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 8 }}>
+                                        Available Actions
+                                      </Text>
                                   <Form.Item name="web_research_grok_api_key" label="Grok API Key">
                                     <Input.Password placeholder="填写 Grok API Key" autoComplete="new-password" />
                                   </Form.Item>
@@ -930,50 +1126,151 @@ export default function SettingsCurrentTab(props: any) {
                                     onClick={() => handleTestWebResearch('grok')}
                                     loading={testingWebResearchProvider === 'grok'}
                                     block={isMobile}
+                                        style={{ borderRadius: 14, minHeight: 42 }}
                                   >
                                     测试 Grok
                                   </Button>
+                                    </div>
+                                  </div>
                                 </Card>
                               </Col>
                             </Row>
 
                             {webResearchTestResult && (
                               <Alert
-                                style={{ marginTop: 16, borderRadius: 12 }}
+                                style={{
+                                  marginTop: 16,
+                                  borderRadius: 18,
+                                  border: `1px solid ${alphaColor(webResearchTestResult.success ? token.colorSuccess : token.colorError, 0.18)}`,
+                                }}
                                 type={webResearchTestResult.success ? 'success' : 'error'}
                                 showIcon
                                 closable
                                 onClose={() => setWebResearchTestResult(null)}
                                 message={`${webResearchTestResult.provider.toUpperCase()}：${webResearchTestResult.message}`}
                                 description={
-                                  <div>
-                                    {webResearchTestResult.response_preview && (
-                                      <div style={{ marginBottom: 8 }}>
-                                        <strong>返回预览：</strong> {webResearchTestResult.response_preview}
+                                  <div style={{ display: 'grid', gap: 12, marginTop: 10 }}>
+                                    <div
+                                      style={{
+                                        padding: isMobile ? '12px 14px' : '14px 16px',
+                                        borderRadius: 18,
+                                        background: `linear-gradient(135deg, ${alphaColor(webResearchTestResult.success ? token.colorSuccess : token.colorError, 0.12)} 0%, ${alphaColor(token.colorBgElevated, 0.98)} 100%)`,
+                                        border: `1px solid ${alphaColor(webResearchTestResult.success ? token.colorSuccess : token.colorError, 0.16)}`,
+                                      }}
+                                    >
+                                      <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 8 }}>
+                                        Research Snapshot
+                                      </Text>
+                                      <Space wrap size={[8, 8]} style={{ marginBottom: 10 }}>
+                                        <Tag color={webResearchTestResult.success ? 'success' : 'error'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                          {webResearchTestResult.provider.toUpperCase()}
+                                        </Tag>
+                                        {typeof webResearchTestResult.result_count === 'number' ? (
+                                          <Tag color="blue" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                            结果 {webResearchTestResult.result_count}
+                                          </Tag>
+                                        ) : null}
+                                        {typeof webResearchTestResult.source_count === 'number' ? (
+                                          <Tag color={webResearchSearchStatus === 'success_with_sources' ? 'processing' : 'default'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                            来源 {webResearchTestResult.source_count}
+                                          </Tag>
+                                        ) : null}
+                                      </Space>
+                                      {webResearchStatusNote ? (
+                                        <Text style={{ display: 'block', color: token.colorTextSecondary, lineHeight: 1.75, marginBottom: webResearchTestResult.response_preview ? 10 : 0 }}>
+                                          {webResearchStatusNote}
+                                        </Text>
+                                      ) : null}
+                                      {webResearchTestResult.response_preview ? (
+                                        <div
+                                          style={{
+                                            padding: '10px 12px',
+                                            borderRadius: 14,
+                                            background: alphaColor(token.colorBgElevated, 0.96),
+                                            border: `1px solid ${alphaColor(webResearchTestResult.success ? token.colorSuccess : token.colorError, 0.12)}`,
+                                          }}
+                                        >
+                                          <Text strong style={{ display: 'block', marginBottom: 4 }}>
+                                            返回预览
+                                          </Text>
+                                          <Text style={{ color: token.colorTextSecondary, lineHeight: 1.7 }}>
+                                            {webResearchTestResult.response_preview}
+                                          </Text>
+                                        </div>
+                                      ) : null}
+                                    </div>
+
+                                    {(typeof webResearchTestResult.source_count === 'number' || webResearchSearchStatus === 'success_without_sources') && (
+                                      <div
+                                        style={{
+                                          padding: isMobile ? '12px 14px' : '14px 16px',
+                                          borderRadius: 18,
+                                          background: alphaColor(token.colorBgElevated, 0.96),
+                                          border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                                        }}
+                                      >
+                                        <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 8 }}>
+                                          Source Coverage
+                                        </Text>
+                                        <Space wrap size={[8, 8]} style={{ marginBottom: 8 }}>
+                                          <Tag color={webResearchSearchStatus === 'success_with_sources' ? 'processing' : 'default'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                            {webResearchSearchStatus === 'success_with_sources' ? '已返回来源' : '未返回来源'}
+                                          </Tag>
+                                          {webResearchTestResult.sources_backfilled ? (
+                                            <Tag color="cyan" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                              Exa 自动补全来源
+                                            </Tag>
+                                          ) : null}
+                                        </Space>
+                                        <Text style={{ display: 'block', color: token.colorTextSecondary, lineHeight: 1.75 }}>
+                                          {webResearchSearchStatus === 'success_with_sources'
+                                            ? `本次检索返回 ${webResearchTestResult.source_count ?? 0} 个可展示来源，可作为后续摘要与记忆沉淀的参考依据。`
+                                            : '本次联网检索已成功执行，但当前结果没有返回可展示来源，后续更适合结合返回摘要与状态说明一起判断。'}
+                                        </Text>
                                       </div>
                                     )}
-                                    {typeof webResearchTestResult.result_count === 'number' && (
-                                      <div>结果数：{webResearchTestResult.result_count}</div>
-                                    )}
-                                    {webResearchStatusNote && (
-                                      <div style={{ marginBottom: 8 }}>
-                                        <strong>{'状态'}</strong> {webResearchStatusNote}
+
+                                    {(webResearchTestResult.error || (webResearchTestResult.suggestions && webResearchTestResult.suggestions.length > 0)) && (
+                                      <div
+                                        style={{
+                                          padding: isMobile ? '12px 14px' : '14px 16px',
+                                          borderRadius: 18,
+                                          background: alphaColor(token.colorFillQuaternary, 0.72),
+                                          border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                                        }}
+                                      >
+                                        <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 8 }}>
+                                          Repair Notes
+                                        </Text>
+                                        {webResearchTestResult.error ? (
+                                          <div
+                                            style={{
+                                              padding: '10px 12px',
+                                              borderRadius: 14,
+                                              background: alphaColor(token.colorBgElevated, 0.96),
+                                              border: `1px solid ${alphaColor(token.colorError, 0.14)}`,
+                                              color: token.colorError,
+                                              marginBottom: webResearchTestResult.suggestions && webResearchTestResult.suggestions.length > 0 ? 10 : 0,
+                                            }}
+                                          >
+                                            <Text strong style={{ display: 'block', color: token.colorError, marginBottom: 4 }}>
+                                              错误信息
+                                            </Text>
+                                            <Text style={{ color: token.colorError, lineHeight: 1.7 }}>
+                                              {webResearchTestResult.error}
+                                            </Text>
+                                          </div>
+                                        ) : null}
+                                        {webResearchTestResult.suggestions && webResearchTestResult.suggestions.length > 0 ? (
+                                          <div style={{ display: 'grid', gap: 6 }}>
+                                            {webResearchTestResult.suggestions.map((item: any, index: any) => (
+                                              <Text key={index} style={{ color: token.colorTextSecondary, lineHeight: 1.75 }}>
+                                                • {item}
+                                              </Text>
+                                            ))}
+                                          </div>
+                                        ) : null}
                                       </div>
-                                    )}
-                                    {typeof webResearchTestResult.source_count === 'number' && webResearchSearchStatus === 'success_with_sources' && (
-                                      <div>来源数：{webResearchTestResult.source_count}</div>
-                                    )}
-                                    {webResearchTestResult.error && (
-                                      <div style={{ color: 'var(--color-error)', marginTop: 8 }}>
-                                        <strong>错误：</strong> {webResearchTestResult.error}
-                                      </div>
-                                    )}
-                                    {webResearchTestResult.suggestions && webResearchTestResult.suggestions.length > 0 && (
-                                      <ul style={{ marginTop: 8, paddingLeft: 18 }}>
-                                        {webResearchTestResult.suggestions.map((item: any, index: any) => (
-                                          <li key={index}>{item}</li>
-                                        ))}
-                                      </ul>
                                     )}
                                   </div>
                                 }
@@ -998,154 +1295,228 @@ export default function SettingsCurrentTab(props: any) {
                                 </Space>
                               }
                               description={
-                                <div style={{ marginTop: 8 }}>
+                                <div style={{ display: 'grid', gap: 12, marginTop: 10 }}>
                                   {testResult.success ? (
-                                    <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                                      {testResult.response_time_ms && (
-                                        <div style={{ fontSize: isMobile ? '12px' : '14px' }}>
-                                          ⚡ 响应时间: <strong>{testResult.response_time_ms} ms</strong>
+                                    <div
+                                      style={{
+                                        padding: isMobile ? '12px 14px' : '14px 16px',
+                                        borderRadius: 18,
+                                        background: `linear-gradient(135deg, ${alphaColor(token.colorSuccess, 0.12)} 0%, ${alphaColor(token.colorBgElevated, 0.98)} 100%)`,
+                                        border: `1px solid ${alphaColor(token.colorSuccess, 0.18)}`,
+                                      }}
+                                    >
+                                      <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 8 }}>
+                                        Runtime Snapshot
+                                      </Text>
+                                      <Space wrap size={[8, 8]} style={{ marginBottom: testResult.response_preview ? 10 : 0 }}>
+                                        <Tag color="success" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                          配置通过
+                                        </Tag>
+                                        {testResult.response_time_ms ? (
+                                          <Tag color="blue" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                            响应 {testResult.response_time_ms} ms
+                                          </Tag>
+                                        ) : null}
+                                      </Space>
+                                      {testResult.response_preview ? (
+                                        <div
+                                          style={{
+                                            padding: '10px 12px',
+                                            borderRadius: 14,
+                                            background: alphaColor(token.colorBgElevated, 0.96),
+                                            border: `1px solid ${alphaColor(token.colorSuccess, 0.12)}`,
+                                          }}
+                                        >
+                                          <Text strong style={{ display: 'block', marginBottom: 4 }}>
+                                            AI 响应预览
+                                          </Text>
+                                          <Text style={{ color: token.colorTextSecondary, lineHeight: 1.7 }}>
+                                            {testResult.response_preview}
+                                          </Text>
                                         </div>
-                                      )}
-                                      {testResult.response_preview && (
-                                        <div style={{
-                                          fontSize: isMobile ? '12px' : '13px',
-                                          padding: '8px 12px',
-                                          background: '#f6ffed',
-                                          borderRadius: '4px',
-                                          border: '1px solid #b7eb8f',
-                                          marginTop: '8px'
-                                        }}>
-                                          <div style={{ marginBottom: '4px', fontWeight: 500 }}>AI 响应预览:</div>
-                                          <div style={{ color: '#595959' }}>{testResult.response_preview}</div>
-                                        </div>
-                                      )}
-                                      <div style={{ color: 'var(--color-success)', fontSize: isMobile ? '12px' : '13px', marginTop: '4px' }}>
-                                        ✓ API 配置正确，可以正常使用
-                                      </div>
-                                    </Space>
+                                      ) : null}
+                                      <Text style={{ display: 'block', color: token.colorSuccess, fontSize: isMobile ? '12px' : '13px', marginTop: 10 }}>
+                                        当前 API 配置可正常连通，后续生成与测试会沿用这组基础接入信息。
+                                      </Text>
+                                    </div>
                                   ) : (
-                                    <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                                      {testResult.error && (
-                                        <div style={{
-                                          fontSize: isMobile ? '12px' : '13px',
-                                          padding: '8px 12px',
-                                          background: '#fff2e8',
-                                          borderRadius: '4px',
-                                          border: '1px solid #ffbb96',
-                                          color: '#d4380d'
-                                        }}>
-                                          <strong>错误信息:</strong> {testResult.error}
+                                    <div
+                                      style={{
+                                        padding: isMobile ? '12px 14px' : '14px 16px',
+                                        borderRadius: 18,
+                                        background: `linear-gradient(135deg, ${alphaColor(token.colorError, 0.12)} 0%, ${alphaColor(token.colorBgElevated, 0.98)} 100%)`,
+                                        border: `1px solid ${alphaColor(token.colorError, 0.18)}`,
+                                      }}
+                                    >
+                                      <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 8 }}>
+                                        Repair Notes
+                                      </Text>
+                                      <Space wrap size={[8, 8]} style={{ marginBottom: 10 }}>
+                                        <Tag color="error" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                          连接失败
+                                        </Tag>
+                                        {testResult.error_type ? (
+                                          <Tag color="default" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                            {testResult.error_type}
+                                          </Tag>
+                                        ) : null}
+                                      </Space>
+                                      {testResult.error ? (
+                                        <div
+                                          style={{
+                                            padding: '10px 12px',
+                                            borderRadius: 14,
+                                            background: alphaColor(token.colorBgElevated, 0.96),
+                                            border: `1px solid ${alphaColor(token.colorError, 0.14)}`,
+                                            color: token.colorError,
+                                          }}
+                                        >
+                                          <Text strong style={{ display: 'block', color: token.colorError, marginBottom: 4 }}>
+                                            错误信息
+                                          </Text>
+                                          <Text style={{ color: token.colorError, lineHeight: 1.7 }}>
+                                            {testResult.error}
+                                          </Text>
                                         </div>
-                                      )}
-                                      {testResult.error_type && (
-                                        <div style={{ fontSize: isMobile ? '11px' : '12px', color: 'var(--color-text-secondary)' }}>
-                                          错误类型: {testResult.error_type}
-                                        </div>
-                                      )}
-                                      {testResult.suggestions && testResult.suggestions.length > 0 && (
-                                        <div style={{ marginTop: '8px' }}>
-                                          <div style={{ fontSize: isMobile ? '12px' : '13px', fontWeight: 500, marginBottom: '4px' }}>
-                                            💡 解决建议:
-                                          </div>
-                                          <ul style={{
-                                            margin: 0,
-                                            paddingLeft: isMobile ? '16px' : '20px',
-                                            fontSize: isMobile ? '12px' : '13px',
-                                            color: '#595959'
-                                          }}>
+                                      ) : null}
+                                      {testResult.suggestions && testResult.suggestions.length > 0 ? (
+                                        <div style={{ marginTop: 10 }}>
+                                          <Text strong style={{ display: 'block', marginBottom: 6 }}>
+                                            建议按下面顺序排查
+                                          </Text>
+                                          <div style={{ display: 'grid', gap: 6 }}>
                                             {testResult.suggestions.map((suggestion: any, index: any) => (
-                                              <li key={index} style={{ marginBottom: '4px' }}>{suggestion}</li>
+                                              <Text key={index} style={{ color: token.colorTextSecondary, lineHeight: 1.7 }}>
+                                                • {suggestion}
+                                              </Text>
                                             ))}
-                                          </ul>
+                                          </div>
                                         </div>
-                                      )}
-                                    </Space>
+                                      ) : null}
+                                    </div>
                                   )}
                                   {endpointDiagnostics && (
                                     <div
                                       style={{
-                                        marginTop: 12,
-                                        padding: '10px 12px',
-                                        background: '#f5f5f5',
-                                        borderRadius: '6px',
-                                        border: '1px solid #d9d9d9',
-                                        fontSize: isMobile ? '12px' : '13px',
+                                        padding: isMobile ? '12px 14px' : '14px 16px',
+                                        borderRadius: 18,
+                                        background: alphaColor(token.colorBgElevated, 0.96),
+                                        border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
                                       }}
                                     >
-                                      <div style={{ fontWeight: 500, marginBottom: 6 }}>端点诊断</div>
-                                      <div style={{ marginBottom: 4 }}>
+                                      <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 8 }}>
+                                        Endpoint Diagnostics
+                                      </Text>
+                                      <Space wrap size={[8, 8]} style={{ marginBottom: 10 }}>
+                                        <Tag color="processing" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                          备用端点 {backupEndpoints.length}
+                                        </Tag>
+                                        <Tag color="default" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                          回退 {endpointDiagnostics.fallback_strategy || 'auto'}
+                                        </Tag>
+                                        <Tag color={endpointDiagnostics.auto_failover_enabled ? 'success' : 'default'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                          自动故障切换 {endpointDiagnostics.auto_failover_enabled ? '已启用' : '未启用'}
+                                        </Tag>
+                                      </Space>
+                                      <Text style={{ display: 'block', lineHeight: 1.7, color: token.colorTextSecondary }}>
                                         主端点：<code style={{ wordBreak: 'break-all' }}>{endpointDiagnostics.primary_endpoint || '未设置'}</code>
-                                      </div>
-                                      <div style={{ marginBottom: 4 }}>备用端点数：{backupEndpoints.length}</div>
-                                      <div style={{ marginBottom: 4 }}>回退策略：{endpointDiagnostics.fallback_strategy || 'auto'}</div>
-                                      <div>自动故障切换：{endpointDiagnostics.auto_failover_enabled ? '已启用' : '已禁用'}</div>
-                                      {backupEndpoints.length > 0 && (
-                                        <div style={{ marginTop: 8 }}>
-                                          <div style={{ fontWeight: 500, marginBottom: 4 }}>备用端点列表：</div>
-                                          <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                                            {backupEndpoints.map((endpoint: string, index: number) => (
-                                              <code key={`${endpoint}-${index}`} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                                                {endpoint}
-                                              </code>
-                                            ))}
-                                          </Space>
+                                      </Text>
+                                      {backupEndpoints.length > 0 ? (
+                                        <div style={{ marginTop: 10, display: 'grid', gap: 6 }}>
+                                          {backupEndpoints.map((endpoint: string, index: number) => (
+                                            <code
+                                              key={`${endpoint}-${index}`}
+                                              style={{
+                                                whiteSpace: 'pre-wrap',
+                                                wordBreak: 'break-all',
+                                                padding: '8px 10px',
+                                                borderRadius: 12,
+                                                background: alphaColor(token.colorFillAlter, 0.82),
+                                                border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                                              }}
+                                            >
+                                              {endpoint}
+                                            </code>
+                                          ))}
                                         </div>
-                                      )}
+                                      ) : null}
                                     </div>
                                   )}
                                   {transportDiagnostics && (
                                     <div
                                       style={{
-                                        marginTop: 12,
-                                        padding: '10px 12px',
-                                        background: '#f5f5f5',
-                                        borderRadius: '6px',
-                                        border: '1px solid #d9d9d9',
-                                        fontSize: isMobile ? '12px' : '13px',
+                                        padding: isMobile ? '12px 14px' : '14px 16px',
+                                        borderRadius: 18,
+                                        background: alphaColor(token.colorFillQuaternary, 0.72),
+                                        border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
                                       }}
                                     >
-                                      <div style={{ fontWeight: 500, marginBottom: 6 }}>传输诊断</div>
-                                      <div style={{ marginBottom: 4 }}>总尝试次数：{transportDiagnostics.summary?.total_attempts ?? 0}</div>
-                                      <div style={{ marginBottom: 4 }}>成功次数：{transportDiagnostics.summary?.successful_attempts ?? 0}</div>
-                                      <div style={{ marginBottom: 4 }}>尝试过的 API 模式：{(transportDiagnostics.summary?.api_modes_tried || []).join(' -> ') || '未知'}</div>
-                                      <div style={{ marginBottom: 4 }}>是否使用备用端点：{transportDiagnostics.summary?.backup_endpoint_used ? '是' : '否'}</div>
-                                      <div style={{ marginBottom: 4 }}>是否触发 API 模式回退：{transportDiagnostics.summary?.api_mode_fallback_used ? '是' : '否'}</div>
-                                      <div style={{ marginBottom: 4 }}>是否强制使用 Chat Completions：{transportDiagnostics.summary?.forced_chat_completions ? '是' : '否'}</div>
-                                      <div>是否使用规范化 Base URL：{transportDiagnostics.summary?.normalized_base_url_used ? '是' : '否'}</div>
-                                      {transportAttempts.length > 0 && (
-                                        <div style={{ marginTop: 8 }}>
-                                          <div style={{ fontWeight: 500, marginBottom: 4 }}>最近尝试：</div>
-                                          <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                                            {transportAttempts.map((attempt, index) => (
-                                              <div key={`${attempt.base_url || 'attempt'}-${attempt.attempt_number || index}-${index}`}>
-                                                <div>
-                                                  <code>{attempt.api_mode || '未知'}</code>
-                                                  {' / '}
-                                                  <strong>{attempt.result || '未知'}</strong>
-                                                  {' / '}
-                                                  {attempt.endpoint_role === 'backup' ? '备用端点' : '主端点'}
-                                                  {' / '}
-                                                  {attempt.attempt_number || 1}/{attempt.max_attempts || 1}
-                                                  {attempt.status_code ? ` / HTTP ${attempt.status_code}` : ''}
-                                                  {attempt.error_type ? ` / ${attempt.error_type}` : ''}
-                                                </div>
-                                                <code style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                                                  {`${attempt.base_url || ''}${attempt.endpoint_path || ''}` || '未知端点'}
-                                                </code>
-                                              </div>
-                                            ))}
-                                          </Space>
+                                      <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 8 }}>
+                                        Transport Diagnostics
+                                      </Text>
+                                      <Space wrap size={[8, 8]} style={{ marginBottom: 10 }}>
+                                        <Tag color="blue" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                          总尝试 {transportDiagnostics.summary?.total_attempts ?? 0}
+                                        </Tag>
+                                        <Tag color="success" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                          成功 {transportDiagnostics.summary?.successful_attempts ?? 0}
+                                        </Tag>
+                                        <Tag color={transportDiagnostics.summary?.backup_endpoint_used ? 'processing' : 'default'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                                          备用端点 {transportDiagnostics.summary?.backup_endpoint_used ? '已介入' : '未介入'}
+                                        </Tag>
+                                      </Space>
+                                      <div style={{ display: 'grid', gap: 6 }}>
+                                        <Text style={{ color: token.colorTextSecondary, lineHeight: 1.7 }}>
+                                          尝试过的 API 模式：{(transportDiagnostics.summary?.api_modes_tried || []).join(' -> ') || '未知'}
+                                        </Text>
+                                        <Text style={{ color: token.colorTextSecondary, lineHeight: 1.7 }}>
+                                          API 模式回退：{transportDiagnostics.summary?.api_mode_fallback_used ? '已触发' : '未触发'}
+                                        </Text>
+                                        <Text style={{ color: token.colorTextSecondary, lineHeight: 1.7 }}>
+                                          Chat Completions 强制模式：{transportDiagnostics.summary?.forced_chat_completions ? '是' : '否'}
+                                        </Text>
+                                        <Text style={{ color: token.colorTextSecondary, lineHeight: 1.7 }}>
+                                          Base URL 规范化：{transportDiagnostics.summary?.normalized_base_url_used ? '已使用' : '未使用'}
+                                        </Text>
+                                      </div>
+                                      {transportAttempts.length > 0 ? (
+                                        <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
+                                          {transportAttempts.map((attempt, index) => (
+                                            <div
+                                              key={`${attempt.base_url || 'attempt'}-${attempt.attempt_number || index}-${index}`}
+                                              style={{
+                                                padding: '10px 12px',
+                                                borderRadius: 14,
+                                                background: alphaColor(token.colorBgElevated, 0.96),
+                                                border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                                              }}
+                                            >
+                                              <Text style={{ display: 'block', lineHeight: 1.7 }}>
+                                                <code>{attempt.api_mode || '未知'}</code>
+                                                {' / '}
+                                                <strong>{attempt.result || '未知'}</strong>
+                                                {' / '}
+                                                {attempt.endpoint_role === 'backup' ? '备用端点' : '主端点'}
+                                                {' / '}
+                                                {attempt.attempt_number || 1}/{attempt.max_attempts || 1}
+                                                {attempt.status_code ? ` / HTTP ${attempt.status_code}` : ''}
+                                                {attempt.error_type ? ` / ${attempt.error_type}` : ''}
+                                              </Text>
+                                              <code style={{ display: 'block', marginTop: 4, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                                                {`${attempt.base_url || ''}${attempt.endpoint_path || ''}` || '未知端点'}
+                                              </code>
+                                            </div>
+                                          ))}
                                         </div>
-                                      )}
+                                      ) : null}
                                     </div>
                                   )}
-
                                 </div>
                               }
                               type={testResult.success ? 'success' : 'error'}
                               closable
                               onClose={() => setShowTestResult(false)}
-                              style={{ marginBottom: isMobile ? 16 : 24 }}
+                              style={{ marginBottom: isMobile ? 16 : 24, borderRadius: 18, border: `1px solid ${alphaColor(testResult.success ? token.colorSuccess : token.colorError, 0.18)}` }}
                             />
                           )}
 
@@ -1280,7 +1651,7 @@ export default function SettingsCurrentTab(props: any) {
                             )}
                           </Form.Item>
                         </Form>
-                      </Spin>
+                      )}
                     </Space>
   );
 }

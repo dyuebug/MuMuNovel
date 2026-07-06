@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from 'react';
-import { Button, Card, Collapse, Form, Input, Radio, Select, Space, Switch } from 'antd';
+import { Button, Card, Collapse, Form, Input, Radio, Select, Space, Switch, Tag, Typography, theme } from 'antd';
 import type { FormInstance } from 'antd';
 
 import type { CreativeMode, PlotStage, QualityPreset, StoryFocus } from '../types';
@@ -26,6 +26,7 @@ import {
 } from '../utils/generationPreferenceOptions';
 
 const { TextArea } = Input;
+const { Text } = Typography;
 
 type OutlineGenerateFormValues = {
   mode?: 'auto' | 'new' | 'continue';
@@ -84,6 +85,8 @@ export default function OutlineGenerateModalContent({
   projectDefaultQualityPreset,
   projectDefaultQualityNotes,
 }: OutlineGenerateModalContentProps) {
+  const { token } = theme.useToken();
+  const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
   const hasOutlines = outlinesCount > 0;
   const initialMode = hasOutlines ? 'continue' : 'new';
 
@@ -180,8 +183,109 @@ export default function OutlineGenerateModalContent({
       story_focus: preset.storyFocus,
     });
   }, [generateForm]);
+  const outlineGenerateGuideSteps = [
+    '先决定这轮是续写现有大纲还是全新生成，再确认章节规模，避免后面反复重开生成模式。',
+    '再校准创作模式、聚焦方向、剧情阶段和质量预设，把大纲的创作目标在提交前一次说清楚。',
+    '最后才按需展开高级策略或联网检索，让额外上下文服务于已经明确的生成主线。',
+  ];
+  const outlineGenerateWorkspaceFocus = outlineEnableWebResearch
+    ? {
+        title: '确认这轮大纲是否真的需要外部资料支撑',
+        note: '当前已经开启联网检索，更适合用于职业、时代、规则或世界观细节明确的大纲生成，不必给普通续写增加额外噪音。',
+      }
+    : !hasOutlines
+      ? {
+          title: '先定义第一版大纲的生成方向',
+          note: '当前项目还没有可续写的大纲，更适合先稳定章节规模和创作偏好，再产出第一版结构骨架。',
+        }
+      : activeOutlineCreationPreset
+        ? {
+            title: `围绕「${activeOutlineCreationPreset.label}」预设推进本轮大纲`,
+            note: '当前已经形成比较明确的创作倾向，适合先确认预设与章节数是否匹配，再提交这轮大纲生成。',
+          }
+        : {
+            title: '收束这轮大纲生成的控制条件',
+            note: '当前更适合先确认生成模式、创作偏好和质量预设，再进入更细的策略卡片，避免信息顺序打乱。',
+          };
 
   return (
+    <>
+        <div
+          style={{
+            marginTop: 8,
+            marginBottom: 18,
+            padding: '16px 18px',
+            borderRadius: 20,
+            background: `linear-gradient(135deg, ${alphaColor(token.colorPrimaryBg, 0.9)} 0%, ${alphaColor(token.colorBgElevated, 0.98)} 100%)`,
+            border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+          }}
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+              gap: 16,
+            }}
+          >
+            <div>
+              <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+                Outline Drafting Guide
+              </Text>
+              <Text strong style={{ display: 'block', fontSize: 17, marginBottom: 8 }}>
+                大纲生成控制台
+              </Text>
+              <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+                这里不改变原有生成请求或配置结构，只把设置顺序和判断重点前置，让本轮大纲生成更贴近当前项目目标。
+              </Text>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {outlineGenerateGuideSteps.map((item, index) => (
+                  <span
+                    key={item}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '6px 12px',
+                      borderRadius: 999,
+                      background: token.colorBgContainer,
+                      border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+                      color: token.colorText,
+                      fontSize: 12,
+                    }}
+                  >
+                    <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div
+              style={{
+                borderRadius: 18,
+                padding: '16px 18px 14px',
+                background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.5)} 100%)`,
+                border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+              }}
+            >
+              <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+                当前工作焦点
+              </Text>
+              <Text strong style={{ display: 'block', fontSize: 16, marginBottom: 8 }}>
+                {outlineGenerateWorkspaceFocus.title}
+              </Text>
+              <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+                {outlineGenerateWorkspaceFocus.note}
+              </Text>
+              <Space wrap size={[8, 8]}>
+                <Tag color="blue">{hasOutlines ? '已有大纲可续写' : '将生成首版大纲'}</Tag>
+                <Tag color="purple">章节数 {selectedOutlineChapterCount || 0}</Tag>
+                <Tag color="cyan">创作模式 {outlineSelectedCreativeModeLabel}</Tag>
+                <Tag color="green">聚焦 {outlineSelectedStoryFocusLabel}</Tag>
+                <Tag color="gold">质量预设 {outlineSelectedQualityPresetLabel}</Tag>
+              </Space>
+            </div>
+          </div>
+        </div>
         <Form
 
 
@@ -523,7 +627,12 @@ export default function OutlineGenerateModalContent({
                   <Card
                     size="small"
                     title="常用生成控制"
-                    style={{ marginBottom: 8 }}
+                    style={{
+                      marginBottom: 8,
+                      borderRadius: 18,
+                      border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+                      background: `linear-gradient(135deg, ${alphaColor(token.colorPrimaryBg, 0.72)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`,
+                    }}
                     styles={{ body: { padding: 12 } }}
                   >
                     <div
@@ -579,7 +688,12 @@ export default function OutlineGenerateModalContent({
 
                   <Collapse
                     size="small"
-                    style={{ marginBottom: 12 }}
+                    style={{
+                      marginBottom: 12,
+                      borderRadius: 18,
+                      overflow: 'hidden',
+                      border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                    }}
                     items={[
                       {
                         key: 'outline-advanced',
@@ -594,7 +708,16 @@ export default function OutlineGenerateModalContent({
                         children: (
                           <div style={{ maxHeight: 'min(72vh, 720px)', overflowY: 'auto', paddingRight: 4 }}>
 
-                  <Card size="small" title="创作预设" style={{ marginBottom: 12 }}>
+                  <Card
+                    size="small"
+                    title="创作预设"
+                    style={{
+                      marginBottom: 12,
+                      borderRadius: 18,
+                      border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+                      background: alphaColor(token.colorBgElevated, 0.98),
+                    }}
+                  >
                     <Space wrap>
                       {CREATION_PRESETS.map((preset) => (
                         <Button
@@ -627,7 +750,15 @@ export default function OutlineGenerateModalContent({
                   </Card>
 
                   {outlineCreationBlueprint && (
-                    <Card size="small" title="结构蓝图预览" style={{ marginBottom: 12 }}>
+                    <Card
+                      size="small"
+                      title="结构蓝图预览"
+                      style={{
+                        marginBottom: 12,
+                        borderRadius: 18,
+                        border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                      }}
+                    >
                       <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                         {outlineCreationBlueprint.summary}
                       </div>
@@ -646,7 +777,15 @@ export default function OutlineGenerateModalContent({
                   )}
 
                   {outlineStoryObjectiveCard && (
-                    <Card size="small" title="目标卡预览" style={{ marginBottom: 12 }}>
+                    <Card
+                      size="small"
+                      title="目标卡预览"
+                      style={{
+                        marginBottom: 12,
+                        borderRadius: 18,
+                        border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                      }}
+                    >
                       <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                         {outlineStoryObjectiveCard.summary}
                       </div>
@@ -661,8 +800,9 @@ export default function OutlineGenerateModalContent({
                             key={label}
                             style={{
                               padding: '10px 12px',
-                              border: '1px solid #f0f0f0',
-                              borderRadius: 8,
+                              border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                              borderRadius: 12,
+                              background: alphaColor(token.colorFillQuaternary, 0.56),
                             }}
                           >
                             <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
@@ -674,7 +814,15 @@ export default function OutlineGenerateModalContent({
                   )}
 
                   {outlineStoryResultCard && (
-                    <Card size="small" title="结果卡预览" style={{ marginBottom: 12 }}>
+                    <Card
+                      size="small"
+                      title="结果卡预览"
+                      style={{
+                        marginBottom: 12,
+                        borderRadius: 18,
+                        border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                      }}
+                    >
                       <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                         {outlineStoryResultCard.summary}
                       </div>
@@ -689,8 +837,9 @@ export default function OutlineGenerateModalContent({
                             key={label}
                             style={{
                               padding: '10px 12px',
-                              border: '1px solid #f0f0f0',
-                              borderRadius: 8,
+                              border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                              borderRadius: 12,
+                              background: alphaColor(token.colorFillQuaternary, 0.56),
                             }}
                           >
                             <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
@@ -702,7 +851,15 @@ export default function OutlineGenerateModalContent({
                   )}
 
                   {outlineStoryExecutionChecklist && (
-                    <Card size="small" title="执行清单预览" style={{ marginBottom: 12 }}>
+                    <Card
+                      size="small"
+                      title="执行清单预览"
+                      style={{
+                        marginBottom: 12,
+                        borderRadius: 18,
+                        border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                      }}
+                    >
                       <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                         {outlineStoryExecutionChecklist.summary}
                       </div>
@@ -717,8 +874,9 @@ export default function OutlineGenerateModalContent({
                             key={label}
                             style={{
                               padding: '10px 12px',
-                              border: '1px solid #f0f0f0',
-                              borderRadius: 8,
+                              border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                              borderRadius: 12,
+                              background: alphaColor(token.colorFillQuaternary, 0.56),
                             }}
                           >
                             <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
@@ -730,7 +888,15 @@ export default function OutlineGenerateModalContent({
                   )}
 
                   {outlineStoryRepetitionRiskCard && (
-                    <Card size="small" title="重复风险预警" style={{ marginBottom: 12 }}>
+                    <Card
+                      size="small"
+                      title="重复风险预警"
+                      style={{
+                        marginBottom: 12,
+                        borderRadius: 18,
+                        border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                      }}
+                    >
                       <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                         {outlineStoryRepetitionRiskCard.summary}
                       </div>
@@ -745,8 +911,9 @@ export default function OutlineGenerateModalContent({
                             key={label}
                             style={{
                               padding: '10px 12px',
-                              border: '1px solid #f0f0f0',
-                              borderRadius: 8,
+                              border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                              borderRadius: 12,
+                              background: alphaColor(token.colorFillQuaternary, 0.56),
                             }}
                           >
                             <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
@@ -758,7 +925,15 @@ export default function OutlineGenerateModalContent({
                   )}
 
                   {outlineStoryAcceptanceCard && (
-                    <Card size="small" title="验收卡预览" style={{ marginBottom: 12 }}>
+                    <Card
+                      size="small"
+                      title="验收卡预览"
+                      style={{
+                        marginBottom: 12,
+                        borderRadius: 18,
+                        border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                      }}
+                    >
                       <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                         {outlineStoryAcceptanceCard.summary}
                       </div>
@@ -773,8 +948,9 @@ export default function OutlineGenerateModalContent({
                             key={label}
                             style={{
                               padding: '10px 12px',
-                              border: '1px solid #f0f0f0',
-                              borderRadius: 8,
+                              border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                              borderRadius: 12,
+                              background: alphaColor(token.colorFillQuaternary, 0.56),
                             }}
                           >
                             <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
@@ -786,7 +962,15 @@ export default function OutlineGenerateModalContent({
                   )}
 
                   {outlineStoryCharacterArcCard && (
-                    <Card size="small" title="角色弧光预览" style={{ marginBottom: 12 }}>
+                    <Card
+                      size="small"
+                      title="角色弧光预览"
+                      style={{
+                        marginBottom: 12,
+                        borderRadius: 18,
+                        border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                      }}
+                    >
                       <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                         {outlineStoryCharacterArcCard.summary}
                       </div>
@@ -801,8 +985,9 @@ export default function OutlineGenerateModalContent({
                             key={label}
                             style={{
                               padding: '10px 12px',
-                              border: '1px solid #f0f0f0',
-                              borderRadius: 8,
+                              border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                              borderRadius: 12,
+                              background: alphaColor(token.colorFillQuaternary, 0.56),
                             }}
                           >
                             <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
@@ -814,7 +999,15 @@ export default function OutlineGenerateModalContent({
                   )}
 
                   {outlineVolumePacingPlan && (
-                    <Card size="small" title="卷级节奏预览" style={{ marginBottom: 12 }}>
+                    <Card
+                      size="small"
+                      title="卷级节奏预览"
+                      style={{
+                        marginBottom: 12,
+                        borderRadius: 18,
+                        border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                      }}
+                    >
                       <div style={{ color: 'var(--color-text-secondary)', marginBottom: 10 }}>
                         {outlineVolumePacingPlan.summary}
                       </div>
@@ -1000,7 +1193,7 @@ export default function OutlineGenerateModalContent({
           {/* 自定义模型选择 - 移到外层，所有模式都显示 */}
 
 
-
         </Form>
+    </>
   );
 }

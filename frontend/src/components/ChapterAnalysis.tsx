@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useRef, useState } from 'react';
-import { Modal, Spin, Alert, Tabs, Card, Tag, List, Empty, Statistic, Row, Col, Button, message } from 'antd';
+import { Modal, Spin, Alert, Tabs, Card, Tag, List, Empty, Statistic, Row, Col, Button, message, Space, Typography, theme } from 'antd';
 import {
   ThunderboltOutlined,
   BulbOutlined,
@@ -15,16 +15,29 @@ import {
 } from '@ant-design/icons';
 import type { AnalysisTask, ChapterAnalysisResponse } from '../types';
 import { chapterApi } from '../services/modularApi';
-import { isRequestCancelledError } from '../services/core/httpClient';
+import { getAxiosErrorStatus, isRequestCancelledError, silentRequestConfig } from '../services/core/httpClient';
 import { getQualityTrendLabel } from '../utils/storyCreationQualitySummary';
 import { MAX_CONSECUTIVE_TASK_POLL_ERRORS } from '../utils/taskPolling';
 import { isAnalysisTaskRetrying } from '../utils/analysisTasks';
+import InlineDeferredPanel from './InlineDeferredPanel';
+import WorkflowEntryFallback from './WorkflowEntryFallback';
+
+const { Text } = Typography;
 
 // 判断是否为移动设备
 const LazyChapterRegenerationModal = lazy(() => import('./ChapterRegenerationModal'));
 const LazyChapterContentComparison = lazy(() => import('./ChapterContentComparison'));
 
 const isMobileDevice = () => window.innerWidth < 768;
+
+const isChapterAnalysisNotFoundError = (error: unknown) => {
+  if (getAxiosErrorStatus(error) !== 404) {
+    return false;
+  }
+
+  const detail = (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+  return detail === 'Chapter analysis not found' || (error as Error).message === 'Chapter analysis not found';
+};
 
 const ANALYSIS_PLOT_STAGE_LABELS: Record<string, string> = {
   development: '发展阶段',
@@ -229,6 +242,7 @@ const areAnalysisResultsEqual = (
 };
 
 export default function ChapterAnalysis({ chapterId, visible, onClose }: ChapterAnalysisProps) {
+  const { token } = theme.useToken();
   const [task, setTask] = useState<AnalysisTask | null>(null);
   const [analysis, setAnalysis] = useState<ChapterAnalysisResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -408,7 +422,7 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
       const data: ChapterAnalysisResponse = await chapterApi.getChapterAnalysis(
         chapterId,
         false,
-        { signal: abortController.signal },
+        silentRequestConfig({ signal: abortController.signal }),
       );
       if (abortController.signal.aborted || requestAbortRef.current !== abortController || !mountedRef.current) {
         return;
@@ -421,6 +435,11 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
       updateAnalysis(data);
     } catch (err) {
       if (isRequestCancelledError(err) || abortController.signal.aborted) {
+        return;
+      }
+      if (isChapterAnalysisNotFoundError(err)) {
+        updateAnalysis(null);
+        setError(null);
         return;
       }
       if (mountedRef.current) {
@@ -699,6 +718,70 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
   const draftMajorCount = draftResult?.major_count ?? 0;
   const draftPriorityIssueCount = draftResult?.priority_issue_count ?? (draftCriticalCount + draftMajorCount);
   const draftAppliedIssueCount = draftResult?.applied_issue_count ?? draftResult?.applied_critical_count ?? 0;
+  const analysisSuggestionCount = formatAnalysisTextList(analysis?.analysis?.suggestions).length;
+  const chapterAnalysisGuideSteps = [
+    '先确认本章当前是准备发起分析、跟进运行进度，还是进入结果复核阶段，再决定你需要停留的工作区。',
+    '再优先看概览里的质量信号、质检问题和自动修订草稿，把真正影响下一步动作的信息先收拢出来。',
+    '最后再进入钩子、伏笔、角色和记忆等细分标签页，避免一开始就在细节里来回切换。',
+  ];
+  const analysisTaskStatusLabel = !task
+    ? '未开始'
+    : task.status === 'pending'
+      ? '排队中'
+      : task.status === 'running'
+        ? '分析中'
+        : task.status === 'completed'
+          ? '已完成'
+          : task.status === 'failed'
+            ? '失败'
+            : task.status;
+  const chapterAnalysisWorkspaceFocus = error
+    ? {
+        title: '先处理这一轮分析阻塞',
+        note: '当前已经返回错误信息，更适合先确认章节上下文或任务状态，再重新触发新的分析请求。',
+      }
+    : loading && !task
+      ? {
+          title: '正在准备章节分析上下文',
+          note: '当前正在读取章节信息与分析状态，适合先等待基础数据就绪，再决定是发起新分析还是进入结果复核。',
+        }
+      : task && (task.status === 'pending' || task.status === 'running' || isAnalysisTaskRetrying(task))
+        ? {
+            title: '跟进当前章节分析进度',
+            note: '当前后台分析已经启动，适合先看进度和状态提示，不要急着重复发起新的分析请求。',
+          }
+        : task?.status === 'failed'
+          ? {
+              title: '确认失败原因后再决定是否重试',
+              note: '当前任务未完成，更适合先阅读失败提示和自动恢复情况，再判断是否需要重新分析。',
+            }
+          : draftResult
+            ? {
+                title: '优先复核自动修订草稿与高优先问题',
+                note: '当前已经得到自动修订草稿，适合先确认处理范围和剩余问题，再决定是应用草稿还是转去重生成。',
+              }
+            : checkerResult
+              ? {
+                  title: '先用概览页锁定主要质量短板',
+                  note: '当前已经加载文本质检结果，更适合先处理优先修复项和质量趋势，再继续查看细分结构标签页。',
+                }
+              : task?.status === 'completed' && analysis
+                ? {
+                    title: '从本章分析结果决定下一步动作',
+                    note: '当前结果已经完整返回，适合先看概览中的摘要、建议和评分，再决定是否进入重生成或内容复核。',
+                  }
+                : {
+                    title: '确认是否发起本章的首次分析',
+                    note: '当前还没有可展示的分析结果，适合先准备好本章上下文，再由现有分析链路生成这一轮诊断信息。',
+                  };
+  const sectionLabelStyle = {
+    display: 'block',
+    fontSize: 11,
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase' as const,
+    color: token.colorTextTertiary,
+    marginBottom: 6,
+  };
 
   const getSeverityTagColor = (severity?: string) => {
     switch ((severity || '').toLowerCase()) {
@@ -1352,7 +1435,17 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
 
   return (
     <Modal
-      title="章节分析"
+      title={(
+        <div>
+          <Text style={sectionLabelStyle}>Chapter Analysis</Text>
+          <Text strong style={{ display: 'block', fontSize: 18, marginBottom: 4 }}>
+            章节分析
+          </Text>
+          <Text type="secondary">
+            {chapterInfo ? `第${chapterInfo.chapter_number}章：${chapterInfo.title}` : `章节 ID：${chapterId}`}
+          </Text>
+        </div>
+      )}
       open={visible}
       onCancel={onClose}
       width={isMobile ? 'calc(100vw - 32px)' : '90%'}
@@ -1424,11 +1517,99 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
         </div>
       )}
     >
-      {loading && !task && (
-        <div style={{ textAlign: 'center', padding: '48px' }}>
-          <Spin size="large" />
-          <p style={{ marginTop: 16 }}>加载中...</p>
+      <Card
+        size="small"
+        style={{
+          marginBottom: 16,
+          borderRadius: 22,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          background: `linear-gradient(135deg, ${token.colorPrimaryBg} 0%, ${token.colorBgContainer} 100%)`,
+        }}
+        styles={{ body: { padding: 16 } }}
+      >
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+            gap: 16,
+          }}
+        >
+          <div>
+            <Text style={sectionLabelStyle}>Analysis Guide</Text>
+            <Text strong style={{ display: 'block', fontSize: 17, marginBottom: 8 }}>
+              本章分析工作台
+            </Text>
+            <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+              这里不改变原有分析、轮询、草稿应用或重生成联动逻辑，只把阅读顺序和决策重点提前说明，帮助你先看对的信号，再进入更细的分析标签页。
+            </Text>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {chapterAnalysisGuideSteps.map((item, index) => (
+                <span
+                  key={item}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '6px 12px',
+                    borderRadius: 999,
+                    background: token.colorBgContainer,
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    color: token.colorText,
+                    fontSize: 12,
+                  }}
+                >
+                  <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+                  {item}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div
+            style={{
+              borderRadius: 18,
+              padding: '16px 18px 14px',
+              background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
+              border: `1px solid ${token.colorBorderSecondary}`,
+            }}
+          >
+            <Text style={sectionLabelStyle}>当前工作焦点</Text>
+            <Text strong style={{ display: 'block', fontSize: 16, marginBottom: 8 }}>
+              {chapterAnalysisWorkspaceFocus.title}
+            </Text>
+            <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+              {chapterAnalysisWorkspaceFocus.note}
+            </Text>
+            <Space wrap size={[8, 8]}>
+              <Tag color="blue">{chapterInfo ? `第 ${chapterInfo.chapter_number} 章` : '章节信息加载中'}</Tag>
+              <Tag color={task?.status === 'failed' ? 'red' : task?.status === 'completed' ? 'green' : task ? 'gold' : 'default'}>
+                状态：{analysisTaskStatusLabel}
+              </Tag>
+              <Tag color={analysisSuggestionCount > 0 ? 'purple' : 'default'}>
+                建议 {analysisSuggestionCount} 条
+              </Tag>
+              <Tag color={checkerIssueTotal > 0 ? 'orange' : 'default'}>
+                质检问题 {checkerIssueTotal}
+              </Tag>
+              <Tag color={draftResult ? 'cyan' : 'default'}>
+                {draftResult ? `草稿已生成 · 已处理 ${draftAppliedIssueCount}` : '未生成自动修订草稿'}
+              </Tag>
+            </Space>
+          </div>
         </div>
+      </Card>
+
+      {loading && !task && (
+        <InlineDeferredPanel
+          eyebrow="Analysis Workspace"
+          title="正在恢复章节分析工作台"
+          message="系统正在准备章节信息、任务状态与分析入口，原有分析查询、轮询恢复与结果接管逻辑保持不变。"
+          minHeight={260}
+          tags={[
+            { label: chapterInfo ? `第 ${chapterInfo.chapter_number} 章` : '章节信息准备中', color: 'blue' },
+            { label: '分析状态同步中', color: 'processing' },
+            { label: '分析链路保持原样', color: 'green' },
+          ]}
+        />
       )}
 
       {error && (
@@ -1481,10 +1662,17 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
         ]}
       >
         {draftPreviewLoading ? (
-          <div style={{ textAlign: 'center', padding: '48px 0' }}>
-            <Spin size="large" />
-            <p style={{ marginTop: 16 }}>正在加载修订草稿...</p>
-          </div>
+          <InlineDeferredPanel
+            eyebrow="Draft Preview"
+            title="正在展开自动修订草稿预览"
+            message="系统正在恢复修订摘要、正文预览与应用入口，原有草稿请求、应用提交流程与状态处理保持不变。"
+            minHeight={240}
+            tags={[
+              { label: '修订草稿拉取中', color: 'processing' },
+              { label: '应用入口待接管', color: 'gold' },
+              { label: '草稿逻辑保持原样', color: 'green' },
+            ]}
+          />
         ) : (
           <div>
             {draftResult && (
@@ -1518,7 +1706,20 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
 
       {/* 重新生成Modal */}
       {chapterInfo && (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={(
+            <WorkflowEntryFallback
+              eyebrow="Regeneration Workspace"
+              title="正在接管章节重生成面板"
+              message="系统正在恢复重生成建议、质量门槛与替换入口，原有重新生成链路和成功回调保持不变。"
+              tags={[
+                { label: '章节重生成', color: 'magenta' },
+                { label: '建议面板恢复中', color: 'processing' },
+                { label: '替换逻辑保持原样', color: 'green' },
+              ]}
+            />
+          )}
+        >
           <LazyChapterRegenerationModal
           visible={regenerationModalVisible}
           onCancel={() => setRegenerationModalVisible(false)}
@@ -1545,7 +1746,20 @@ export default function ChapterAnalysis({ chapterId, visible, onClose }: Chapter
 
       {/* 内容对比组件 */}
       {chapterInfo && comparisonModalVisible && (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={(
+            <WorkflowEntryFallback
+              eyebrow="Comparison Review"
+              title="正在展开正文对比审阅面板"
+              message="系统正在恢复原稿、新稿与应用确认区，原有对比、应用和放弃逻辑保持不变。"
+              tags={[
+                { label: '正文对比', color: 'geekblue' },
+                { label: '审阅面板恢复中', color: 'processing' },
+                { label: '确认逻辑保持原样', color: 'green' },
+              ]}
+            />
+          )}
+        >
           <LazyChapterContentComparison
           visible={comparisonModalVisible}
           onClose={() => setComparisonModalVisible(false)}

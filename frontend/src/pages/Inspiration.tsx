@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { useBusyNavigationGuard } from '../hooks/useBusyNavigationGuard';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Card, Input, Button, Space, Typography, message, Spin, Modal, Switch, theme } from 'antd';
-import { SendOutlined, ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Alert, Card, Input, Button, Space, Typography, message, Modal, Switch, Tag, theme } from 'antd';
+import { SendOutlined, ArrowLeftOutlined, ReloadOutlined, LoadingOutlined } from '@ant-design/icons';
 import { backgroundTaskApi, inspirationApi, type BackgroundTaskStatus } from '../services/modularApi';
 import { AIProjectGenerator, type GenerationConfig } from '../components/AIProjectGenerator';
 import {
@@ -14,6 +14,7 @@ import { invalidateAllProjectCollectionFreshness } from '../store/projectCollect
 import { invalidateProjectCareers } from '../services/projectCareers';
 import type { InspirationOptionResponse, InspirationQuickGenerateResponse } from '../services/modules/inspiration';
 import { waitForBackgroundTaskCompletion } from '../utils/taskPolling';
+import { designDisplayFont } from '../theme/themeConfig';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -184,6 +185,16 @@ const formatInspirationPrompt = (fallbackPrompt: string, response?: InspirationO
   return `${prompt}\n\n${notes.join('\n')}`;
 };
 
+const clampPreviewText = (value: string | undefined, fallback: string, maxLength = 72) => {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return fallback;
+  }
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength).trim()}...`
+    : normalized;
+};
+
 const Inspiration: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -195,6 +206,7 @@ const Inspiration: React.FC = () => {
   } = useBusyNavigationGuard();
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const { token } = theme.useToken();
+  const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
 
   useEffect(() => {
     const handleResize = () => {
@@ -1604,6 +1616,103 @@ const Inspiration: React.FC = () => {
     handleRestart();
   };
 
+  const editorialInk = token.colorText;
+  const heroBackground = `linear-gradient(135deg, #171411 0%, color-mix(in srgb, #171411 68%, ${token.colorPrimary} 32%) 100%)`;
+  const quietPanelBackground = `linear-gradient(180deg, color-mix(in srgb, ${token.colorBgContainer} 98%, ${token.colorBgLayout} 2%) 0%, color-mix(in srgb, ${token.colorBgContainer} 92%, ${token.colorBgLayout} 8%) 100%)`;
+  const panelBorder = `1px solid color-mix(in srgb, ${token.colorPrimary} 12%, ${token.colorBorder} 88%)`;
+  const outlineButtonStyle = {
+    borderRadius: 999,
+    background: 'color-mix(in srgb, var(--ant-color-bg-container) 14%, transparent)',
+    border: '1px solid color-mix(in srgb, var(--ant-color-bg-container) 20%, transparent)',
+    color: editorialInk,
+    boxShadow: `0 10px 18px color-mix(in srgb, ${token.colorText} 18%, transparent)`,
+    backdropFilter: 'blur(8px)',
+  } as const;
+  const stepTitleMap: Record<Step, string> = {
+    idea: '灵感起点',
+    title: '标题探索',
+    description: '简介打磨',
+    theme: '主题确认',
+    genre: '题材组合',
+    perspective: '视角选择',
+    outline_mode: '结构模式',
+    confirm: '最终确认',
+    generating: '项目生成中',
+    complete: '项目已完成',
+  };
+  const currentStepLabel = stepTitleMap[currentStep];
+  const isConversationStage = currentStep !== 'generating' && currentStep !== 'complete';
+  const heroSummaryItems = [
+    { label: '当前阶段', value: currentStepLabel },
+    { label: '消息数', value: `${messages.length}` },
+    { label: '联网研究', value: executionEnableWebResearch ? '已开启' : '未开启' },
+  ];
+  const chatBubbleBaseBorder = `1px solid ${alphaColor(token.colorBorderSecondary, 0.82)}`;
+  const aiBubbleBackground = `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.4)} 100%)`;
+  const userBubbleBackground = `linear-gradient(135deg, ${alphaColor(token.colorPrimary, 0.92)} 0%, ${alphaColor(token.colorInfo, 0.74)} 100%)`;
+  const researchPanelBackground = `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillAlter, 0.58)} 100%)`;
+  const controlPanelStyle = {
+    borderRadius: 16,
+    border: chatBubbleBaseBorder,
+    background: `linear-gradient(180deg, ${alphaColor(token.colorBgElevated, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.42)} 100%)`,
+    padding: '12px 14px',
+  } as const;
+  const conversationStepOrder: Step[] = [
+    'idea',
+    'title',
+    'description',
+    'theme',
+    'genre',
+    'perspective',
+    'outline_mode',
+    'confirm',
+  ];
+  const currentStageIndex = conversationStepOrder.indexOf(currentStep);
+  const selectedOutlineModeLabel = wizardData.outline_mode === 'one-to-many' ? '细化模式' : '传统模式';
+  const selectedGenreLabel = wizardData.genre?.length ? wizardData.genre.join('、') : '待确认';
+  const stepProgressItems = conversationStepOrder.map((stepKey, index) => {
+    const isCurrent = currentStageIndex === index;
+    const isCompleted = currentStageIndex > index;
+    return {
+      key: stepKey,
+      label: stepTitleMap[stepKey],
+      caption: index === 0 ? '输入灵感' : isCompleted ? '已沉淀' : isCurrent ? '进行中' : '待推进',
+      isCurrent,
+      isCompleted,
+    };
+  });
+  const projectBriefItems = [
+    {
+      label: '灵感原点',
+      value: clampPreviewText(initialIdea, '等待你输入第一句真正想写的冲突与代价', 56),
+    },
+    {
+      label: '标题方向',
+      value: clampPreviewText(wizardData.title, '还没有沉淀出正式书名', 32),
+    },
+    {
+      label: '一句话简介',
+      value: clampPreviewText(wizardData.description, '简介还在对话中提炼', 68),
+    },
+    {
+      label: '主题钩子',
+      value: clampPreviewText(wizardData.theme, '主题尚未确认', 42),
+    },
+    {
+      label: '题材组合',
+      value: selectedGenreLabel,
+    },
+    {
+      label: '叙事结构',
+      value: `${wizardData.narrative_perspective || '待确认'} · ${selectedOutlineModeLabel}`,
+    },
+  ];
+  const researchStatusLabel = executionEnableWebResearch
+    ? previewResearchQuery || '将自动生成检索词'
+    : inspirationResearch.assets.length > 0
+      ? `已缓存 ${inspirationResearch.assets.length} 条资料，待重新启用`
+      : '当前不带入联网研究';
+
   // 渲染对话界面
   const renderChat = () => (
     <>
@@ -1613,9 +1722,13 @@ const Inspiration: React.FC = () => {
           height: isMobile ? 'calc(100vh - 280px)' : 600,
           overflowY: 'auto',
           marginBottom: 16,
-          boxShadow: `0 8px 24px color-mix(in srgb, ${token.colorTextBase} 20%, transparent)`,
+          borderRadius: isMobile ? 20 : 24,
+          border: panelBorder,
+          background: quietPanelBackground,
+          boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorTextBase} 12%, transparent)`,
           scrollBehavior: 'smooth'
         }}
+        styles={{ body: { padding: isMobile ? 14 : 18 } }}
       >
         <Space direction="vertical" style={{ width: '100%' }} size="large">
           {messages.map((msg, index) => (
@@ -1631,20 +1744,34 @@ const Inspiration: React.FC = () => {
               }}
             >
               <div style={{
-                maxWidth: '80%',
-                padding: '12px 16px',
-                borderRadius: 12,
-                background: msg.type === 'ai' ? token.colorBgContainer : token.colorPrimary,
+                maxWidth: isMobile ? '90%' : '82%',
+                padding: isMobile ? '12px 14px' : '14px 16px',
+                borderRadius: 18,
+                border: msg.type === 'ai' ? chatBubbleBaseBorder : `1px solid ${alphaColor(token.colorPrimary, 0.22)}`,
+                background: msg.type === 'ai' ? aiBubbleBackground : userBubbleBackground,
                 color: msg.type === 'ai' ? token.colorText : token.colorWhite,
                 boxShadow: msg.type === 'ai'
-                  ? `0 2px 10px color-mix(in srgb, ${token.colorTextBase} 12%, transparent)`
-                  : `0 4px 14px color-mix(in srgb, ${token.colorPrimary} 30%, transparent)`,
+                  ? `0 12px 28px ${alphaColor(token.colorTextBase, 0.08)}`
+                  : `0 14px 32px ${alphaColor(token.colorPrimary, 0.22)}`,
               }}>
+                <Text
+                  style={{
+                    display: 'block',
+                    marginBottom: 8,
+                    fontSize: 11,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: msg.type === 'ai' ? token.colorTextTertiary : 'rgba(255,255,255,0.72)',
+                  }}
+                >
+                  {msg.type === 'ai' ? 'Muse' : 'You'}
+                </Text>
                 <Paragraph
                   style={{
                     margin: 0,
                     color: msg.type === 'ai' ? token.colorText : token.colorWhite,
-                    whiteSpace: 'pre-wrap'
+                    whiteSpace: 'pre-wrap',
+                    lineHeight: 1.8,
                   }}
                 >
                   {msg.content}
@@ -1656,6 +1783,23 @@ const Inspiration: React.FC = () => {
                     style={{ width: '100%', marginTop: 12 }}
                     size="small"
                   >
+                    <div
+                      style={{
+                        ...controlPanelStyle,
+                        padding: '10px 12px',
+                      }}
+                    >
+                      <Text strong style={{ display: 'block', fontSize: 12 }}>
+                        {msg.isMultiSelect
+                          ? `已选 ${selectedOptions.length} 项，可继续多选后统一确认`
+                          : '点击任意提案即可继续推进这轮灵感对话'}
+                      </Text>
+                      <Text type="secondary" style={{ display: 'block', marginTop: 4, fontSize: 12 }}>
+                        {msg.isMultiSelect
+                          ? '这一轮更像编辑筛选题材组合，先圈住你想要的方向，再统一提交。'
+                          : '每张卡片都对应一条可直接采纳的编辑建议，你也可以先改写再发送。'}
+                      </Text>
+                    </div>
                     {msg.options.map((option, optIndex) => (
                       <Card
                         key={optIndex}
@@ -1665,23 +1809,27 @@ const Inspiration: React.FC = () => {
                         style={{
                           cursor: msg.optionsDisabled ? 'not-allowed' : 'pointer',
                           border: msg.isMultiSelect && selectedOptions.includes(option)
-                            ? `2px solid ${token.colorPrimary}`
-                            : `1px solid ${token.colorBorder}`,
+                            ? `2px solid ${alphaColor(token.colorPrimary, 0.42)}`
+                            : `1px solid ${alphaColor(token.colorBorderSecondary, 0.86)}`,
                           background: msg.optionsDisabled
-                            ? token.colorBgLayout
+                            ? alphaColor(token.colorBgLayout, 0.98)
                             : msg.isMultiSelect && selectedOptions.includes(option)
-                              ? token.colorPrimaryBg
-                              : token.colorBgContainer,
+                              ? `linear-gradient(180deg, ${alphaColor(token.colorPrimaryBg, 0.94)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`
+                              : `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.4)} 100%)`,
                           opacity: msg.optionsDisabled ? 0.6 : 1,
                           animation: 'floatIn 0.6s ease-out',
                           animationDelay: `${optIndex * 0.1}s`,
                           animationFillMode: 'both',
                           transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                          borderRadius: 16,
+                          boxShadow: msg.isMultiSelect && selectedOptions.includes(option)
+                            ? `0 10px 24px ${alphaColor(token.colorPrimary, 0.14)}`
+                            : 'none',
                         }}
                         onMouseEnter={(e) => {
                           if (!msg.optionsDisabled) {
                             e.currentTarget.style.transform = 'translateY(-2px) scale(1.02)';
-                            e.currentTarget.style.boxShadow = `0 8px 22px color-mix(in srgb, ${token.colorTextBase} 14%, transparent)`;
+                            e.currentTarget.style.boxShadow = `0 12px 24px ${alphaColor(token.colorTextBase, 0.12)}`;
                           }
                         }}
                         onMouseLeave={(e) => {
@@ -1691,7 +1839,28 @@ const Inspiration: React.FC = () => {
                           }
                         }}
                       >
-                        {option}
+                        <Text
+                          style={{
+                            display: 'block',
+                            marginBottom: 6,
+                            fontSize: 11,
+                            letterSpacing: '0.08em',
+                            textTransform: 'uppercase',
+                            color: msg.isMultiSelect && selectedOptions.includes(option)
+                              ? token.colorPrimary
+                              : token.colorTextTertiary,
+                          }}
+                        >
+                          {`Option ${String(optIndex + 1).padStart(2, '0')}`}
+                        </Text>
+                        <Paragraph style={{ margin: 0, color: token.colorText, lineHeight: 1.8 }}>
+                          {option}
+                        </Paragraph>
+                        {msg.isMultiSelect && selectedOptions.includes(option) && (
+                          <Text style={{ display: 'block', marginTop: 8, fontSize: 12, color: token.colorPrimary }}>
+                            已加入本轮候选清单
+                          </Text>
+                        )}
                       </Card>
                     ))}
 
@@ -1701,6 +1870,7 @@ const Inspiration: React.FC = () => {
                         block
                         onClick={handleConfirmGenres}
                         disabled={selectedOptions.length === 0}
+                        style={{ borderRadius: 14, height: 40 }}
                       >
                         确认选择 ({selectedOptions.length})
                       </Button>
@@ -1708,9 +1878,15 @@ const Inspiration: React.FC = () => {
 
                     {/* 反馈优化区域 - 新增 */}
                     {msg.canRefine && !msg.optionsDisabled && !msg.isMultiSelect && (
-                      <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${token.colorBorder}` }}>
+                      <div
+                        style={{
+                          marginTop: 8,
+                          paddingTop: 10,
+                          borderTop: `1px dashed ${alphaColor(token.colorBorderSecondary, 0.9)}`,
+                        }}
+                      >
                         {showFeedbackInput === index ? (
-                          <Space direction="vertical" style={{ width: '100%' }} size="small">
+                          <Space direction="vertical" style={{ ...controlPanelStyle, width: '100%' }} size="small">
                             <TextArea
                               value={feedbackValue}
                               onChange={(e) => setFeedbackValue(e.target.value)}
@@ -1753,7 +1929,7 @@ const Inspiration: React.FC = () => {
                             onClick={() => setShowFeedbackInput(index)}
                             style={{ padding: 0, height: 'auto' }}
                           >
-                            💡 不太满意？告诉我你的想法
+                            不太满意？告诉我你的想法
                           </Button>
                         )}
                       </div>
@@ -1770,7 +1946,34 @@ const Inspiration: React.FC = () => {
               padding: 20,
               animation: 'fadeIn 0.3s ease-in'
             }}>
-              <Spin tip={refining ? "正在根据您的反馈重新生成..." : "正在思考中..."} />
+              <div
+                style={{
+                  display: 'inline-block',
+                  padding: '14px 18px',
+                  borderRadius: 16,
+                  border: chatBubbleBaseBorder,
+                  background: aiBubbleBackground,
+                }}
+              >
+                <Space direction="vertical" size={8} style={{ alignItems: 'flex-start' }}>
+                  <Tag color="processing" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                    {refining ? '灵感重排中' : '灵感编排中'}
+                  </Tag>
+                  <Space size={10} align="start">
+                    <LoadingOutlined spin style={{ color: token.colorPrimary, fontSize: 16, marginTop: 2 }} />
+                    <div style={{ textAlign: 'left' }}>
+                      <Text strong style={{ display: 'block' }}>
+                        {refining ? '正在根据你的反馈重写候选方向' : '正在整理下一组灵感候选'}
+                      </Text>
+                      <Text type="secondary" style={{ display: 'block', marginTop: 4, lineHeight: 1.7, maxWidth: 320 }}>
+                        {refining
+                          ? '系统会保留当前上下文，只重排这一轮不满意的表达、冲突和节奏建议。'
+                          : '系统正在结合当前对话、联网研究和已选信息，生成下一步最适合你继续判断的候选。'}
+                      </Text>
+                    </div>
+                  </Space>
+                </Space>
+              </div>
             </div>
           )}
 
@@ -1779,11 +1982,34 @@ const Inspiration: React.FC = () => {
       </Card>
 
       <Card
-        style={{ boxShadow: `0 4px 12px color-mix(in srgb, ${token.colorTextBase} 14%, transparent)` }}
-        styles={{ body: { padding: 12 } }}
+        style={{
+          borderRadius: isMobile ? 20 : 24,
+          border: panelBorder,
+          background: researchPanelBackground,
+          boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorTextBase} 12%, transparent)`,
+        }}
+        styles={{ body: { padding: 14 } }}
       >
+        <Text
+          style={{
+            display: 'block',
+            marginBottom: 6,
+            fontSize: 11,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: token.colorTextTertiary,
+          }}
+        >
+          Research Assist
+        </Text>
+        <Text strong style={{ display: 'block', marginBottom: 8, fontSize: 16 }}>
+          联网研究与输入工作台
+        </Text>
+        <Text type="secondary" style={{ display: 'block', marginBottom: 14, lineHeight: 1.7 }}>
+          这里负责给灵感对话补充题材资料、趋势参考和自定义检索词，同时也是你继续推进对话的主输入区。
+        </Text>
         <Space direction="vertical" size={12} style={{ width: '100%', marginBottom: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ ...controlPanelStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <div>
               <Text strong>联网搜索增强</Text>
               <Text type="secondary" style={{ display: 'block', fontSize: 12, marginTop: 4 }}>
@@ -1800,7 +2026,7 @@ const Inspiration: React.FC = () => {
           {executionEnableWebResearch && (
             <>
               {showResearchQueryEditor ? (
-                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Space direction="vertical" size={8} style={{ ...controlPanelStyle, width: '100%' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <Text strong style={{ fontSize: 12 }}>自定义检索词（可选）</Text>
                     <Button
@@ -1833,6 +2059,7 @@ const Inspiration: React.FC = () => {
                   type="dashed"
                   block
                   onClick={() => setShowResearchQueryEditor(true)}
+                  style={{ borderRadius: 14, height: 42 }}
                 >
                   补充自定义检索词（可选）
                 </Button>
@@ -1841,10 +2068,10 @@ const Inspiration: React.FC = () => {
                 <div
                   data-testid="inspiration-research-preview"
                   style={{
-                    borderRadius: 10,
-                    padding: '10px 12px',
-                    background: `color-mix(in srgb, ${token.colorInfoBg} 75%, ${token.colorBgContainer} 25%)`,
-                    border: `1px solid color-mix(in srgb, ${token.colorInfoBorder} 72%, transparent)`,
+                    borderRadius: 16,
+                    padding: '12px 14px',
+                    background: `linear-gradient(180deg, ${alphaColor(token.colorInfoBg, 0.82)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`,
+                    border: `1px solid ${alphaColor(token.colorInfo, 0.14)}`,
                   }}
                 >
                   <Text strong style={{ display: 'block', marginBottom: 6 }}>
@@ -1877,43 +2104,45 @@ const Inspiration: React.FC = () => {
             <Text
               data-testid="inspiration-research-preview-disabled"
               type="secondary"
-              style={{ fontSize: 12 }}
+              style={{ fontSize: 12, ...controlPanelStyle }}
             >
               当前已缓存 {inspirationResearch.assets.length} 条灵感资料；重新开启后会自动带入创建流程。
             </Text>
           )}
         </Space>
-        <Space.Compact style={{ width: '100%' }}>
-          <TextArea
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            placeholder={
-              currentStep === 'idea'
-                ? '例如：女法医穿回案发前一天，必须在24小时内洗清自己杀人嫌疑...'
-                : '输入自定义内容，或点击上方选项卡片...'
-            }
-            autoSize={{ minRows: 2, maxRows: 4 }}
-            onPressEnter={(e) => {
-              if (!e.shiftKey) {
-                e.preventDefault();
-                handleSendMessage();
+        <div style={{ ...controlPanelStyle, padding: 12 }}>
+          <Space.Compact style={{ width: '100%' }}>
+            <TextArea
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              placeholder={
+                currentStep === 'idea'
+                  ? '例如：女法医穿回案发前一天，必须在24小时内洗清自己杀人嫌疑...'
+                  : '输入自定义内容，或点击上方选项卡片...'
               }
-            }}
-            disabled={loading}
-          />
-          <Button
-            type="primary"
-            icon={<SendOutlined />}
-            onClick={handleSendMessage}
-            loading={loading}
-            style={{ height: 'auto' }}
-          >
-            发送
-          </Button>
-        </Space.Compact>
-        <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: 'block' }}>
-          💡 提示：按 Enter 发送，Shift+Enter 换行
-        </Text>
+              autoSize={{ minRows: 2, maxRows: 4 }}
+              onPressEnter={(e) => {
+                if (!e.shiftKey) {
+                  e.preventDefault();
+                  handleSendMessage();
+                }
+              }}
+              disabled={loading}
+            />
+            <Button
+              type="primary"
+              icon={<SendOutlined />}
+              onClick={handleSendMessage}
+              loading={loading}
+              style={{ height: 'auto', minWidth: 92, borderRadius: 12 }}
+            >
+              发送
+            </Button>
+          </Space.Compact>
+          <Text type="secondary" style={{ fontSize: 12, marginTop: 8, display: 'block' }}>
+            提示：按 Enter 发送，Shift+Enter 换行
+          </Text>
+        </div>
       </Card>
     </>
   );
@@ -1921,7 +2150,7 @@ const Inspiration: React.FC = () => {
   return (
     <div style={{
       minHeight: '100dvh',
-      background: token.colorBgBase,
+      background: `linear-gradient(180deg, ${token.colorBgLayout} 0%, ${token.colorBgBase} 100%)`,
     }}>
       {contextHolder}
       <style>
@@ -1962,87 +2191,251 @@ const Inspiration: React.FC = () => {
         `}
       </style>
 
-      {/* 顶部标题栏 - 固定不滚动 */}
       <div style={{
-        position: 'sticky',
-        top: 0,
-        zIndex: 100,
-        background: token.colorPrimary,
-        boxShadow: `0 6px 20px color-mix(in srgb, ${token.colorPrimary} 30%, transparent)`,
+        maxWidth: 1080,
+        margin: '0 auto',
+        padding: isMobile ? '18px 14px 32px' : '24px 24px 40px',
       }}>
-        <div style={{
-          maxWidth: 1200,
-          margin: '0 auto',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: isMobile ? '12px 16px' : '16px 24px',
-        }}>
-          <Button
-            icon={<ArrowLeftOutlined />}
-            onClick={handleBack}
-            size={isMobile ? 'middle' : 'large'}
-            disabled={shouldDisableNavigation(currentStep === 'generating')}
+        <Card
+          variant="borderless"
+          style={{
+            background: heroBackground,
+            borderRadius: isMobile ? 22 : 30,
+            border: `1px solid color-mix(in srgb, ${token.colorBgContainer} 12%, transparent)`,
+            boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
+            overflow: 'hidden',
+            position: 'relative',
+            marginBottom: 18,
+          }}
+          styles={{ body: { padding: isMobile ? 18 : 24 } }}
+        >
+          <div style={{ position: 'absolute', top: -56, right: -40, width: 180, height: 180, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', pointerEvents: 'none' }} />
+          <div style={{ position: 'absolute', bottom: -30, left: '24%', width: 110, height: 110, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', pointerEvents: 'none' }} />
+          <div style={{ position: 'relative', zIndex: 1 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 520px' }}>
+                <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase' }}>
+                  Creative Entry
+                </Text>
+                <Title
+                  level={isMobile ? 3 : 2}
+                  style={{
+                    margin: '8px 0 10px',
+                    color: editorialInk,
+                    fontFamily: designDisplayFont,
+                    letterSpacing: '-0.03em',
+                  }}
+                >
+                  灵感模式
+                </Title>
+                <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.82)', fontSize: isMobile ? 13 : 15, lineHeight: 1.8, maxWidth: 680 }}>
+                  这里是项目创作的第一道入口。你可以像和编辑沟通一样，把主角、冲突、代价与题材气质一步步聊出来，再把结果无缝推进到完整项目生成。
+                </Paragraph>
+              </div>
+              <div style={{ flex: '1 1 280px', minWidth: isMobile ? '100%' : 280 }}>
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  {heroSummaryItems.map((item) => (
+                    <div
+                      key={item.label}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: 12,
+                        borderRadius: 18,
+                        padding: '12px 14px',
+                        background: 'rgba(255,255,255,0.08)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        backdropFilter: 'blur(10px)',
+                      }}
+                    >
+                      <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12 }}>{item.label}</Text>
+                      <Text style={{ color: editorialInk, fontWeight: 600 }}>{item.value}</Text>
+                    </div>
+                  ))}
+                </Space>
+              </div>
+            </div>
+            <Space wrap size={[10, 10]} style={{ marginTop: 20 }}>
+              <Button
+                icon={<ArrowLeftOutlined />}
+                onClick={handleBack}
+                size={isMobile ? 'middle' : 'large'}
+                disabled={shouldDisableNavigation(currentStep === 'generating')}
+                style={outlineButtonStyle}
+              >
+                {isMobile ? '返回' : '返回首页'}
+              </Button>
+              {isConversationStage && currentStep !== 'idea' ? (
+                <Button
+                  icon={<ReloadOutlined />}
+                  onClick={() => {
+                    modal.confirm({
+                      title: '确认重新开始',
+                      content: '确定要重新开始吗？当前的对话进度将会丢失。',
+                      okText: '确认',
+                      cancelText: '取消',
+                      centered: true,
+                      okButtonProps: { danger: true },
+                      onOk: () => {
+                        handleRestart();
+                      },
+                    });
+                  }}
+                  size={isMobile ? 'middle' : 'large'}
+                  style={outlineButtonStyle}
+                >
+                  {isMobile ? '重新' : '重新开始'}
+                </Button>
+              ) : null}
+            </Space>
+          </div>
+        </Card>
+
+        {isConversationStage && (
+          <div
             style={{
-              background: `color-mix(in srgb, ${token.colorWhite} 20%, transparent)`,
-              borderColor: `color-mix(in srgb, ${token.colorWhite} 30%, transparent)`,
-              color: token.colorWhite,
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.3fr) minmax(320px, 0.95fr)',
+              gap: 14,
+              marginBottom: 16,
             }}
           >
-            {isMobile ? '返回' : '返回首页'}
-          </Button>
-
-          <div style={{ textAlign: 'center' }}>
-            <Title
-              level={isMobile ? 4 : 2}
+            <Card
               style={{
-                margin: 0,
-                color: token.colorWhite,
-                textShadow: '0 2px 4px color-mix(in srgb, var(--ant-color-black) 18%, transparent)',
-                lineHeight: 1.2
+                borderRadius: isMobile ? 20 : 24,
+                border: panelBorder,
+                background: quietPanelBackground,
+                boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorTextBase} 10%, transparent)`,
               }}
+              styles={{ body: { padding: isMobile ? 14 : 18 } }}
             >
-              ✨ 灵感模式
-            </Title>
+              <Text
+                style={{
+                  display: 'block',
+                  marginBottom: 6,
+                  fontSize: 11,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: token.colorTextTertiary,
+                }}
+              >
+                Creative Route
+              </Text>
+              <Text strong style={{ display: 'block', marginBottom: 8, fontSize: 16 }}>
+                创作路线图
+              </Text>
+              <Text type="secondary" style={{ display: 'block', marginBottom: 14, lineHeight: 1.7 }}>
+                先把冲突讲明，再逐步收束成标题、简介、主题、题材与结构，让灵感像编辑工作台一样一格格落地。
+              </Text>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                {stepProgressItems.map((item, index) => (
+                  <div
+                    key={item.key}
+                    style={{
+                      flex: isMobile ? '1 1 calc(50% - 8px)' : '1 1 150px',
+                      minWidth: isMobile ? 0 : 150,
+                      borderRadius: 18,
+                      padding: '12px 14px',
+                      border: item.isCurrent
+                        ? `1px solid ${alphaColor(token.colorPrimary, 0.24)}`
+                        : `1px solid ${alphaColor(token.colorBorderSecondary, 0.84)}`,
+                      background: item.isCurrent
+                        ? `linear-gradient(180deg, ${alphaColor(token.colorPrimaryBg, 0.92)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`
+                        : item.isCompleted
+                          ? `linear-gradient(180deg, ${alphaColor(token.colorSuccessBg, 0.9)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`
+                          : `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.42)} 100%)`,
+                      boxShadow: item.isCurrent
+                        ? `0 10px 24px ${alphaColor(token.colorPrimary, 0.12)}`
+                        : 'none',
+                    }}
+                  >
+                    <Text
+                      style={{
+                        display: 'block',
+                        marginBottom: 6,
+                        fontSize: 11,
+                        letterSpacing: '0.08em',
+                        textTransform: 'uppercase',
+                        color: item.isCurrent
+                          ? token.colorPrimary
+                          : item.isCompleted
+                            ? token.colorSuccess
+                            : token.colorTextTertiary,
+                      }}
+                    >
+                      {`Step ${String(index + 1).padStart(2, '0')}`}
+                    </Text>
+                    <Text strong style={{ display: 'block', marginBottom: 4 }}>
+                      {item.label}
+                    </Text>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {item.caption}
+                    </Text>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <Card
+              style={{
+                borderRadius: isMobile ? 20 : 24,
+                border: panelBorder,
+                background: researchPanelBackground,
+                boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorTextBase} 10%, transparent)`,
+              }}
+              styles={{ body: { padding: isMobile ? 14 : 18 } }}
+            >
+              <Text
+                style={{
+                  display: 'block',
+                  marginBottom: 6,
+                  fontSize: 11,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: token.colorTextTertiary,
+                }}
+              >
+                Project Brief
+              </Text>
+              <Text strong style={{ display: 'block', marginBottom: 8, fontSize: 16 }}>
+                当前项目摘要
+              </Text>
+              <Text type="secondary" style={{ display: 'block', marginBottom: 14, lineHeight: 1.7 }}>
+                这里汇总对话已经沉淀出的核心设定，方便你一边聊天，一边看到项目骨架是怎样逐步成形的。
+              </Text>
+              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                {projectBriefItems.map((item) => (
+                  <div
+                    key={item.label}
+                    style={{
+                      borderRadius: 16,
+                      padding: '12px 14px',
+                      border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.84)}`,
+                      background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.34)} 100%)`,
+                    }}
+                  >
+                    <Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
+                      {item.label}
+                    </Text>
+                    <Text strong style={{ lineHeight: 1.7 }}>
+                      {item.value}
+                    </Text>
+                  </div>
+                ))}
+                <div style={{ ...controlPanelStyle, padding: '12px 14px' }}>
+                  <Text strong style={{ display: 'block', marginBottom: 4 }}>
+                    研究带入状态
+                  </Text>
+                  <Text type="secondary" style={{ display: 'block', lineHeight: 1.7 }}>
+                    {researchStatusLabel}
+                  </Text>
+                </div>
+              </Space>
+            </Card>
           </div>
+        )}
 
-          {/* 重新开始按钮 - 只在对话进行中显示 */}
-          {currentStep !== 'idea' && currentStep !== 'generating' && currentStep !== 'complete' ? (
-            <Button
-              icon={<ReloadOutlined />}
-              onClick={() => {
-                modal.confirm({
-                  title: '确认重新开始',
-                  content: '确定要重新开始吗？当前的对话进度将会丢失。',
-                  okText: '确认',
-                  cancelText: '取消',
-                  centered: true,
-                  okButtonProps: { danger: true },
-                  onOk: () => {
-                    handleRestart();
-                  },
-                });
-              }}
-              size={isMobile ? 'middle' : 'large'}
-              style={{
-                background: `color-mix(in srgb, ${token.colorWhite} 20%, transparent)`,
-                borderColor: `color-mix(in srgb, ${token.colorWhite} 30%, transparent)`,
-                color: token.colorWhite,
-              }}
-            >
-              {isMobile ? '重新' : '重新开始'}
-            </Button>
-          ) : (
-            <div style={{ width: isMobile ? 60 : 120 }}></div>
-          )}
-        </div>
-      </div>
-
-      <div style={{
-        maxWidth: 800,
-        margin: '0 auto',
-        padding: isMobile ? '16px 12px' : '24px 24px',
-      }}>
         {(currentStep === 'idea' || currentStep === 'title' || currentStep === 'description' ||
           currentStep === 'theme' || currentStep === 'genre' || currentStep === 'perspective' ||
           currentStep === 'outline_mode' || currentStep === 'confirm') && renderChat()}
@@ -2061,14 +2454,74 @@ const Inspiration: React.FC = () => {
       </div>
 
       <Modal
-        title="执行设置"
+        title={(
+          <div>
+            <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 4 }}>
+              Launch Review
+            </Text>
+            <Text strong style={{ display: 'block', fontSize: 18 }}>
+              执行设置
+            </Text>
+            <Text type="secondary" style={{ display: 'block', marginTop: 4, lineHeight: 1.7 }}>
+              在正式开始生成前，最后确认本次项目骨架的执行方式、模型策略和联网研究状态。
+            </Text>
+          </div>
+        )}
         open={executionModalOpen}
         onCancel={() => setExecutionModalOpen(false)}
         onOk={beginProjectGeneration}
         okText="开始生成"
         cancelText="取消"
         destroyOnHidden
+        width={760}
+        styles={{
+          content: {
+            borderRadius: 24,
+            border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+            background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.52)} 100%)`,
+            boxShadow: `0 28px 56px ${alphaColor(token.colorTextBase, 0.14)}`,
+          },
+          header: {
+            paddingBottom: 0,
+            background: 'transparent',
+            borderBottom: 'none',
+          },
+          body: {
+            paddingTop: 16,
+          },
+          footer: {
+            borderTop: 'none',
+            paddingTop: 8,
+          },
+        }}
       >
+        <Card
+          size="small"
+          style={{
+            marginBottom: 14,
+            borderRadius: 18,
+            border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.85)}`,
+            background: `linear-gradient(135deg, ${alphaColor(token.colorPrimaryBg, 0.9)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`,
+          }}
+          styles={{ body: { padding: 14 } }}
+        >
+          <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+            Project Snapshot
+          </Text>
+          <Text strong style={{ display: 'block', marginBottom: 8 }}>
+            本次将生成的项目摘要
+          </Text>
+          <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+            这里展示的是灵感对话已经收束出的核心设定，方便你在点击“开始生成”前做最后核对。
+          </Text>
+          <Space wrap size={[8, 8]}>
+            <Tag color="blue" style={{ borderRadius: 999 }}>书名：{wizardData.title || '待确认'}</Tag>
+            <Tag color="purple" style={{ borderRadius: 999 }}>题材：{selectedGenreLabel}</Tag>
+            <Tag color="gold" style={{ borderRadius: 999 }}>视角：{wizardData.narrative_perspective || '待确认'}</Tag>
+            <Tag color="green" style={{ borderRadius: 999 }}>结构：{selectedOutlineModeLabel}</Tag>
+          </Space>
+        </Card>
+
         <GenerationExecutionSettingsPanel
           card={false}
           enableMcp={executionEnableMcp}
@@ -2080,6 +2533,71 @@ const Inspiration: React.FC = () => {
           runtimeProvider={runtimeProvider}
           currentSettingsModel={currentSettingsModel}
         />
+
+        <Card
+          size="small"
+          style={{
+            marginTop: 14,
+            borderRadius: 18,
+            border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.85)}`,
+            background: `linear-gradient(180deg, ${alphaColor(token.colorBgElevated, 0.98)} 0%, ${alphaColor(token.colorFillAlter, 0.5)} 100%)`,
+          }}
+          styles={{ body: { padding: 14 } }}
+        >
+          <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+            Research Context
+          </Text>
+          <Text strong style={{ display: 'block', marginBottom: 8 }}>
+            联网研究与灵感资料
+          </Text>
+          <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+            如果已经在灵感阶段积累了题材资料，这里会告诉你哪些研究上下文会被带进正式的项目创建流程。
+          </Text>
+          <Alert
+            type={executionEnableWebResearch ? 'success' : 'info'}
+            showIcon
+            style={{
+              marginBottom: 12,
+              borderRadius: 14,
+              border: `1px solid ${alphaColor(executionEnableWebResearch ? token.colorSuccess : token.colorInfo, 0.12)}`,
+              background: executionEnableWebResearch
+                ? `linear-gradient(135deg, ${alphaColor(token.colorSuccessBg, 0.88)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`
+                : `linear-gradient(135deg, ${alphaColor(token.colorInfoBg, 0.88)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`,
+            }}
+            message={executionEnableWebResearch
+              ? '已开启联网研究，生成时会携带检索上下文与灵感资料。'
+              : '当前未开启联网研究；本次将只依据对话中沉淀的设定生成项目。'}
+          />
+          <Space wrap size={[8, 8]} style={{ marginBottom: 12 }}>
+            <Tag color={executionEnableWebResearch ? 'green' : 'default'} style={{ borderRadius: 999 }}>
+              联网研究：{executionEnableWebResearch ? '开启' : '关闭'}
+            </Tag>
+            <Tag color="blue" style={{ borderRadius: 999 }}>
+              检索词：{previewResearchQuery || '未设置'}
+            </Tag>
+            <Tag color="purple" style={{ borderRadius: 999 }}>
+              已缓存资料：{inspirationResearch.assets.length} 条
+            </Tag>
+          </Space>
+          {previewResearchAssets.length > 0 ? (
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              {previewResearchAssets.map((asset, index) => (
+                <Text key={`${asset.title}-${asset.source || index}`} style={{ display: 'block', fontSize: 12 }}>
+                  - {asset.title}{asset.source ? ` · ${asset.source}` : ''}
+                </Text>
+              ))}
+              {previewResearchOverflowCount > 0 ? (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  还有 {previewResearchOverflowCount} 条资料会在生成时一并带入。
+                </Text>
+              ) : null}
+            </Space>
+          ) : (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              当前没有额外研究资料预览，系统会直接使用现有灵感对话内容。
+            </Text>
+          )}
+        </Card>
       </Modal>
     </div>
   );

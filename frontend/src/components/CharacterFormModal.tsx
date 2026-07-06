@@ -1,6 +1,7 @@
-import { Button, Col, Divider, Form, Input, InputNumber, Modal, Row, Select, Space, Typography, theme } from 'antd';
+import { Button, Card, Col, Divider, Form, Input, InputNumber, Modal, Row, Select, Space, Tag, Typography, theme } from 'antd';
 import type { FormInstance } from 'antd';
 import type { Character } from '../types';
+import { designDisplayFont } from '../theme/themeConfig';
 
 type CareerOption = {
   id: string;
@@ -47,6 +48,11 @@ type CharacterFormModalProps = {
 };
 
 const { TextArea } = Input;
+const characterFormGuideSteps = [
+  '先确认当前是在创建还是编辑角色/组织，再决定这次优先补基础身份还是世界观细节。',
+  '再填写上方核心字段，把名称、定位、职业或组织性质作为这次表单的主线信息。',
+  '最后再补背景、外貌、宗旨等扩展内容，提交前回看右侧焦点卡确认这次工作重点是否完整。',
+];
 
 function renderCharacterFields(
   mode: 'create' | 'edit',
@@ -348,6 +354,27 @@ export default function CharacterFormModal({
   onFinish,
 }: CharacterFormModalProps) {
   const { token } = theme.useToken();
+  const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
+  const quietPanelBackground = `linear-gradient(180deg, color-mix(in srgb, ${token.colorBgContainer} 96%, ${token.colorFillAlter} 4%) 0%, color-mix(in srgb, ${token.colorBgContainer} 88%, ${token.colorFillAlter} 12%) 100%)`;
+  const characterFormWorkspaceFocus = entityType === 'organization'
+    ? mode === 'create'
+      ? {
+          title: '当前更适合先把组织的类型、宗旨和势力等级搭起来',
+          note: '这一步先把组织框架建立完整，再继续补地点、口号和背景，会比一开始就写长文本更顺手。',
+        }
+      : {
+          title: '当前更适合先校准组织设定，再回看成员与势力信息',
+          note: '编辑模式下已经有现成组织实体，建议优先检查宗旨、势力等级和所在地是否还符合当前剧情结构。',
+        }
+    : mode === 'create'
+      ? {
+          title: '当前更适合先建立角色定位，再逐步补人物细节',
+          note: '创建角色时先把名称、角色类型和职业主线定下来，会让后续背景与外貌信息更容易保持一致。',
+        }
+      : {
+          title: `当前正在调整 ${record?.name || '该角色'} 的设定，先看核心身份是否仍然成立`,
+          note: '编辑模式更适合先复核角色类型、关系摘要和职业信息，再决定要不要继续改动背景或性格描写。',
+        };
 
   return (
     <Modal
@@ -374,6 +401,93 @@ export default function CharacterFormModal({
       }}
     >
       <Form form={form} layout="vertical" onFinish={onFinish} style={{ marginTop: 8 }}>
+        <Card
+          bordered={false}
+          style={{
+            marginBottom: 16,
+            borderRadius: 18,
+            background: quietPanelBackground,
+            border: `1px solid ${alphaColor(token.colorPrimary, 0.08)}`,
+          }}
+          styles={{ body: { padding: 18 } }}
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+              gap: 16,
+            }}
+          >
+            <div>
+              <Typography.Text style={{ fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                Form Guide
+              </Typography.Text>
+              <Typography.Title level={5} style={{ margin: '6px 0 8px', fontFamily: designDisplayFont }}>
+                {entityType === 'organization' ? '组织表单填写顺序' : '角色表单填写顺序'}
+              </Typography.Title>
+              <Typography.Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
+                这里现在只增强表单阅读顺序与当前焦点说明，不改变 `Form` 提交、字段校验、职业列表、组织成员回填或移动端弹窗行为。
+              </Typography.Paragraph>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
+                {characterFormGuideSteps.map((item, index) => (
+                  <span
+                    key={item}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '6px 12px',
+                      borderRadius: 999,
+                      background: token.colorBgContainer,
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      color: token.colorTextSecondary,
+                      fontSize: 12,
+                    }}
+                  >
+                    <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div
+              style={{
+                borderRadius: 16,
+                padding: '16px 18px',
+                background: token.colorBgContainer,
+                border: `1px solid ${token.colorBorderSecondary}`,
+              }}
+            >
+              <Typography.Text style={{ display: 'block', fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                当前工作焦点
+              </Typography.Text>
+              <Typography.Title level={5} style={{ margin: '8px 0 6px', fontFamily: designDisplayFont }}>
+                {characterFormWorkspaceFocus.title}
+              </Typography.Title>
+              <Typography.Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
+                {characterFormWorkspaceFocus.note}
+              </Typography.Paragraph>
+              <Space wrap size={[8, 8]} style={{ marginTop: 12 }}>
+                <Tag color={mode === 'create' ? 'green' : 'blue'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                  {mode === 'create' ? '新建模式' : '编辑模式'}
+                </Tag>
+                <Tag color={entityType === 'organization' ? 'purple' : 'processing'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                  {entityType === 'organization' ? '组织表单' : '角色表单'}
+                </Tag>
+                {entityType === 'character' ? (
+                  <Tag color={mainCareers.length > 0 || subCareers.length > 0 ? 'gold' : 'default'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                    {mainCareers.length > 0 || subCareers.length > 0 ? '可补职业信息' : '无职业选项'}
+                  </Tag>
+                ) : (
+                  <Tag color={mode === 'edit' ? 'orange' : 'default'} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                    {mode === 'edit' ? '可回看成员信息' : '创建阶段无成员摘要'}
+                  </Tag>
+                )}
+              </Space>
+            </div>
+          </div>
+        </Card>
+
         {entityType === 'character'
           ? renderCharacterFields(mode, form, record, token, mainCareers, subCareers)
           : renderOrganizationFields(mode, token)}

@@ -35,7 +35,6 @@ const Settings = lazy(withChunkLoadRecovery(() => import('../../pages/Settings')
 const MCPPlugins = lazy(withChunkLoadRecovery(() => import('../../pages/MCPPlugins')));
 const UserManagement = lazy(withChunkLoadRecovery(() => import('../../pages/UserManagement')));
 const PromptTemplates = lazy(withChunkLoadRecovery(() => import('../../pages/PromptTemplates')));
-const Sponsor = lazy(withChunkLoadRecovery(() => import('../../pages/Sponsor')));
 const Login = lazy(withChunkLoadRecovery(() => import('../../pages/Login')));
 const AuthCallback = lazy(withChunkLoadRecovery(() => import('../../pages/AuthCallback')));
 
@@ -107,7 +106,7 @@ export default function AppRouter() {
       />
 
       <Route path="/project/:projectId" element={<ProtectedRoute>{withSuspense(<ProjectDetail />)}</ProtectedRoute>}>
-        <Route index element={<Navigate to="sponsor" replace />} />
+        <Route index element={<Navigate to="world-setting" replace />} />
         <Route path="world-setting" element={withSuspense(<WorldSetting />)} />
         <Route path="careers" element={withSuspense(<Careers />)} />
         <Route path="outline" element={withSuspense(<Outline />)} />
@@ -120,7 +119,6 @@ export default function AppRouter() {
         <Route path="foreshadows" element={withSuspense(<Foreshadows />)} />
         <Route path="writing-styles" element={withSuspense(<WritingStyles />)} />
         <Route path="prompt-workshop" element={withSuspense(<PromptWorkshop />)} />
-        <Route path="sponsor" element={withSuspense(<Sponsor />)} />
       </Route>
     </Routes>
   );

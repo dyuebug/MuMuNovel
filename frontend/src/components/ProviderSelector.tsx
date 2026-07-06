@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
-import { Select, Space, Tag, Typography } from 'antd';
 import { CheckCircleOutlined } from '@ant-design/icons';
+import { Select, Space, Tag, Typography, theme } from 'antd';
+import { designDisplayFont } from '../theme/themeConfig';
 
 const { Text } = Typography;
 
@@ -52,11 +53,45 @@ const PROVIDER_OPTIONS: ProviderOption[] = [
   },
 ];
 
+const PROVIDER_GUIDE = [
+  '如果你正在使用中转站、NewAPI 或 OpenAI-compatible 网关，优先选择 OpenAI 兼容接口。',
+  '如果你希望直接走 Anthropic 官方链路，再选择 Claude（Anthropic）。',
+  '如果你需要 Gemini 官方 API 或多模态模型列表，再切换到 Google Gemini。',
+];
+
+const getProviderTone = (option: ProviderOption, token: ReturnType<typeof theme.useToken>['token']) => {
+  switch (option.value) {
+    case 'anthropic':
+      return {
+        accent: token.colorInfo,
+        tagColor: 'cyan',
+        featureFill: alphaColor(token.colorInfo, 0.1),
+      };
+    case 'gemini':
+      return {
+        accent: token.colorSuccess,
+        tagColor: 'green',
+        featureFill: alphaColor(token.colorSuccess, 0.1),
+      };
+    default:
+      return {
+        accent: token.colorPrimary,
+        tagColor: 'processing',
+        featureFill: alphaColor(token.colorPrimary, 0.1),
+      };
+  }
+};
+
+const alphaColor = (color: string, alpha: number) =>
+  `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
+
 const ProviderSelector: React.FC<ProviderSelectorProps> = ({
   value,
   onChange,
   disabled = false,
 }) => {
+  const { token } = theme.useToken();
+
   const selectOptions = useMemo<ProviderSelectOption[]>(() => (
     PROVIDER_OPTIONS.map((option) => ({
       ...option,
@@ -69,8 +104,64 @@ const ProviderSelector: React.FC<ProviderSelectorProps> = ({
     [selectOptions, value]
   );
 
+  const selectedTone = getProviderTone(selectedOption, token);
+
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+    <Space direction="vertical" size={14} style={{ width: '100%' }}>
+      <div
+        style={{
+          padding: '16px 18px',
+          borderRadius: 20,
+          background: `linear-gradient(135deg, ${alphaColor(token.colorPrimaryBg, 0.88)} 0%, ${alphaColor(token.colorBgElevated, 0.98)} 100%)`,
+          border: `1px solid ${alphaColor(token.colorPrimary, 0.14)}`,
+          boxShadow: `0 16px 32px ${alphaColor(token.colorText, 0.05)}`,
+        }}
+      >
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1fr) auto',
+            gap: 16,
+            alignItems: 'start',
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+              Provider Workspace
+            </Text>
+            <Text
+              strong
+              style={{
+                display: 'block',
+                fontSize: 18,
+                marginBottom: 8,
+                fontFamily: designDisplayFont,
+                letterSpacing: '-0.03em',
+              }}
+            >
+              选择最合适的 API 接入协议
+            </Text>
+            <Text type="secondary" style={{ display: 'block', lineHeight: 1.75 }}>
+              先根据你是否使用官方直连或兼容网关选择 provider，再继续配置模型、密钥与端点。这里只调整阅读顺序和信息层级，不改变任何设置逻辑。
+            </Text>
+          </div>
+          <Space wrap size={[8, 8]} style={{ justifyContent: 'flex-end' }}>
+            <Tag color={selectedTone.tagColor} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+              当前 {selectedOption.shortLabel}
+            </Tag>
+            {selectedOption.recommended ? (
+              <Tag color="success" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                推荐默认路径
+              </Tag>
+            ) : (
+              <Tag color="default" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                官方专属链路
+              </Tag>
+            )}
+          </Space>
+        </div>
+      </div>
+
       <Select
         value={value}
         onChange={onChange}
@@ -88,60 +179,168 @@ const ProviderSelector: React.FC<ProviderSelectorProps> = ({
         }}
         optionRender={(option) => {
           const rawOption = option.data as ProviderSelectOption;
+          const tone = getProviderTone(rawOption, token);
+
           return (
-            <Space direction="vertical" size={6} style={{ width: '100%' }}>
-              <Space wrap size={8}>
+            <div style={{ display: 'grid', gap: 8, paddingBlock: 4 }}>
+              <Space wrap size={[8, 8]}>
                 <Text strong>{rawOption.label}</Text>
-                <Tag color="processing" style={{ marginInlineEnd: 0 }}>{rawOption.group}</Tag>
-                {rawOption.recommended && (
-                  <Tag color="green" style={{ marginInlineEnd: 0 }}>
+                <Tag color={tone.tagColor} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                  {rawOption.group}
+                </Tag>
+                {rawOption.recommended ? (
+                  <Tag color="success" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
                     <CheckCircleOutlined /> 推荐
                   </Tag>
-                )}
+                ) : null}
               </Space>
-              <Text style={{ fontSize: 12, color: '#666' }}>{rawOption.description}</Text>
-              <Space size={4} wrap>
+              <Text style={{ fontSize: 12, color: token.colorTextSecondary, lineHeight: 1.7 }}>
+                {rawOption.description}
+              </Text>
+              <Space size={[6, 6]} wrap>
                 {rawOption.features.map((feature) => (
-                  <Tag key={feature} color="blue" style={{ fontSize: 11, marginInlineEnd: 0 }}>
+                  <Tag
+                    key={feature}
+                    style={{
+                      margin: 0,
+                      borderRadius: 999,
+                      paddingInline: 10,
+                      borderColor: alphaColor(tone.accent, 0.18),
+                      background: tone.featureFill,
+                      color: tone.accent,
+                    }}
+                  >
                     {feature}
                   </Tag>
                 ))}
               </Space>
-            </Space>
+            </div>
           );
         }}
       />
 
       <div
         style={{
-          padding: '12px 14px',
-          borderRadius: 12,
-          border: '1px solid rgba(24, 144, 255, 0.15)',
-          background: 'linear-gradient(135deg, rgba(24, 144, 255, 0.08) 0%, rgba(255, 255, 255, 0.98) 100%)',
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1.45fr) minmax(260px, 0.95fr)',
+          gap: 14,
         }}
       >
-        <Space direction="vertical" size={6} style={{ width: '100%' }}>
-          <Space wrap size={8}>
-            <Text strong>{selectedOption.label}</Text>
-            <Tag color="processing" style={{ marginInlineEnd: 0 }}>{selectedOption.group}</Tag>
-            {selectedOption.recommended && (
-              <Tag color="green" style={{ marginInlineEnd: 0 }}>
-                <CheckCircleOutlined /> 推荐默认选择
+        <div
+          style={{
+            padding: 18,
+            borderRadius: 22,
+            border: `1px solid ${alphaColor(selectedTone.accent, 0.18)}`,
+            background: `linear-gradient(135deg, ${alphaColor(selectedTone.accent, 0.12)} 0%, ${alphaColor(token.colorBgElevated, 0.98)} 100%)`,
+            boxShadow: `0 16px 32px ${alphaColor(token.colorText, 0.05)}`,
+          }}
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0, 1fr) auto',
+              gap: 14,
+              alignItems: 'start',
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+                Provider Dossier
+              </Text>
+              <Text
+                strong
+                style={{
+                  display: 'block',
+                  fontSize: 17,
+                  marginBottom: 8,
+                  fontFamily: designDisplayFont,
+                  letterSpacing: '-0.03em',
+                }}
+              >
+                {selectedOption.label}
+              </Text>
+              <Text type="secondary" style={{ display: 'block', lineHeight: 1.75 }}>
+                {selectedOption.description}
+              </Text>
+            </div>
+            <Space wrap size={[8, 8]} style={{ justifyContent: 'flex-end' }}>
+              <Tag color={selectedTone.tagColor} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                {selectedOption.group}
               </Tag>
-            )}
-          </Space>
-          <Text style={{ color: '#666', lineHeight: 1.7 }}>{selectedOption.description}</Text>
-          <Space size={4} wrap>
-            {selectedOption.features.map((feature) => (
-              <Tag key={feature} color="blue" style={{ marginInlineEnd: 0 }}>
-                {feature}
-              </Tag>
-            ))}
-          </Space>
-          <Text style={{ fontSize: 12, color: '#8c8c8c' }}>
-            {"如果你使用中转站、NewAPI 或 OpenAI 兼容网关，通常优先选择“NewAPI”或“自定义”。"}
+              {selectedOption.recommended ? (
+                <Tag color="success" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                  <CheckCircleOutlined /> 默认推荐
+                </Tag>
+              ) : null}
+            </Space>
+          </div>
+
+          <div
+            style={{
+              marginTop: 14,
+              padding: '14px 16px',
+              borderRadius: 18,
+              background: alphaColor(token.colorBgElevated, 0.96),
+              border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.86)}`,
+            }}
+          >
+            <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 8 }}>
+              Capability Snapshot
+            </Text>
+            <Space size={[8, 8]} wrap>
+              {selectedOption.features.map((feature) => (
+                <Tag
+                  key={feature}
+                  style={{
+                    margin: 0,
+                    borderRadius: 999,
+                    paddingInline: 10,
+                    borderColor: alphaColor(selectedTone.accent, 0.18),
+                    background: selectedTone.featureFill,
+                    color: selectedTone.accent,
+                  }}
+                >
+                  {feature}
+                </Tag>
+              ))}
+            </Space>
+          </div>
+        </div>
+
+        <div
+          style={{
+            padding: 18,
+            borderRadius: 22,
+            background: alphaColor(token.colorFillQuaternary, 0.72),
+            border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+          }}
+        >
+          <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+            Selection Guide
           </Text>
-        </Space>
+          <Text
+            strong
+            style={{
+              display: 'block',
+              fontSize: 16,
+              marginBottom: 8,
+              fontFamily: designDisplayFont,
+              letterSpacing: '-0.02em',
+            }}
+          >
+            如何快速判断该选哪一类
+          </Text>
+          <div style={{ display: 'grid', gap: 8 }}>
+            {PROVIDER_GUIDE.map((item) => (
+              <Text key={item} type="secondary" style={{ lineHeight: 1.75 }}>
+                • {item}
+              </Text>
+            ))}
+          </div>
+          <Text style={{ display: 'block', fontSize: 12, lineHeight: 1.7, color: token.colorTextTertiary, marginTop: 12 }}>
+            如果你连接的是中转、代理或聚合供应商，即使背后模型来自 Claude 或 Gemini，也通常仍然优先走 OpenAI 兼容入口。
+          </Text>
+        </div>
       </div>
     </Space>
   );

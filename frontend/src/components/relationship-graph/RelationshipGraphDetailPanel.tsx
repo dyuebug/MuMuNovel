@@ -90,6 +90,11 @@ function RelationshipGraphDetailPanel({
   const { token } = theme.useToken();
   const alphaColor = (color: string, alpha: number) =>
     `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
+  const detailGuideSteps = [
+    '先确认当前选中的是角色、组织还是职业节点，再决定要看人物信息、组织势力还是职业关联。',
+    '再用顶部焦点卡快速锁定这次阅读重点，把详情面板当作关系校对入口，而不是一次性看完所有字段。',
+    '最后再下钻到具体字段，结合关系图主视图判断这条节点在世界观中的位置是否清晰。',
+  ];
 
   if (!selectedNodeId) {
     return null;
@@ -109,13 +114,32 @@ function RelationshipGraphDetailPanel({
           zIndex: 1000,
         }}
       >
-        <Card size="small" style={{ width: 300, borderRadius: 10, boxShadow: `0 6px 18px ${alphaColor(token.colorTextBase, 0.2)}` }}>
+        <Card
+          size="small"
+          style={{
+            width: 320,
+            borderRadius: 16,
+            border: `1px solid ${alphaColor(token.colorWarning, 0.18)}`,
+            background: `linear-gradient(135deg, ${alphaColor(token.colorWarningBg, 0.9)} 0%, ${alphaColor(token.colorBgElevated, 0.98)} 100%)`,
+            boxShadow: `0 10px 24px ${alphaColor(token.colorTextBase, 0.14)}`,
+          }}
+          bodyStyle={{ padding: 16 }}
+        >
+          <div style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+            Career Node Guide
+          </div>
+          <Text strong style={{ display: 'block', fontSize: 16, marginBottom: 8 }}>
+            职业节点说明
+          </Text>
+          <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+            该节点用于展示职业体系中的职业，可通过连线查看角色与职业的关联。这里先给出用途说明，不展开角色或组织详情。
+          </Text>
           <Space align="start">
             <TrophyOutlined style={{ color: token.colorWarning, marginTop: 4 }} />
             <div>
-              <Text strong>职业节点</Text>
+              <Text strong>当前工作焦点</Text>
               <p style={{ ...clampTextStyle(2), marginTop: 2 }}>
-                该节点用于展示职业体系中的职业，可通过连线查看角色与职业的关联。
+                先从主视图里的连线关系判断谁与这个职业节点有关，再回到关系图继续查看具体角色或组织。
               </p>
             </div>
           </Space>
@@ -127,6 +151,25 @@ function RelationshipGraphDetailPanel({
   const traitList = safeParseStringArray(nodeDetail.traits);
   const orgMembers = safeParseStringArray(nodeDetail.organization_members);
   const subCareerData = nodeDetail.is_organization ? [] : safeParseSubCareers(nodeDetail.sub_careers);
+  const detailWorkspaceFocus = nodeDetail.is_organization
+    ? {
+        title: '先确认这个组织节点在关系图里承担的是势力还是成员聚合角色',
+        note: '当前更适合优先查看组织宗旨、所在地和势力等级，再结合成员信息判断它在剧情推进中的组织地位。',
+      }
+    : nodeDetail.role_type === 'protagonist'
+      ? {
+          title: '先确认主角当前的人设、职业与关系图中心位置是否一致',
+          note: '当前节点是主角，更适合优先检查性格、背景和职业阶段，确认它和关系图主线是否对齐。',
+        }
+      : nodeDetail.role_type === 'antagonist'
+        ? {
+            title: '先确认反派节点的身份、动机和职业路径是否足够清晰',
+            note: '当前节点承担对抗角色，更适合先看背景、职业与关键标签，再判断关系图里的冲突关系是否明确。',
+          }
+        : {
+            title: '先从配角的功能定位和职业信息切入详情回看',
+            note: '当前节点更适合作为辅助角色回看，建议优先检查职业、特征与背景，确认它在关系图中的叙事作用。',
+          };
 
   const renderCareerTags = () => {
     if (nodeDetail.is_organization) return null;
@@ -229,6 +272,88 @@ function RelationshipGraphDetailPanel({
         }
       >
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div
+            style={{
+              marginBottom: 14,
+              padding: '14px 16px',
+              borderRadius: 20,
+              border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+              background: `linear-gradient(135deg, ${alphaColor(token.colorPrimaryBg, 0.88)} 0%, ${alphaColor(token.colorBgElevated, 0.98)} 100%)`,
+            }}
+          >
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: 14,
+              }}
+            >
+              <div>
+                <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+                  Detail Guide
+                </Text>
+                <Text strong style={{ display: 'block', fontSize: 16, marginBottom: 8 }}>
+                  关系图详情导览
+                </Text>
+                <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+                  这里负责把关系图里的节点信息展开成可读详情。当前只增强阅读顺序和焦点说明，不改变任何节点解析、字段映射或关闭交互。
+                </Text>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {detailGuideSteps.map((item, index) => (
+                    <span
+                      key={item}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '6px 12px',
+                        borderRadius: 999,
+                        background: token.colorBgContainer,
+                        border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+                        color: token.colorText,
+                        fontSize: 12,
+                      }}
+                    >
+                      <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              </div>
+              <div
+                style={{
+                  borderRadius: 16,
+                  padding: '14px 16px 12px',
+                  background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.5)} 100%)`,
+                  border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+                }}
+              >
+                <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+                  当前工作焦点
+                </Text>
+                <Text strong style={{ display: 'block', fontSize: 15, marginBottom: 8 }}>
+                  {detailWorkspaceFocus.title}
+                </Text>
+                <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+                  {detailWorkspaceFocus.note}
+                </Text>
+                <Space wrap>
+                  <Tag color={nodeDetail.is_organization ? 'green' : nodeDetail.role_type === 'protagonist' ? 'red' : nodeDetail.role_type === 'antagonist' ? 'purple' : 'blue'}>
+                    {nodeDetail.is_organization ? '组织节点' : nodeDetail.role_type === 'protagonist' ? '主角节点' : nodeDetail.role_type === 'antagonist' ? '反派节点' : '配角节点'}
+                  </Tag>
+                  {!nodeDetail.is_organization && nodeDetail.main_career_id ? (
+                    <Tag color="gold">
+                      主职业: {careerNameMap[nodeDetail.main_career_id]?.name || nodeDetail.main_career_id}
+                    </Tag>
+                  ) : null}
+                  {nodeDetail.is_organization && nodeDetail.power_level !== undefined && nodeDetail.power_level !== null ? (
+                    <Tag color="orange">势力等级: {nodeDetail.power_level}/100</Tag>
+                  ) : null}
+                </Space>
+              </div>
+            </div>
+          </div>
+
           <div
             style={{
               textAlign: 'center',

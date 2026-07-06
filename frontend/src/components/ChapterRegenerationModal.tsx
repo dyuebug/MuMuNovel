@@ -16,6 +16,8 @@ import {
   Space,
   Switch,
   Tag,
+  Typography,
+  theme,
 } from 'antd';
 import {
   CheckCircleOutlined,
@@ -49,6 +51,7 @@ import { SSEProgressModal } from './SSEProgressModal';
 
 const { TextArea } = Input;
 const { Panel } = Collapse;
+const { Text } = Typography;
 
 const REGENERATION_STREAM_INACTIVITY_TIMEOUT_MS = 90000;
 const REGENERATION_HEARTBEAT_SUFFIX = '（仍在生成中）';
@@ -172,6 +175,8 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
   qualityMetricsSummary = null,
   qualityGate = null,
 }) => {
+  const { token } = theme.useToken();
+  const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
   const currentProjectId = useStore((state) => state.currentProject?.id);
   const [form] = Form.useForm<RegenerationFormValues>();
   const [modal, contextHolder] = Modal.useModal();
@@ -483,11 +488,70 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
     });
   };
 
+  const regenerationGuideSteps = [
+    '先确认这轮重写主要依赖自定义要求、分析建议还是混合模式，再决定本章的修订主线。',
+    '再补充重点方向、保留策略和联网检索，把“重写约束”放在真正提交任务之前校准清楚。',
+    '最后再开始重生成；进入运行态后优先观察进度、质量信号与修复建议，不要频繁重开新的重写请求。',
+  ];
+  const regenerationWorkspaceFocus = status === 'generating'
+    ? {
+        title: `跟进第 ${chapterNumber} 章的重生成进度`,
+        note: '当前后台任务已经启动，适合先观察生成进度、字数与质量提示，再决定下一轮是否继续追加修复要求。',
+      }
+    : status === 'success'
+      ? {
+          title: '复核这一版重生成结果',
+          note: '当前已经得到新的章节结果，适合先确认字数、牵引和修复效果，再决定是否接受本轮输出。',
+        }
+      : status === 'error'
+        ? {
+            title: '先处理这轮重生成阻塞',
+            note: '当前请求已经返回错误，适合先看失败信息和配置条件，再重新发起下一次重写。',
+          }
+        : regenerationEnableWebResearch
+          ? {
+              title: '确认是否需要外部资料支撑',
+              note: '当前已经开启联网检索，适合先确认职业、时代、规则或场景细节是否真的值得引入额外上下文。',
+            }
+          : modificationSource === 'analysis_suggestions' && selectedSuggestions.length === 0
+            ? {
+                title: '先勾选本轮要采纳的分析建议',
+                note: '当前以分析建议为主，但还没有选择具体建议，适合先缩小修订目标，再提交这一轮重生成。',
+              }
+            : hasRepairGuidance
+              ? {
+                  title: '围绕自动修复建议组织这轮重写',
+                  note: '当前已经加载修复摘要、短板与保留优势，适合先让这一轮信息收敛，再补充少量自定义要求。',
+                }
+              : {
+                  title: '定义本章这一轮的重写目标',
+                  note: '当前更适合先说清楚章末牵引、情绪浓度、结构保留与重点方向，再把请求交给现有重生成链路。',
+                };
+
+  const sectionLabelStyle = {
+    display: 'block',
+    fontSize: 11,
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase' as const,
+    color: token.colorTextTertiary,
+    marginBottom: 6,
+  };
+
   return (
     <>
       {contextHolder}
       <Modal
-        title={`重新生成章节 - 第${chapterNumber}章：${chapterTitle}`}
+        title={(
+          <div>
+            <Text style={sectionLabelStyle}>Chapter Regeneration</Text>
+            <Text strong style={{ display: 'block', fontSize: 18, marginBottom: 4 }}>
+              重新生成章节
+            </Text>
+            <Text type="secondary">
+              第{chapterNumber}章：{chapterTitle}
+            </Text>
+          </div>
+        )}
         open={visible}
         onCancel={handleCancel}
         width={860}
@@ -518,6 +582,78 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
               ]
         }
       >
+        <Card
+          size="small"
+          style={{
+            marginBottom: 16,
+            borderRadius: 22,
+            border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+            background: `linear-gradient(135deg, ${alphaColor(token.colorPrimaryBg, 0.84)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`,
+          }}
+          styles={{ body: { padding: 16 } }}
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+              gap: 16,
+            }}
+          >
+            <div>
+              <Text style={sectionLabelStyle}>Regeneration Guide</Text>
+              <Text strong style={{ display: 'block', fontSize: 17, marginBottom: 8 }}>
+                本章重生成工作台
+              </Text>
+              <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+                这里不会改变原有后台任务逻辑，只是把本章重写的配置顺序和判断重点提前说明，帮助你更稳定地组织这一轮修订请求。
+              </Text>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {regenerationGuideSteps.map((item, index) => (
+                  <span
+                    key={item}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '6px 12px',
+                      borderRadius: 999,
+                      background: token.colorBgContainer,
+                      border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+                      color: token.colorText,
+                      fontSize: 12,
+                    }}
+                  >
+                    <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <div
+              style={{
+                borderRadius: 18,
+                padding: '16px 18px 14px',
+                background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.5)} 100%)`,
+                border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+              }}
+            >
+              <Text style={sectionLabelStyle}>当前工作焦点</Text>
+              <Text strong style={{ display: 'block', fontSize: 16, marginBottom: 8 }}>
+                {regenerationWorkspaceFocus.title}
+              </Text>
+              <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+                {regenerationWorkspaceFocus.note}
+              </Text>
+              <Space wrap size={[8, 8]}>
+                <Tag color="blue">第 {chapterNumber} 章</Tag>
+                <Tag color="purple">建议 {suggestions.length} 条</Tag>
+                <Tag color={hasAnalysis ? 'green' : 'default'}>{hasAnalysis ? '已加载分析结果' : '无章节分析'}</Tag>
+                <Tag color={hasRepairGuidance ? 'orange' : 'default'}>{hasRepairGuidance ? '已加载自动修复建议' : '未启用自动修复建议'}</Tag>
+              </Space>
+            </div>
+          </div>
+        </Card>
+
         {status === 'success' && (
           <Alert
             message="重新生成成功"
@@ -544,7 +680,12 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
           <Alert
             type="info"
             showIcon
-            style={{ marginBottom: 16 }}
+            style={{
+              marginBottom: 16,
+              borderRadius: 18,
+              border: `1px solid ${alphaColor(token.colorInfo, 0.16)}`,
+              background: `linear-gradient(135deg, ${alphaColor(token.colorInfoBg, 0.94)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`,
+            }}
             message="已加载自动修复建议"
             description={(
               <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -607,7 +748,14 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
           <Alert
             type={effectiveQualityGate?.requires_manual_review ? 'warning' : 'info'}
             showIcon
-            style={{ marginBottom: 16 }}
+            style={{
+              marginBottom: 16,
+              borderRadius: 18,
+              border: `1px solid ${alphaColor(effectiveQualityGate?.requires_manual_review ? token.colorWarning : token.colorInfo, 0.16)}`,
+              background: effectiveQualityGate?.requires_manual_review
+                ? `linear-gradient(135deg, ${alphaColor(token.colorWarningBg, 0.94)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`
+                : `linear-gradient(135deg, ${alphaColor(token.colorInfoBg, 0.94)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`,
+            }}
             message="最近质量信号"
             description={(
               <Space direction="vertical" size={8} style={{ width: '100%' }}>
@@ -665,26 +813,54 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
         )}
 
         <Form form={form} layout="vertical" disabled={loading || status === 'success'}>
-          <Form.Item
-            name="modification_source"
-            label="修改来源"
-            rules={[{ required: true, message: '请选择修改来源。' }]}
+          <Card
+            size="small"
+            style={{
+              marginBottom: 16,
+              borderRadius: 20,
+              border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.9)}`,
+              background: alphaColor(token.colorBgContainer, 0.98),
+            }}
+            styles={{ body: { padding: 16 } }}
           >
-            <Radio.Group onChange={(event) => setModificationSource(event.target.value)}>
-              <Radio value="custom">仅自定义修改</Radio>
-              {hasAnalysis && suggestions.length > 0 && (
-                <>
-                  <Radio value="analysis_suggestions">仅分析建议</Radio>
-                  <Radio value="mixed">混合模式</Radio>
-                </>
-              )}
-            </Radio.Group>
-          </Form.Item>
+            <Text style={sectionLabelStyle}>Modification Source</Text>
+            <Text strong style={{ display: 'block', marginBottom: 8 }}>
+              修改来源
+            </Text>
+            <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 14 }}>
+              选择这一轮更依赖你的主动要求、章节分析建议，还是把两者混合起来使用。
+            </Text>
+            <Form.Item
+              name="modification_source"
+              label="修改来源"
+              rules={[{ required: true, message: '请选择修改来源。' }]}
+              style={{ marginBottom: 0 }}
+            >
+              <Radio.Group onChange={(event) => setModificationSource(event.target.value)}>
+                <Radio value="custom">仅自定义修改</Radio>
+                {hasAnalysis && suggestions.length > 0 && (
+                  <>
+                    <Radio value="analysis_suggestions">仅分析建议</Radio>
+                    <Radio value="mixed">混合模式</Radio>
+                  </>
+                )}
+              </Radio.Group>
+            </Form.Item>
+          </Card>
 
           {hasAnalysis && suggestions.length > 0 && (
             (modificationSource === 'analysis_suggestions' || modificationSource === 'mixed') && (
               <Form.Item label={`选择分析建议 (${selectedSuggestions.length}/${suggestions.length})`}>
-                <Card size="small" style={{ maxHeight: 300, overflow: 'auto' }}>
+                <Card
+                  size="small"
+                  style={{
+                    maxHeight: 320,
+                    overflow: 'auto',
+                    borderRadius: 18,
+                    border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+                    background: `linear-gradient(180deg, ${alphaColor(token.colorBgElevated, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.48)} 100%)`,
+                  }}
+                >
                   <Space direction="vertical" style={{ width: '100%' }}>
                     {suggestions.map((suggestion, index) => (
                       <Checkbox
@@ -697,7 +873,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
                             color={
                               suggestion.priority === 'high'
                                 ? 'red'
-                                : suggestion.priority === 'medium'
+                              : suggestion.priority === 'medium'
                                   ? 'orange'
                                   : 'blue'
                             }
@@ -720,26 +896,59 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
               gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
               gap: 16,
               alignItems: 'start',
+              marginBottom: 16,
             }}
           >
             {(modificationSource === 'custom' || modificationSource === 'mixed') && (
-              <Form.Item
-                name="custom_instructions"
-                label="自定义修改要求"
-                tooltip="描述你希望如何改进这一章。"
-                extra={repairGuidanceDisplay ? '若留空，系统会结合自动修复建议与重点方向进行重生成。' : undefined}
-                style={{ marginBottom: 0 }}
+              <Card
+                size="small"
+                style={{
+                  borderRadius: 20,
+                  border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.9)}`,
+                  background: alphaColor(token.colorBgContainer, 0.98),
+                }}
+                styles={{ body: { padding: 16 } }}
               >
-                <TextArea
-                  rows={6}
-                  placeholder="例如：增强情绪张力，保持主角行为逻辑一致，并在章末留下更强的牵引。"
-                  showCount
-                  maxLength={1000}
-                />
-              </Form.Item>
+                <Text style={sectionLabelStyle}>Custom Instructions</Text>
+                <Text strong style={{ display: 'block', marginBottom: 8 }}>
+                  自定义修改要求
+                </Text>
+                <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 14 }}>
+                  把你最在意的调整目标说清楚，例如章末牵引、情绪浓度、冲突强度或叙事克制感。
+                </Text>
+                <Form.Item
+                  name="custom_instructions"
+                  label="自定义修改要求"
+                  tooltip="描述你希望如何改进这一章。"
+                  extra={repairGuidanceDisplay ? '若留空，系统会结合自动修复建议与重点方向进行重生成。' : undefined}
+                  style={{ marginBottom: 0 }}
+                >
+                  <TextArea
+                    rows={6}
+                    placeholder="例如：增强情绪张力，保持主角行为逻辑一致，并在章末留下更强的牵引。"
+                    showCount
+                    maxLength={1000}
+                  />
+                </Form.Item>
+              </Card>
             )}
 
-            <div>
+            <Card
+              size="small"
+              style={{
+                borderRadius: 20,
+                border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.9)}`,
+                background: `linear-gradient(180deg, ${alphaColor(token.colorBgElevated, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.46)} 100%)`,
+              }}
+              styles={{ body: { padding: 16 } }}
+            >
+              <Text style={sectionLabelStyle}>Web Research</Text>
+              <Text strong style={{ display: 'block', marginBottom: 8 }}>
+                联网检索
+              </Text>
+              <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 14 }}>
+                当章节涉及职业、时代、规则或场景细节时，先补外部资料再重生成，通常会更稳。
+              </Text>
               <Form.Item
                 name="enable_web_research"
                 label="联网检索"
@@ -770,10 +979,20 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
                   />
                 </Form.Item>
               )}
-            </div>
+            </Card>
           </div>
 
-          <Collapse ghost>
+          <Collapse
+            ghost
+            style={{
+              marginBottom: 8,
+              borderRadius: 20,
+              overflow: 'hidden',
+              border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+              background: alphaColor(token.colorBgContainer, 0.96),
+              padding: '2px 12px',
+            }}
+          >
             <Panel header="高级选项" key="advanced">
               <Form.Item name="focus_areas" label="重点优化方向">
                 <Checkbox.Group>

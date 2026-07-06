@@ -1,27 +1,27 @@
 ﻿import type { CSSProperties } from 'react';
 
 const bookshelfBaseShadow = `
-  0 10px 22px -12px color-mix(in srgb, var(--ant-color-text) 28%, transparent),
-  inset 0 1px 0 color-mix(in srgb, var(--ant-color-bg-container) 82%, transparent)
+  0 18px 34px -24px color-mix(in srgb, var(--ant-color-text) 46%, transparent),
+  0 1px 0 color-mix(in srgb, var(--ant-color-bg-container) 82%, transparent) inset
 `;
 
 const bookshelfHoverShadow = `
-  0 16px 30px -12px color-mix(in srgb, var(--ant-color-text) 34%, transparent),
-  inset 0 1px 0 color-mix(in srgb, var(--ant-color-bg-container) 88%, transparent)
+  0 26px 46px -24px color-mix(in srgb, var(--ant-color-text) 52%, transparent),
+  0 1px 0 color-mix(in srgb, var(--ant-color-bg-container) 88%, transparent) inset
 `;
 
 const bookshelfNewBaseShadow = `
-  0 10px 24px -14px color-mix(in srgb, var(--ant-color-text) 30%, transparent),
-  inset 0 1px 0 color-mix(in srgb, var(--ant-color-bg-container) 84%, transparent)
+  0 18px 34px -22px color-mix(in srgb, var(--ant-color-warning) 28%, transparent),
+  0 1px 0 color-mix(in srgb, var(--ant-color-bg-container) 84%, transparent) inset
 `;
 
 const bookshelfNewHoverShadow = `
-  0 16px 30px -12px color-mix(in srgb, var(--ant-color-text) 36%, transparent),
-  inset 0 1px 0 color-mix(in srgb, var(--ant-color-bg-container) 90%, transparent)
+  0 26px 46px -22px color-mix(in srgb, var(--ant-color-warning) 34%, transparent),
+  0 1px 0 color-mix(in srgb, var(--ant-color-bg-container) 90%, transparent) inset
 `;
 
 const promptTemplateBaseShadow = `
-  0 6px 16px color-mix(in srgb, var(--ant-color-text) 11%, transparent),
+  0 18px 32px -24px color-mix(in srgb, var(--ant-color-text) 36%, transparent),
   0 1px 0 color-mix(in srgb, var(--ant-color-white) 42%, transparent) inset
 `;
 
@@ -37,12 +37,16 @@ export const bookshelfCardStyles = {
 
   projectCard: {
     height: '100%',
-    borderRadius: '4px 12px 12px 4px',
+    borderRadius: '18px 24px 24px 14px',
     overflow: 'hidden',
-    background: 'linear-gradient(180deg, color-mix(in srgb, var(--ant-color-bg-container) 96%, var(--ant-color-text) 4%) 0%, color-mix(in srgb, var(--ant-color-bg-container) 88%, var(--ant-color-text) 12%) 100%)',
+    background: `
+      linear-gradient(180deg,
+        color-mix(in srgb, var(--ant-color-bg-container) 95%, var(--ant-color-primary) 5%) 0%,
+        color-mix(in srgb, var(--ant-color-bg-container) 88%, var(--ant-color-text) 12%) 100%)
+    `,
     boxShadow: bookshelfBaseShadow,
-    transition: 'transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), border-color 0.3s ease',
-    border: '1px solid color-mix(in srgb, var(--ant-color-text) 18%, transparent)',
+    transition: 'transform 0.36s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.36s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.3s ease, background 0.3s ease',
+    border: '1px solid color-mix(in srgb, var(--ant-color-primary) 14%, var(--ant-color-border) 86%)',
     display: 'flex',
     flexDirection: 'column',
     position: 'relative',
@@ -52,16 +56,20 @@ export const bookshelfCardStyles = {
 
   newProjectCard: {
     height: '100%',
-    borderRadius: 12,
+    borderRadius: 24,
     overflow: 'hidden',
-    background: 'linear-gradient(180deg, color-mix(in srgb, var(--ant-color-bg-container) 94%, var(--ant-color-warning) 6%) 0%, color-mix(in srgb, var(--ant-color-bg-container) 86%, var(--ant-color-warning) 14%) 100%)',
+    background: `
+      linear-gradient(180deg,
+        color-mix(in srgb, var(--ant-color-bg-container) 92%, var(--ant-color-warning) 8%) 0%,
+        color-mix(in srgb, var(--ant-color-bg-container) 82%, var(--ant-color-warning) 18%) 100%)
+    `,
     boxShadow: bookshelfNewBaseShadow,
-    border: '2px dashed color-mix(in srgb, var(--ant-color-warning) 40%, var(--ant-color-border) 60%)',
+    border: '1px dashed color-mix(in srgb, var(--ant-color-warning) 48%, var(--ant-color-border) 52%)',
     display: 'flex',
     flexDirection: 'column',
     justifyContent: 'center',
     alignItems: 'center',
-    transition: 'transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease, background-color 0.3s ease',
+    transition: 'transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease, background 0.3s ease',
     position: 'relative',
   } as CSSProperties,
 };
@@ -109,8 +117,12 @@ export const promptTemplateCardStyles = {
     height: '100%',
     borderRadius: 14,
     overflow: 'hidden',
-    border: '1px solid color-mix(in srgb, var(--ant-color-text) 8%, transparent)',
-    background: 'linear-gradient(180deg, color-mix(in srgb, var(--ant-color-bg-container) 97%, var(--ant-color-primary) 3%) 0%, var(--ant-color-bg-container) 100%)',
+    border: '1px solid color-mix(in srgb, var(--ant-color-primary) 10%, var(--ant-color-border) 90%)',
+    background: `
+      linear-gradient(180deg,
+        color-mix(in srgb, var(--ant-color-bg-container) 96%, var(--ant-color-primary) 4%) 0%,
+        color-mix(in srgb, var(--ant-color-bg-container) 90%, var(--ant-color-warning) 10%) 100%)
+    `,
     boxShadow: promptTemplateBaseShadow,
     transition: 'transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.28s cubic-bezier(0.22, 1, 0.36, 1), border-color 0.28s ease',
   } as CSSProperties,
@@ -121,10 +133,10 @@ export const promptTemplateCardHoverHandlers = {
     const target = e.currentTarget;
     target.style.transform = 'translateY(-6px)';
     target.style.boxShadow = `
-      0 14px 24px color-mix(in srgb, var(--ant-color-text) 16%, transparent),
+      0 28px 40px -28px color-mix(in srgb, var(--ant-color-text) 54%, transparent),
       0 1px 0 color-mix(in srgb, var(--ant-color-white) 48%, transparent) inset
     `;
-    target.style.borderColor = 'color-mix(in srgb, var(--ant-color-primary) 24%, transparent)';
+    target.style.borderColor = 'color-mix(in srgb, var(--ant-color-primary) 28%, var(--ant-color-border) 72%)';
   },
   onMouseLeave: (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
@@ -144,10 +156,14 @@ export const promptTemplateGridConfig = {
 // WorldSetting 页面卡片样式
 export const worldSettingCardStyles = {
   sectionCard: {
-    borderRadius: 14,
-    border: '1px solid color-mix(in srgb, var(--ant-color-text) 7%, transparent)',
-    boxShadow: '0 4px 12px color-mix(in srgb, var(--ant-color-text) 8%, transparent)',
-    background: 'linear-gradient(180deg, color-mix(in srgb, var(--ant-color-bg-container) 98%, var(--ant-color-primary) 2%) 0%, var(--ant-color-bg-container) 100%)',
+    borderRadius: 18,
+    border: '1px solid color-mix(in srgb, var(--ant-color-primary) 10%, var(--ant-color-border) 90%)',
+    boxShadow: '0 18px 34px -28px color-mix(in srgb, var(--ant-color-text) 34%, transparent)',
+    background: `
+      linear-gradient(180deg,
+        color-mix(in srgb, var(--ant-color-bg-container) 97%, var(--ant-color-primary) 3%) 0%,
+        color-mix(in srgb, var(--ant-color-bg-container) 92%, var(--ant-color-warning) 8%) 100%)
+    `,
     transition: 'box-shadow 0.24s ease, border-color 0.24s ease',
   } as CSSProperties,
 };
@@ -157,14 +173,19 @@ export const characterCardStyles = {
   characterCard: {
     display: 'flex',
     flexDirection: 'column',
-    borderRadius: 12,
+    borderRadius: 18,
+    background: `
+      linear-gradient(180deg,
+        color-mix(in srgb, var(--ant-color-bg-container) 96%, var(--ant-color-primary) 4%) 0%,
+        var(--ant-color-bg-container) 100%)
+    `,
   } as CSSProperties,
 
   organizationCard: {
     display: 'flex',
     flexDirection: 'column',
-    backgroundColor: 'var(--ant-color-bg-layout)',
-    borderRadius: 12,
+    background: 'color-mix(in srgb, var(--ant-color-bg-layout) 90%, var(--ant-color-primary) 10%)',
+    borderRadius: 18,
   } as CSSProperties,
 
   nameEllipsis: {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, Button, Space, Typography, message, Progress } from 'antd';
+import { Card, Button, Space, Typography, message, Progress, Tag, theme } from 'antd';
 import { CheckCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import { wizardStreamApi } from '../services/modularApi';
 import { backgroundTaskApi, type BackgroundTaskStatus } from '../services/modularApi';
@@ -10,6 +10,7 @@ import { isRequestCancelledError } from '../services/core/httpClient';
 import { isProjectWizardCompleted } from '../utils/projectWizardState';
 import type { SSEClientOptions } from '../utils/sseClient';
 import type { ApiError, CreativeMode, PlotStage, QualityPreset, ResearchAssetSummary, StoryFocus } from '../types';
+import { designDisplayFont } from '../theme/themeConfig';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -150,6 +151,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   homeButtonText = '返回首页',
 }) => {
   const navigate = useNavigate();
+  const { token } = theme.useToken();
 
   // 状态管理
   const [loading, setLoading] = useState(false);
@@ -1552,6 +1554,227 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
     generationSteps.characters === 'error' ||
     generationSteps.outline === 'error';
   const showTerminalActions = hasError || isCancelled;
+  const workflowStepItems = [
+    { key: 'worldBuilding', label: '生成世界观', detail: '先搭建时代、规则与整体叙事空气', step: generationSteps.worldBuilding },
+    { key: 'careers', label: '生成职业体系', detail: '把职业分工和社会结构补成可用骨架', step: generationSteps.careers },
+    { key: 'characters', label: '生成角色', detail: '补齐主要角色、关系张力与出场职责', step: generationSteps.characters },
+    { key: 'outline', label: '生成大纲', detail: '把设定收束成章节级推进路线', step: generationSteps.outline },
+  ] as const;
+  const completedStepCount = workflowStepItems.filter((item) => item.step === 'completed').length;
+  const researchSummaryItems = ([
+    ['worldBuilding', '世界观设定'],
+    ['careers', '职业体系'],
+    ['characters', '角色设定'],
+    ['outline', '大纲'],
+  ] as Array<[ResearchStepKey, string]>)
+    .map(([stepKey, label]) => ({ stepKey, label, item: researchSummaries[stepKey] }))
+    .filter(({ item }) => item && (item.query || item.assets.length > 0));
+  const activeWorkflowItem = workflowStepItems.find((item) => item.step === 'processing')
+    ?? workflowStepItems.find((item) => item.step === 'error')
+    ?? workflowStepItems[Math.min(completedStepCount, workflowStepItems.length - 1)];
+  const heroBackground = `linear-gradient(135deg,
+    color-mix(in srgb, ${token.colorPrimary} 80%, #6b4334 20%) 0%,
+    color-mix(in srgb, ${token.colorInfo} 36%, #1f2730 64%) 100%)`;
+  const quietPanelBackground = `linear-gradient(180deg,
+    color-mix(in srgb, ${token.colorBgContainer} 96%, white 4%) 0%,
+    color-mix(in srgb, ${token.colorFillAlter} 42%, ${token.colorBgContainer} 58%) 100%)`;
+  const panelBorder = `1px solid color-mix(in srgb, ${token.colorBorderSecondary} 88%, white 12%)`;
+  const workflowGuideSteps = [
+    '先用顶部焦点确认当前处在哪个生成阶段，再决定是否继续等待、取消或返回。',
+    '再看研究摘要与步骤状态，判断这次任务是在补设定、补角色还是已经进入大纲收束。',
+    '最后再处理取消、重试或退出动作；原有后台任务、恢复与回调逻辑保持不变。',
+  ];
+  const workflowFocus = hasError
+    ? {
+        title: `当前在${activeWorkflowItem.label}阶段出现异常`,
+        note: '先读错误详情，再决定智能重试。现有重试会回到对应中断阶段，不会改写任务状态机。',
+        tags: [
+          { label: '需要重试', color: 'error' },
+          { label: `完成 ${completedStepCount}/4`, color: 'blue' },
+          resumeProjectId ? { label: '恢复模式', color: 'gold' } : { label: '新建流程', color: 'default' },
+        ],
+      }
+    : isCancelled
+      ? {
+          title: '当前任务已停止在可退出状态',
+          note: '可以返回上一步调整配置，或直接退出当前工作区。现有清理与退出逻辑保持不变。',
+          tags: [
+            { label: '任务已取消', color: 'warning' },
+            { label: `完成 ${completedStepCount}/4`, color: 'blue' },
+            resumeProjectId ? { label: '恢复模式', color: 'gold' } : { label: '新建流程', color: 'default' },
+          ],
+        }
+      : {
+          title: `当前焦点：${activeWorkflowItem.label}`,
+          note: activeWorkflowItem.detail,
+          tags: [
+            { label: `进度 ${progress}%`, color: progress === 100 ? 'success' : 'processing' },
+            { label: `完成 ${completedStepCount}/4`, color: 'blue' },
+            researchSummaryItems.length > 0
+              ? { label: `研究摘要 ${researchSummaryItems.length} 组`, color: 'cyan' }
+              : { label: '无额外研究摘要', color: 'default' },
+          ],
+        };
+
+  const getStepStatusText = (step: GenerationStep) => {
+    if (step === 'completed') return '已完成';
+    if (step === 'processing') return '进行中';
+    if (step === 'error') return '异常';
+    return '等待中';
+  };
+
+  const getStepTagColor = (step: GenerationStep) => {
+    if (step === 'completed') return 'success';
+    if (step === 'processing') return 'processing';
+    if (step === 'error') return 'error';
+    return 'default';
+  };
+
+  const renderHero = () => (
+    <Card
+      bordered={false}
+      style={{
+        marginBottom: 16,
+        borderRadius: 24,
+        overflow: 'hidden',
+        background: heroBackground,
+      }}
+      styles={{ body: { padding: isMobile ? 20 : 24 } }}
+    >
+      <Text style={{ color: 'rgba(255,255,255,0.68)', letterSpacing: '0.14em', textTransform: 'uppercase' }}>
+        Project Generation Studio
+      </Text>
+      <Title
+        level={isMobile ? 4 : 3}
+        style={{
+          margin: '8px 0 12px',
+          color: '#f7f1e8',
+          fontFamily: designDisplayFont,
+          letterSpacing: '-0.04em',
+          wordBreak: 'break-word',
+        }}
+      >
+        {`正在为《${config.title}》搭建世界、角色与大纲`}
+      </Title>
+      <Paragraph
+        style={{
+          margin: 0,
+          color: 'rgba(255,255,255,0.84)',
+          lineHeight: 1.75,
+          fontSize: isMobile ? 14 : 15,
+        }}
+      >
+        当前工作台把生成阶段、研究摘要和退出动作整理成更清晰的阅读顺序。原有后台任务创建、恢复、取消与完成回调逻辑保持不变。
+      </Paragraph>
+      <Space wrap size={[8, 8]} style={{ marginTop: 16 }}>
+        <Tag color="blue" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+          {resumeProjectId ? '恢复项目生成' : '新建项目生成'}
+        </Tag>
+        <Tag color={hasError ? 'error' : (isCancelled ? 'warning' : 'processing')} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+          {hasError ? '需要人工处理' : (isCancelled ? '已取消，可退出' : '生成进行中')}
+        </Tag>
+        <Tag color="gold" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+          {`目标 ${config.chapter_count} 章 / ${config.character_count} 角色`}
+        </Tag>
+      </Space>
+    </Card>
+  );
+
+  const renderGuidePanel = () => (
+    <Card
+      bordered={false}
+      style={{
+        borderRadius: 20,
+        background: `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimary} 8%, white 92%) 0%, color-mix(in srgb, ${token.colorWarning} 8%, white 92%) 100%)`,
+        border: `1px solid color-mix(in srgb, ${token.colorPrimary} 14%, white 86%)`,
+      }}
+      styles={{ body: { padding: 18 } }}
+    >
+      <Text style={{ fontSize: 12, color: token.colorTextTertiary, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+        Generation Guide
+      </Text>
+      <Title level={5} style={{ margin: '6px 0 10px', fontFamily: designDisplayFont }}>
+        先识别阶段，再处理动作
+      </Title>
+      <Paragraph style={{ margin: 0, color: token.colorText, lineHeight: 1.75 }}>
+        这里像项目生成的导览面板：先知道流程走到了哪里，再判断是继续等待、取消任务还是回退配置。我们只强化阅读顺序，不改变现有生成逻辑。
+      </Paragraph>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
+        {workflowGuideSteps.map((item, index) => (
+          <span
+            key={item}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '6px 12px',
+              borderRadius: 999,
+              background: token.colorBgContainer,
+              border: `1px solid ${token.colorBorderSecondary}`,
+              color: token.colorTextSecondary,
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+            {item}
+          </span>
+        ))}
+      </div>
+
+      <Card
+        bordered={false}
+        style={{
+          marginTop: 16,
+          borderRadius: 16,
+          background: token.colorBgContainer,
+          border: panelBorder,
+        }}
+        styles={{ body: { padding: 16 } }}
+      >
+        <Text style={{ fontSize: 12, color: token.colorTextTertiary, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+          Current Focus
+        </Text>
+        <Title level={5} style={{ margin: '6px 0 8px', fontFamily: designDisplayFont }}>
+          {workflowFocus.title}
+        </Title>
+        <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
+          {workflowFocus.note}
+        </Paragraph>
+        <Space wrap size={[8, 8]} style={{ marginTop: 12 }}>
+          {workflowFocus.tags.map((tag) => (
+            <Tag key={tag.label} color={tag.color} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+              {tag.label}
+            </Tag>
+          ))}
+        </Space>
+      </Card>
+    </Card>
+  );
+
+  const renderWorkspacePanel = (content: React.ReactNode) => (
+    <Card
+      bordered={false}
+      style={{
+        borderRadius: 24,
+        background: quietPanelBackground,
+        border: panelBorder,
+        boxShadow: `0 24px 56px color-mix(in srgb, ${token.colorText} 10%, transparent)`,
+      }}
+      styles={{ body: { padding: isMobile ? 16 : 20 } }}
+    >
+      <Text style={{ fontSize: 12, color: token.colorTextTertiary, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+        Generation Workspace
+      </Text>
+      <Title level={4} style={{ margin: '6px 0 10px', fontFamily: designDisplayFont }}>
+        当前生成工作区
+      </Title>
+      <Paragraph style={{ marginTop: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
+        这里保留原来的进度条、研究摘要、阶段状态与动作按钮，只把它们组织成更易扫读的工作流面板。
+      </Paragraph>
+      {content}
+    </Card>
+  );
 
   const handleExitGeneration = (target: 'back' | 'home') => {
     invalidateGenerationRun();
@@ -1570,206 +1793,291 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   };
 
   const renderGenerating = () => (
+    <div
+      style={{
+        padding: isMobile ? '32px 16px' : '40px 20px',
+        maxWidth: 1180,
+        overflow: 'hidden',
+        margin: '0 auto',
+      }}
+    >
+      {renderHero()}
 
-    <div style={{
-      textAlign: 'center',
-      padding: isMobile ? '32px 16px' : '40px 20px',
-      maxWidth: '100%',
-      overflow: 'hidden'
-    }}>
-      <Title
-        level={isMobile ? 4 : 3}
+      <div
         style={{
-          marginBottom: 32,
-          color: 'var(--color-text-primary)',
-          wordBreak: 'break-word',
-          whiteSpace: 'normal',
-          overflowWrap: 'break-word'
+          display: 'grid',
+          gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.4fr) minmax(320px, 0.8fr)',
+          gap: 16,
+          alignItems: 'start',
         }}
       >
-        正在为《{config.title}》生成内容
-      </Title>
-
-      <Card style={{ marginBottom: 24, maxWidth: '100%' }}>
-        <Progress
-          percent={progress}
-          status={hasError ? 'exception' : (progress === 100 ? 'success' : 'active')}
-          strokeColor={{
-            '0%': 'var(--color-primary)',
-            '100%': 'var(--color-primary-active)',
-          }}
-          style={{ marginBottom: 24 }}
-        />
-
-        <Paragraph
-          style={{
-            fontSize: isMobile ? 14 : 16,
-            marginBottom: 32,
-            color: hasError ? 'var(--color-error)' : 'var(--color-text-secondary)',
-            wordBreak: 'break-word',
-            whiteSpace: 'normal',
-            overflowWrap: 'break-word'
-          }}
-        >
-          {progressMessage}
-        </Paragraph>
-
-        {errorDetails && (
-          <Card
-            size="small"
-            style={{
-              marginBottom: 24,
-              background: 'var(--color-error-bg)',
-              borderColor: 'var(--color-error-border)',
-              textAlign: 'left',
-              maxWidth: '100%',
-              overflow: 'hidden'
-            }}
-          >
-            <Text strong style={{ color: 'var(--color-error)' }}>错误详情：</Text>
-            <br />
-            <Text
+        {renderWorkspacePanel(
+          <>
+            <Card
+              bordered={false}
               style={{
-                color: 'var(--color-text-secondary)',
-                fontSize: 14,
-                wordBreak: 'break-word',
-                whiteSpace: 'normal',
-                overflowWrap: 'break-word',
-                display: 'block'
+                marginBottom: 16,
+                borderRadius: 18,
+                background: token.colorBgContainer,
+                border: panelBorder,
               }}
+              styles={{ body: { padding: isMobile ? 16 : 18 } }}
             >
-              {errorDetails}
-            </Text>
-          </Card>
-        )}
-
-        {Object.values(researchSummaries).some((item) => item && (item.query || item.assets.length > 0)) && (
-          <Card
-            size="small"
-            title="本次联网研究摘要"
-            data-testid="project-generator-research-summary"
-            style={{
-              marginBottom: 24,
-              textAlign: 'left',
-              maxWidth: '100%',
-              overflow: 'hidden',
-            }}
-          >
-            <Space direction="vertical" size={12} style={{ width: '100%' }}>
-              {([
-                ['worldBuilding', '世界观设定'],
-                ['careers', '职业体系'],
-                ['characters', '角色设定'],
-                ['outline', '大纲'],
-              ] as Array<[ResearchStepKey, string]>).map(([stepKey, label]) => {
-                const item = researchSummaries[stepKey];
-                if (!item || (!item.query && item.assets.length === 0)) {
-                  return null;
-                }
-                return (
-                  <div key={stepKey} style={{ padding: '12px', border: '1px solid var(--color-border-secondary)', borderRadius: 8 }}>
-                    <Text strong>{label}</Text>
-                    {item.query && (
-                      <div style={{ marginTop: 6, color: 'var(--color-text-secondary)', fontSize: 13 }}>
-                        <strong>检索词：</strong>{item.query}
-                      </div>
-                    )}
-                    {item.assets.length > 0 && (
-                      <ul style={{ margin: '8px 0 0 0', paddingLeft: 18 }}>
-                        {item.assets.map((asset, index) => (
-                          <li key={`${stepKey}-${index}`} style={{ marginBottom: 8 }}>
-                            <div style={{ fontWeight: 500 }}>{asset.title}</div>
-                            {asset.summary && <div style={{ fontSize: 13 }}>{asset.summary}</div>}
-                            {asset.source && (
-                              <div style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>来源：{asset.source}</div>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                );
-              })}
-            </Space>
-          </Card>
-        )}
-
-        <Space
-          direction="vertical"
-          size={16}
-          style={{
-            width: '100%',
-            maxWidth: isMobile ? '100%' : 400,
-            margin: '0 auto'
-          }}
-        >
-          {[
-            { key: 'worldBuilding', label: '生成世界观', step: generationSteps.worldBuilding },
-            { key: 'careers', label: '生成职业体系', step: generationSteps.careers },
-            { key: 'characters', label: '生成角色', step: generationSteps.characters },
-            { key: 'outline', label: '生成大纲', step: generationSteps.outline },
-          ].map(({ key, label, step }) => {
-            const status = getStepStatus(step);
-            return (
               <div
-                key={key}
                 style={{
                   display: 'flex',
-                  alignItems: 'center',
+                  flexWrap: 'wrap',
                   justifyContent: 'space-between',
-                  padding: isMobile ? '10px 12px' : '12px 20px',
-                  background: step === 'processing' ? 'var(--color-info-bg)' : (step === 'error' ? 'var(--color-error-bg)' : 'var(--color-bg-layout)'),
-                  borderRadius: 8,
-                  border: `1px solid ${step === 'processing' ? 'var(--color-info-border)' : (step === 'error' ? 'var(--color-error-border)' : 'var(--color-border-secondary)')}`,
-                  gap: '8px',
-                  maxWidth: '100%',
-                  overflow: 'hidden'
+                  gap: 12,
+                  marginBottom: 12,
+                  alignItems: 'center',
                 }}
               >
+                <div>
+                  <Text style={{ fontSize: 12, color: token.colorTextTertiary, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                    Progress Pulse
+                  </Text>
+                  <Title level={5} style={{ margin: '6px 0 0', fontFamily: designDisplayFont }}>
+                    {hasError ? '生成流程已中断，等待重试决策' : '项目生成仍在持续推进'}
+                  </Title>
+                </div>
+                <Space wrap size={[8, 8]}>
+                  <Tag color={hasError ? 'error' : (progress === 100 ? 'success' : 'processing')} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                    {`总进度 ${progress}%`}
+                  </Tag>
+                  <Tag color="blue" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                    {`完成 ${completedStepCount}/4`}
+                  </Tag>
+                </Space>
+              </div>
+
+              <Progress
+                percent={progress}
+                status={hasError ? 'exception' : (progress === 100 ? 'success' : 'active')}
+                strokeColor={{
+                  '0%': token.colorPrimary,
+                  '100%': token.colorInfo,
+                }}
+                style={{ marginBottom: 18 }}
+              />
+
+              <Paragraph
+                style={{
+                  fontSize: isMobile ? 14 : 15,
+                  marginBottom: 0,
+                  color: hasError ? token.colorError : token.colorTextSecondary,
+                  lineHeight: 1.8,
+                  wordBreak: 'break-word',
+                }}
+              >
+                {progressMessage}
+              </Paragraph>
+            </Card>
+
+            {errorDetails && (
+              <Card
+                bordered={false}
+                size="small"
+                style={{
+                  marginBottom: 16,
+                  borderRadius: 18,
+                  background: `linear-gradient(180deg, color-mix(in srgb, ${token.colorErrorBg} 82%, ${token.colorBgContainer} 18%) 0%, ${token.colorBgContainer} 100%)`,
+                  border: `1px solid ${token.colorErrorBorder}`,
+                }}
+                styles={{ body: { padding: 16 } }}
+              >
+                <Text strong style={{ color: token.colorError }}>错误详情</Text>
                 <Text
                   style={{
-                    fontSize: isMobile ? 14 : 16,
-                    fontWeight: step === 'processing' ? 600 : 400,
+                    color: token.colorTextSecondary,
+                    fontSize: 14,
+                    lineHeight: 1.75,
                     wordBreak: 'break-word',
-                    whiteSpace: 'normal',
-                    overflowWrap: 'break-word',
-                    flex: 1,
-                    textAlign: 'left'
+                    display: 'block',
+                    marginTop: 8,
                   }}
                 >
-                  {label}
+                  {errorDetails}
                 </Text>
-                <span
-                  style={{
-                    fontSize: 20,
-                    color: status.color,
-                    flexShrink: 0
-                  }}
-                >
-                  {status.icon}
-                </span>
+              </Card>
+            )}
+
+            {researchSummaryItems.length > 0 && (
+              <Card
+                bordered={false}
+                size="small"
+                title="本次联网研究摘要"
+                data-testid="project-generator-research-summary"
+                style={{
+                  marginBottom: 16,
+                  borderRadius: 18,
+                  background: `linear-gradient(180deg, color-mix(in srgb, ${token.colorInfoBg} 76%, ${token.colorBgContainer} 24%) 0%, ${token.colorBgContainer} 100%)`,
+                  border: `1px solid ${token.colorInfoBorder}`,
+                }}
+                styles={{ body: { padding: 16 } }}
+              >
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  {researchSummaryItems.map(({ stepKey, label, item }) => (
+                    <div
+                      key={stepKey}
+                      style={{
+                        padding: '14px 14px 12px',
+                        border: `1px solid ${token.colorBorderSecondary}`,
+                        borderRadius: 14,
+                        background: token.colorBgContainer,
+                      }}
+                    >
+                      <Space wrap size={[8, 8]} style={{ marginBottom: item?.query ? 8 : 0 }}>
+                        <Text strong>{label}</Text>
+                        <Tag color="cyan" style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                          研究摘要
+                        </Tag>
+                      </Space>
+                      {item?.query && (
+                        <div style={{ marginTop: 6, color: token.colorTextSecondary, fontSize: 13, lineHeight: 1.7 }}>
+                          <strong>检索词：</strong>
+                          {item.query}
+                        </div>
+                      )}
+                      {item?.assets.length ? (
+                        <ul style={{ margin: '10px 0 0 0', paddingLeft: 18 }}>
+                          {item.assets.map((asset, index) => (
+                            <li key={`${stepKey}-${index}`} style={{ marginBottom: 8, lineHeight: 1.7 }}>
+                              <div style={{ fontWeight: 600 }}>{asset.title}</div>
+                              {asset.summary && <div style={{ fontSize: 13 }}>{asset.summary}</div>}
+                              {asset.source && (
+                                <div style={{ fontSize: 12, color: token.colorTextSecondary }}>
+                                  {`来源：${asset.source}`}
+                                </div>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ))}
+                </Space>
+              </Card>
+            )}
+
+            <Card
+              bordered={false}
+              style={{
+                borderRadius: 18,
+                background: token.colorBgContainer,
+                border: panelBorder,
+              }}
+              styles={{ body: { padding: 16 } }}
+            >
+              <div style={{ marginBottom: 12 }}>
+                <Text style={{ fontSize: 12, color: token.colorTextTertiary, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                  Step Monitor
+                </Text>
+                <Title level={5} style={{ margin: '6px 0 0', fontFamily: designDisplayFont }}>
+                  生成阶段状态
+                </Title>
               </div>
-            );
-          })}
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                {workflowStepItems.map(({ key, label, detail, step }) => {
+                  const status = getStepStatus(step);
+                  return (
+                    <div
+                      key={key}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        justifyContent: 'space-between',
+                        padding: isMobile ? '12px 12px' : '14px 16px',
+                        background: step === 'processing'
+                          ? token.colorInfoBg
+                          : (step === 'error' ? token.colorErrorBg : token.colorFillAlter),
+                        borderRadius: 16,
+                        border: `1px solid ${step === 'processing'
+                          ? token.colorInfoBorder
+                          : (step === 'error' ? token.colorErrorBorder : token.colorBorderSecondary)}`,
+                        gap: 12,
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <Space wrap size={[8, 8]}>
+                          <Text
+                            style={{
+                              fontSize: isMobile ? 14 : 16,
+                              fontWeight: step === 'processing' ? 600 : 500,
+                              color: token.colorText,
+                            }}
+                          >
+                            {label}
+                          </Text>
+                          <Tag color={getStepTagColor(step)} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
+                            {getStepStatusText(step)}
+                          </Tag>
+                        </Space>
+                        <Paragraph style={{ margin: '8px 0 0', color: token.colorTextSecondary, lineHeight: 1.7, fontSize: 13 }}>
+                          {detail}
+                        </Paragraph>
+                      </div>
+                      <span
+                        style={{
+                          fontSize: 20,
+                          color: status.color,
+                          flexShrink: 0,
+                          paddingTop: 2,
+                        }}
+                      >
+                        {status.icon}
+                      </span>
+                    </div>
+                  );
+                })}
+              </Space>
+            </Card>
+          </>
+        )}
+
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          {renderGuidePanel()}
+
+          <Card
+            bordered={false}
+            style={{
+              borderRadius: 20,
+              background: token.colorBgContainer,
+              border: panelBorder,
+            }}
+            styles={{ body: { padding: 18 } }}
+          >
+            <Text style={{ fontSize: 12, color: token.colorTextTertiary, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+              Action Notes
+            </Text>
+            <Paragraph style={{ margin: '8px 0 0', color: token.colorTextSecondary, lineHeight: 1.75 }}>
+              {hasError
+                ? '先检查错误详情，再决定是否触发智能重试。'
+                : (isCancelled
+                  ? '任务已取消，可以回到上一步调整配置，或直接退出当前生成工作台。'
+                  : '生成期间可以取消当前后台任务；只有进入异常或取消态后，才会显示退出动作。')}
+            </Paragraph>
+          </Card>
         </Space>
-      </Card>
+      </div>
 
       <Paragraph
         type="secondary"
         style={{
-          color: 'var(--color-text-secondary)',
+          color: token.colorTextSecondary,
           opacity: 0.9,
           wordBreak: 'break-word',
-          whiteSpace: 'normal',
-          overflowWrap: 'break-word',
-          fontSize: isMobile ? 14 : 16
+          fontSize: isMobile ? 14 : 16,
+          margin: '18px 0 0',
+          lineHeight: 1.75,
+          textAlign: isMobile ? 'left' : 'center',
         }}
       >
-        {hasError ? '生成过程中出现错误，请点击重试按钮重新生成' : '请耐心等待，正在为您精心创作...'}
+        {hasError ? '生成过程中出现错误，请点击重试按钮重新进入对应阶段。' : '请耐心等待，系统正在依次完成设定、角色与大纲生成。'}
       </Paragraph>
 
       {!hasError && loading && (
-        <Space style={{ marginTop: 16 }}>
+        <Space style={{ marginTop: 16 }} wrap>
           <Button
             danger
             size="large"
@@ -1783,7 +2091,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
       )}
 
       {hasError && (
-        <Space style={{ marginTop: 16 }}>
+        <Space style={{ marginTop: 16 }} wrap>
           <Button
             type="primary"
             size="large"
@@ -1816,7 +2124,6 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
           </Button>
         </Space>
       )}
-
     </div>
   );
 

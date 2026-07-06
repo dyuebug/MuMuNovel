@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, Outlet, Link, useLocation } from 'react-router-dom';
-import { Layout, Menu, Spin, Button, Drawer, Typography, theme } from 'antd';
+import { Layout, Menu, Button, Drawer, Typography, theme } from 'antd';
 import {
   ArrowLeftOutlined,
   FileTextOutlined,
@@ -14,7 +14,6 @@ import {
   BankOutlined,
   EditOutlined,
   FundOutlined,
-  HeartOutlined,
   TrophyOutlined,
   BulbOutlined,
   CloudOutlined,
@@ -28,8 +27,10 @@ import { preloadProjectNavigationPages, shouldSkipProjectNavigationPreload } fro
 import type { ProjectNavigationPageKey } from '../routes/projectPageLoaders';
 import { projectApi } from '../services/modularApi';
 import { isRequestCancelledError } from '../services/core/httpClient';
+import InlineDeferredPanel from '../components/InlineDeferredPanel';
 import ThemeSwitch from '../components/ThemeSwitch';
 import { useThemeMode } from '../theme/useThemeMode';
+import { designDisplayFont } from '../theme/themeConfig';
 import { getStoredSidebarCollapsed, setStoredSidebarCollapsed } from '../utils/sidebarState';
 import { VERSION_INFO } from '../config/version';
 import { useShallow } from 'zustand/react/shallow';
@@ -48,12 +49,54 @@ type ProjectStatsItem = {
   unit: string;
 };
 
+type WorkspaceFocusItem = {
+  title: string;
+};
+
 const OUTLET_CONTAINER_STYLE = {
-  height: '100%',
-  overflow: 'hidden',
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  overflowX: 'hidden',
   display: 'flex',
   flexDirection: 'column',
 } as const;
+
+const WORKSPACE_FOCUS: Record<string, WorkspaceFocusItem> = {
+  'world-setting': {
+    title: '世界设定',
+  },
+  characters: {
+    title: '角色管理',
+  },
+  organizations: {
+    title: '组织管理',
+  },
+  careers: {
+    title: '职业管理',
+  },
+  relationships: {
+    title: '关系管理',
+  },
+  outline: {
+    title: '大纲管理',
+  },
+  chapters: {
+    title: '章节管理',
+  },
+  'chapter-analysis': {
+    title: '剧情分析',
+  },
+  foreshadows: {
+    title: '伏笔管理',
+  },
+  'writing-styles': {
+    title: '写作风格',
+  },
+  'prompt-workshop': {
+    title: '提示词工坊',
+  },
+};
 
 const ProjectStatsBar = memo(function ProjectStatsBar({
   projectStats,
@@ -75,31 +118,35 @@ const ProjectStatsBar = memo(function ProjectStatsBar({
               flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'center',
-              backdropFilter: 'blur(4px)',
-              borderRadius: '28px',
-              minWidth: '56px',
-              height: '56px',
-              padding: '0 12px',
-              boxShadow: `inset 0 0 15px ${alphaColor(token.colorWhite, 0.15)}, 0 4px 10px ${alphaColor(token.colorText, 0.1)}`,
+              background: alphaColor('#ffffff', 0.08),
+              border: `1px solid ${alphaColor('#f7f1e8', 0.1)}`,
+              backdropFilter: 'blur(10px)',
+              borderRadius: '22px',
+              minWidth: '64px',
+              height: '58px',
+              padding: '0 14px',
+              boxShadow: `0 16px 30px ${alphaColor('#000000', 0.12)}`,
               cursor: 'default',
               transition: 'all 0.3s ease',
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.transform = 'translateY(-3px) scale(1.02)';
-              e.currentTarget.style.boxShadow = `inset 0 0 20px ${alphaColor(token.colorWhite, 0.25)}, 0 8px 16px ${alphaColor(token.colorText, 0.15)}`;
-              e.currentTarget.style.border = `1px solid ${alphaColor(token.colorWhite, 0.1)}`;
+              e.currentTarget.style.boxShadow = `0 20px 36px ${alphaColor('#000000', 0.18)}`;
+              e.currentTarget.style.border = `1px solid ${alphaColor('#f7f1e8', 0.18)}`;
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.transform = 'translateY(0) scale(1)';
-              e.currentTarget.style.boxShadow = `inset 0 0 15px ${alphaColor(token.colorWhite, 0.15)}, 0 4px 10px ${alphaColor(token.colorText, 0.1)}`;
+              e.currentTarget.style.boxShadow = `0 16px 30px ${alphaColor('#000000', 0.12)}`;
             }}
           >
             <span
               style={{
                 fontSize: '11px',
-                color: alphaColor(token.colorWhite, 0.9),
-                marginBottom: '2px',
+                color: alphaColor('#f7f1e8', 0.66),
+                marginBottom: '4px',
                 lineHeight: 1,
+                letterSpacing: '0.12em',
+                textTransform: 'uppercase',
               }}
             >
               {item.label}
@@ -108,9 +155,9 @@ const ProjectStatsBar = memo(function ProjectStatsBar({
               style={{
                 fontSize: '15px',
                 fontWeight: '600',
-                color: token.colorWhite,
+                color: '#f7f1e8',
                 lineHeight: 1,
-                fontFamily: 'Monaco, monospace',
+                fontFamily: token.fontFamilyCode,
               }}
             >
               {item.value > 10000 ? `${(item.value / 10000).toFixed(1)}w` : item.value}
@@ -145,6 +192,20 @@ export default function ProjectDetail() {
   const { token } = theme.useToken();
   const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
   const { mode, resolvedMode, setMode } = useThemeMode();
+  const editorialInk = '#f7f1e8';
+  const editorialShellBackground = resolvedMode === 'dark'
+    ? 'radial-gradient(circle at top, rgba(204, 120, 92, 0.16) 0%, transparent 26%), linear-gradient(180deg, #0f0e0d 0%, #151311 100%)'
+    : 'radial-gradient(circle at top, rgba(204, 120, 92, 0.12) 0%, transparent 28%), linear-gradient(180deg, #f8f2e9 0%, #efe6da 100%)';
+  const editorialSidebarBackground = 'linear-gradient(180deg, #151311 0%, #1d1916 100%)';
+  const editorialHeaderBackground = 'linear-gradient(135deg, #171411 0%, color-mix(in srgb, #171411 64%, #cc785c 36%) 100%)';
+  const editorialPanelBackground = resolvedMode === 'dark'
+    ? 'linear-gradient(180deg, #171513 0%, #1d1917 100%)'
+    : 'linear-gradient(180deg, #fffaf3 0%, #f7f0e7 100%)';
+  const editorialPanelBorder = resolvedMode === 'dark'
+    ? alphaColor('#f7f1e8', 0.1)
+    : alphaColor(token.colorText, 0.1);
+  const editorialMenuFooterBackground = alphaColor('#ffffff', resolvedMode === 'dark' ? 0.04 : 0.06);
+  const editorialMutedInk = alphaColor(editorialInk, 0.66);
   const cycleThemeMode = () => {
     const nextMode = mode === 'light' ? 'dark' : mode === 'dark' ? 'system' : 'light';
     setMode(nextMode);
@@ -333,6 +394,9 @@ export default function ProjectDetail() {
     return () => {
       cancelled = true;
       projectLoadAbortRef.current?.abort();
+      if (effectProjectId) {
+        projectLoadPromises.delete(effectProjectId);
+      }
       if (effectProjectId && activeProjectIdRef.current === effectProjectId) {
         invalidateAllProjectCollectionFreshness(effectProjectId);
         clearProjectData();
@@ -378,7 +442,6 @@ export default function ProjectDetail() {
     outlineCount,
   ]);
 
-  const sponsorPath = `/project/${projectId}/sponsor`;
   const worldSettingPath = `/project/${projectId}/world-setting`;
   const charactersPath = `/project/${projectId}/characters`;
   const organizationsPath = `/project/${projectId}/organizations`;
@@ -391,7 +454,6 @@ export default function ProjectDetail() {
   const writingStylesPath = `/project/${projectId}/writing-styles`;
   const promptWorkshopPath = `/project/${projectId}/prompt-workshop`;
 
-  const sponsorLink = useMemo(() => <Link to={sponsorPath}>赞助支持</Link>, [sponsorPath]);
   const worldSettingLink = useMemo(() => <Link to={worldSettingPath}>世界设定</Link>, [worldSettingPath]);
   const writingStylesLink = useMemo(() => <Link to={writingStylesPath}>写作风格</Link>, [writingStylesPath]);
   const promptWorkshopLink = useMemo(() => <Link to={promptWorkshopPath}>提示词工坊</Link>, [promptWorkshopPath]);
@@ -405,11 +467,6 @@ export default function ProjectDetail() {
   const foreshadowsLink = useMemo(() => createMenuLink(foreshadowsPath, '伏笔管理', 'foreshadows'), [foreshadowsPath, createMenuLink]);
 
   const menuItems = useMemo(() => [
-    {
-      key: 'sponsor',
-      icon: <HeartOutlined />,
-      label: sponsorLink,
-    },
     {
       type: 'group' as const,
       label: '创作管理',
@@ -487,17 +544,11 @@ export default function ProjectDetail() {
     outlineLink,
     promptWorkshopLink,
     relationshipsLink,
-    sponsorLink,
     worldSettingLink,
     writingStylesLink,
   ]);
 
   const menuItemsCollapsed = useMemo(() => [
-    {
-      key: 'sponsor',
-      icon: <HeartOutlined />,
-      label: sponsorLink,
-    },
     {
       key: 'world-setting',
       icon: <GlobalOutlined />,
@@ -563,7 +614,6 @@ export default function ProjectDetail() {
     outlineLink,
     promptWorkshopLink,
     relationshipsLink,
-    sponsorLink,
     worldSettingLink,
     writingStylesLink,
   ]);
@@ -582,10 +632,14 @@ export default function ProjectDetail() {
     if (path.includes('/chapters')) return 'chapters';
     if (path.includes('/writing-styles')) return 'writing-styles';
     if (path.includes('/prompt-workshop')) return 'prompt-workshop';
-    if (path.includes('/sponsor')) return 'sponsor';
     // if (path.includes('/polish')) return 'polish';
-    return 'sponsor'; // 默认选中赞助支持
+    return 'world-setting';
   }, [location.pathname]);
+
+  const currentWorkspaceFocus = useMemo(
+    () => WORKSPACE_FOCUS[selectedKey] ?? WORKSPACE_FOCUS['world-setting'],
+    [selectedKey],
+  );
 
   const menuNode = useMemo(() => (
     <div style={{
@@ -594,12 +648,15 @@ export default function ProjectDetail() {
       overflowX: 'hidden'
     }}>
       <Menu
+        theme="dark"
         mode="inline"
         inlineCollapsed={collapsed}
         selectedKeys={[selectedKey]}
         style={{
           borderRight: 0,
-          paddingTop: '12px'
+          padding: '12px 10px 0',
+          background: 'transparent',
+          color: editorialInk,
         }}
         items={collapsed ? menuItemsCollapsed : menuItems}
         onClick={() => mobile && setDrawerVisible(false)}
@@ -625,16 +682,37 @@ export default function ProjectDetail() {
     }
 
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
-        <Spin size="large" />
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          minHeight: '100vh',
+          padding: 24,
+          background: editorialShellBackground,
+        }}
+      >
+        <div style={{ width: 'min(560px, 100%)' }}>
+          <InlineDeferredPanel
+            eyebrow="Project Workspace"
+            title="恢复项目导航与工作台骨架"
+            message="当前正在读取项目元信息、侧边导航与页面预加载状态。原有项目切换、路由恢复和工作区预热逻辑保持不变。"
+            minHeight={300}
+            tags={[
+              { label: '项目元信息恢复中', color: 'processing' },
+              { label: '导航骨架预热', color: 'blue' },
+              { label: '页面路由同步', color: 'default' },
+            ]}
+          />
+        </div>
       </div>
     );
   }
 
   return (
-    <Layout style={{ minHeight: '100vh', height: '100vh', overflow: 'hidden' }}>
+    <Layout style={{ minHeight: '100vh', height: '100vh', overflow: 'hidden', background: editorialShellBackground }}>
       <Header style={{
-        background: token.colorPrimary,
+        background: editorialHeaderBackground,
         padding: mobile ? '0 12px' : '0 24px',
         display: 'flex',
         alignItems: 'center',
@@ -644,7 +722,8 @@ export default function ProjectDetail() {
         left: mobile ? 0 : (collapsed ? 60 : 220),
         right: 0,
         zIndex: 1000,
-        boxShadow: `0 2px 10px ${alphaColor(token.colorText, 0.16)}`,
+        boxShadow: `0 18px 32px ${alphaColor('#000000', 0.12)}`,
+        borderBottom: `1px solid ${alphaColor(editorialInk, 0.08)}`,
         height: mobile ? 56 : 70,
         transition: 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
         overflow: 'hidden'
@@ -657,7 +736,7 @@ export default function ProjectDetail() {
               onClick={() => setDrawerVisible(true)}
               style={{
                 fontSize: '18px',
-                color: token.colorWhite,
+                color: editorialInk,
                 width: '36px',
                 height: '36px'
               }}
@@ -667,10 +746,11 @@ export default function ProjectDetail() {
 
         <h2 style={{
           margin: 0,
-          color: token.colorWhite,
-          fontSize: mobile ? '16px' : '24px',
+          color: editorialInk,
+          fontSize: mobile ? '16px' : '28px',
           fontWeight: 600,
-          textShadow: `0 2px 4px ${alphaColor(token.colorText, 0.2)}`,
+          fontFamily: designDisplayFont,
+          letterSpacing: '-0.03em',
           position: mobile ? 'static' : 'absolute',
           left: mobile ? 'auto' : '50%',
           transform: mobile ? 'none' : 'translateX(-50%)',
@@ -692,7 +772,7 @@ export default function ProjectDetail() {
             onClick={navigateHome}
             style={{
               fontSize: '14px',
-              color: token.colorWhite,
+              color: editorialInk,
               height: '36px',
               padding: '0 8px',
               zIndex: 1
@@ -719,30 +799,41 @@ export default function ProjectDetail() {
                 <div style={{
                   width: 30,
                   height: 30,
-                  background: token.colorPrimary,
+                  background: editorialHeaderBackground,
                   borderRadius: 8,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  color: token.colorWhite,
+                  color: editorialInk,
                   fontSize: 16,
                 }}>
                   <BookOutlined />
                 </div>
-                <span style={{ fontWeight: 600, fontSize: 16 }}>{VERSION_INFO.projectName}</span>
+                <span style={{ fontWeight: 600, fontSize: 18, fontFamily: designDisplayFont, color: editorialInk }}>{VERSION_INFO.projectName}</span>
               </div>
             }
             placement="left"
             onClose={() => setDrawerVisible(false)}
             open={drawerVisible}
             width={280}
-            styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column' } }}
+            styles={{
+              header: {
+                background: editorialSidebarBackground,
+                borderBottom: `1px solid ${alphaColor(editorialInk, 0.08)}`,
+              },
+              body: {
+                padding: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                background: editorialSidebarBackground,
+              },
+            }}
           >
             {menuNode}
-            <div style={{ padding: 16, borderTop: `1px solid ${token.colorBorderSecondary}` }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: token.colorTextTertiary, marginBottom: 8 }}>
+            <div style={{ padding: 16, borderTop: `1px solid ${alphaColor(editorialInk, 0.08)}`, background: editorialMenuFooterBackground }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: editorialMutedInk, marginBottom: 8 }}>
                 <span>主题模式</span>
-                <span>{resolvedMode === 'dark' ? '深色' : '浅色'}</span>
+                <span>{mode === 'system' ? `跟随系统 · ${resolvedMode === 'dark' ? '深色' : '浅色'}` : resolvedMode === 'dark' ? '深色' : '浅色'}</span>
               </div>
               <ThemeSwitch block />
             </div>
@@ -763,9 +854,9 @@ export default function ProjectDetail() {
               overflow: 'hidden',
               transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
               height: '100vh',
-              background: token.colorBgContainer,
-              borderRight: `1px solid ${token.colorBorderSecondary}`,
-              boxShadow: `4px 0 16px ${alphaColor(token.colorText, 0.06)}`,
+              background: editorialSidebarBackground,
+              borderRight: `1px solid ${alphaColor(editorialInk, 0.08)}`,
+              boxShadow: `18px 0 36px ${alphaColor('#000000', 0.16)}`,
               zIndex: 1000
             }}
           >
@@ -775,11 +866,11 @@ export default function ProjectDetail() {
               flexDirection: 'column'
             }}>
               <div style={{
-                height: 70,
+                height: 82,
                 display: 'flex',
                 alignItems: 'center',
                 padding: collapsed ? 0 : '0 12px',
-                background: token.colorPrimary,
+                background: editorialHeaderBackground,
                 flexShrink: 0,
                 justifyContent: collapsed ? 'center' : 'space-between',
                 gap: 8
@@ -790,7 +881,7 @@ export default function ProjectDetail() {
                     icon={<MenuUnfoldOutlined />}
                     onClick={() => setCollapsed(false)}
                     style={{
-                      color: token.colorWhite,
+                      color: editorialInk,
                       width: '100%',
                       height: '100%',
                       padding: 0,
@@ -806,34 +897,45 @@ export default function ProjectDetail() {
                       <div style={{
                         width: 30,
                         height: 30,
-                        background: alphaColor(token.colorWhite, 0.2),
+                        background: alphaColor(editorialInk, 0.16),
                         borderRadius: 8,
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        color: token.colorWhite,
+                        color: editorialInk,
                         fontSize: 16,
                         backdropFilter: 'blur(4px)'
                       }}>
                         <BookOutlined />
                       </div>
-                      <span style={{
-                        color: token.colorWhite,
-                        fontWeight: 600,
-                        fontSize: 15,
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis'
-                      }}>
-                        {VERSION_INFO.projectName}
-                      </span>
+                      <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                        <span style={{
+                          color: editorialMutedInk,
+                          fontSize: 10,
+                          letterSpacing: '0.18em',
+                          textTransform: 'uppercase',
+                        }}>
+                          Project Workspace
+                        </span>
+                        <span style={{
+                          color: editorialInk,
+                          fontWeight: 600,
+                          fontSize: 18,
+                          fontFamily: designDisplayFont,
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis'
+                        }}>
+                          {VERSION_INFO.projectName}
+                        </span>
+                      </div>
                     </div>
                     <Button
                       type="text"
                       icon={<MenuFoldOutlined />}
                       onClick={() => setCollapsed(true)}
                       style={{
-                        color: token.colorWhite,
+                        color: editorialInk,
                         width: 32,
                         height: 32,
                         padding: 0,
@@ -846,8 +948,9 @@ export default function ProjectDetail() {
               {menuNode}
               <div style={{
                 padding: collapsed ? '12px 8px' : '12px',
-                borderTop: `1px solid ${token.colorBorderSecondary}`,
-                flexShrink: 0
+                borderTop: `1px solid ${alphaColor(editorialInk, 0.08)}`,
+                flexShrink: 0,
+                background: editorialMenuFooterBackground,
               }}>
                 {collapsed ? (
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
@@ -860,9 +963,9 @@ export default function ProjectDetail() {
                         width: 40,
                         height: 40,
                         borderRadius: 20,
-                        background: alphaColor(token.colorBgContainer, 0.65),
-                        border: `1px solid ${token.colorBorder}`,
-                        color: token.colorText,
+                        background: alphaColor('#ffffff', 0.08),
+                        border: `1px solid ${alphaColor(editorialInk, 0.12)}`,
+                        color: editorialInk,
                         padding: 0,
                       }}
                     />
@@ -874,18 +977,18 @@ export default function ProjectDetail() {
                         width: 40,
                         height: 40,
                         borderRadius: 20,
-                        background: alphaColor(token.colorBgContainer, 0.65),
-                        border: `1px solid ${token.colorBorder}`,
-                        color: token.colorText,
+                        background: alphaColor('#ffffff', 0.08),
+                        border: `1px solid ${alphaColor(editorialInk, 0.12)}`,
+                        color: editorialInk,
                         padding: 0,
                       }}
                     />
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: token.colorTextTertiary }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: editorialMutedInk }}>
                       <span>主题模式</span>
-                      <span>{resolvedMode === 'dark' ? '深色' : '浅色'}</span>
+                      <span>{mode === 'system' ? `跟随系统 · ${resolvedMode === 'dark' ? '深色' : '浅色'}` : resolvedMode === 'dark' ? '深色' : '浅色'}</span>
                     </div>
                     <ThemeSwitch block />
                     <Button
@@ -894,10 +997,12 @@ export default function ProjectDetail() {
                       onClick={navigateHome}
                       block
                       style={{
-                        color: token.colorText,
+                        color: editorialInk,
                         height: 40,
                         justifyContent: 'flex-start',
-                        padding: '0 12px'
+                        padding: '0 12px',
+                        background: alphaColor('#ffffff', 0.05),
+                        border: `1px solid ${alphaColor(editorialInk, 0.08)}`,
                       }}
                     >
                       返回主页
@@ -911,29 +1016,69 @@ export default function ProjectDetail() {
 
         <Layout style={{
           marginLeft: mobile ? 0 : (collapsed ? 60 : 220),
-          transition: 'margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+          transition: 'margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+          background: editorialShellBackground,
         }}>
           <Content
             style={{
-              background: token.colorBgLayout,
-              padding: mobile ? 12 : 24,
+              background: editorialShellBackground,
+              padding: mobile ? 12 : 28,
               height: mobile ? 'calc(100vh - 56px)' : 'calc(100vh - 70px)',
               overflow: 'hidden',
               display: 'flex',
               flexDirection: 'column'
             }}
           >
-            <div style={{
-              background: token.colorBgContainer,
-              padding: mobile ? 12 : 24,
-              borderRadius: mobile ? '8px' : '12px',
-              boxShadow: `0 8px 24px ${alphaColor(token.colorText, 0.08)}`,
-              height: '100%',
-              overflow: 'hidden',
-              display: 'flex',
-              flexDirection: 'column'
-            }}>
-              <ProjectPageOutletContainer />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: mobile ? 10 : 16, height: '100%' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: mobile ? 'flex-start' : 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  flexDirection: mobile ? 'column' : 'row',
+                  borderRadius: mobile ? 14 : 18,
+                  padding: mobile ? '12px 14px' : '14px 18px',
+                  border: `1px solid ${alphaColor(editorialInk, resolvedMode === 'dark' ? 0.1 : 0.08)}`,
+                  background: `linear-gradient(135deg, #171411 0%, color-mix(in srgb, #171411 78%, #cc785c 22%) 100%)`,
+                  boxShadow: `0 14px 28px ${alphaColor('#000000', 0.14)}`,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <Text style={{ color: alphaColor(editorialInk, 0.64), letterSpacing: '0.1em', textTransform: 'uppercase', fontSize: 11 }}>
+                    Project
+                  </Text>
+                  <Title
+                    level={mobile ? 5 : 4}
+                    style={{
+                      margin: '4px 0 0',
+                      color: editorialInk,
+                      fontFamily: designDisplayFont,
+                      letterSpacing: 0,
+                    }}
+                  >
+                    {currentProjectTitle}
+                  </Title>
+                </div>
+                <Text style={{ color: alphaColor(editorialInk, 0.82), fontWeight: 600 }}>
+                  {currentWorkspaceFocus.title}
+                </Text>
+              </div>
+
+              <div style={{
+                background: editorialPanelBackground,
+                padding: mobile ? 12 : 16,
+                borderRadius: mobile ? '16px' : '24px',
+                border: `1px solid ${editorialPanelBorder}`,
+                boxShadow: `0 22px 48px ${alphaColor(token.colorText, resolvedMode === 'dark' ? 0.18 : 0.08)}`,
+                flex: 1,
+                minHeight: 0,
+                overflow: 'hidden',
+                display: 'flex',
+                flexDirection: 'column'
+              }}>
+                <ProjectPageOutletContainer />
+              </div>
             </div>
           </Content>
         </Layout>

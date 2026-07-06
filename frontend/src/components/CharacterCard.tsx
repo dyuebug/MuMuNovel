@@ -2,8 +2,9 @@ import { Card, Space, Tag, Typography, Popconfirm, theme } from 'antd';
 import { EditOutlined, DeleteOutlined, UserOutlined, BankOutlined, ExportOutlined } from '@ant-design/icons';
 import { characterCardStyles } from './CardStyles';
 import type { Character } from '../types';
+import { designDisplayFont } from '../theme/themeConfig';
 
-const { Text } = Typography;
+const { Paragraph, Text, Title } = Typography;
 
 interface CharacterCardProps {
   character: Character;
@@ -14,6 +15,8 @@ interface CharacterCardProps {
 
 export const CharacterCard: React.FC<CharacterCardProps> = ({ character, onEdit, onDelete, onExport }) => {
   const { token } = theme.useToken();
+  const alphaColor = (color: string, alpha: number) =>
+    `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
 
   const getRoleTypeColor = (roleType?: string) => {
     const roleColors: Record<string, string> = {
@@ -36,7 +39,10 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({ character, onEdit,
   const isOrganization = character.is_organization;
   const charStatus = character.status || 'active';
   const isInactive = charStatus !== 'active';
-
+  const heroBackground = isOrganization
+    ? `linear-gradient(135deg, color-mix(in srgb, ${token.colorInfo} 26%, ${token.colorBgContainer} 74%) 0%, color-mix(in srgb, ${token.colorSuccess} 18%, ${token.colorBgContainer} 82%) 100%)`
+    : `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimary} 18%, ${token.colorBgContainer} 82%) 0%, color-mix(in srgb, ${token.colorWarning} 12%, ${token.colorBgContainer} 88%) 100%)`;
+  const quietPanelBackground = `linear-gradient(180deg, color-mix(in srgb, ${token.colorBgContainer} 94%, ${token.colorFillAlter} 6%) 0%, color-mix(in srgb, ${token.colorBgContainer} 87%, ${token.colorFillAlter} 13%) 100%)`;
 
   const toPreviewText = (value: unknown, maxLength = 120) => {
     if (value === null || value === undefined) {
@@ -73,21 +79,53 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({ character, onEdit,
 
   const getStatusTag = () => {
     const statusConfig: Record<string, { color: string; label: string }> = {
-      deceased: { color: token.colorTextBase, label: '💀 已死亡' },
-      missing: { color: token.colorWarning, label: '❓ 已失踪' },
-      retired: { color: token.colorTextTertiary, label: '📤 已退场' },
-      destroyed: { color: token.colorTextBase, label: '💀 已覆灭' },
+      deceased: { color: token.colorTextBase, label: '已死亡' },
+      missing: { color: token.colorWarning, label: '已失踪' },
+      retired: { color: token.colorTextTertiary, label: '已退场' },
+      destroyed: { color: token.colorTextBase, label: '已覆灭' },
     };
     const config = statusConfig[charStatus];
     if (!config) return null;
-    return <Tag color={config.color} style={{ marginLeft: 4 }}>{config.label}</Tag>;
+    return <Tag color={config.color} style={{ margin: 0, borderRadius: 999 }}>{config.label}</Tag>;
   };
+
+  const detailItems = (
+    isOrganization
+      ? [
+          character.organization_type ? { label: '类型', value: character.organization_type, tagColor: 'cyan' } : null,
+          character.power_level !== undefined && character.power_level !== null
+            ? {
+                label: '势力等级',
+                value: String(character.power_level),
+                tagColor: character.power_level >= 70 ? 'red' : character.power_level >= 50 ? 'orange' : 'default',
+              }
+            : null,
+          character.location ? { label: '所在地', value: locationPreviewText } : null,
+          character.color ? { label: '代表颜色', value: character.color } : null,
+          character.motto ? { label: '格言', value: mottoPreviewText } : null,
+          character.organization_purpose ? { label: '目的', value: organizationPurposePreviewText } : null,
+          character.organization_members ? { label: '成员', value: organizationMembersText } : null,
+        ]
+      : [
+          character.age ? { label: '年龄', value: character.age } : null,
+          character.gender ? { label: '性别', value: character.gender } : null,
+          character.personality ? { label: '性格', value: personalityPreviewText } : null,
+          character.relationships ? { label: '关系', value: relationshipsPreviewText } : null,
+        ]
+  ).filter((item): item is { label: string; value: string; tagColor?: string } => Boolean(item));
+  const heroSummary = isOrganization
+    ? organizationPurposePreviewText || mottoPreviewText || locationPreviewText || '尚未补充这个组织的目标与风格摘要。'
+    : personalityPreviewText || relationshipsPreviewText || '尚未补充这个角色的气质与关系摘要。';
+  const sectionEyebrow = isOrganization ? 'Organization Profile' : 'Character Profile';
+  const sectionTitle = isOrganization ? '组织档案' : '角色档案';
 
   return (
     <Card
       hoverable
       style={{
         ...(isOrganization ? characterCardStyles.organizationCard : characterCardStyles.characterCard),
+        border: `1px solid ${alphaColor(token.colorPrimary, 0.08)}`,
+        boxShadow: `0 20px 40px ${alphaColor(token.colorText, 0.08)}`,
         ...(isInactive ? { opacity: 0.6, filter: 'grayscale(40%)' } : {}),
       }}
       styles={{
@@ -95,11 +133,12 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({ character, onEdit,
           flex: 1,
           overflow: 'auto',
           display: 'flex',
-          flexDirection: 'column'
+          flexDirection: 'column',
+          padding: 18,
         },
         actions: {
-          borderRadius: '0 0 12px 12px'
-        }
+          borderRadius: '0 0 18px 18px',
+        },
       }}
       actions={[
         ...(onEdit ? [<EditOutlined key="edit" onClick={() => onEdit(character)} />] : []),
@@ -115,147 +154,142 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({ character, onEdit,
         </Popconfirm>,
       ]}
     >
-      <Card.Meta
-        avatar={
-          isOrganization ? (
-            <BankOutlined style={{ fontSize: 32, color: token.colorSuccess }} />
-          ) : (
-            <UserOutlined style={{ fontSize: 32, color: token.colorPrimary }} />
-          )
-        }
-        title={
-          <Space>
-            <span style={characterCardStyles.nameEllipsis}>{character.name}</span>
-            {isOrganization ? (
-              <Tag color="green">组织</Tag>
-            ) : (
-              character.role_type && (
-                <Tag color={getRoleTypeColor(character.role_type)}>
-                  {getRoleTypeLabel(character.role_type)}
-                </Tag>
-              )
-            )}
-            {getStatusTag()}
-          </Space>
-        }
-        description={
-          <div style={characterCardStyles.descriptionBlock}>
-            {/* 角色特有字段 */}
-            {!isOrganization && (
-              <>
-                {character.age && (
-                  <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
-                    <Text type="secondary" style={{ flexShrink: 0 }}>年龄：</Text>
-                    <Text style={{ flex: 1 }}>{character.age}</Text>
-                  </div>
-                )}
-                {character.gender && (
-                  <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
-                    <Text type="secondary" style={{ flexShrink: 0 }}>性别：</Text>
-                    <Text style={{ flex: 1 }}>{character.gender}</Text>
-                  </div>
-                )}
-                {character.personality && (
-                  <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
-                    <Text type="secondary" style={{ flexShrink: 0 }}>性格：</Text>
-                    <Text style={singleLinePreviewStyle} title={character.personality}>
-                      {personalityPreviewText}
-                    </Text>
-                  </div>
-                )}
-                {character.relationships && (
-                  <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
-                    <Text type="secondary" style={{ flexShrink: 0 }}>关系：</Text>
-                    <Text style={singleLinePreviewStyle} title={character.relationships}>
-                      {relationshipsPreviewText}
-                    </Text>
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* 组织特有字段 */}
-            {isOrganization && (
-              <>
-                {character.organization_type && (
-                  <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center' }}>
-                    <Text type="secondary" style={{ flexShrink: 0 }}>类型：</Text>
-                    <Tag color="cyan">{character.organization_type}</Tag>
-                  </div>
-                )}
-                {character.power_level !== undefined && character.power_level !== null && (
-                  <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center' }}>
-                    <Text type="secondary" style={{ flexShrink: 0 }}>势力等级：</Text>
-                    <Tag color={character.power_level >= 70 ? 'red' : character.power_level >= 50 ? 'orange' : 'default'}>
-                      {character.power_level}
-                    </Tag>
-                  </div>
-                )}
-                {character.location && (
-                  <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
-                    <Text type="secondary" style={{ flexShrink: 0 }}>所在地：</Text>
-                    <Text style={singleLinePreviewStyle} title={character.location}>
-                      {locationPreviewText}
-                    </Text>
-                  </div>
-                )}
-                {character.color && (
-                  <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
-                    <Text type="secondary" style={{ flexShrink: 0 }}>代表颜色：</Text>
-                    <Text style={{ flex: 1, minWidth: 0 }}>{character.color}</Text>
-                  </div>
-                )}
-                {character.motto && (
-                  <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
-                    <Text type="secondary" style={{ flexShrink: 0 }}>格言：</Text>
-                    <Text style={singleLinePreviewStyle} title={character.motto}>
-                      {mottoPreviewText}
-                    </Text>
-                  </div>
-                )}
-                {character.organization_purpose && (
-                  <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
-                    <Text type="secondary" style={{ flexShrink: 0 }}>目的：</Text>
-                    <Text style={singleLinePreviewStyle} title={character.organization_purpose}>
-                      {organizationPurposePreviewText}
-                    </Text>
-                  </div>
-                )}
-                {character.organization_members && (
-                  <div style={{ marginBottom: 8, display: 'flex', alignItems: 'flex-start' }}>
-                    <Text type="secondary" style={{ flexShrink: 0 }}>{'成员：'}</Text>
-                    <Text
-                      style={{ flex: 1, minWidth: 0, fontSize: 12, lineHeight: 1.6, wordBreak: 'break-all' }}
-                      title={organizationMembersFullText}
-                    >
-                      {organizationMembersText}
-                    </Text>
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* 通用字段 - 背景信息截断显示 */}
-            {character.background && (
-              <div style={{ marginTop: 12 }}>
-                <Text
-                  type="secondary"
-                  style={{
-                    display: 'block',
-                    fontSize: 12,
-                    lineHeight: 1.6,
-                    marginBottom: 0,
-                    wordBreak: 'break-word',
-                  }}
-                  title={character.background}
-                >
-                  {backgroundPreviewText}
-                </Text>
-              </div>
-            )}
+      <div style={{ display: 'grid', gap: 16, height: '100%' }}>
+        <div
+          style={{
+            padding: '16px 16px 14px',
+            borderRadius: 18,
+            background: heroBackground,
+            border: `1px solid ${alphaColor(token.colorPrimary, 0.08)}`,
+          }}
+        >
+          <Text style={{ fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+            {sectionEyebrow}
+          </Text>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', marginTop: 10 }}>
+            <div
+              style={{
+                width: 42,
+                height: 42,
+                borderRadius: 14,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: alphaColor(isOrganization ? token.colorSuccess : token.colorPrimary, 0.14),
+                color: isOrganization ? token.colorSuccess : token.colorPrimary,
+                flexShrink: 0,
+              }}
+            >
+              {isOrganization ? <BankOutlined style={{ fontSize: 22 }} /> : <UserOutlined style={{ fontSize: 22 }} />}
+            </div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <Title
+                level={4}
+                style={{
+                  margin: '0 0 6px',
+                  fontFamily: designDisplayFont,
+                  letterSpacing: '-0.02em',
+                }}
+              >
+                <span style={characterCardStyles.nameEllipsis}>{character.name}</span>
+              </Title>
+              <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.7 }}>
+                {heroSummary}
+              </Paragraph>
+            </div>
           </div>
-        }
-      />
+          <Space wrap size={[8, 8]} style={{ marginTop: 12 }}>
+            <Tag color={isOrganization ? 'green' : 'blue'} style={{ margin: 0, borderRadius: 999 }}>
+              {sectionTitle}
+            </Tag>
+            {!isOrganization && character.role_type ? (
+              <Tag color={getRoleTypeColor(character.role_type)} style={{ margin: 0, borderRadius: 999 }}>
+                {getRoleTypeLabel(character.role_type)}
+              </Tag>
+            ) : null}
+            {getStatusTag()}
+            {isInactive ? (
+              <Tag color="default" style={{ margin: 0, borderRadius: 999 }}>
+                非活跃
+              </Tag>
+            ) : null}
+          </Space>
+        </div>
+
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+            gap: 10,
+          }}
+        >
+          {detailItems.length > 0 ? (
+            detailItems.map((item) => (
+              <div
+                key={`${item.label}-${item.value}`}
+                style={{
+                  padding: '12px 14px',
+                  borderRadius: 16,
+                  background: quietPanelBackground,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  minWidth: 0,
+                }}
+              >
+                <Text style={{ display: 'block', fontSize: 12, color: token.colorTextTertiary, marginBottom: 6 }}>
+                  {item.label}
+                </Text>
+                {item.tagColor ? (
+                  <Tag color={item.tagColor} style={{ margin: 0, borderRadius: 999 }}>
+                    {item.value}
+                  </Tag>
+                ) : (
+                  <Text style={singleLinePreviewStyle} title={item.value}>
+                    {item.value}
+                  </Text>
+                )}
+              </div>
+            ))
+          ) : (
+            <div
+              style={{
+                padding: '14px 16px',
+                borderRadius: 16,
+                background: quietPanelBackground,
+                border: `1px dashed ${token.colorBorderSecondary}`,
+                color: token.colorTextSecondary,
+              }}
+            >
+              暂无更多结构化信息，先保留基础档案入口。
+            </div>
+          )}
+        </div>
+
+        {character.background ? (
+          <div
+            style={{
+              borderRadius: 18,
+              padding: '14px 16px',
+              background: quietPanelBackground,
+              border: `1px solid ${token.colorBorderSecondary}`,
+            }}
+          >
+            <Text style={{ display: 'block', fontSize: 12, color: token.colorTextTertiary, marginBottom: 6 }}>
+              背景摘录
+            </Text>
+            <Paragraph
+              style={{
+                margin: 0,
+                color: token.colorTextSecondary,
+                lineHeight: 1.75,
+                wordBreak: 'break-word',
+              }}
+              title={character.background}
+            >
+              {backgroundPreviewText}
+            </Paragraph>
+          </div>
+        ) : null}
+      </div>
     </Card>
   );
 };

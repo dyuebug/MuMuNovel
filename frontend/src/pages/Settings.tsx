@@ -14,7 +14,6 @@ import {
   Row,
   Select,
   Space,
-  Spin,
   Switch,
   Tabs,
   Tag,
@@ -36,6 +35,8 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { settingsApi } from '../services/modularApi';
+import InlineDeferredPanel from '../components/InlineDeferredPanel';
+import { designDisplayFont } from '../theme/themeConfig';
 import type {
   APIKeyPreset,
   APIKeyPresetConfig,
@@ -310,6 +311,7 @@ export default function SettingsPage() {
   const storedApiKeyRequestIdRef = useRef(0);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       settingsRequestIdRef.current += 1;
@@ -318,6 +320,18 @@ export default function SettingsPage() {
     };
   }, []);
   const isMobile = window.innerWidth <= 768;
+  const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
+  const editorialInk = '#f7f1e8';
+  const pageBackground = `linear-gradient(180deg, ${alphaColor(token.colorPrimary, 0.05)} 0%, ${token.colorBgLayout} 28%, ${token.colorBgLayout} 100%)`;
+  const heroBackground = `linear-gradient(135deg, #171411 0%, color-mix(in srgb, #171411 64%, ${token.colorPrimary} 36%) 100%)`;
+  const panelBackground = `linear-gradient(180deg, ${token.colorBgContainer} 0%, color-mix(in srgb, ${token.colorBgContainer} 76%, ${token.colorFillAlter} 24%) 100%)`;
+  const panelBorder = alphaColor(token.colorPrimary, 0.1);
+  const quietPanelBackground = `linear-gradient(180deg, color-mix(in srgb, ${token.colorBgContainer} 92%, ${token.colorFillAlter} 8%) 0%, color-mix(in srgb, ${token.colorBgContainer} 82%, ${token.colorFillAlter} 18%) 100%)`;
+  const modalSurfaceStyles = {
+    header: { padding: '22px 24px 0', borderBottom: 'none' },
+    body: { padding: '0 24px 24px' },
+    footer: { padding: '0 24px 24px', borderTop: 'none' },
+  } as const;
 
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [savingSettings, setSavingSettings] = useState(false);
@@ -344,6 +358,7 @@ export default function SettingsPage() {
   const [clearStoredApiKey, setClearStoredApiKey] = useState(false);
 
   const providerValue = Form.useWatch('api_provider', settingsForm) || 'openai';
+  const currentModel = Form.useWatch('llm_model', settingsForm) || '';
   const webResearchEnabled = Form.useWatch('web_research_enabled', webResearchForm) ?? false;
   const exaEnabled = Form.useWatch('web_research_exa_enabled', webResearchForm) ?? true;
   const grokEnabled = Form.useWatch('web_research_grok_enabled', webResearchForm) ?? true;
@@ -354,6 +369,73 @@ export default function SettingsPage() {
     : 'sk-...';
 
   const providerHint = providerPlaceholders[(providerValue as ProviderValue) || 'openai'];
+  const activePreset = presets.find((preset) => preset.is_active) ?? null;
+  const activeResearchProviders = [
+    webResearchEnabled && exaEnabled ? 'Exa' : null,
+    webResearchEnabled && grokEnabled ? 'Grok' : null,
+  ].filter((item): item is string => Boolean(item));
+  const workspaceGuideItems = [
+    {
+      label: 'Step 1',
+      title: '先校准主模型',
+      description: '先把主模型链路与 API Key 验证到可用，再去扩展联网检索。',
+    },
+    {
+      label: 'Step 2',
+      title: '再接入 Research',
+      description: '把 Exa / Grok 当作补充检索层，避免在主链路未稳定前叠加复杂度。',
+    },
+    {
+      label: 'Step 3',
+      title: '最后沉淀预设',
+      description: '把验证通过的组合封装成预设，便于按阶段切换成本、速度与质量。',
+    },
+  ];
+  const controlDeckItems = [
+    {
+      label: '主模型链路',
+      value: currentModel || '未设置',
+      detail: providerValue === 'openai' ? '兼容 OpenAI / DeepSeek / OpenRouter 网关' : `当前提供商：${providerValue}`,
+    },
+    {
+      label: 'Research 状态',
+      value: webResearchEnabled ? (activeResearchProviders.length ? activeResearchProviders.join(' + ') : '已启用但未选引擎') : '关闭',
+      detail: webResearchEnabled ? '用于生成前补充联网上下文' : '当前只使用本地模型链路',
+    },
+    {
+      label: '活跃预设',
+      value: activePreset?.name || '未激活',
+      detail: activePreset ? `模型：${activePreset.config.llm_model}` : '建议把验证通过的配置沉淀为预设',
+    },
+  ];
+  const researchGuideItems = [
+    {
+      label: '启用顺序',
+      value: '总开关 -> Exa/Grok -> Search',
+    },
+    {
+      label: '当前引擎',
+      value: activeResearchProviders.length ? activeResearchProviders.join(' / ') : '未启用',
+    },
+    {
+      label: '建议目标',
+      value: '补充事实、资料、趋势，而不是替代主模型写作',
+    },
+  ];
+  const presetGuideItems = [
+    {
+      label: '拆分维度',
+      value: '按成本、速度、创作阶段来拆',
+    },
+    {
+      label: '命名建议',
+      value: '用“用途 + 模型 + 档位”命名，后续更易切换',
+    },
+    {
+      label: '维护原则',
+      value: '只保留验证通过且常用的组合，减少陈旧配置',
+    },
+  ];
 
   const modelSelectOptions = useMemo(
     () => modelOptions.map((model) => ({ label: model, value: model })),
@@ -871,37 +953,221 @@ export default function SettingsPage() {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingBottom: 24 }}>
-      <div
+    <div style={{ display: 'flex', flexDirection: 'column', gap: isMobile ? 16 : 20, paddingBottom: 24, background: pageBackground }}>
+      <Card
+        variant="borderless"
         style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 10,
-          background: token.colorBgContainer,
-          borderBottom: `1px solid ${token.colorBorderSecondary}`,
-          padding: isMobile ? '12px 0' : '16px 0',
+          background: heroBackground,
+          borderRadius: isMobile ? 22 : 28,
+          border: `1px solid ${alphaColor(editorialInk, 0.08)}`,
+          boxShadow: `0 24px 48px ${alphaColor(token.colorText, 0.16)}`,
+          overflow: 'hidden',
         }}
+        styles={{ body: { padding: isMobile ? 18 : 24 } }}
       >
-        <Space direction="vertical" size={4} style={{ width: '100%' }}>
-          <Title level={isMobile ? 4 : 3} style={{ margin: 0 }}>
-            <ApiOutlined style={{ marginRight: 8 }} />
-            API 设置
-          </Title>
-          <Text type="secondary">
-            这里管理主模型配置、模型列表探测以及 API 预设。已保存的密钥不会再次明文回显。
-          </Text>
-        </Space>
-      </div>
+        <div style={{ position: 'absolute', top: -56, right: -40, width: 180, height: 180, borderRadius: '50%', background: alphaColor(editorialInk, 0.06), pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', bottom: -34, left: '24%', width: 110, height: 110, borderRadius: '50%', background: alphaColor(editorialInk, 0.05), pointerEvents: 'none' }} />
+        <Row gutter={[24, 20]} align="middle" style={{ position: 'relative', zIndex: 1 }}>
+          <Col xs={24} lg={15}>
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <Text style={{ color: alphaColor(editorialInk, 0.7), fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase' }}>
+                Configuration Guide
+              </Text>
+              <Title
+                level={isMobile ? 3 : 2}
+                style={{ margin: 0, color: editorialInk, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}
+              >
+                <ApiOutlined style={{ marginRight: 10, fontSize: isMobile ? 24 : 28, color: alphaColor(editorialInk, 0.88) }} />
+                API 设置
+              </Title>
+              <Paragraph style={{ margin: 0, color: alphaColor(editorialInk, 0.8), fontSize: isMobile ? 13 : 15, lineHeight: 1.8 }}>
+                这里统一管理主模型、Web Research 和 API 预设。页面结构按文档型工作台整理，方便你一边理解参数含义，一边安全地调整运行配置。
+              </Paragraph>
+            </Space>
+          </Col>
+          <Col xs={24} lg={9}>
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              {[ 
+                { label: '当前模型', value: currentModel || '未设置' },
+                { label: '已保存密钥', value: hasStoredApiKey ? '已保存' : '未保存' },
+                { label: '可用预设', value: `${presets.length} 个` },
+              ].map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    gap: 12,
+                    borderRadius: 18,
+                    padding: '12px 14px',
+                    background: alphaColor('#ffffff', 0.08),
+                    border: `1px solid ${alphaColor(editorialInk, 0.1)}`,
+                    backdropFilter: 'blur(10px)',
+                  }}
+                >
+                  <Text style={{ color: alphaColor(editorialInk, 0.72), fontSize: 12 }}>{item.label}</Text>
+                  <Text style={{ color: editorialInk, fontWeight: 600 }}>{item.value}</Text>
+                </div>
+              ))}
+            </Space>
+          </Col>
+        </Row>
+      </Card>
 
-      <Spin spinning={loadingSettings} tip="正在加载设置...">
+      {loadingSettings ? (
+        <InlineDeferredPanel
+          eyebrow="Settings Workspace"
+          title="正在展开设置工作区"
+          message="系统正在恢复模型配置、联网研究与预设管理面板，原有设置读取、保存和测试逻辑保持不变。"
+          minHeight={isMobile ? 320 : 360}
+          tags={[
+            { label: '设置中心', color: 'processing' },
+            { label: '主链路配置恢复中', color: 'gold' },
+            { label: '保存逻辑保持原样', color: 'green' },
+          ]}
+        />
+      ) : (
+        <Card
+          variant="borderless"
+          style={{
+            borderRadius: isMobile ? 20 : 24,
+            background: panelBackground,
+            border: `1px solid ${panelBorder}`,
+            boxShadow: `0 20px 40px ${alphaColor(token.colorText, 0.06)}`,
+          }}
+          styles={{ body: { padding: isMobile ? 14 : 18 } }}
+        >
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.15fr) minmax(300px, 0.9fr)',
+            gap: 16,
+            marginBottom: isMobile ? 16 : 18,
+          }}
+        >
+          <Card
+            variant="borderless"
+            style={{
+              borderRadius: 20,
+              background: quietPanelBackground,
+              border: `1px solid ${panelBorder}`,
+            }}
+            styles={{ body: { padding: 18 } }}
+          >
+            <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+              Workspace Guide
+            </Text>
+            <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+              设置页阅读顺序
+            </Title>
+            <Paragraph type="secondary" style={{ marginBottom: 14, lineHeight: 1.8 }}>
+              这个页面更像运行配置说明书。先把主链路校准到稳定，再给联网检索加能力，最后把可复用配置沉淀为预设。
+            </Paragraph>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+              {workspaceGuideItems.map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    borderRadius: 16,
+                    padding: '12px 14px',
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    background: token.colorBgContainer,
+                  }}
+                >
+                  <Text style={{ display: 'block', fontSize: 11, color: token.colorTextTertiary, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                    {item.label}
+                  </Text>
+                  <Text strong style={{ display: 'block', margin: '6px 0 4px' }}>
+                    {item.title}
+                  </Text>
+                  <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.7 }}>
+                    {item.description}
+                  </Text>
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <Card
+            variant="borderless"
+            style={{
+              borderRadius: 20,
+              background: quietPanelBackground,
+              border: `1px solid ${panelBorder}`,
+            }}
+            styles={{ body: { padding: 18 } }}
+          >
+            <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+              Current Focus
+            </Text>
+            <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+              当前控制面
+            </Title>
+            <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              {controlDeckItems.map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    borderRadius: 16,
+                    padding: '12px 14px',
+                    background: token.colorBgContainer,
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                  }}
+                >
+                  <Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
+                    {item.label}
+                  </Text>
+                  <Text strong style={{ display: 'block', lineHeight: 1.7 }}>
+                    {item.value}
+                  </Text>
+                  <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.7 }}>
+                    {item.detail}
+                  </Text>
+                </div>
+              ))}
+            </Space>
+          </Card>
+        </div>
+
         <Tabs
+          tabBarStyle={{ marginBottom: isMobile ? 16 : 20 }}
           items={[
             {
               key: 'current',
               label: '当前配置',
               children: (
                 <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                  <Card>
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{
+                      borderRadius: 16,
+                      border: `1px solid ${alphaColor(token.colorInfo, 0.2)}`,
+                      background: alphaColor(token.colorInfo, 0.08),
+                    }}
+                    message="建议先完成主模型配置，再测试连接；确认模型探测正常后，再单独配置 Web Research。"
+                  />
+
+                  <Card
+                    variant="borderless"
+                    style={{
+                      borderRadius: 20,
+                      background: quietPanelBackground,
+                      border: `1px solid ${panelBorder}`,
+                    }}
+                  >
+                    <Space direction="vertical" size={4} style={{ width: '100%', marginBottom: 20 }}>
+                      <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                        Model Workspace
+                      </Text>
+                      <Title level={isMobile ? 4 : 3} style={{ margin: 0, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+                        主模型与接口配置
+                      </Title>
+                      <Text type="secondary">
+                        适合放这里的内容只有一件事：把“生成主链路”配置到可用状态。操作说明放右侧，不把表单本身做得过于花哨。
+                      </Text>
+                    </Space>
                     <Row gutter={[16, 16]}>
                       <Col xs={24} lg={16}>
                         <Form form={settingsForm} layout="vertical" initialValues={defaultMainSettingsValues}>
@@ -1040,7 +1306,17 @@ export default function SettingsPage() {
                         </Form>
                       </Col>
                       <Col xs={24} lg={8}>
-                        <Card size="small" title="当前状态" style={{ background: token.colorFillAlter }}>
+                        <Card
+                          size="small"
+                          title="当前状态"
+                          variant="borderless"
+                          style={{
+                            background: alphaColor(token.colorPrimary, 0.05),
+                            borderRadius: 18,
+                            marginBottom: 12,
+                            border: `1px solid ${alphaColor(token.colorPrimary, 0.08)}`,
+                          }}
+                        >
                           <Space direction="vertical" size={8} style={{ width: '100%' }}>
                             <Text>已保存密钥：{hasStoredApiKey ? '是' : '否'}</Text>
                             <Text>当前模型：{settingsForm.getFieldValue('llm_model') || '未设置'}</Text>
@@ -1048,6 +1324,25 @@ export default function SettingsPage() {
                             <Text type="secondary">
                               如果 API Key 输入框留空，保存时会保持现有密钥，不会被 `********` 覆盖。
                             </Text>
+                          </Space>
+                        </Card>
+                        <Card
+                          size="small"
+                          title="配置建议"
+                          variant="borderless"
+                          style={{
+                            background: alphaColor(token.colorWarning, 0.06),
+                            borderRadius: 18,
+                            border: `1px solid ${alphaColor(token.colorWarning, 0.12)}`,
+                          }}
+                        >
+                          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                            <Text type="secondary">1. 先填 `API Base URL` 和 `API Key`。</Text>
+                            <Text type="secondary">2. 再获取模型或直接输入模型名。</Text>
+                            <Text type="secondary">3. 成功连通后再微调 `Temperature / Max Tokens`。</Text>
+                            <Tag color="processing" style={{ width: 'fit-content', margin: 0 }}>
+                              当前推荐占位：{providerHint.model}
+                            </Tag>
                           </Space>
                         </Card>
                       </Col>
@@ -1071,7 +1366,46 @@ export default function SettingsPage() {
                   {renderAlert(probeAlert)}
                   {renderAlert(functionCallingAlert)}
 
-                  <Card title="生成前网络检索（Web Research）">
+                  <Card
+                    title="生成前网络检索（Web Research）"
+                    variant="borderless"
+                    style={{
+                      borderRadius: 20,
+                      background: quietPanelBackground,
+                      border: `1px solid ${panelBorder}`,
+                    }}
+                  >
+                    <Space direction="vertical" size={4} style={{ width: '100%', marginBottom: 20 }}>
+                      <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                        Research Stack
+                      </Text>
+                      <Title level={isMobile ? 4 : 3} style={{ margin: 0, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+                        生成前网络检索（Web Research）
+                      </Title>
+                      <Text type="secondary">
+                        这一层更像“输入增强器”。目标是把事实资料、外部趋势和检索结论带进生成链路，而不是让联网配置本身变成新的维护负担。
+                      </Text>
+                    </Space>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 18 }}>
+                      {researchGuideItems.map((item) => (
+                        <div
+                          key={item.label}
+                          style={{
+                            borderRadius: 16,
+                            padding: '12px 14px',
+                            background: token.colorBgContainer,
+                            border: `1px solid ${token.colorBorderSecondary}`,
+                          }}
+                        >
+                          <Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
+                            {item.label}
+                          </Text>
+                          <Text strong style={{ lineHeight: 1.7 }}>
+                            {item.value}
+                          </Text>
+                        </div>
+                      ))}
+                    </div>
                     <Form form={webResearchForm} layout="vertical" initialValues={defaultWebResearchValues}>
                       <Row gutter={[16, 0]}>
                         <Col xs={24} md={8}>
@@ -1140,7 +1474,45 @@ export default function SettingsPage() {
               label: '配置预设',
               children: (
                 <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                  <Card>
+                  <Card
+                    variant="borderless"
+                    style={{
+                      borderRadius: 20,
+                      background: quietPanelBackground,
+                      border: `1px solid ${panelBorder}`,
+                    }}
+                  >
+                    <Space direction="vertical" size={4} style={{ width: '100%', marginBottom: 16 }}>
+                      <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                        Reusable Profiles
+                      </Text>
+                      <Title level={isMobile ? 4 : 3} style={{ margin: 0, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+                        API 预设
+                      </Title>
+                      <Text type="secondary">
+                        预设更像“可切换的工作配置”。适合按模型用途、成本档位、写作阶段来拆分，而不是把所有参数塞进一个默认配置里。
+                      </Text>
+                    </Space>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 16 }}>
+                      {presetGuideItems.map((item) => (
+                        <div
+                          key={item.label}
+                          style={{
+                            borderRadius: 16,
+                            padding: '12px 14px',
+                            background: token.colorBgContainer,
+                            border: `1px solid ${token.colorBorderSecondary}`,
+                          }}
+                        >
+                          <Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
+                            {item.label}
+                          </Text>
+                          <Text strong style={{ lineHeight: 1.7 }}>
+                            {item.value}
+                          </Text>
+                        </div>
+                      ))}
+                    </div>
                     <Space wrap>
                       <Button type="primary" icon={<PlusOutlined />} onClick={openCreatePreset}>
                         新建预设
@@ -1154,70 +1526,114 @@ export default function SettingsPage() {
                     </Space>
                   </Card>
 
-                  <Card>
-                    <Spin spinning={loadingPresets}>
-                      {presets.length === 0 ? (
-                        <Empty description="暂无 API 预设" />
-                      ) : (
-                        <List
-                          itemLayout="vertical"
-                          dataSource={presets}
-                          renderItem={(preset) => (
-                            <List.Item
-                              key={preset.id}
-                              actions={[
-                                <Button key="activate" type={preset.is_active ? 'default' : 'link'} icon={<CheckCircleOutlined />} onClick={() => void handleActivatePreset(preset.id)}>
-                                  {preset.is_active ? '当前启用' : '激活'}
-                                </Button>,
-                                <Button key="test" type="link" icon={<PlayCircleOutlined />} onClick={() => void handleTestPreset(preset.id)}>
-                                  测试
-                                </Button>,
-                                <Button key="edit" type="link" icon={<EditOutlined />} onClick={() => openEditPreset(preset)}>
-                                  编辑
-                                </Button>,
-                                <Popconfirm
-                                  key="delete"
-                                  title="确认删除这个预设吗？"
-                                  description="激活中的预设不能直接删除。"
-                                  onConfirm={() => void handleDeletePreset(preset.id)}
-                                >
-                                  <Button danger type="link" icon={<DeleteOutlined />}>删除</Button>
-                                </Popconfirm>,
-                              ]}
-                            >
-                              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                                <Space wrap>
-                                  <Text strong>{preset.name}</Text>
-                                  {preset.is_active ? <Tag color="success">已激活</Tag> : null}
-                                  <Tag color="blue">{preset.config.api_provider}</Tag>
-                                  <Tag>{preset.config.llm_model}</Tag>
-                                </Space>
-                                {preset.description ? <Paragraph style={{ marginBottom: 0 }}>{preset.description}</Paragraph> : null}
-                                <Text type="secondary">Base URL：{preset.config.api_base_url || '未设置'} · Temperature：{preset.config.temperature} · Max Tokens：{preset.config.max_tokens}</Text>
+                  <Card
+                    variant="borderless"
+                    style={{
+                      borderRadius: 20,
+                      background: quietPanelBackground,
+                      border: `1px solid ${panelBorder}`,
+                    }}
+                  >
+                    {loadingPresets ? (
+                      <InlineDeferredPanel
+                        eyebrow="Preset Library"
+                        title="正在整理 API 预设列表"
+                        message="系统正在恢复预设档案、激活入口与测试操作，原有预设读取、切换和删除逻辑保持不变。"
+                        minHeight={260}
+                        tags={[
+                          { label: 'API 预设', color: 'purple' },
+                          { label: '预设档案恢复中', color: 'processing' },
+                          { label: '切换逻辑保持原样', color: 'green' },
+                        ]}
+                      />
+                    ) : presets.length === 0 ? (
+                      <Empty description="暂无 API 预设" />
+                    ) : (
+                      <List
+                        itemLayout="vertical"
+                        dataSource={presets}
+                        renderItem={(preset) => (
+                          <List.Item
+                            key={preset.id}
+                            style={{
+                              borderRadius: 18,
+                              padding: '16px 18px',
+                              marginBottom: 12,
+                              background: token.colorBgContainer,
+                              border: `1px solid ${token.colorBorderSecondary}`,
+                            }}
+                            actions={[
+                              <Button key="activate" type={preset.is_active ? 'default' : 'link'} icon={<CheckCircleOutlined />} onClick={() => void handleActivatePreset(preset.id)}>
+                                {preset.is_active ? '当前启用' : '激活'}
+                              </Button>,
+                              <Button key="test" type="link" icon={<PlayCircleOutlined />} onClick={() => void handleTestPreset(preset.id)}>
+                                测试
+                              </Button>,
+                              <Button key="edit" type="link" icon={<EditOutlined />} onClick={() => openEditPreset(preset)}>
+                                编辑
+                              </Button>,
+                              <Popconfirm
+                                key="delete"
+                                title="确认删除这个预设吗？"
+                                description="激活中的预设不能直接删除。"
+                                onConfirm={() => void handleDeletePreset(preset.id)}
+                              >
+                                <Button danger type="link" icon={<DeleteOutlined />}>删除</Button>
+                              </Popconfirm>,
+                            ]}
+                          >
+                            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                              <Space wrap>
+                                <Text strong>{preset.name}</Text>
+                                {preset.is_active ? <Tag color="success">已激活</Tag> : null}
+                                <Tag color="blue">{preset.config.api_provider}</Tag>
+                                <Tag>{preset.config.llm_model}</Tag>
                               </Space>
-                            </List.Item>
-                          )}
-                        />
-                      )}
-                    </Spin>
+                              {preset.description ? <Paragraph style={{ marginBottom: 0 }}>{preset.description}</Paragraph> : null}
+                              <Text type="secondary">Base URL：{preset.config.api_base_url || '未设置'} · Temperature：{preset.config.temperature} · Max Tokens：{preset.config.max_tokens}</Text>
+                            </Space>
+                          </List.Item>
+                        )}
+                      />
+                    )}
                   </Card>
                 </Space>
               ),
             },
           ]}
         />
-      </Spin>
+        </Card>
+      )}
 
       <Modal
-        title={editingPreset ? '编辑预设' : '新建预设'}
+        title={(
+          <Space direction="vertical" size={2}>
+            <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+              Preset Editor
+            </Text>
+            <Title level={4} style={{ margin: 0, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+              {editingPreset ? '编辑预设' : '新建预设'}
+            </Title>
+            <Text type="secondary">
+              为一组可重复使用的模型参数建立清晰说明，方便按创作阶段、成本档位和模型用途切换。
+            </Text>
+          </Space>
+        )}
         open={presetModalOpen}
         onCancel={() => setPresetModalOpen(false)}
         onOk={() => void handleSubmitPreset()}
         okText={editingPreset ? '保存修改' : '创建预设'}
         confirmLoading={submittingPreset}
         width={720}
+        styles={modalSurfaceStyles}
         destroyOnClose
       >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16, borderRadius: 14 }}
+          message="建议把一个预设定义为一种稳定工作模式，而不是临时参数草稿。"
+        />
         <Form form={presetForm} layout="vertical">
           <Row gutter={[16, 0]}>
             <Col xs={24} md={12}>
@@ -1280,12 +1696,25 @@ export default function SettingsPage() {
       </Modal>
 
       <Modal
-        title="从当前配置创建预设"
+        title={(
+          <Space direction="vertical" size={2}>
+            <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+              Snapshot Draft
+            </Text>
+            <Title level={4} style={{ margin: 0, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+              从当前配置创建预设
+            </Title>
+            <Text type="secondary">
+              把当前已验证的设置保存为可复用快照，适合在“可用状态”稳定后再执行这一步。
+            </Text>
+          </Space>
+        )}
         open={snapshotModalOpen}
         onCancel={() => setSnapshotModalOpen(false)}
         onOk={() => void handleCreateSnapshotPreset()}
         okText="创建预设"
         confirmLoading={creatingSnapshot}
+        styles={modalSurfaceStyles}
         destroyOnClose
       >
         <Alert

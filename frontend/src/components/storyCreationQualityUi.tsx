@@ -38,6 +38,17 @@ const getMetricStrokeColor = (rate?: number): string => {
   return '#ff4d4f';
 };
 
+const getMetricShellStyle = (rate?: number): CSSProperties => {
+  const tone = getMetricStrokeColor(rate);
+  return {
+    padding: '12px 14px',
+    border: `1px solid color-mix(in srgb, ${tone} 18%, var(--ant-color-border-secondary) 82%)`,
+    borderRadius: 18,
+    background: `linear-gradient(180deg, color-mix(in srgb, ${tone} 8%, var(--ant-color-bg-container) 92%) 0%, color-mix(in srgb, var(--ant-color-fill-alter) 44%, var(--ant-color-bg-container) 56%) 100%)`,
+    boxShadow: `0 14px 28px color-mix(in srgb, ${tone} 10%, transparent)`,
+  };
+};
+
 export const renderCompactMetricGrid = (
   items: CompactMetricItem[],
   options: {
@@ -56,22 +67,35 @@ export const renderCompactMetricGrid = (
     {items.map((item) => (
       <div
         key={item.key}
-        style={{
-          padding: '8px 10px',
-          border: '1px solid #f0f0f0',
-          borderRadius: 8,
-        }}
+        style={getMetricShellStyle(item.value)}
       >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 8 }}>
           <Space size={4} wrap>
-            <span style={{ fontWeight: 600, fontSize: 13 }}>{item.label}</span>
+            <span
+              style={{
+                fontWeight: 700,
+                fontSize: 13,
+                lineHeight: 1.5,
+                letterSpacing: '-0.01em',
+              }}
+            >
+              {item.label}
+            </span>
             {item.tip && (
               <Tooltip title={item.tip}>
-                <InfoCircleOutlined style={{ color: '#8c8c8c' }} />
+                <InfoCircleOutlined style={{ color: 'var(--ant-color-text-tertiary)', marginTop: 2 }} />
               </Tooltip>
             )}
           </Space>
-          <Tag color={getMetricRateColor(item.value)} style={{ marginInlineEnd: 0 }}>
+          <Tag
+            color={getMetricRateColor(item.value)}
+            style={{
+              marginInlineEnd: 0,
+              borderRadius: 999,
+              paddingInline: 10,
+              fontWeight: 600,
+            }}
+          >
             {item.displayValue ?? `${item.value}%`}
           </Tag>
         </div>
@@ -80,6 +104,8 @@ export const renderCompactMetricGrid = (
           showInfo={false}
           size="small"
           strokeColor={getMetricStrokeColor(item.value)}
+          strokeLinecap="round"
+          trailColor="color-mix(in srgb, var(--ant-color-border-secondary) 56%, transparent)"
         />
       </div>
     ))}

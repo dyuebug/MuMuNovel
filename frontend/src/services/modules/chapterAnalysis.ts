@@ -51,6 +51,10 @@ const formatChapterAnalysisError = (
     return 'Chapter analysis failed: project not found';
   }
 
+  if (errorCode === 'analysis_missing') {
+    return '分析任务已完成，但分析结果缺失，请重新分析';
+  }
+
   if (errorCode === 'retrying') {
     return errorMessage ?? null;
   }

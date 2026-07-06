@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card } from 'antd';
+import { Card, Space, Tag, Typography, theme } from 'antd';
 
 import type {
   ProjectChapterQualityTrendItem,
@@ -25,6 +25,8 @@ import {
   getQualityTrendLabel,
   getRepairGuidanceDisplay,
 } from '../utils/storyCreationQualitySummary';
+
+const { Text } = Typography;
 
 type HintTone = 'success' | 'info' | 'warning';
 type TrendStage = 'opening' | 'development' | 'ending';
@@ -319,6 +321,8 @@ const ProjectQualityTrendPanel: React.FC<ProjectQualityTrendPanelProps> = ({
   loading = false,
   compact = false,
 }) => {
+  const { token } = theme.useToken();
+  const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
   const summary = trendData?.quality_metrics_summary ?? null;
   const guidance = getRepairGuidanceDisplay(summary?.repair_guidance ?? null);
   const metricItems = getBatchSummaryMetricItems(summary);
@@ -341,6 +345,11 @@ const ProjectQualityTrendPanel: React.FC<ProjectQualityTrendPanelProps> = ({
       : summary?.overall_score_trend === 'rising'
         ? 'success'
         : 'info';
+  const qualityTrendGuideSteps = [
+    '先看整体趋势、覆盖章节和最近分析时间，确认这次质量画像是不是建立在足够新的样本上。',
+    '再判断卷级目标、伏笔压力和当前修复建议，优先抓真正影响后续章节推进的风险项。',
+    '最后再深入看阶段分层、近期章节与修复成效率，把诊断结果转成下一轮创作动作。',
+  ];
 
   const overviewItems = [
     ...(typeof summary?.avg_overall_score === 'number'
@@ -434,6 +443,20 @@ const ProjectQualityTrendPanel: React.FC<ProjectQualityTrendPanelProps> = ({
     renderTrendSparklineCard('回报兑现', '#52c41a', payoffSeries, (value) => `${formatNumber(value)}%`),
     renderTrendSparklineCard('章尾牵引', '#fa8c16', cliffhangerSeries, (value) => `${formatNumber(value)}%`),
   ].filter((item): item is JSX.Element => Boolean(item));
+  const qualityTrendWorkspaceFocus = summary?.overall_score_trend === 'falling'
+    ? {
+        title: '先处理正在下滑的章节质量信号',
+        note: '当前更适合优先看修复建议、节奏异常和未回收的伏笔压力，避免问题继续扩散到后续章节。',
+      }
+    : repairActions.length > 0
+      ? {
+          title: `把这 ${repairActions.length} 项修复动作转成下一轮创作计划`,
+          note: '当前趋势不一定恶化，但已经有明确修复方向，适合先确认优先级，再决定下一轮章节修订或生成策略。',
+        }
+      : {
+          title: '先确认当前趋势是否已经形成稳定正反馈',
+          note: '当前没有明显下滑压力，更适合先看阶段分层与最近章节，确认修复效果是否已经转化为持续性的质量提升。',
+        };
 
   return (
     <Card
@@ -450,147 +473,245 @@ const ProjectQualityTrendPanel: React.FC<ProjectQualityTrendPanelProps> = ({
         )
       ) : (
         <>
-          {renderCompactSelectionSummary(overviewItems, { style: { marginBottom: 10 } })}
-          {projectHealthItems.length > 0 && renderCompactSelectionSummary(projectHealthItems, { style: { marginBottom: 10 } })}
-          {volumeGoal?.profile_summary && renderCompactSettingHint(
-            '体裁 / 风格画像',
-            volumeGoal.profile_summary,
-            { tone: 'info', style: { marginBottom: 10 } },
-          )}
-          {guidance?.summary && renderCompactSettingHint(
-            '当前修复建议',
-            guidance.summary,
-            { tone: overallTone, style: { marginBottom: 10 } },
-          )}
-          {runtimeContextHighlights.length > 0 && renderCompactListCard(
-            '运行时账本焦点',
-            runtimeContextHighlights,
-            { tagText: `${runtimeContextHighlights.length}项`, tagColor: 'blue', style: { marginBottom: 10 } },
-          )}
-          {metricItems.length > 0 && renderCompactMetricGrid(metricItems, { style: { marginBottom: 10 } })}
-          {volumeGoal?.summary && renderCompactSettingHint(
-            '卷级目标达成',
-            volumeGoal.summary,
-            { tone: getStatusTone(volumeGoal.status), style: { marginBottom: 10 } },
-          )}
-          {pacing?.summary && renderCompactSettingHint(
-            '长篇节奏信号',
-            pacing.summary,
-            { tone: getStatusTone(pacing.status), style: { marginBottom: 10 } },
-          )}
-          {foreshadowDelay?.summary && renderCompactSettingHint(
-            '伏笔兑现压力',
-            foreshadowDelay.summary,
-            {
-              tone: getStatusTone(foreshadowDelay.status),
-              style: { marginBottom: 10 },
-            },
-          )}
-          {(sparklineCards.length > 0 || stageBucketLines.length > 0 || repairEffectiveness?.summary) && (
+          <Card
+            size="small"
+            style={{
+              marginBottom: 16,
+              borderRadius: 20,
+              border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+              background: `linear-gradient(135deg, ${alphaColor(token.colorPrimaryBg, 0.82)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`,
+              boxShadow: 'none',
+            }}
+            styles={{ body: { padding: 16 } }}
+          >
             <div
               style={{
                 display: 'grid',
                 gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-                gap: 8,
-                marginBottom: 10,
+                gap: 16,
               }}
             >
-              {sparklineCards.length > 0 && (
-                <div style={{ minWidth: 0, display: 'grid', gap: 8 }}>
-                  {sparklineCards}
+              <div>
+                <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+                  Quality Trend Guide
+                </Text>
+                <Text strong style={{ display: 'block', fontSize: 17, marginBottom: 8 }}>
+                  章节质量趋势导览
+                </Text>
+                <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+                  这里负责把章节分析结果转成项目级诊断视图。当前只调整阅读顺序和焦点说明，不改任何质量计算、趋势判断或修复建议逻辑。
+                </Text>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {qualityTrendGuideSteps.map((item, index) => (
+                    <span
+                      key={item}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '6px 12px',
+                        borderRadius: 999,
+                        background: token.colorBgContainer,
+                        border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+                        color: token.colorText,
+                        fontSize: 12,
+                      }}
+                    >
+                      <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+                      {item}
+                    </span>
+                  ))}
                 </div>
-              )}
-              {stageBucketLines.length > 0 && (
-                <div style={{ minWidth: 0 }}>
-                  {renderCompactListCard(
-                    '阶段分层观察',
-                    stageBucketLines,
-                    { tagText: `${stageBucketLines.length}段`, tagColor: 'geekblue', style: { height: '100%' } },
-                  )}
-                </div>
-              )}
-              {repairEffectiveness?.summary && (
-                <div style={INSIGHT_CARD_STYLE}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13 }}>修复成效率</div>
-                    <div style={{ color: getStatusColor(repairEffectiveness.status), fontSize: 12, fontWeight: 600 }}>
-                      {typeof repairEffectiveness.success_rate === 'number' ? `${repairEffectiveness.success_rate.toFixed(1)}%` : '--'}
-                    </div>
-                  </div>
-                  <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>
-                    {repairEffectiveness.summary}
-                  </div>
-                  {renderCompactSelectionSummary([
-                    ...(typeof repairEffectiveness.success_rate === 'number'
-                      ? [{ label: '成功率', value: `${repairEffectiveness.success_rate.toFixed(1)}%`, color: getStatusColor(repairEffectiveness.status) }]
-                      : []),
-                    ...(typeof repairEffectiveness.evaluated_pairs === 'number'
-                      ? [{ label: '样本', value: `${repairEffectiveness.evaluated_pairs}` }]
-                      : []),
-                    ...(typeof repairEffectiveness.successful_pairs === 'number'
-                      ? [{ label: '成功组', value: `${repairEffectiveness.successful_pairs}`, color: 'green' }]
-                      : []),
-                  ], { style: { marginBottom: 8 } })}
-                  {repairUnresolved.length > 0 && (
-                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, lineHeight: 1.6, marginBottom: repairRecovered.length > 0 || repairFocusLines.length > 0 ? 6 : 0 }}>
-                      仍未稳定：{repairUnresolved.join(' / ')}
-                    </div>
-                  )}
-                  {repairRecovered.length > 0 && (
-                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, lineHeight: 1.6, marginBottom: repairFocusLines.length > 0 ? 6 : 0 }}>
-                      开始回收：{repairRecovered.join(' / ')}
-                    </div>
-                  )}
-                  {repairFocusLines.length > 0 && (
-                    <div style={{ display: 'grid', gap: 4 }}>
-                      {repairFocusLines.map((item) => (
-                        <div key={item} style={{ color: 'var(--color-text-secondary)', fontSize: 12, lineHeight: 1.6 }}>
-                          • {item}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
+              </div>
+              <div
+                style={{
+                  borderRadius: 18,
+                  padding: '16px 18px 14px',
+                  background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.5)} 100%)`,
+                  border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+                }}
+              >
+                <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+                  当前工作焦点
+                </Text>
+                <Text strong style={{ display: 'block', fontSize: 16, marginBottom: 8 }}>
+                  {qualityTrendWorkspaceFocus.title}
+                </Text>
+                <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+                  {qualityTrendWorkspaceFocus.note}
+                </Text>
+                <Space wrap>
+                  <Tag color="blue">覆盖章节: {analyzedCount}/{totalCount}</Tag>
+                  {trendLabel ? <Tag color={summary?.overall_score_trend === 'falling' ? 'red' : summary?.overall_score_trend === 'rising' ? 'green' : 'blue'}>趋势: {trendLabel}</Tag> : null}
+                  {typeof summary?.avg_overall_score === 'number' ? <Tag color={getOverallScoreColor(summary.avg_overall_score)}>均分: {summary.avg_overall_score.toFixed(1)}</Tag> : null}
+                  <Tag color={overallTone === 'warning' ? 'red' : overallTone === 'success' ? 'green' : 'gold'}>
+                    诊断状态: {summary?.quality_gate?.status ?? 'watch'}
+                  </Tag>
+                </Space>
+              </div>
             </div>
-          )}
-          {(repairActions.length > 0 || pacingSignals.length > 0 || recentChapters.length > 0) && (
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-                gap: 8,
-              }}
-            >
-              {repairActions.length > 0 && (
-                <div style={{ minWidth: 0 }}>
-                  {renderCompactListCard(
-                    '下一阶段修复',
-                    repairActions,
-                    { tagText: `${repairActions.length}项`, tagColor: 'gold', style: { height: '100%' } },
-                  )}
-                </div>
-              )}
-              {pacingSignals.length > 0 && (
-                <div style={{ minWidth: 0 }}>
-                  {renderCompactListCard(
-                    '节奏异常',
-                    pacingSignals,
-                    { tagText: `${pacingSignals.length}项`, tagColor: 'red', style: { height: '100%' } },
-                  )}
-                </div>
-              )}
-              {recentChapters.length > 0 && (
-                <div style={{ minWidth: 0 }}>
-                  {renderCompactListCard(
-                    '最近分析章节',
-                    recentChapters,
-                    { tagText: `${recentChapters.length}章`, tagColor: 'blue', style: { height: '100%' } },
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+          </Card>
+
+          <div
+            style={{
+              padding: compact ? 12 : 16,
+              borderRadius: 22,
+              border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.9)}`,
+              background: `linear-gradient(180deg, ${alphaColor(token.colorBgElevated, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.46)} 100%)`,
+            }}
+          >
+            <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+              Diagnostic Workspace
+            </Text>
+            <Text strong style={{ display: 'block', marginBottom: 8 }}>
+              项目级质量诊断面板
+            </Text>
+            <Text type="secondary" style={{ display: 'block', marginBottom: 14, lineHeight: 1.7 }}>
+              建议先看整体趋势与项目健康，再下钻到阶段分层、节奏异常和最近章节，把分析结果整理成下一轮创作动作。
+            </Text>
+
+            {renderCompactSelectionSummary(overviewItems, { style: { marginBottom: 10 } })}
+            {projectHealthItems.length > 0 && renderCompactSelectionSummary(projectHealthItems, { style: { marginBottom: 10 } })}
+            {volumeGoal?.profile_summary && renderCompactSettingHint(
+              '体裁 / 风格画像',
+              volumeGoal.profile_summary,
+              { tone: 'info', style: { marginBottom: 10 } },
+            )}
+            {guidance?.summary && renderCompactSettingHint(
+              '当前修复建议',
+              guidance.summary,
+              { tone: overallTone, style: { marginBottom: 10 } },
+            )}
+            {runtimeContextHighlights.length > 0 && renderCompactListCard(
+              '运行时账本焦点',
+              runtimeContextHighlights,
+              { tagText: `${runtimeContextHighlights.length}项`, tagColor: 'blue', style: { marginBottom: 10 } },
+            )}
+            {metricItems.length > 0 && renderCompactMetricGrid(metricItems, { style: { marginBottom: 10 } })}
+            {volumeGoal?.summary && renderCompactSettingHint(
+              '卷级目标达成',
+              volumeGoal.summary,
+              { tone: getStatusTone(volumeGoal.status), style: { marginBottom: 10 } },
+            )}
+            {pacing?.summary && renderCompactSettingHint(
+              '长篇节奏信号',
+              pacing.summary,
+              { tone: getStatusTone(pacing.status), style: { marginBottom: 10 } },
+            )}
+            {foreshadowDelay?.summary && renderCompactSettingHint(
+              '伏笔兑现压力',
+              foreshadowDelay.summary,
+              {
+                tone: getStatusTone(foreshadowDelay.status),
+                style: { marginBottom: 10 },
+              },
+            )}
+            {(sparklineCards.length > 0 || stageBucketLines.length > 0 || repairEffectiveness?.summary) && (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                  gap: 8,
+                  marginBottom: 10,
+                }}
+              >
+                {sparklineCards.length > 0 && (
+                  <div style={{ minWidth: 0, display: 'grid', gap: 8 }}>
+                    {sparklineCards}
+                  </div>
+                )}
+                {stageBucketLines.length > 0 && (
+                  <div style={{ minWidth: 0 }}>
+                    {renderCompactListCard(
+                      '阶段分层观察',
+                      stageBucketLines,
+                      { tagText: `${stageBucketLines.length}段`, tagColor: 'geekblue', style: { height: '100%' } },
+                    )}
+                  </div>
+                )}
+                {repairEffectiveness?.summary && (
+                  <div style={INSIGHT_CARD_STYLE}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13 }}>修复成效率</div>
+                      <div style={{ color: getStatusColor(repairEffectiveness.status), fontSize: 12, fontWeight: 600 }}>
+                        {typeof repairEffectiveness.success_rate === 'number' ? `${repairEffectiveness.success_rate.toFixed(1)}%` : '--'}
+                      </div>
+                    </div>
+                    <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>
+                      {repairEffectiveness.summary}
+                    </div>
+                    {renderCompactSelectionSummary([
+                      ...(typeof repairEffectiveness.success_rate === 'number'
+                        ? [{ label: '成功率', value: `${repairEffectiveness.success_rate.toFixed(1)}%`, color: getStatusColor(repairEffectiveness.status) }]
+                        : []),
+                      ...(typeof repairEffectiveness.evaluated_pairs === 'number'
+                        ? [{ label: '样本', value: `${repairEffectiveness.evaluated_pairs}` }]
+                        : []),
+                      ...(typeof repairEffectiveness.successful_pairs === 'number'
+                        ? [{ label: '成功组', value: `${repairEffectiveness.successful_pairs}`, color: 'green' }]
+                        : []),
+                    ], { style: { marginBottom: 8 } })}
+                    {repairUnresolved.length > 0 && (
+                      <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, lineHeight: 1.6, marginBottom: repairRecovered.length > 0 || repairFocusLines.length > 0 ? 6 : 0 }}>
+                        仍未稳定：{repairUnresolved.join(' / ')}
+                      </div>
+                    )}
+                    {repairRecovered.length > 0 && (
+                      <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, lineHeight: 1.6, marginBottom: repairFocusLines.length > 0 ? 6 : 0 }}>
+                        开始回收：{repairRecovered.join(' / ')}
+                      </div>
+                    )}
+                    {repairFocusLines.length > 0 && (
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        {repairFocusLines.map((item) => (
+                          <div key={item} style={{ color: 'var(--color-text-secondary)', fontSize: 12, lineHeight: 1.6 }}>
+                            • {item}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            {(repairActions.length > 0 || pacingSignals.length > 0 || recentChapters.length > 0) && (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                  gap: 8,
+                }}
+              >
+                {repairActions.length > 0 && (
+                  <div style={{ minWidth: 0 }}>
+                    {renderCompactListCard(
+                      '下一阶段修复',
+                      repairActions,
+                      { tagText: `${repairActions.length}项`, tagColor: 'gold', style: { height: '100%' } },
+                    )}
+                  </div>
+                )}
+                {pacingSignals.length > 0 && (
+                  <div style={{ minWidth: 0 }}>
+                    {renderCompactListCard(
+                      '节奏异常',
+                      pacingSignals,
+                      { tagText: `${pacingSignals.length}项`, tagColor: 'red', style: { height: '100%' } },
+                    )}
+                  </div>
+                )}
+                {recentChapters.length > 0 && (
+                  <div style={{ minWidth: 0 }}>
+                    {renderCompactListCard(
+                      '最近分析章节',
+                      recentChapters,
+                      { tagText: `${recentChapters.length}章`, tagColor: 'blue', style: { height: '100%' } },
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </>
       )}
     </Card>

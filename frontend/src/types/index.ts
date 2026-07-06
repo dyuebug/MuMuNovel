@@ -1021,8 +1021,9 @@ export interface AnalysisTask {
   status: 'pending' | 'running' | 'completed' | 'failed' | 'none';
   progress: number;
   error_message?: string | null;
-  error_code?: 'retrying' | 'json_parse_failed' | 'ai_empty' | 'stream_interrupted' | 'timeout' | 'chapter_empty' | 'project_missing' | 'unknown' | null;
+  error_code?: 'retrying' | 'json_parse_failed' | 'ai_empty' | 'stream_interrupted' | 'timeout' | 'chapter_empty' | 'project_missing' | 'analysis_missing' | 'unknown' | null;
   auto_recovered?: boolean;
+  missing_result?: boolean;
   created_at?: string | null;
   started_at?: string | null;
   completed_at?: string | null;

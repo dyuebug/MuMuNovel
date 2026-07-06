@@ -1,9 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { Suspense, lazy, memo, useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Card, Form, Input, Select, Space, message } from 'antd';
+import { Button, Card, Form, Input, Select, Space, Typography, message, theme } from 'antd';
 import { FundOutlined, FormOutlined, LockOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import PartialRegenerateToolbar from './PartialRegenerateToolbar';
 import ChapterEditorAiSection from './ChapterEditorAiSection';
+import WorkflowEntryFallback from './WorkflowEntryFallback';
 import {
   renderCompactSelectionSummary,
   renderCompactSettingFlow,
@@ -13,6 +14,7 @@ import { CREATION_PLOT_STAGE_OPTIONS } from '../utils/creationPresetsCore';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 
 const { TextArea } = Input;
+const { Text } = Typography;
 
 const LazyPartialRegenerateModal = lazy(() => import('./PartialRegenerateModal'));
 
@@ -148,6 +150,8 @@ const areEditorModalContentPropsEqual = (
 };
 
 function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentProps) {
+  const { token } = theme.useToken();
+  const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
   const {
     editorForm,
     handleEditorSubmit,
@@ -364,44 +368,202 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
 
   const selectedRegenerateCount = selectedTextForRegenerate.trim().length;
   const hasPartialSelection = selectedRegenerateCount > 0;
+  const chapterDisplayTitle = currentEditingChapter?.title || '未命名章节';
+  const chapterDisplayNumber = currentEditingChapter?.chapter_number ? `第 ${currentEditingChapter.chapter_number} 章` : '章节编辑';
+  const chapterEditorGuideSteps = [
+    '先确认章节标题、风格、视角和剧情阶段，让本章的创作上下文在动笔前保持一致。',
+    '再决定这一轮是继续生成、查看分析，还是直接手动编辑正文，避免在多个入口之间来回切换。',
+    '最后再进入局部重写或全文修改，把动作建立在已经明确的章节目标之上。',
+  ];
+  const chapterEditorWorkspaceFocus = hasPartialSelection
+    ? {
+        title: `优先处理当前选中的 ${selectedRegenerateCount} 字片段`,
+        note: '当前已经选中可重写的正文片段，适合先完成局部重写或回到正文修改，再决定是否继续分析或续写整章内容。',
+      }
+    : !currentEditingCanGenerate
+      ? {
+          title: '先补齐本章继续生成前的条件',
+          note: currentEditingGenerateDisabledReason || '当前还不满足继续生成条件，适合先确认创作设置与正文状态，再推进下一步生成。',
+        }
+      : canAnalyzeCurrentChapter
+        ? {
+            title: '围绕本章现有内容安排下一步动作',
+            note: '当前既可继续生成，也能查看分析，更适合先判断这一轮是要扩写内容还是先复核质量信号。',
+          }
+        : {
+            title: '先稳定本章的编辑上下文',
+            note: '当前更适合先核对标题、创作设置与正文内容，再决定是否进入后续生成或分析链路。',
+          };
 
   return (
     <Form form={editorForm} layout="vertical" onFinish={handleEditorSubmit}>
-      <Form.Item
-        label="章节标题"
-        tooltip="当前标题仅供查看，修改请前往章节设置"
-        style={{ marginBottom: isMobile ? 16 : 12 }}
+      <Card
+        size="small"
+        style={{
+          marginBottom: 14,
+          borderRadius: 22,
+          border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+          background: `linear-gradient(135deg, ${alphaColor(token.colorPrimaryBg, 0.84)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`,
+        }}
+        styles={{ body: { padding: 16 } }}
       >
-        <Space.Compact style={{ width: '100%' }}>
-          <Form.Item name="title" noStyle>
-            <Input disabled style={{ flex: 1 }} />
-          </Form.Item>
-          {currentEditingChapter ? (
-            <>
-              <Button
-                type="primary"
-                icon={currentEditingCanGenerate ? <ThunderboltOutlined /> : <LockOutlined />}
-                onClick={() => showGenerateModal(currentEditingChapter)}
-                loading={isContinuing}
-                disabled={!currentEditingCanGenerate}
-                danger={!currentEditingCanGenerate}
-                style={{ fontWeight: 'bold' }}
-                title={!currentEditingCanGenerate ? currentEditingGenerateDisabledReason : '继续生成章节内容'}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+            gap: 16,
+          }}
+        >
+          <div>
+            <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+              Chapter Editing Guide
+            </Text>
+            <Text strong style={{ display: 'block', fontSize: 17, marginBottom: 8 }}>
+              {chapterDisplayTitle}
+            </Text>
+            <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+              这里是章节正文编辑工作台。不会改变原有编辑、续写、分析或局部重写逻辑，只是把工作顺序和判断重点提前说明，让这一章的编辑节奏更清楚。
+            </Text>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {chapterEditorGuideSteps.map((item, index) => (
+                <span
+                  key={item}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '6px 12px',
+                    borderRadius: 999,
+                    background: token.colorBgContainer,
+                    border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+                    color: token.colorText,
+                    fontSize: 12,
+                  }}
+                >
+                  <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+                  {item}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div
+            style={{
+              borderRadius: 18,
+              padding: '16px 18px 14px',
+              background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.5)} 100%)`,
+              border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+            }}
+          >
+            <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+              当前工作焦点
+            </Text>
+            <Text strong style={{ display: 'block', fontSize: 16, marginBottom: 8 }}>
+              {chapterEditorWorkspaceFocus.title}
+            </Text>
+            <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+              {chapterEditorWorkspaceFocus.note}
+            </Text>
+            <Space wrap size={[8, 8]}>
+              <Text
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  background: alphaColor(token.colorPrimary, 0.08),
+                  border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+                }}
               >
-                {isMobile ? '续写' : '继续生成'}
-              </Button>
-              <Button
-                icon={<FundOutlined />}
-                onClick={() => handleShowAnalysis(currentEditingChapter.id)}
-                disabled={!canAnalyzeCurrentChapter}
-                title={canAnalyzeCurrentChapter ? '查看章节分析' : '暂无内容，无法分析'}
+                {chapterDisplayNumber}
+              </Text>
+              <Text
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  background: currentEditingCanGenerate ? alphaColor(token.colorSuccess, 0.08) : alphaColor(token.colorWarning, 0.08),
+                  border: `1px solid ${currentEditingCanGenerate ? alphaColor(token.colorSuccess, 0.14) : alphaColor(token.colorWarning, 0.16)}`,
+                }}
               >
-                {isMobile ? '分析' : '分析章节'}
-              </Button>
-            </>
-          ) : null}
-        </Space.Compact>
-      </Form.Item>
+                {currentEditingCanGenerate ? '可继续生成' : '当前不可续写'}
+              </Text>
+              <Text
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  background: canAnalyzeCurrentChapter ? alphaColor(token.colorInfo, 0.08) : alphaColor(token.colorTextTertiary, 0.08),
+                  border: `1px solid ${canAnalyzeCurrentChapter ? alphaColor(token.colorInfo, 0.14) : alphaColor(token.colorBorderSecondary, 0.9)}`,
+                }}
+              >
+                {canAnalyzeCurrentChapter ? '可查看分析' : '暂无分析入口'}
+              </Text>
+              <Text
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  background: hasPartialSelection ? alphaColor(token.colorInfo, 0.08) : alphaColor(token.colorTextTertiary, 0.08),
+                  border: `1px solid ${hasPartialSelection ? alphaColor(token.colorInfo, 0.14) : alphaColor(token.colorBorderSecondary, 0.9)}`,
+                }}
+              >
+                {hasPartialSelection ? `已选 ${selectedRegenerateCount} 字` : '未选择片段'}
+              </Text>
+            </Space>
+          </div>
+        </div>
+      </Card>
+
+      <Card
+        size="small"
+        style={{
+          marginBottom: isMobile ? 16 : 12,
+          borderRadius: 20,
+          border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.9)}`,
+          background: alphaColor(token.colorBgContainer, 0.98),
+        }}
+        styles={{ body: { padding: 16 } }}
+      >
+        <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+          Chapter Header
+        </Text>
+        <Text strong style={{ display: 'block', marginBottom: 8 }}>
+          标题与快捷操作
+        </Text>
+        <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 14 }}>
+          标题当前只读，章节管理动作仍然从这里快速触发，避免来回切换工作区域。
+        </Text>
+        <Form.Item
+          label="章节标题"
+          tooltip="当前标题仅供查看，修改请前往章节设置"
+          style={{ marginBottom: 0 }}
+        >
+          <Space.Compact style={{ width: '100%' }}>
+            <Form.Item name="title" noStyle>
+              <Input disabled style={{ flex: 1 }} />
+            </Form.Item>
+            {currentEditingChapter ? (
+              <>
+                <Button
+                  type="primary"
+                  icon={currentEditingCanGenerate ? <ThunderboltOutlined /> : <LockOutlined />}
+                  onClick={() => showGenerateModal(currentEditingChapter)}
+                  loading={isContinuing}
+                  disabled={!currentEditingCanGenerate}
+                  danger={!currentEditingCanGenerate}
+                  style={{ fontWeight: 'bold' }}
+                  title={!currentEditingCanGenerate ? currentEditingGenerateDisabledReason : '继续生成章节内容'}
+                >
+                  {isMobile ? '续写' : '继续生成'}
+                </Button>
+                <Button
+                  icon={<FundOutlined />}
+                  onClick={() => handleShowAnalysis(currentEditingChapter.id)}
+                  disabled={!canAnalyzeCurrentChapter}
+                  title={canAnalyzeCurrentChapter ? '查看章节分析' : '暂无内容，无法分析'}
+                >
+                  {isMobile ? '分析' : '分析章节'}
+                </Button>
+              </>
+            ) : null}
+          </Space.Compact>
+        </Form.Item>
+      </Card>
 
       {renderCompactSettingFlow(
         '生成前先确认本章创作设置。',
@@ -409,7 +571,17 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
         ['确认标题', '选择风格', '设置视角', '设置阶段'],
       )}
 
-      <Card size="small" title="本章创作设置" style={{ marginBottom: 12 }}>
+      <Card
+        size="small"
+        title="本章创作设置"
+        style={{
+          marginBottom: 12,
+          borderRadius: 20,
+          border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.9)}`,
+          background: `linear-gradient(180deg, ${alphaColor(token.colorBgElevated, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.44)} 100%)`,
+        }}
+        styles={{ body: { padding: 16 } }}
+      >
         <div
           style={{
             display: isMobile ? 'block' : 'flex',
@@ -518,14 +690,39 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
           ),
         },
       )}
-      <Form.Item name="content" style={{ marginBottom: 10 }}>
-        <TextArea
-          ref={contentTextAreaRef}
-          rows={isMobile ? 12 : 20}
-          placeholder="请在这里编辑章节正文..."
-          style={{ fontFamily: 'monospace', fontSize: isMobile ? 12 : 14 }}
-        />
-      </Form.Item>
+      <Card
+        size="small"
+        style={{
+          marginBottom: 10,
+          borderRadius: 20,
+          border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.9)}`,
+          background: alphaColor(token.colorBgContainer, 0.98),
+        }}
+        styles={{ body: { padding: 16 } }}
+      >
+        <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+          Chapter Body
+        </Text>
+        <Text strong style={{ display: 'block', marginBottom: 8 }}>
+          正文编辑区
+        </Text>
+        <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+          直接在这里调整正文。选中文本后，会在附近弹出局部智能重写工具条，方便就地改写片段。
+        </Text>
+        <Form.Item name="content" style={{ marginBottom: 0 }}>
+          <TextArea
+            ref={contentTextAreaRef}
+            rows={isMobile ? 12 : 20}
+            placeholder="请在这里编辑章节正文..."
+            style={{
+              fontFamily: 'monospace',
+              fontSize: isMobile ? 12 : 14,
+              lineHeight: 1.8,
+              background: alphaColor(token.colorFillAlter, 0.72),
+            }}
+          />
+        </Form.Item>
+      </Card>
 
       <div data-partial-regenerate-toolbar>
         {partialRegenerateToolbarVisible && selectedTextForRegenerate ? (
@@ -539,7 +736,20 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
       </div>
 
       {partialRegenerateModalVisible && currentEditingChapterId ? (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={(
+            <WorkflowEntryFallback
+              eyebrow="Partial Regenerate"
+              title="正在整理局部重写工作区"
+              message="系统正在恢复选中文本、改写范围与应用入口，原有局部重生成与写回逻辑保持不变。"
+              tags={[
+                { label: '局部重写', color: 'orange' },
+                { label: '选区上下文恢复中', color: 'processing' },
+                { label: '应用逻辑保持原样', color: 'green' },
+              ]}
+            />
+          )}
+        >
           <LazyPartialRegenerateModal
             visible={partialRegenerateModalVisible}
             chapterId={currentEditingChapterId}
@@ -561,6 +771,10 @@ function ChapterEditorModalContent({ contentProps }: ChapterEditorModalContentPr
             justifyContent: 'space-between',
             alignItems: isMobile ? 'stretch' : 'center',
             gap: 12,
+            padding: isMobile ? '12px 14px' : '14px 16px',
+            borderRadius: 18,
+            border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.9)}`,
+            background: alphaColor(token.colorBgContainer, 0.98),
           }}
         >
           {renderCompactSelectionSummary(

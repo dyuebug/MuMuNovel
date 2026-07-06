@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Button, Drawer, Menu, Modal, message, Space, Spin, Tag, theme } from 'antd';
+import { Button, Drawer, Menu, Modal, message, Space, Tag, theme } from 'antd';
 import { EditOutlined, BookOutlined, CalendarOutlined, FileTextOutlined, TrophyOutlined, SettingOutlined, UploadOutlined, ApiOutlined, FileSearchOutlined, MenuUnfoldOutlined, MenuFoldOutlined, BulbOutlined, MoonOutlined, DesktopOutlined } from '@ant-design/icons';
 import { projectApi } from '../services/modularApi';
 import { useStore } from '../store';
@@ -8,9 +8,12 @@ import { useProjectSync } from '../store/hooks';
 import { eventBus, EventNames } from '../store/eventBus';
 import type { ReactNode } from 'react';
 import type { Project } from '../types';
+import InlineDeferredPanel from '../components/InlineDeferredPanel';
+import WorkflowEntryFallback from '../components/WorkflowEntryFallback';
 import UserMenu from '../components/UserMenu';
 import ThemeSwitch from '../components/ThemeSwitch';
 import { useThemeMode } from '../theme/useThemeMode';
+import { designDisplayFont } from '../theme/themeConfig';
 import { getStoredSidebarCollapsed, setStoredSidebarCollapsed } from '../utils/sidebarState';
 import { isProjectWizardIncomplete } from '../utils/projectWizardState';
 import { VERSION_INFO } from '../config/version';
@@ -304,6 +307,72 @@ export default function ProjectList() {
     return progress >= 100 || p.status === 'completed';
   }).length;
 
+  const projectListGuideSteps = [
+    '先看顶栏统计和当前视图，确认这次是在巡检项目总览，还是准备进入某个工具页。',
+    '再从书架区筛选、进入、导入或导出项目，把高影响操作放在看清当前项目分布之后。',
+    '最后再切到设置、MCP、提示词或导书入口，避免在项目列表和工具页之间来回跳动。',
+  ];
+  const projectListFocus = importModalVisible || validating || importing
+    ? {
+        title: '确认本轮项目导入结果',
+        note: '当前正在校验或导入项目文件，适合先看清文件状态和结果提示，再继续进入书架或工具页。',
+      }
+    : exportModalVisible || exporting
+      ? {
+          title: '整理要导出的项目批次',
+          note: '导出面板已经打开，适合先确认勾选范围与导出内容，再批量触发项目归档或迁移。',
+        }
+      : loading
+        ? {
+            title: '等待项目书架同步',
+            note: '项目列表正在刷新，稍后就能继续巡检项目状态、进入创作或执行导入导出操作。',
+          }
+        : selectedProjectIds.length > 0
+          ? {
+              title: `处理 ${selectedProjectIds.length} 个已选项目`,
+              note: '当前已经选中一批项目，适合先完成这一轮导出或检查，再回到全量书架继续筛选。',
+            }
+          : showApiTip
+            ? {
+                title: '先浏览当前工作台提示',
+                note: '书架页仍有入口提示信息，适合先确认本轮要走新建、灵感、导入还是继续已有项目。',
+              }
+            : projects.length > 0
+              ? {
+                  title: '巡检现有项目书架',
+                  note: '当前项目库已经有内容，适合先看项目分布、状态与字数体量，再决定进入哪一个项目继续创作。',
+                }
+              : {
+                  title: '建立第一批项目入口',
+                  note: '当前书架还是空的，适合先创建项目或导入已有项目，再逐步补齐后续创作工作流。',
+                };
+
+  const renderWorkspaceFallback = (
+    view: ProjectListView,
+    options: {
+      eyebrow: string;
+      title: string;
+      message: string;
+      tags: Array<{ label: string; color?: string }>;
+    },
+  ) => (
+    <div
+      style={{
+        padding: view === 'projects'
+          ? 0
+          : (isMobile ? '16px 16px 28px' : '24px 24px 36px'),
+      }}
+    >
+      <InlineDeferredPanel
+        eyebrow={options.eyebrow}
+        title={options.title}
+        message={options.message}
+        minHeight={view === 'projects' ? (isMobile ? 320 : 360) : 'calc(100vh - 220px)'}
+        tags={options.tags}
+      />
+    </div>
+  );
+
   const handleFileSelect = async (file: File) => {
     const requestId = beginImportRequest();
     setSelectedFile(file);
@@ -496,6 +565,14 @@ export default function ProjectList() {
   const expandedSiderWidth = 220;
   const collapsedSiderWidth = 60;
   const desktopSiderWidth = collapsed ? collapsedSiderWidth : expandedSiderWidth;
+  const editorialInk = '#f7f1e8';
+  const editorialShellBackground = resolvedMode === 'dark'
+    ? 'radial-gradient(circle at top, rgba(204, 120, 92, 0.16) 0%, transparent 26%), linear-gradient(180deg, #0f0e0d 0%, #151311 100%)'
+    : 'radial-gradient(circle at top, rgba(204, 120, 92, 0.12) 0%, transparent 28%), linear-gradient(180deg, #f8f2e9 0%, #efe6da 100%)';
+  const editorialSidebarBackground = 'linear-gradient(180deg, #151311 0%, #1d1916 100%)';
+  const editorialHeaderBackground = 'linear-gradient(135deg, #171411 0%, color-mix(in srgb, #171411 64%, #cc785c 36%) 100%)';
+  const editorialMenuFooterBackground = alphaColor('#ffffff', resolvedMode === 'dark' ? 0.04 : 0.06);
+  const editorialMutedInk = alphaColor(editorialInk, 0.66);
 
   const currentViewTitle = activeView === 'projects'
     ? '我的书架'
@@ -580,8 +657,8 @@ export default function ProjectList() {
       height: '100vh',
       display: 'flex',
       flexDirection: 'column',
-      background: token.colorBgLayout,
-      overflow: 'hidden'
+      background: editorialShellBackground,
+      overflow: 'hidden',
     }}>
       {contextHolder}
 
@@ -589,8 +666,8 @@ export default function ProjectList() {
         <div
           style={{
           width: desktopSiderWidth,
-          background: token.colorBgContainer,
-          borderRight: `1px solid ${token.colorBorderSecondary}`,
+          background: editorialSidebarBackground,
+          borderRight: `1px solid ${alphaColor(editorialInk, 0.08)}`,
           display: 'flex',
           flexDirection: 'column',
           position: 'fixed',
@@ -600,15 +677,15 @@ export default function ProjectList() {
           height: '100vh',
           overflow: 'hidden',
           transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-          boxShadow: `4px 0 16px ${alphaColor(token.colorText, 0.06)}`,
+          boxShadow: `18px 0 36px ${alphaColor('#000000', 0.16)}`,
           zIndex: 1000
         }}>
           <div style={{
-            height: 70,
+            height: 82,
             display: 'flex',
             alignItems: 'center',
             padding: collapsed ? 0 : '0 12px',
-            background: token.colorPrimary,
+            background: editorialHeaderBackground,
             flexShrink: 0,
             justifyContent: collapsed ? 'center' : 'space-between',
             gap: 8
@@ -619,7 +696,7 @@ export default function ProjectList() {
                 icon={<MenuUnfoldOutlined />}
                 onClick={() => setCollapsed(false)}
                 style={{
-                  color: token.colorWhite,
+                  color: editorialInk,
                   width: '100%',
                   height: '100%',
                   padding: 0,
@@ -635,35 +712,45 @@ export default function ProjectList() {
                   <div style={{
                     width: 30,
                     height: 30,
-                    background: alphaColor(token.colorWhite, 0.2),
+                    background: alphaColor(editorialInk, 0.16),
                     borderRadius: 8,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    color: token.colorWhite,
+                    color: editorialInk,
                     fontSize: 16,
                     backdropFilter: 'blur(4px)'
                   }}>
                     <BookOutlined />
                   </div>
-                  <span style={{
-                    color: token.colorWhite,
-                    fontWeight: 600,
-                    fontSize: 15,
-                    fontFamily: token.fontFamily,
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis'
-                  }}>
-                    {VERSION_INFO.projectName}
-                  </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                    <span style={{
+                      color: editorialMutedInk,
+                      fontSize: 10,
+                      letterSpacing: '0.18em',
+                      textTransform: 'uppercase',
+                    }}>
+                      Editorial Workspace
+                    </span>
+                    <span style={{
+                      color: editorialInk,
+                      fontWeight: 600,
+                      fontSize: 18,
+                      fontFamily: designDisplayFont,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}>
+                      {VERSION_INFO.projectName}
+                    </span>
+                  </div>
                 </div>
                 <Button
                   type="text"
                   icon={<MenuFoldOutlined />}
                   onClick={() => setCollapsed(true)}
                   style={{
-                    color: token.colorWhite,
+                    color: editorialInk,
                     width: 32,
                     height: 32,
                     padding: 0,
@@ -674,12 +761,19 @@ export default function ProjectList() {
             )}
           </div>
 
-          <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
+          <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '12px 10px 10px' }}>
             <Menu
+              theme="dark"
               mode="inline"
               inlineCollapsed={collapsed}
               selectedKeys={[activeView]}
-              style={{ borderRight: 0, paddingTop: 12, width: '100%' }}
+              style={{
+                borderRight: 0,
+                width: '100%',
+                background: 'transparent',
+                color: editorialInk,
+                fontSize: 14,
+              }}
               onClick={({ key }) => {
                 changeView(key as ProjectListView);
               }}
@@ -689,8 +783,9 @@ export default function ProjectList() {
 
           <div style={{
             padding: collapsed ? '12px 8px' : 16,
-            borderTop: `1px solid ${token.colorBorderSecondary}`,
-            flexShrink: 0
+            borderTop: `1px solid ${alphaColor(editorialInk, 0.08)}`,
+            flexShrink: 0,
+            background: editorialMenuFooterBackground,
           }}>
             {collapsed ? (
               <Space direction="vertical" style={{ width: '100%', alignItems: 'center' }} size={10}>
@@ -703,18 +798,18 @@ export default function ProjectList() {
                     width: 40,
                     height: 40,
                     borderRadius: 20,
-                    background: alphaColor(token.colorBgContainer, 0.65),
-                    border: `1px solid ${token.colorBorder}`,
-                    color: token.colorTextSecondary,
+                    background: alphaColor('#ffffff', 0.08),
+                    border: `1px solid ${alphaColor(editorialInk, 0.12)}`,
+                    color: editorialInk,
                   }}
                 />
                 <UserMenu compact />
               </Space>
             ) : (
               <Space direction="vertical" style={{ width: '100%' }} size={12}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: token.colorTextTertiary }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: editorialMutedInk }}>
                   <span>主题模式</span>
-                  <span>{resolvedMode === 'dark' ? '深色' : '浅色'}</span>
+                  <span>{mode === 'system' ? `跟随系统 · ${resolvedMode === 'dark' ? '深色' : '浅色'}` : resolvedMode === 'dark' ? '深色' : '浅色'}</span>
                 </div>
                 <ThemeSwitch block />
                 <UserMenu />
@@ -725,7 +820,7 @@ export default function ProjectList() {
       )}
 
       <div style={{
-        background: token.colorPrimary,
+        background: editorialHeaderBackground,
         padding: isMobile ? '0 12px' : '0 24px',
         display: 'flex',
         alignItems: 'center',
@@ -735,7 +830,8 @@ export default function ProjectList() {
         left: isMobile ? 0 : desktopSiderWidth,
         right: 0,
         zIndex: 1000,
-        boxShadow: `0 2px 10px ${alphaColor(token.colorText, 0.16)}`,
+        boxShadow: `0 18px 32px ${alphaColor('#000000', 0.12)}`,
+        borderBottom: `1px solid ${alphaColor(editorialInk, 0.08)}`,
         height: headerHeight,
         flexShrink: 0,
         transition: 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
@@ -750,7 +846,7 @@ export default function ProjectList() {
                 onClick={() => setDrawerVisible(true)}
                 style={{
                   fontSize: 18,
-                  color: token.colorWhite,
+                  color: editorialInk,
                   width: 36,
                   height: 36
                 }}
@@ -759,10 +855,11 @@ export default function ProjectList() {
 
             <h2 style={{
               margin: 0,
-              color: token.colorWhite,
+              color: editorialInk,
               fontSize: 16,
               fontWeight: 600,
-              textShadow: `0 2px 4px ${alphaColor(token.colorText, 0.2)}`,
+              fontFamily: designDisplayFont,
+              letterSpacing: '-0.02em',
               flex: 1,
               textAlign: 'center',
               whiteSpace: 'nowrap',
@@ -777,24 +874,39 @@ export default function ProjectList() {
           </>
         ) : (
           <>
-            <div style={{ width: 40, zIndex: 1 }} />
+            <div style={{ width: 160, zIndex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <span style={{ color: editorialMutedInk, fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase' }}>
+                Workspace
+              </span>
+              <span style={{ color: editorialInk, fontSize: 13 }}>
+                Long-form writing hub
+              </span>
+            </div>
 
-            <h2 style={{
-              margin: 0,
-              color: token.colorWhite,
-              fontSize: '24px',
-              fontWeight: 600,
-              textShadow: `0 2px 4px ${alphaColor(token.colorText, 0.2)}`,
+            <div style={{
               position: 'absolute',
               left: '50%',
               transform: 'translateX(-50%)',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              maxWidth: '45%'
+              maxWidth: '45%',
+              textAlign: 'center',
             }}>
-              {currentViewTitle}
-            </h2>
+              <div style={{ color: editorialMutedInk, fontSize: 11, letterSpacing: '0.2em', textTransform: 'uppercase', marginBottom: 6 }}>
+                {activeView === 'projects' ? 'Library Overview' : 'Creative Toolkit'}
+              </div>
+              <h2 style={{
+                margin: 0,
+                color: editorialInk,
+                fontSize: '30px',
+                fontWeight: 600,
+                fontFamily: designDisplayFont,
+                letterSpacing: '-0.03em',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}>
+                {currentViewTitle}
+              </h2>
+            </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, zIndex: 1 }}>
               {activeView === 'projects' && (
@@ -813,29 +925,31 @@ export default function ProjectList() {
                             flexDirection: 'column',
                             alignItems: 'center',
                             justifyContent: 'center',
-                            backdropFilter: 'blur(4px)',
-                            borderRadius: '28px',
-                            minWidth: '56px',
-                            height: '56px',
-                            padding: '0 12px',
-                            boxShadow: `inset 0 0 15px ${alphaColor(token.colorWhite, 0.15)}, 0 4px 10px ${alphaColor(token.colorText, 0.1)}`,
+                            background: alphaColor('#ffffff', 0.08),
+                            border: `1px solid ${alphaColor(editorialInk, 0.1)}`,
+                            backdropFilter: 'blur(10px)',
+                            borderRadius: '22px',
+                            minWidth: '64px',
+                            height: '58px',
+                            padding: '0 14px',
+                            boxShadow: `0 16px 30px ${alphaColor('#000000', 0.12)}`,
                             cursor: 'default',
                             transition: 'transform 0.3s ease, box-shadow 0.3s ease',
                           }}
                           onMouseEnter={(e) => {
                             e.currentTarget.style.transform = 'translateY(-3px) scale(1.02)';
-                            e.currentTarget.style.boxShadow = `inset 0 0 20px ${alphaColor(token.colorWhite, 0.25)}, 0 8px 16px ${alphaColor(token.colorText, 0.15)}`;
-                            e.currentTarget.style.border = `1px solid ${alphaColor(token.colorWhite, 0.1)}`;
+                            e.currentTarget.style.boxShadow = `0 20px 36px ${alphaColor('#000000', 0.18)}`;
+                            e.currentTarget.style.border = `1px solid ${alphaColor(editorialInk, 0.18)}`;
                           }}
                           onMouseLeave={(e) => {
                             e.currentTarget.style.transform = 'translateY(0) scale(1)';
-                            e.currentTarget.style.boxShadow = `inset 0 0 15px ${alphaColor(token.colorWhite, 0.15)}, 0 4px 10px ${alphaColor(token.colorText, 0.1)}`;
+                            e.currentTarget.style.boxShadow = `0 16px 30px ${alphaColor('#000000', 0.12)}`;
                           }}
                         >
-                          <span style={{ fontSize: '11px', color: alphaColor(token.colorWhite, 0.9), marginBottom: '2px', lineHeight: 1 }}>
+                          <span style={{ fontSize: '11px', color: editorialMutedInk, marginBottom: '4px', lineHeight: 1, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
                             {item.label}
                           </span>
-                          <span style={{ fontSize: '15px', fontWeight: '600', color: token.colorWhite, lineHeight: 1, fontFamily: 'Monaco, monospace' }}>
+                          <span style={{ fontSize: '16px', fontWeight: '600', color: editorialInk, lineHeight: 1, fontFamily: token.fontFamilyCode }}>
                             {item.label === '总字数' ? formatWordCount(item.value) : item.value}
                             {item.unit && <span style={{ fontSize: '10px', marginLeft: '2px', opacity: 0.8 }}>{item.unit}</span>}
                           </span>
@@ -857,30 +971,42 @@ export default function ProjectList() {
               <div style={{
                 width: 30,
                 height: 30,
-                background: token.colorPrimary,
+                background: editorialHeaderBackground,
                 borderRadius: 8,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: token.colorWhite,
+                color: editorialInk,
                 fontSize: 16,
               }}>
                 <BookOutlined />
               </div>
-              <span style={{ fontWeight: 600, fontSize: 16, fontFamily: token.fontFamily }}>{VERSION_INFO.projectName}</span>
+              <span style={{ fontWeight: 600, fontSize: 18, fontFamily: designDisplayFont, color: editorialInk }}>{VERSION_INFO.projectName}</span>
             </div>
           }
           placement="left"
           onClose={() => setDrawerVisible(false)}
           open={drawerVisible}
           width={280}
-          styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column' } }}
+          styles={{
+            header: {
+              background: editorialSidebarBackground,
+              borderBottom: `1px solid ${alphaColor(editorialInk, 0.08)}`,
+            },
+            body: {
+              padding: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              background: editorialSidebarBackground,
+            },
+          }}
         >
           <div style={{ flex: 1, overflowY: 'auto' }}>
             <Menu
+              theme="dark"
               mode="inline"
               selectedKeys={[activeView]}
-              style={{ borderRight: 0, paddingTop: 8 }}
+              style={{ borderRight: 0, padding: '8px 10px 0', background: 'transparent' }}
               onClick={({ key }) => {
                 changeView(key as ProjectListView);
                 setDrawerVisible(false);
@@ -890,11 +1016,11 @@ export default function ProjectList() {
 
           </div>
 
-          <div style={{ padding: 16, borderTop: `1px solid ${token.colorBorderSecondary}` }}>
+          <div style={{ padding: 16, borderTop: `1px solid ${alphaColor(editorialInk, 0.08)}`, background: editorialMenuFooterBackground }}>
             <Space direction="vertical" style={{ width: '100%' }} size={12}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: token.colorTextTertiary }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: editorialMutedInk }}>
                 <span>主题模式</span>
-                <span>{resolvedMode === 'dark' ? '深色' : '浅色'}</span>
+                <span>{mode === 'system' ? `跟随系统 · ${resolvedMode === 'dark' ? '深色' : '浅色'}` : resolvedMode === 'dark' ? '深色' : '浅色'}</span>
               </div>
               <ThemeSwitch block />
               <UserMenu showFullInfo />
@@ -921,69 +1047,219 @@ export default function ProjectList() {
             flex: 1,
             overflowY: 'auto',
             padding: activeView === 'projects'
-              ? (isMobile ? '20px 16px 70px' : '24px 24px 70px')
+              ? (isMobile ? '20px 16px 70px' : '28px 28px 78px')
               : 0,
             background: activeView === 'projects'
-              ? `linear-gradient(180deg, ${alphaColor(token.colorPrimary, 0.04)} 0%, ${token.colorBgLayout} 26%)`
+              ? editorialShellBackground
               : token.colorBgLayout,
           }}
         >
           {activeView === 'settings' ? (
-            <Suspense fallback={<div style={{ padding: 32, textAlign: 'center' }}><Spin /></div>}>
+            <Suspense
+              fallback={renderWorkspaceFallback('settings', {
+                eyebrow: 'Workspace Settings',
+                title: '正在展开设置工作区',
+                message: '系统正在恢复模型提供商、研究参数与保存入口，原有设置读取、测试和提交流程保持不变。',
+                tags: [
+                  { label: '设置中心', color: 'processing' },
+                  { label: '模型与研究配置', color: 'gold' },
+                  { label: '保存逻辑保持原样', color: 'green' },
+                ],
+              })}
+            >
               <LazySettingsPage />
             </Suspense>
           ) : null}
           {activeView === 'mcp' ? (
-            <Suspense fallback={<div style={{ padding: 32, textAlign: 'center' }}><Spin /></div>}>
+            <Suspense
+              fallback={renderWorkspaceFallback('mcp', {
+                eyebrow: 'MCP Plugins',
+                title: '正在展开 MCP 插件工作区',
+                message: '系统正在恢复插件列表、连接说明与管理入口，原有插件配置和安装逻辑保持不变。',
+                tags: [
+                  { label: 'MCP 插件中心', color: 'cyan' },
+                  { label: '插件工作区恢复中', color: 'processing' },
+                  { label: '管理逻辑保持原样', color: 'green' },
+                ],
+              })}
+            >
               <LazyMCPPluginsPage />
             </Suspense>
           ) : null}
           {activeView === 'prompts' ? (
-            <Suspense fallback={<div style={{ padding: 32, textAlign: 'center' }}><Spin /></div>}>
+            <Suspense
+              fallback={renderWorkspaceFallback('prompts', {
+                eyebrow: 'Prompt Workshop',
+                title: '正在展开提示词工坊',
+                message: '系统正在恢复模板列表、编辑入口与发布视图，原有提示词配置与提交逻辑保持不变。',
+                tags: [
+                  { label: '提示词工坊', color: 'purple' },
+                  { label: '模板工作区恢复中', color: 'processing' },
+                  { label: '发布逻辑保持原样', color: 'green' },
+                ],
+              })}
+            >
               <LazyPromptTemplates />
             </Suspense>
           ) : null}
           
           {activeView === 'book-import' ? (
-            <Suspense fallback={<div style={{ padding: 32, textAlign: 'center' }}><Spin /></div>}>
+            <Suspense
+              fallback={renderWorkspaceFallback('book-import', {
+                eyebrow: 'Book Import',
+                title: '正在展开拆书导入工作台',
+                message: '系统正在恢复上传、任务进度与预览入口，原有导入步骤和任务状态流保持不变。',
+                tags: [
+                  { label: '拆书导入', color: 'volcano' },
+                  { label: '导入工作台恢复中', color: 'processing' },
+                  { label: '任务状态流保持原样', color: 'green' },
+                ],
+              })}
+            >
               <LazyBookImport />
             </Suspense>
           ) : null}
 
           {activeView === 'projects' ? (
-            <Suspense fallback={<div style={{ padding: 32, textAlign: 'center' }}><Spin /></div>}>
-              <LazyBookshelfPage
-                isMobile={isMobile}
-                loading={loading}
-                projects={projects}
-                showApiTip={showApiTip}
-                setShowApiTip={setShowApiTip}
-                exportableProjectsCount={exportableProjects.length}
-                onOpenImportModal={() => setImportModalVisible(true)}
-                onOpenExportModal={handleOpenExportModal}
-                onGoSettings={() => changeView('settings')}
-                onStartWizard={() => navigate('/wizard')}
-                onOpenInspiration={() => navigate('/inspiration')}
-                onEnterProject={handleEnterProject}
-                onDeleteProject={handleDelete}
-                formatWordCount={formatWordCount}
-                getProgress={getProgress}
-                getProgressColor={getProgressColor}
-                getDisplayStatus={getDisplayStatus}
-                getStatusTag={getStatusTag}
-                formatDate={formatDate}
-              />
+            <Suspense
+              fallback={renderWorkspaceFallback('projects', {
+                eyebrow: 'Project Library',
+                title: '正在整理项目书架与创作入口',
+                message: '系统正在恢复项目书架、快捷操作与导航入口，原有项目列表数据和进入项目逻辑保持不变。',
+                tags: [
+                  { label: '项目书架', color: 'blue' },
+                  { label: '创作入口恢复中', color: 'processing' },
+                  { label: '导航逻辑保持原样', color: 'green' },
+                ],
+              })}
+            >
+              <>
+                <div
+                  style={{
+                    marginBottom: 18,
+                    borderRadius: 24,
+                    padding: isMobile ? '16px 16px 14px' : '18px 20px',
+                    background: `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimary} 10%, white 90%) 0%, color-mix(in srgb, ${token.colorInfo} 10%, white 90%) 100%)`,
+                    border: `1px solid color-mix(in srgb, ${token.colorPrimary} 16%, white 84%)`,
+                    boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.7fr) minmax(260px, 0.9fr)',
+                      gap: 16,
+                    }}
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <div style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                        Library Guide
+                      </div>
+                      <div style={{ color: token.colorText, lineHeight: 1.75 }}>
+                        这个页面更像项目书架与工具入口的总控壳层。原有的项目进入、导入导出、侧边导航和工具页切换逻辑都保持不变，这里只把总览顺序和当前处理重点提前说明。
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        {projectListGuideSteps.map((item, index) => (
+                          <span
+                            key={item}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              padding: '6px 12px',
+                              borderRadius: 999,
+                              background: token.colorBgContainer,
+                              border: `1px solid ${token.colorBorderSecondary}`,
+                              color: token.colorTextBase,
+                              fontSize: 12,
+                            }}
+                          >
+                            <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+                            {item}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        borderRadius: 18,
+                        padding: isMobile ? '14px 14px 12px' : '16px 18px 14px',
+                        background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
+                        border: `1px solid ${token.colorBorderSecondary}`,
+                      }}
+                    >
+                      <div style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                        当前工作焦点
+                      </div>
+                      <div style={{ margin: '8px 0 6px', color: token.colorTextBase, fontSize: 22, lineHeight: 1.2, fontFamily: designDisplayFont }}>
+                        {projectListFocus.title}
+                      </div>
+                      <div style={{ color: token.colorTextSecondary, lineHeight: 1.75 }}>
+                        {projectListFocus.note}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <LazyBookshelfPage
+                  isMobile={isMobile}
+                  loading={loading}
+                  projects={projects}
+                  showApiTip={showApiTip}
+                  setShowApiTip={setShowApiTip}
+                  exportableProjectsCount={exportableProjects.length}
+                  onOpenImportModal={() => setImportModalVisible(true)}
+                  onOpenExportModal={handleOpenExportModal}
+                  onGoSettings={() => changeView('settings')}
+                  onStartWizard={() => navigate('/wizard')}
+                  onOpenInspiration={() => navigate('/inspiration')}
+                  onEnterProject={handleEnterProject}
+                  onDeleteProject={handleDelete}
+                  formatWordCount={formatWordCount}
+                  getProgress={getProgress}
+                  getProgressColor={getProgressColor}
+                  getDisplayStatus={getDisplayStatus}
+                  getStatusTag={getStatusTag}
+                  formatDate={formatDate}
+                />
+              </>
             </Suspense>
           ) : null}
         
-          <Suspense fallback={null}>
+          <Suspense
+            fallback={(
+              <WorkflowEntryFallback
+                eyebrow="Release Notes"
+                title="正在接入更新日志入口"
+                message="系统正在恢复更新日志浮动入口与说明面板触发器，原有打开逻辑和页面工作区保持不变。"
+                tags={[
+                  { label: '更新日志入口', color: 'blue' },
+                  { label: '入口恢复中', color: 'processing' },
+                  { label: '交互逻辑保持原样', color: 'green' },
+                ]}
+              />
+            )}
+          >
             <LazyChangelogFloatingButton />
           </Suspense>
         </div>
       </div>
 
       {importModalVisible ? (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={(
+            <WorkflowEntryFallback
+              eyebrow="Project Import"
+              title="正在整理项目导入工作台"
+              message="系统正在恢复文件校验、导入配置与确认入口，原有导入链路和校验状态保持不变。"
+              tags={[
+                { label: '项目导入', color: 'blue' },
+                { label: '文件校验恢复中', color: 'processing' },
+                { label: '导入逻辑保持原样', color: 'green' },
+              ]}
+            />
+          )}
+        >
           <LazyProjectImportModal
             open={importModalVisible}
             isMobile={isMobile}
@@ -1006,7 +1282,20 @@ export default function ProjectList() {
       ) : null}
 
       {exportModalVisible ? (
-        <Suspense fallback={null}>
+        <Suspense
+          fallback={(
+            <WorkflowEntryFallback
+              eyebrow="Project Export"
+              title="正在整理项目导出工作台"
+              message="系统正在恢复项目选择、导出选项与确认入口，原有导出逻辑和选择状态保持不变。"
+              tags={[
+                { label: '项目导出', color: 'purple' },
+                { label: '导出面板恢复中', color: 'processing' },
+                { label: '选择逻辑保持原样', color: 'green' },
+              ]}
+            />
+          )}
+        >
           <LazyProjectExportModal
             open={exportModalVisible}
             isMobile={isMobile}

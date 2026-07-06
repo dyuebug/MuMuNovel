@@ -1,6 +1,7 @@
 import { Suspense, lazy, memo } from 'react';
 import { useChapterGenerationUiStore } from '../store/chapterGenerationUi';
 import { formatActiveStoryRepairLabel } from '../utils/activeStoryRepair';
+import WorkflowEntryFallback from './WorkflowEntryFallback';
 
 const LazySSEProgressModal = lazy(async () => {
   const module = await import('./SSEProgressModal');
@@ -60,7 +61,21 @@ function ChapterBatchProgressEntry({
       ].filter(Boolean).join(' | ');
 
   return (
-    <Suspense fallback={null}>
+    <Suspense
+      fallback={(
+        <WorkflowEntryFallback
+          variant="floating"
+          eyebrow="Batch Progress"
+          title="正在接管批量生成进度看板"
+          message="系统正在恢复章节批量生成进度、质量信号与修复提示，原有轮询展示与取消逻辑保持不变。"
+          tags={[
+            { label: '批量生成进度', color: 'purple' },
+            { label: '修复信号同步中', color: 'processing' },
+            { label: '状态流保持原样', color: 'green' },
+          ]}
+        />
+      )}
+    >
       <LazySSEProgressModal
         visible={visible}
         progress={progress}

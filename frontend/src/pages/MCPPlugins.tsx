@@ -11,7 +11,6 @@ import {
   Select,
   message,
   Tag,
-  Spin,
   Empty,
   Alert,
   Row,
@@ -33,6 +32,8 @@ import {
 } from '@ant-design/icons';
 import { mcpPluginApi, settingsApi } from '../services/modularApi';
 import type { MCPPlugin, MCPTool } from '../types';
+import { designDisplayFont } from '../theme/themeConfig';
+import InlineDeferredPanel from '../components/InlineDeferredPanel';
 
 const { Paragraph, Text, Title } = Typography;
 const { TextArea } = Input;
@@ -209,6 +210,11 @@ export default function MCPPluginsPage() {
   const [form] = Form.useForm();
   const { token } = theme.useToken();
   const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
+  const editorialInk = '#f7f1e8';
+  const pageBackground = `linear-gradient(180deg, ${alphaColor(token.colorPrimary, 0.06)} 0%, ${token.colorBgLayout} 30%, ${token.colorBgLayout} 100%)`;
+  const heroBackground = `linear-gradient(135deg, #171411 0%, color-mix(in srgb, #171411 60%, ${token.colorPrimary} 40%) 100%)`;
+  const quietPanelBackground = `linear-gradient(180deg, color-mix(in srgb, ${token.colorBgContainer} 94%, ${token.colorFillAlter} 6%) 0%, color-mix(in srgb, ${token.colorBgContainer} 86%, ${token.colorFillAlter} 14%) 100%)`;
+  const panelBorder = alphaColor(token.colorPrimary, 0.12);
 
   const statusStyles = {
     success: {
@@ -959,13 +965,75 @@ export default function MCPPluginsPage() {
     }
   };
 
+  const activePluginCount = plugins.filter((plugin) => plugin.enabled).length;
+  const runningPluginCount = plugins.filter((plugin) => plugin.status === 'active').length;
+  const issuePluginCount = plugins.filter((plugin) => plugin.status === 'error').length;
+  const overviewStats = [
+    { label: '插件总数', value: `${plugins.length} 个`, accent: token.colorPrimary },
+    { label: '已启用', value: `${activePluginCount} 个`, accent: token.colorInfo },
+    { label: '运行中', value: `${runningPluginCount} 个`, accent: token.colorSuccess },
+    { label: '异常状态', value: `${issuePluginCount} 个`, accent: token.colorError },
+  ];
+  const pluginFlowItems = [
+    { step: '01', title: '检查模型能力', note: '先确认当前模型支持 Function Calling，再进入插件编排。' },
+    { step: '02', title: '接入标准配置', note: '粘贴 MCP JSON，并用分类把插件挂到合适的创作场景。' },
+    { step: '03', title: '逐个测试连通性', note: '确认连接、端点与回退策略正常，再决定是否启用。' },
+    { step: '04', title: '查看工具暴露面', note: '核对每个插件到底向模型暴露了哪些工具和输入参数。' },
+  ];
+  const pluginFocusItems = [
+    {
+      label: '当前模型能力',
+      value: modelSupportStatus === 'supported'
+        ? '支持 Function Calling'
+        : modelSupportStatus === 'unsupported'
+          ? '暂不支持 Function Calling'
+          : '尚未完成检测',
+    },
+    {
+      label: '推荐操作顺序',
+      value: '检测能力 -> 添加配置 -> 测试连接 -> 查看工具 -> 再启用',
+    },
+    {
+      label: '当前治理重点',
+      value: issuePluginCount > 0
+        ? `有 ${issuePluginCount} 个插件处于异常状态，建议优先处理`
+        : runningPluginCount > 0
+          ? `已有 ${runningPluginCount} 个插件在运行，可继续补齐工具校对`
+          : '优先建立基础插件清单和分类规则',
+    },
+  ];
+  const renderPluginWorkspaceFallback = () => (
+    <InlineDeferredPanel
+      eyebrow="Plugin Workspace"
+      title="恢复插件目录与运行诊断"
+      message="当前正在刷新插件清单、连接状态与模型能力检测结果。先等待目录、诊断入口、工具查看和生命周期管理面板回流，原有插件启停与测试逻辑保持不变。"
+      minHeight={isMobile ? 320 : 360}
+      tags={[
+        {
+          label: modelSupportStatus === 'supported'
+            ? 'Function Calling 已支持'
+            : modelSupportStatus === 'unsupported'
+              ? 'Function Calling 待调整'
+              : '等待能力检测',
+          color: modelSupportStatus === 'supported'
+            ? 'success'
+            : modelSupportStatus === 'unsupported'
+              ? 'error'
+              : 'processing',
+        },
+        { label: '插件目录恢复中', color: 'processing' },
+        { label: '工具暴露面校验', color: 'blue' },
+      ]}
+    />
+  );
+
   return (
     <>
       {contextHolder}
       <div style={{
         minHeight: '90vh',
-        background: `linear-gradient(180deg, ${token.colorBgLayout} 0%, ${alphaColor(token.colorPrimary, 0.08)} 100%)`,
-        padding: isMobile ? '20px 16px 70px' : '24px 24px 70px',
+        background: pageBackground,
+        padding: isMobile ? '20px 16px 70px' : '28px 24px 80px',
         display: 'flex',
         flexDirection: 'column',
       }}>
@@ -977,36 +1045,47 @@ export default function MCPPluginsPage() {
           display: 'flex',
           flexDirection: 'column',
         }}>
-          {/* 顶部导航卡片 */}
           <Card
-            variant="borderless"
             style={{
-              background: `linear-gradient(135deg, ${token.colorPrimary} 0%, ${alphaColor(token.colorPrimary, 0.8)} 50%, ${token.colorPrimaryHover} 100%)`,
-              borderRadius: isMobile ? 16 : 24,
-              boxShadow: `0 12px 40px ${alphaColor(token.colorPrimary, 0.25)}, 0 4px 12px ${alphaColor(token.colorText, 0.08)}`,
+              background: heroBackground,
+              borderRadius: isMobile ? 22 : 28,
+              boxShadow: `0 32px 68px -42px ${alphaColor(token.colorTextBase, 0.55)}`,
               marginBottom: isMobile ? 20 : 24,
               border: 'none',
               position: 'relative',
               overflow: 'hidden'
             }}
           >
-            {/* 装饰性背景元素 */}
             <div style={{ position: 'absolute', top: -60, right: -60, width: 200, height: 200, borderRadius: '50%', background: alphaColor(token.colorWhite, 0.08), pointerEvents: 'none' }} />
             <div style={{ position: 'absolute', bottom: -40, left: '30%', width: 120, height: 120, borderRadius: '50%', background: alphaColor(token.colorWhite, 0.05), pointerEvents: 'none' }} />
             <div style={{ position: 'absolute', top: '50%', right: '15%', width: 80, height: 80, borderRadius: '50%', background: alphaColor(token.colorWhite, 0.06), pointerEvents: 'none' }} />
 
             <Row align="middle" justify="space-between" gutter={[16, 16]} style={{ position: 'relative', zIndex: 1 }}>
               <Col xs={24} sm={12}>
-                <Space direction="vertical" size={4}>
-                  <Space align="center">
-                    <Title level={isMobile ? 3 : 2} style={{ margin: 0, color: token.colorWhite, textShadow: `0 2px 4px ${alphaColor(token.colorText, 0.2)}` }}>
-                      <ToolOutlined style={{ color: alphaColor(token.colorWhite, 0.9), marginRight: 8 }} />
-                      MCP插件管理
-                    </Title>
-                  </Space>
-                  <Text style={{ fontSize: isMobile ? 12 : 14, color: alphaColor(token.colorWhite, 0.85), marginLeft: isMobile ? 40 : 48 }}>
-                    扩展AI能力，连接外部工具与服务
-                  </Text>
+                <Space direction="vertical" size={8}>
+                  <Tag
+                    bordered={false}
+                    style={{
+                      alignSelf: 'flex-start',
+                      borderRadius: 999,
+                      paddingInline: 12,
+                      lineHeight: '28px',
+                      background: alphaColor(token.colorWhite, 0.12),
+                      color: editorialInk,
+                    }}
+                  >
+                    Connector Studio
+                  </Tag>
+                  <Title
+                    level={isMobile ? 3 : 2}
+                    style={{ margin: 0, color: editorialInk, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}
+                  >
+                    <ToolOutlined style={{ color: alphaColor(token.colorWhite, 0.9), marginRight: 10 }} />
+                    MCP 插件管理
+                  </Title>
+                  <Paragraph style={{ fontSize: isMobile ? 13 : 15, color: alphaColor(token.colorWhite, 0.82), margin: 0, maxWidth: 640 }}>
+                    把外部搜索、分析与系统能力接入创作链路，同时用统一的验证面板检查模型是否支持 Function Calling。
+                  </Paragraph>
                 </Space>
               </Col>
               <Col xs={24} sm={12}>
@@ -1016,11 +1095,11 @@ export default function MCPPluginsPage() {
                     icon={<PlusOutlined />}
                     onClick={handleCreate}
                     style={{
-                      borderRadius: 12,
+                      borderRadius: 16,
                       background: alphaColor(token.colorWarning, 0.95),
                       border: `1px solid ${alphaColor(token.colorWhite, 0.3)}`,
                       boxShadow: `0 4px 16px ${alphaColor(token.colorWarning, 0.4)}`,
-                      color: token.colorWhite,
+                      color: '#211a16',
                       fontWeight: 600
                     }}
                   >
@@ -1028,6 +1107,40 @@ export default function MCPPluginsPage() {
                   </Button>
                 </Space>
               </Col>
+            </Row>
+
+            <Row gutter={[14, 14]} style={{ marginTop: isMobile ? 16 : 24 }}>
+              {overviewStats.map((stat) => (
+                <Col xs={24} sm={12} lg={6} key={stat.label}>
+                  <Card
+                    bordered={false}
+                    style={{
+                      height: '100%',
+                      borderRadius: 20,
+                      background: alphaColor(token.colorWhite, 0.08),
+                      boxShadow: `inset 0 1px 0 ${alphaColor(token.colorWhite, 0.12)}`,
+                    }}
+                    styles={{ body: { padding: isMobile ? 16 : 18 } }}
+                  >
+                    <Text style={{ color: alphaColor(token.colorWhite, 0.68), fontSize: 12 }}>{stat.label}</Text>
+                    <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span
+                        style={{
+                          width: 10,
+                          height: 10,
+                          borderRadius: 999,
+                          background: stat.accent,
+                          boxShadow: `0 0 0 6px ${alphaColor(stat.accent, 0.18)}`,
+                          flexShrink: 0,
+                        }}
+                      />
+                      <Text style={{ color: token.colorWhite, fontSize: isMobile ? 18 : 20, fontWeight: 600 }}>
+                        {stat.value}
+                      </Text>
+                    </div>
+                  </Card>
+                </Col>
+              ))}
             </Row>
 
             <div style={{ marginTop: isMobile ? 16 : 24, display: 'flex', gap: isMobile ? 12 : 16, flexDirection: isMobile ? 'column' : 'row' }}>
@@ -1117,31 +1230,159 @@ export default function MCPPluginsPage() {
             </div>
           </Card>
 
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.2fr) minmax(320px, 0.92fr)',
+              gap: isMobile ? 12 : 16,
+              marginBottom: isMobile ? 16 : 20,
+            }}
+          >
+            <Card
+              bordered={false}
+              style={{
+                borderRadius: 22,
+                border: `1px solid ${panelBorder}`,
+                background: quietPanelBackground,
+                boxShadow: `0 24px 48px -42px ${alphaColor(token.colorTextBase, 0.45)}`,
+              }}
+              styles={{ body: { padding: isMobile ? 14 : 18 } }}
+            >
+              <Text style={{ fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                Connection Flow
+              </Text>
+              <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, color: token.colorTextBase }}>
+                插件接入流程
+              </Title>
+              <Text type="secondary" style={{ display: 'block', marginBottom: 14, lineHeight: 1.7 }}>
+                这个页面更像一块连接器工作台。先确认模型具备工具调用能力，再把配置、测试与工具暴露面逐步核对完整。
+              </Text>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                {pluginFlowItems.map((item) => (
+                  <div
+                    key={item.step}
+                    style={{
+                      flex: isMobile ? '1 1 calc(50% - 8px)' : '1 1 180px',
+                      minWidth: isMobile ? 0 : 180,
+                      borderRadius: 18,
+                      padding: '12px 14px',
+                      border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.84)}`,
+                      background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.36)} 100%)`,
+                    }}
+                  >
+                    <Text style={{ display: 'block', marginBottom: 6, fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorPrimary }}>
+                      {`Step ${item.step}`}
+                    </Text>
+                    <Text strong style={{ display: 'block', marginBottom: 4 }}>
+                      {item.title}
+                    </Text>
+                    <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.7 }}>
+                      {item.note}
+                    </Text>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <Card
+              bordered={false}
+              style={{
+                borderRadius: 22,
+                border: `1px solid ${panelBorder}`,
+                background: quietPanelBackground,
+                boxShadow: `0 24px 48px -42px ${alphaColor(token.colorTextBase, 0.45)}`,
+              }}
+              styles={{ body: { padding: isMobile ? 14 : 18 } }}
+            >
+              <Text style={{ fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                Workspace Focus
+              </Text>
+              <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, color: token.colorTextBase }}>
+                当前工作焦点
+              </Title>
+              <Text type="secondary" style={{ display: 'block', marginBottom: 14, lineHeight: 1.7 }}>
+                这一列更偏运维说明：告诉你当前模型条件、推荐动作顺序，以及本轮最值得优先处理的插件状态。
+              </Text>
+              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                {pluginFocusItems.map((item) => (
+                  <div
+                    key={item.label}
+                    style={{
+                      borderRadius: 16,
+                      padding: '12px 14px',
+                      border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.84)}`,
+                      background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.32)} 100%)`,
+                    }}
+                  >
+                    <Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
+                      {item.label}
+                    </Text>
+                    <Text strong style={{ lineHeight: 1.7 }}>
+                      {item.value}
+                    </Text>
+                  </div>
+                ))}
+              </Space>
+            </Card>
+          </div>
+
           {/* 主内容区 */}
           <div style={{ flex: 1 }}>
-            {/* 模型能力未验证时的警告提示 */}
-            {modelSupportStatus !== 'supported' && plugins.length > 0 && (
-              <Alert
-                message={
-                  modelSupportStatus === 'unsupported'
-                    ? '当前模型不支持 Function Calling，所有插件操作已禁用'
-                    : '请先完成模型能力检查，才能操作插件'
-                }
-                type={modelSupportStatus === 'unsupported' ? 'error' : 'warning'}
-                showIcon
-                icon={modelSupportStatus === 'unsupported' ? <CloseCircleOutlined /> : <WarningOutlined />}
-                style={{ marginBottom: 16, borderRadius: 8 }}
-                action={
-                  <Button size="small" type="primary" onClick={handleCheckFunctionCalling} loading={checkingFunctionCalling}>
-                    {modelSupportStatus === 'unknown' ? '开始检测' : '重新检测'}
-                  </Button>
-                }
-              />
-            )}
+            <Card
+              bordered={false}
+              style={{
+                borderRadius: 24,
+                border: `1px solid ${panelBorder}`,
+                background: quietPanelBackground,
+                boxShadow: `0 24px 48px -42px ${alphaColor(token.colorTextBase, 0.45)}`,
+              }}
+              styles={{ body: { padding: isMobile ? 16 : 22 } }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: isMobile ? 'flex-start' : 'center',
+                  flexDirection: isMobile ? 'column' : 'row',
+                  gap: 12,
+                  marginBottom: 18,
+                }}
+              >
+                <Space direction="vertical" size={4}>
+                  <Text style={{ fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                    Plugin Workspace
+                  </Text>
+                  <Title level={4} style={{ margin: 0, fontFamily: designDisplayFont, color: token.colorTextBase }}>
+                    插件编排与运行状态
+                  </Title>
+                </Space>
+                <Text type="secondary" style={{ maxWidth: 620 }}>
+                  先校验模型能力，再在同一工作区里完成插件的创建、诊断、工具查看与生命周期管理。
+                </Text>
+              </div>
 
-            {/* 插件列表 */}
-            <Spin spinning={loading}>
-              {plugins.length === 0 ? (
+              {modelSupportStatus !== 'supported' && plugins.length > 0 && (
+                <Alert
+                  message={
+                    modelSupportStatus === 'unsupported'
+                      ? '当前模型不支持 Function Calling，所有插件操作已禁用'
+                      : '请先完成模型能力检查，才能操作插件'
+                  }
+                  type={modelSupportStatus === 'unsupported' ? 'error' : 'warning'}
+                  showIcon
+                  icon={modelSupportStatus === 'unsupported' ? <CloseCircleOutlined /> : <WarningOutlined />}
+                  style={{ marginBottom: 16, borderRadius: 14 }}
+                  action={
+                    <Button size="small" type="primary" onClick={handleCheckFunctionCalling} loading={checkingFunctionCalling}>
+                      {modelSupportStatus === 'unknown' ? '开始检测' : '重新检测'}
+                    </Button>
+                  }
+                />
+              )}
+
+              {loading ? (
+                renderPluginWorkspaceFallback()
+              ) : plugins.length === 0 ? (
                 <Empty
                   description="还没有添加任何插件"
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
@@ -1158,10 +1399,12 @@ export default function MCPPluginsPage() {
                       key={plugin.id}
                       size="small"
                       style={{
-                        borderRadius: 8,
-                        border: `1px solid ${token.colorBorderSecondary}`,
+                        borderRadius: 16,
+                        border: `1px solid ${alphaColor(token.colorPrimary, 0.1)}`,
+                        background: token.colorBgContainer,
+                        boxShadow: `0 18px 34px -32px ${alphaColor(token.colorTextBase, 0.34)}`,
                       }}
-                      styles={{ body: { padding: isMobile ? 12 : 16 } }}
+                      styles={{ body: { padding: isMobile ? 14 : 18 } }}
                     >
                       <div
                         style={{
@@ -1170,10 +1413,8 @@ export default function MCPPluginsPage() {
                           gap: isMobile ? 12 : 16,
                         }}
                       >
-                        {/* 插件信息区域 */}
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <Space direction="vertical" size="small" style={{ width: '100%' }}>
-                            {/* 标题和状态标签 */}
                             <div style={{
                               display: 'flex',
                               alignItems: 'center',
@@ -1187,7 +1428,6 @@ export default function MCPPluginsPage() {
                                 </Text>
                                 {getStatusTag(plugin)}
                               </div>
-                              {/* 移动端：开关放在标题行右侧 */}
                               {isMobile && (
                                 <Switch
                                   title={modelSupportStatus !== 'supported' ? '请先完成模型能力检查' : (plugin.enabled ? '禁用插件' : '启用插件')}
@@ -1206,17 +1446,18 @@ export default function MCPPluginsPage() {
                                 />
                               )}
                             </div>
-                            
-                            {/* 类型和分类标签 */}
+
                             <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                               <Tag color={plugin.plugin_type === 'http' || plugin.plugin_type === 'streamable_http' || plugin.plugin_type === 'sse' ? 'blue' : 'cyan'} style={{ fontSize: isMobile ? 11 : 12 }}>
                                 {plugin.plugin_type?.toUpperCase() || 'UNKNOWN'}
                               </Tag>
                               {plugin.category && plugin.category !== 'general' && (
-                                <Tag color="purple" style={{ fontSize: isMobile ? 11 : 12 }}>{plugin.category}</Tag>
+                                <Tag style={{ fontSize: isMobile ? 11 : 12, borderRadius: 999, paddingInline: 10 }}>
+                                  {plugin.category}
+                                </Tag>
                               )}
                             </div>
-                            
+
                             {plugin.description && (
                               <Paragraph
                                 type="secondary"
@@ -1230,7 +1471,6 @@ export default function MCPPluginsPage() {
                               </Paragraph>
                             )}
 
-                            {/* 只显示有值的URL或命令，脱敏处理敏感信息 */}
                             {(plugin.plugin_type === 'http' || plugin.plugin_type === 'streamable_http' || plugin.plugin_type === 'sse') && plugin.server_url && (
                               <div style={{
                                 fontSize: isMobile ? '11px' : '12px',
@@ -1240,14 +1480,11 @@ export default function MCPPluginsPage() {
                               }}>
                                 <Text type="secondary" code style={{ fontSize: 'inherit' }}>
                                   {(() => {
-                                    // 脱敏处理：隐藏URL中的API Key
                                     const url = plugin.server_url;
                                     try {
                                       const urlObj = new URL(url);
-                                      // 替换查询参数中的敏感信息
                                       const params = new URLSearchParams(urlObj.search);
                                       let maskedUrl = `${urlObj.protocol}//${urlObj.host}${urlObj.pathname}`;
-
                                       const sensitiveKeys = ['apiKey', 'api_key', 'key', 'token', 'secret', 'password', 'auth'];
                                       let hasParams = false;
 
@@ -1260,7 +1497,6 @@ export default function MCPPluginsPage() {
 
                                       return maskedUrl;
                                     } catch {
-                                      // 如果URL解析失败，尝试简单替换
                                       return url.replace(/([?&])(apiKey|api_key|key|token|secret|password|auth)=([^&]+)/gi, '$1$2=***');
                                     }
                                   })()}
@@ -1281,16 +1517,34 @@ export default function MCPPluginsPage() {
                               </div>
                             )}
 
-                            {/* 显示最后错误信息 */}
                             {plugin.last_error && (
                               <Text type="danger" style={{ fontSize: isMobile ? '11px' : '12px' }}>
                                 错误: {plugin.last_error}
                               </Text>
                             )}
+
+                            <div
+                              style={{
+                                borderRadius: 14,
+                                padding: '12px 14px',
+                                border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.84)}`,
+                                background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.34)} 100%)`,
+                              }}
+                            >
+                              <Text style={{ display: 'block', marginBottom: 6, fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                                Runtime Brief
+                              </Text>
+                              <Text type="secondary" style={{ display: 'block', fontSize: 12, lineHeight: 1.7 }}>
+                                {plugin.enabled
+                                  ? plugin.status === 'active'
+                                    ? '当前插件已启用且连接通过，可继续查看工具暴露面与输入参数。'
+                                    : '插件已启用，但仍建议先做一次测试确认当前运行状态。'
+                                  : '当前插件尚未启用，适合先检查配置和分类，再决定是否纳入创作链路。'}
+                              </Text>
+                            </div>
                           </Space>
                         </div>
 
-                        {/* 操作按钮区域 */}
                         <div style={{
                           display: 'flex',
                           justifyContent: isMobile ? 'flex-end' : 'flex-start',
@@ -1300,7 +1554,6 @@ export default function MCPPluginsPage() {
                           borderTop: isMobile ? `1px solid ${token.colorBorderSecondary}` : 'none',
                           paddingTop: isMobile ? 12 : 0
                         }}>
-                          {/* 桌面端显示开关 */}
                           {!isMobile && (
                             <Switch
                               title={modelSupportStatus !== 'supported' ? '请先完成模型能力检查' : (plugin.enabled ? '禁用插件' : '启用插件')}
@@ -1355,13 +1608,25 @@ export default function MCPPluginsPage() {
                   ))}
                 </Space>
               )}
-            </Spin>
+            </Card>
           </div>
         </div>
 
         {/* 创建/编辑插件模态框 */}
         <Modal
-          title={editingPlugin ? '编辑插件' : '添加插件'}
+          title={(
+            <div>
+              <Text style={{ display: 'block', marginBottom: 4, fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                Plugin Editor
+              </Text>
+              <Text strong style={{ display: 'block', fontSize: 18 }}>
+                {editingPlugin ? '编辑插件' : '添加插件'}
+              </Text>
+              <Text type="secondary" style={{ display: 'block', marginTop: 4, lineHeight: 1.7 }}>
+                粘贴标准 MCP 配置后，页面会自动提取插件名称；你只需要补齐分类并确认这个插件适合什么创作场景。
+              </Text>
+            </div>
+          )}
           open={modalVisible}
           centered
           onCancel={() => {
@@ -1373,8 +1638,32 @@ export default function MCPPluginsPage() {
           confirmLoading={loading}
           okText="保存"
           cancelText="取消"
+          styles={{
+            content: {
+              borderRadius: 24,
+              border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.84)}`,
+              background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.5)} 100%)`,
+              boxShadow: `0 28px 56px ${alphaColor(token.colorText, 0.12)}`,
+            },
+            header: {
+              background: 'transparent',
+              borderBottom: 'none',
+              paddingBottom: 0,
+            },
+            body: {
+              paddingTop: 16,
+            },
+          }}
         >
-          <Form form={form} layout="vertical" onFinish={handleSubmit}>
+          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              style={{ borderRadius: 14 }}
+              message="配置建议"
+              description="先确保 JSON 里只保留当前插件真正需要的服务器定义，再通过分类让后续的模型调用更容易匹配到正确工具。"
+            />
+            <Form form={form} layout="vertical" onFinish={handleSubmit}>
             <Form.Item
               label="MCP配置JSON"
               name="config_json"
@@ -1413,15 +1702,21 @@ export default function MCPPluginsPage() {
                 <Select.Option value="general">通用 (General) - 其他功能</Select.Option>
               </Select>
             </Form.Item>
-          </Form>
+            </Form>
+          </Space>
         </Modal>
 
         {/* 查看工具列表模态框 */}
         <Modal
           title={
-            <Space>
-              <ToolOutlined style={{ color: token.colorPrimary }} />
-              <span>可用工具列表</span>
+            <Space direction="vertical" size={2}>
+              <Text style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                Tool Index
+              </Text>
+              <Space>
+                <ToolOutlined style={{ color: token.colorPrimary }} />
+                <span>可用工具列表</span>
+              </Space>
               {viewingTools && viewingTools.tools.length > 0 && (
                 <Tag color="blue">{viewingTools.tools.length} 个工具</Tag>
               )}
@@ -1437,6 +1732,17 @@ export default function MCPPluginsPage() {
           width={isMobile ? '95%' : 800}
           centered
           styles={{
+            content: {
+              borderRadius: 24,
+              border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.84)}`,
+              background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.5)} 100%)`,
+              boxShadow: `0 28px 56px ${alphaColor(token.colorText, 0.12)}`,
+            },
+            header: {
+              background: 'transparent',
+              borderBottom: 'none',
+              paddingBottom: 0,
+            },
             body: {
               maxHeight: isMobile ? '60vh' : '70vh',
               overflowY: 'auto',
@@ -1446,6 +1752,13 @@ export default function MCPPluginsPage() {
         >
           {viewingTools && (
             <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+              <Alert
+                type="info"
+                showIcon
+                style={{ borderRadius: 14 }}
+                message="阅读提示"
+                description="先看工具用途，再看输入参数结构。这里展示的是模型最终可调用的工具表，是判断插件是否值得启用的最后一道核对。"
+              />
               {viewingTools.tools.length === 0 ? (
                 <Empty
                   description="该插件没有提供任何工具"
@@ -1458,9 +1771,9 @@ export default function MCPPluginsPage() {
                     key={index}
                     size="small"
                     style={{
-                      borderRadius: 8,
+                      borderRadius: 16,
                       border: `1px solid ${token.colorBorderSecondary}`,
-                      boxShadow: `0 2px 4px ${alphaColor(token.colorText, 0.08)}`
+                      boxShadow: `0 12px 24px ${alphaColor(token.colorText, 0.06)}`
                     }}
                     title={
                       <Space>
@@ -1485,7 +1798,7 @@ export default function MCPPluginsPage() {
                               fontSize: isMobile ? '12px' : '13px',
                               padding: '8px 12px',
                               background: token.colorBgLayout,
-                              borderRadius: 4,
+                              borderRadius: 10,
                               borderLeft: `3px solid ${token.colorInfo}`
                             }}
                           >
@@ -1503,7 +1816,7 @@ export default function MCPPluginsPage() {
                               margin: 0,
                               padding: isMobile ? '8px' : '12px',
                               background: token.colorBgLayout,
-                              borderRadius: 4,
+                              borderRadius: 10,
                               fontSize: isMobile ? '11px' : '12px',
                               overflow: 'auto',
                               maxHeight: '200px',

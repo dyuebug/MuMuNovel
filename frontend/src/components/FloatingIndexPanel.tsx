@@ -22,9 +22,21 @@ function FloatingIndexPanel({
     onChapterSelect,
     onClose,
   });
+  const groupCount = viewModel.resultsModel.filteredGroups.length;
+  const chapterCount = viewModel.resultsModel.filteredGroups.reduce(
+    (sum, group) => sum + group.chapters.length,
+    0,
+  );
+  const hasSearch = viewModel.searchModel.searchTerm.trim().length > 0;
 
   return (
-    <FloatingIndexPanelDrawer visible={visible} onClose={onClose}>
+    <FloatingIndexPanelDrawer
+      visible={visible}
+      onClose={onClose}
+      groupCount={groupCount}
+      chapterCount={chapterCount}
+      hasSearch={hasSearch}
+    >
       <FloatingIndexPanelContent viewModel={viewModel} />
     </FloatingIndexPanelDrawer>
   );

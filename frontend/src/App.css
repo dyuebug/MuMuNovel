@@ -1,7 +1,87 @@
+:root {
+  --design-sans-font: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --design-display-font: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --design-code-font: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+  color-scheme: light dark;
+}
+
+html,
+body,
 #root {
   width: 100%;
+  min-height: 100%;
   margin: 0;
   padding: 0;
+}
+
+body {
+  font-family: var(--design-sans-font);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background:
+    radial-gradient(circle at top, rgba(204, 120, 92, 0.12) 0%, transparent 34%),
+    radial-gradient(circle at 20% 18%, rgba(232, 165, 90, 0.08) 0%, transparent 24%),
+    linear-gradient(180deg, #f8f3ea 0%, #f2ece3 52%, #ece3d7 100%);
+  color: #141413;
+}
+
+body::selection {
+  background: rgba(204, 120, 92, 0.22);
+  color: #141413;
+}
+
+a,
+button,
+input,
+textarea,
+select {
+  transition:
+    color 0.24s ease,
+    background-color 0.24s ease,
+    border-color 0.24s ease,
+    box-shadow 0.24s ease,
+    transform 0.24s ease;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family: var(--design-code-font);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(20, 20, 19, 0.06);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(20, 20, 19, 0.2);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(20, 20, 19, 0.32);
+  background-clip: padding-box;
+}
+
+.design-display-heading {
+  font-family: var(--design-display-font);
+  letter-spacing: -0.02em;
+}
+
+.design-kicker {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
 }
 
 /* 移动端按钮文本优化 */
@@ -9,7 +89,7 @@
   .button-text-mobile {
     font-size: 14px;
   }
-  
+
   /* 小屏幕下按钮文字可以隐藏，只保留图标 */
   @media (max-width: 480px) {
     .button-text-mobile {

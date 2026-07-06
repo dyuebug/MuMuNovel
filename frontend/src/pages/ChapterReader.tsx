@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { MAX_CONSECUTIVE_TASK_POLL_ERRORS } from '../utils/taskPolling';
 import { isAnalysisTaskRetrying } from '../utils/analysisTasks';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Spin, Alert, Button, Space, Switch, Drawer, message, Progress, theme } from 'antd';
+import { Card, Alert, Button, Space, Switch, Drawer, message, Progress, theme, Typography, Row, Col, Tag } from 'antd';
 import {
   ArrowLeftOutlined,
   EyeOutlined,
@@ -15,7 +15,11 @@ import {
 import { api, chapterApi } from '../services/modularApi';
 import { isRequestCancelledError } from '../services/core/httpClient';
 import AnnotatedText, { type MemoryAnnotation } from '../components/AnnotatedText';
+import InlineDeferredPanel from '../components/InlineDeferredPanel';
 import MemorySidebar from '../components/MemorySidebar';
+import { designDisplayFont } from '../theme/themeConfig';
+
+const { Title, Paragraph, Text } = Typography;
 
 interface ChapterData {
   id: string;
@@ -403,8 +407,29 @@ const ChapterReader: React.FC = () => {
 
   if (loading) {
     return (
-      <div style={{ textAlign: 'center', padding: '100px 0' }}>
-        <Spin size="large" tip="加载章节中..." />
+      <div
+        style={{
+          minHeight: '100vh',
+          padding: isMobile ? '24px 12px' : '32px 16px',
+          background: `linear-gradient(180deg, ${token.colorBgLayout} 0%, color-mix(in srgb, ${token.colorPrimary} 6%, ${token.colorBgLayout} 94%) 100%)`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <div style={{ width: 'min(640px, 100%)' }}>
+          <InlineDeferredPanel
+            eyebrow="Reading Desk"
+            title="恢复章节正文与标注工作台"
+            message="当前正在读取章节正文、记忆标注、上下章导航与分析状态。原有章节加载、分析恢复和导航切换逻辑保持不变。"
+            minHeight={300}
+            tags={[
+              { label: '正文加载中', color: 'processing' },
+              { label: '标注与记忆恢复', color: 'blue' },
+              { label: '导航状态同步', color: 'default' },
+            ]}
+          />
+        </div>
       </div>
     );
   }
@@ -428,94 +453,258 @@ const ChapterReader: React.FC = () => {
   const annotationItems = annotationsData?.annotations ?? [];
   const hasAnnotations = annotationItems.length > 0;
   const desktopSidebarVisible = Boolean(hasAnnotations && !isMobile);
+  const heroBackground = `linear-gradient(135deg,
+    color-mix(in srgb, ${token.colorPrimary} 70%, #6f4737 30%) 0%,
+    color-mix(in srgb, ${token.colorInfo} 24%, #162129 76%) 100%)`;
+  const editorialInk = '#fff9f0';
+  const actionButtonStyle = {
+    borderRadius: 999,
+    height: 40,
+    paddingInline: 14,
+    borderColor: 'rgba(255,255,255,0.18)',
+    background: 'rgba(255,255,255,0.08)',
+    color: editorialInk,
+    boxShadow: 'none',
+  } as const;
+  const panelBackground = `linear-gradient(180deg,
+    color-mix(in srgb, ${token.colorBgContainer} 95%, white 5%) 0%,
+    color-mix(in srgb, ${token.colorFillAlter} 44%, ${token.colorBgContainer} 56%) 100%)`;
+  const panelBorder = `1px solid color-mix(in srgb, ${token.colorBorderSecondary} 88%, white 12%)`;
+  const annotationSummaryItems = annotationsData ? [
+    { label: '标注总数', value: annotationsData.summary.total_annotations, accent: editorialInk },
+    { label: '钩子', value: annotationsData.summary.hooks, accent: token.colorSuccess },
+    { label: '伏笔', value: annotationsData.summary.foreshadows, accent: token.colorInfo },
+    { label: '情节点', value: annotationsData.summary.plot_points, accent: editorialInk },
+  ] : [
+    { label: '标注总数', value: 0, accent: editorialInk },
+    { label: '钩子', value: 0, accent: token.colorSuccess },
+    { label: '伏笔', value: 0, accent: token.colorInfo },
+    { label: '情节点', value: 0, accent: editorialInk },
+  ];
+  const readerGuideSteps = [
+    '先通读正文确认当前章目标',
+    '再查看标注与记忆点分布',
+    '需要时回到分析或切换上下章',
+  ];
+  const readerFocusNote = analyzing
+    ? '当前正在刷新章节分析结果，稍后可以直接回看新的标注与摘要。'
+    : activeAnnotationId
+      ? '当前已选中一条标注，可以结合正文位置与右侧信息一起判断它的作用。'
+      : hasAnnotations
+        ? '当前更适合先浏览正文，再点选关键标注查看记忆和情节线索。'
+        : '当前还没有分析标注，建议先阅读正文或触发一次章节分析。';
 
   return (
-    <div style={{ height: '100dvh', minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      {/* 顶部工具栏 */}
+    <div style={{ height: '100dvh', minHeight: '100vh', display: 'flex', flexDirection: 'column', gap: 16, overflow: 'hidden', padding: isMobile ? 12 : 16 }}>
       <Card
-        size="small"
+        variant="borderless"
         style={{
-          borderRadius: 0,
-          borderLeft: 0,
-          borderRight: 0,
-          borderTop: 0,
+          background: heroBackground,
+          borderRadius: 28,
+          border: `1px solid color-mix(in srgb, ${token.colorBgContainer} 12%, transparent)`,
+          boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
+          overflow: 'hidden',
+          position: 'relative',
         }}
+        styles={{ body: { padding: isMobile ? 20 : 24 } }}
       >
+        <div style={{ position: 'absolute', top: -56, right: -30, width: 170, height: 170, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', bottom: -30, left: isMobile ? '56%' : '26%', width: 120, height: 120, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', pointerEvents: 'none' }} />
+        <Row gutter={[24, 18]} align="middle" style={{ position: 'relative', zIndex: 1 }}>
+          <Col xs={24} lg={15}>
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase' }}>
+                Reading Desk
+              </Text>
+              <Title level={2} style={{ margin: 0, color: editorialInk, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+                第{chapter.chapter_number}章 · {chapter.title}
+              </Title>
+              <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.82)', fontSize: 15, lineHeight: 1.8 }}>
+                这里是沉浸式阅读与标注回看工作台。你可以直接阅读正文、检查章节分析记忆点，并在需要时快速切换上下章或重新触发分析。
+              </Paragraph>
+              <Space wrap size={[10, 10]}>
+                <Tag style={{ borderRadius: 999, paddingInline: 12, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.08)', color: editorialInk }}>
+                  {chapter.word_count} 字
+                </Tag>
+                <Tag style={{ borderRadius: 999, paddingInline: 12, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.08)', color: editorialInk }}>
+                  {hasAnnotations ? '已生成记忆标注' : '暂无分析标注'}
+                </Tag>
+                {navigation?.current && (
+                  <Tag style={{ borderRadius: 999, paddingInline: 12, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.08)', color: editorialInk }}>
+                    Chapter {navigation.current.chapter_number}
+                  </Tag>
+                )}
+              </Space>
+            </Space>
+          </Col>
+          <Col xs={24} lg={9}>
+            <Row gutter={[12, 12]}>
+              {annotationSummaryItems.map((item) => (
+                <Col xs={12} key={item.label}>
+                  <div
+                    style={{
+                      minHeight: 92,
+                      borderRadius: 18,
+                      padding: '12px 14px',
+                      background: 'rgba(255,255,255,0.08)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      backdropFilter: 'blur(10px)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, display: 'block' }}>{item.label}</Text>
+                    <Text style={{ color: item.accent, fontWeight: 700, fontSize: 24 }}>{item.value}</Text>
+                  </div>
+                </Col>
+              ))}
+            </Row>
+          </Col>
+        </Row>
+
         <div
           style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: isMobile ? 'stretch' : 'center',
-            gap: 12,
-            flexWrap: 'wrap',
+            marginTop: 18,
+            position: 'relative',
+            zIndex: 1,
+            borderRadius: 20,
+            padding: isMobile ? '14px 14px 12px' : '16px 18px',
+            background: 'rgba(255,255,255,0.07)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            backdropFilter: 'blur(10px)',
           }}
         >
-          <Space wrap size={isMobile ? 8 : 12} style={{ flex: '1 1 420px', minWidth: 0 }}>
-            <Button icon={<ArrowLeftOutlined />} onClick={handleBackClick}>
-              返回
-            </Button>
-            <Button
-              icon={<LeftOutlined />}
-              onClick={handlePreviousChapter}
-              disabled={!navigation?.previous}
-              title={navigation?.previous ? `上一章: ${navigation.previous.title}` : '已是第一章'}
-            >
-              上一章
-            </Button>
-            <span style={{ fontSize: isMobile ? 15 : 16, fontWeight: 600, lineHeight: 1.5, flex: '1 1 auto', minWidth: 0, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-              第{chapter.chapter_number}章: {chapter.title}
-            </span>
-            <Button
-              icon={<RightOutlined />}
-              onClick={handleNextChapter}
-              disabled={!navigation?.next}
-              title={navigation?.next ? `下一章: ${navigation.next.title}` : '已是最后一章'}
-            >
-              下一章
-            </Button>
-          </Space>
+          <Row gutter={[16, 16]}>
+            <Col xs={24} lg={15}>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Text style={{ color: 'rgba(255,255,255,0.68)', fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                  Reader Guide
+                </Text>
+                <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.86)', lineHeight: 1.75 }}>
+                  这个页面更像阅读与分析之间的桥接层。保持原有正文、标注、翻页和重分析流程不变，只把当前阅读顺序说明得更清楚。
+                </Paragraph>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {readerGuideSteps.map((item, index) => (
+                    <span
+                      key={item}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '6px 12px',
+                        borderRadius: 999,
+                        background: 'rgba(255,255,255,0.08)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        color: editorialInk,
+                        fontSize: 12,
+                      }}
+                    >
+                      <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              </Space>
+            </Col>
+            <Col xs={24} lg={9}>
+              <div
+                style={{
+                  height: '100%',
+                  borderRadius: 18,
+                  padding: '14px 16px',
+                  background: 'rgba(255,255,255,0.08)',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                }}
+              >
+                <Text style={{ display: 'block', color: 'rgba(255,255,255,0.68)', fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                  当前阅读焦点
+                </Text>
+                <Title level={5} style={{ margin: '8px 0 6px', color: editorialInk, fontFamily: designDisplayFont }}>
+                  {analyzing ? '等待分析回流' : hasAnnotations ? '正文与标注联读' : '先读正文或发起分析'}
+                </Title>
+                <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.82)', lineHeight: 1.75 }}>
+                  {readerFocusNote}
+                </Paragraph>
+              </div>
+            </Col>
+          </Row>
+        </div>
 
-          <Space wrap size={isMobile ? 8 : 12} style={{ justifyContent: isMobile ? 'flex-start' : 'flex-end' }}>
-            <Button
-              icon={<ReloadOutlined />}
-              onClick={handleReanalyze}
-              loading={analyzing}
-              disabled={analyzing}
-            >
-              {analyzing ? '分析中...' : '重新分析'}
-            </Button>
-            {hasAnnotations && (
-              <>
+        <Space wrap size={[10, 10]} style={{ marginTop: 20, position: 'relative', zIndex: 1 }}>
+          <Button icon={<ArrowLeftOutlined />} onClick={handleBackClick} style={actionButtonStyle}>
+            返回
+          </Button>
+          <Button
+            icon={<LeftOutlined />}
+            onClick={handlePreviousChapter}
+            disabled={!navigation?.previous}
+            title={navigation?.previous ? `上一章: ${navigation.previous.title}` : '已是第一章'}
+            style={actionButtonStyle}
+          >
+            上一章
+          </Button>
+          <Button
+            icon={<RightOutlined />}
+            onClick={handleNextChapter}
+            disabled={!navigation?.next}
+            title={navigation?.next ? `下一章: ${navigation.next.title}` : '已是最后一章'}
+            style={actionButtonStyle}
+          >
+            下一章
+          </Button>
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={handleReanalyze}
+            loading={analyzing}
+            disabled={analyzing}
+            style={actionButtonStyle}
+          >
+            {analyzing ? '分析中...' : '重新分析'}
+          </Button>
+          {hasAnnotations && (
+            <>
+              <Space
+                size={8}
+                style={{
+                  borderRadius: 999,
+                  padding: '0 12px',
+                  height: 40,
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  background: 'rgba(255,255,255,0.08)',
+                  color: editorialInk,
+                }}
+              >
                 <Switch
                   checked={showAnnotations}
                   onChange={setShowAnnotations}
                   checkedChildren={<EyeOutlined />}
                   unCheckedChildren={<EyeInvisibleOutlined />}
                 />
-                <span style={{ fontSize: 13, color: token.colorTextSecondary }}>显示标注</span>
-                <Button
-                  icon={<MenuOutlined />}
-                  onClick={() => setSidebarVisible(true)}
-                  style={{ display: isMobile ? 'inline-block' : 'none' }}
-                >
-                  分析
-                </Button>
-              </>
-            )}
-          </Space>
-        </div>
+                <Text style={{ color: editorialInk, fontSize: 13 }}>显示标注</Text>
+              </Space>
+              <Button
+                icon={<MenuOutlined />}
+                onClick={() => setSidebarVisible(true)}
+                style={{ ...actionButtonStyle, display: isMobile ? 'inline-flex' : 'none' }}
+              >
+                分析
+              </Button>
+            </>
+          )}
+        </Space>
 
         {analyzing && (
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: 16, position: 'relative', zIndex: 1 }}>
             <Progress percent={analysisProgress} size="small" status="active" />
-            <span style={{ fontSize: 12, color: token.colorTextSecondary, marginLeft: 8 }}>
+            <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.78)', marginLeft: 8 }}>
               正在分析章节...
             </span>
           </div>
         )}
 
         {!analyzing && hasAnnotations && annotationsData && (
-          <div style={{ marginTop: 12, fontSize: 12, color: token.colorTextTertiary }}>
+          <div style={{ marginTop: 16, fontSize: 12, color: 'rgba(255,255,255,0.78)', position: 'relative', zIndex: 1 }}>
             共有 {annotationsData.summary.total_annotations} 个标注：
             {annotationsData.summary.hooks > 0 && ` 🎣${annotationsData.summary.hooks}个钩子`}
             {annotationsData.summary.foreshadows > 0 &&
@@ -528,8 +717,17 @@ const ChapterReader: React.FC = () => {
         )}
       </Card>
 
-      {/* 主内容区域 */}
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+      <div
+        style={{
+          flex: 1,
+          display: 'flex',
+          overflow: 'hidden',
+          background: panelBackground,
+          borderRadius: 24,
+          border: panelBorder,
+          boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+        }}
+      >
         {/* 左侧：章节内容 */}
         <div
           style={{
@@ -539,7 +737,16 @@ const ChapterReader: React.FC = () => {
             maxWidth: desktopSidebarVisible ? 'calc(100% - 360px)' : '100%',
           }}
         >
-          <Card>
+          <Card
+            variant="borderless"
+            style={{
+              borderRadius: 24,
+              background: token.colorBgContainer,
+              border: `1px solid ${token.colorBorderSecondary}`,
+              boxShadow: `0 18px 32px color-mix(in srgb, ${token.colorText} 6%, transparent)`,
+            }}
+            styles={{ body: { padding: isMobile ? 18 : 28 } }}
+          >
             <div style={{ maxWidth: 800, margin: '0 auto' }}>
               {!hasAnnotations && (
                 <Alert
@@ -565,6 +772,7 @@ const ChapterReader: React.FC = () => {
                     fontSize: 16,
                     whiteSpace: 'pre-wrap',
                     wordBreak: 'break-word',
+                    color: token.colorTextBase,
                   }}
                 >
                   {chapter.content}
@@ -619,7 +827,7 @@ const ChapterReader: React.FC = () => {
               width: 360,
               borderLeft: `1px solid ${token.colorBorderSecondary}`,
               overflowY: 'auto',
-              background: token.colorBgLayout,
+              background: `linear-gradient(180deg, ${token.colorFillAlter} 0%, ${token.colorBgContainer} 100%)`,
             }}
           >
             <MemorySidebar

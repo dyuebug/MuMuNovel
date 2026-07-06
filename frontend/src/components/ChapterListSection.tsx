@@ -1,8 +1,11 @@
 import { memo } from 'react';
-import { Collapse, Empty, List, Tag } from 'antd';
+import { Collapse, Empty, List, Tag, Typography, theme } from 'antd';
 import { CaretRightOutlined } from '@ant-design/icons';
 import type { Chapter } from '../types';
 import ChapterListItem from './ChapterListItem';
+import { designDisplayFont } from '../theme/themeConfig';
+
+const { Paragraph, Text, Title } = Typography;
 
 type GroupedChapterViewModel = {
   key: string;
@@ -145,39 +148,85 @@ const GroupedChapterPanel = memo(function GroupedChapterPanel({
   onShowExpansionPlan,
   onOpenPlanEditor,
 }: GroupedChapterPanelProps) {
+  const { token } = theme.useToken();
+  const alphaColor = (color: string, alpha: number) =>
+    `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
+  const quietPanelBackground = `linear-gradient(180deg, color-mix(in srgb, ${token.colorBgContainer} 95%, ${token.colorFillAlter} 5%) 0%, color-mix(in srgb, ${token.colorBgContainer} 88%, ${token.colorFillAlter} 12%) 100%)`;
+  const heroBackground = group.outlineId
+    ? `linear-gradient(135deg, color-mix(in srgb, ${token.colorInfo} 14%, ${token.colorBgContainer} 86%) 0%, color-mix(in srgb, ${token.colorPrimary} 8%, ${token.colorBgContainer} 92%) 100%)`
+    : `linear-gradient(135deg, color-mix(in srgb, ${token.colorWarning} 10%, ${token.colorBgContainer} 90%) 0%, color-mix(in srgb, ${token.colorPrimary} 6%, ${token.colorBgContainer} 94%) 100%)`;
+  const groupLabel = group.outlineId ? `大纲 ${group.outlineOrder ?? '-'}` : '手动章节';
+  const groupSummary = group.outlineId
+    ? '这一组章节按当前大纲顺序组织，适合先看当前批次覆盖范围，再进入单章阅读、编辑或分析。'
+    : '这一组章节来自手动创建链路，当前保留独立创作入口与后续规划动作。';
+
   return (
     <Collapse.Panel
       key={group.key}
       header={
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <Tag color={group.outlineId ? 'blue' : 'default'} style={{ margin: 0, flexShrink: 0 }}>
-            {group.outlineId
-              ? `大纲 ${group.outlineOrder ?? '-'}`
-              : '手动章节'}
-          </Tag>
-          <span
+        <div
+          style={{
+            display: 'grid',
+            gap: 12,
+            width: '100%',
+          }}
+        >
+          <div
             style={{
-              fontWeight: 600,
-              fontSize: 16,
-              wordBreak: 'break-word',
-              lineHeight: 1.5,
+              padding: isMobile ? '12px 12px 10px' : '14px 14px 12px',
+              borderRadius: 18,
+              background: heroBackground,
+              border: `1px solid ${alphaColor(token.colorPrimary, 0.08)}`,
             }}
           >
-            {group.outlineTitle || '未命名大纲'}
-          </span>
-          <Tag color="green" style={{ margin: 0 }}>
-            章节数 {group.chapters.length}
-          </Tag>
-          <Tag color="blue" style={{ margin: 0 }}>
-            总字数 {group.totalWordCount}
-          </Tag>
+            <Text
+              style={{
+                display: 'block',
+                fontSize: 11,
+                letterSpacing: '0.12em',
+                textTransform: 'uppercase',
+                color: token.colorTextTertiary,
+              }}
+            >
+              Outline Workspace
+            </Text>
+            <Title
+              level={isMobile ? 5 : 4}
+              style={{
+                margin: '6px 0 6px',
+                fontFamily: designDisplayFont,
+                fontSize: isMobile ? 16 : 18,
+                lineHeight: 1.35,
+                wordBreak: 'break-word',
+              }}
+            >
+              {group.outlineTitle || '未命名大纲'}
+            </Title>
+            <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.7 }}>
+              {groupSummary}
+            </Paragraph>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <Tag color={group.outlineId ? 'blue' : 'default'} style={{ margin: 0, borderRadius: 999, flexShrink: 0 }}>
+              {groupLabel}
+            </Tag>
+            <Tag color="green" style={{ margin: 0, borderRadius: 999 }}>
+              章节数 {group.chapters.length}
+            </Tag>
+            <Tag color="blue" style={{ margin: 0, borderRadius: 999 }}>
+              总字数 {group.totalWordCount}
+            </Tag>
+          </div>
         </div>
       }
       style={{
         marginBottom: 16,
-        background: '#fff',
-        borderRadius: 8,
-        border: '1px solid #f0f0f0',
+        background: quietPanelBackground,
+        borderRadius: 20,
+        border: `1px solid ${alphaColor(token.colorPrimary, 0.08)}`,
+        boxShadow: `0 20px 38px ${alphaColor(token.colorText, 0.06)}`,
+        overflow: 'hidden',
       }}
     >
       <List
@@ -241,8 +290,25 @@ function ChapterListSection({
   onShowExpansionPlan,
   onOpenPlanEditor,
 }: ChapterListSectionProps) {
+  const { token } = theme.useToken();
+  const alphaColor = (color: string, alpha: number) =>
+    `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
+  const quietPanelBackground = `linear-gradient(180deg, color-mix(in srgb, ${token.colorBgContainer} 95%, ${token.colorFillAlter} 5%) 0%, color-mix(in srgb, ${token.colorBgContainer} 88%, ${token.colorFillAlter} 12%) 100%)`;
+
   if (sortedChapters.length === 0) {
-    return <Empty description="暂无章节" />;
+    return (
+      <div
+        style={{
+          borderRadius: 22,
+          padding: '28px 20px',
+          background: quietPanelBackground,
+          border: `1px solid ${alphaColor(token.colorPrimary, 0.08)}`,
+          boxShadow: `0 20px 38px ${alphaColor(token.colorText, 0.06)}`,
+        }}
+      >
+        <Empty description="暂无章节" />
+      </div>
+    );
   }
 
   if (outlineMode === 'one-to-one') {

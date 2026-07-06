@@ -1,6 +1,8 @@
 import React from 'react';
-import { Button, Tooltip, theme } from 'antd';
+import { Button, Tooltip, Typography, theme } from 'antd';
 import { EditOutlined } from '@ant-design/icons';
+
+const { Text } = Typography;
 
 interface PartialRegenerateToolbarProps {
   visible: boolean;
@@ -20,6 +22,7 @@ export const PartialRegenerateToolbar: React.FC<PartialRegenerateToolbarProps> =
   selectedText
 }) => {
   const { token } = theme.useToken();
+  const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
 
   if (!visible || !selectedText) return null;
 
@@ -35,19 +38,46 @@ export const PartialRegenerateToolbar: React.FC<PartialRegenerateToolbarProps> =
         top: position.top,
         left: position.left,
         zIndex: 10000,
-        background: token.colorBgElevated,
-        borderRadius: 8,
-        boxShadow: token.boxShadow,
-        padding: '6px 8px',
+        background: `linear-gradient(135deg, ${alphaColor(token.colorPrimaryBg, 0.94)} 0%, ${alphaColor(token.colorBgElevated, 0.98)} 100%)`,
+        borderRadius: 14,
+        boxShadow: token.boxShadowSecondary,
+        padding: '8px 10px',
         display: 'flex',
         alignItems: 'center',
         gap: 8,
         animation: 'fadeIn 0.2s ease-out',
-        border: `1px solid ${token.colorBorderSecondary}`,
+        border: `1px solid ${alphaColor(token.colorPrimary, 0.14)}`,
         maxWidth: 'calc(100vw - 24px)',
         flexWrap: 'wrap',
       }}
     >
+      <div style={{ minWidth: 0 }}>
+        <Text
+          style={{
+            display: 'block',
+            fontSize: 10,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: token.colorTextTertiary,
+            marginBottom: 2,
+          }}
+        >
+          Selected Passage
+        </Text>
+        <Text
+          style={{
+            fontSize: 12,
+            color: token.colorTextSecondary,
+            maxWidth: 150,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            display: 'block',
+          }}
+        >
+          已选 {selectedText.length} 字
+        </Text>
+      </div>
       <Tooltip
         title={`智能重写选中内容: "${displayText}"`}
         placement="top"
@@ -71,16 +101,6 @@ export const PartialRegenerateToolbar: React.FC<PartialRegenerateToolbarProps> =
           智能重写
         </Button>
       </Tooltip>
-      <span style={{ 
-        fontSize: 12, 
-        color: token.colorTextTertiary,
-        maxWidth: 150,
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-      }}>
-        已选 {selectedText.length} 字
-      </span>
     </div>
   );
 };

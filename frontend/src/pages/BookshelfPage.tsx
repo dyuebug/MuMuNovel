@@ -1,9 +1,11 @@
-import { Card, Button, Spin, Space, Tag, Typography, Alert, Tooltip, theme } from 'antd';
+import { Card, Button, Space, Tag, Typography, Alert, Tooltip, theme } from 'antd';
 import { BookOutlined, RocketOutlined, BulbOutlined, UploadOutlined, DownloadOutlined, LoadingOutlined, CalendarOutlined, DeleteOutlined, CheckCircleOutlined, EditOutlined, PauseCircleOutlined } from '@ant-design/icons';
 import type { ReactNode } from 'react';
 import type { Project } from '../types';
 import { bookshelfCardStyles, bookshelfCardHoverHandlers } from '../components/CardStyles';
+import InlineDeferredPanel from '../components/InlineDeferredPanel';
 import { useThemeMode } from '../theme/useThemeMode';
+import { designDisplayFont } from '../theme/themeConfig';
 import { VERSION_INFO } from '../config/version';
 import { isProjectWizardIncomplete } from '../utils/projectWizardState';
 
@@ -58,6 +60,74 @@ export default function BookshelfPage({
   const mobileBookHeight = 460;
   const desktopBookHeight = 430;
   const mobileSpineWidth = 32;
+  const heroBackground = isDark
+    ? 'linear-gradient(135deg, #171411 0%, color-mix(in srgb, #171411 68%, #cc785c 32%) 100%)'
+    : 'linear-gradient(135deg, #1a1714 0%, color-mix(in srgb, #1a1714 70%, #cc785c 30%) 100%)';
+  const heroMutedInk = alphaColor('#f7f1e8', 0.76);
+  const wizardPendingCount = projects.filter((project) => isProjectWizardIncomplete(project)).length;
+  const latestUpdatedProject = [...projects]
+    .sort((left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime())[0];
+  const shelfGuideItems = [
+    {
+      label: 'Step 1',
+      title: '先看入口书架',
+      description: '把这里当成项目总览入口，先判断是继续旧项目、创建新项目，还是导入已有档案。',
+    },
+    {
+      label: 'Step 2',
+      title: '再挑创作路径',
+      description: '核心项目适合直接进入书本，模糊想法则先去灵感模式再回到书架继续推进。',
+    },
+    {
+      label: 'Step 3',
+      title: '最后做归档操作',
+      description: '导入导出更适合在项目结构稳定后再执行，避免创作中途频繁打断。',
+    },
+  ];
+  const shelfFocusItems = [
+    {
+      label: '项目总数',
+      value: `${projects.length} 本`,
+      detail: '当前书架已收纳的项目数量',
+    },
+    {
+      label: '待补向导',
+      value: `${wizardPendingCount} 本`,
+      detail: wizardPendingCount > 0 ? '这些项目可能还需要继续完成创建向导' : '当前没有未完成的创建向导',
+    },
+    {
+      label: '最近更新',
+      value: latestUpdatedProject?.title || '暂无',
+      detail: latestUpdatedProject ? `更新于 ${formatDate(latestUpdatedProject.updated_at)}` : '书架里还没有项目记录',
+    },
+  ];
+  const shelfWorkspaceFocus = loading
+    ? {
+        title: '恢复项目书架与阅读入口',
+        note: '当前正在刷新项目目录、最近更新信息与书架陈列。先等待书本入口、导入导出和灵感跳转恢复，再决定本轮继续哪条创作路径。',
+      }
+    : projects.length === 0
+      ? {
+          title: '建立第一批书架项目',
+          note: '当前书架还是空的，适合先创建第一个项目，或者导入已有档案后再回到书架统一整理。',
+        }
+      : {
+          title: '从书架中挑选下一本要推进的作品',
+          note: '当前书架已经有可继续推进的项目，适合先按更新时间和状态筛出本轮重点，再进入正文创作或继续补全向导。',
+        };
+  const renderBookshelfWorkspaceFallback = () => (
+    <InlineDeferredPanel
+      eyebrow="Bookshelf Workspace"
+      title={shelfWorkspaceFocus.title}
+      message={`${shelfWorkspaceFocus.note} 原有项目进入、删除、导入导出与灵感模式跳转逻辑保持不变。`}
+      minHeight={isMobile ? mobileBookHeight + 60 : desktopBookHeight + 90}
+      tags={[
+        { label: `${projects.length} 本项目`, color: 'blue' },
+        { label: '书架目录刷新中', color: 'processing' },
+        { label: exportableProjectsCount > 0 ? `可导出 ${exportableProjectsCount} 本` : '等待导出清单', color: exportableProjectsCount > 0 ? 'success' : 'default' },
+      ]}
+    />
+  );
 
   const serialBookPalettes = [
     {
@@ -113,17 +183,18 @@ export default function BookshelfPage({
         variant="borderless"
         style={{
           marginBottom: isMobile ? 12 : 16,
-          borderRadius: isMobile ? 14 : 18,
-          background: `linear-gradient(135deg, ${token.colorPrimary} 0%, ${token.colorPrimaryHover} 100%)`,
-          boxShadow: token.boxShadowSecondary,
-          border: 'none',
+          borderRadius: isMobile ? 18 : 24,
+          background: heroBackground,
+          boxShadow: `0 24px 42px ${alphaColor(token.colorText, isDark ? 0.24 : 0.16)}`,
+          border: `1px solid ${alphaColor('#f7f1e8', 0.1)}`,
           position: 'relative',
           overflow: 'hidden',
         }}
-        styles={{ body: { padding: isMobile ? '14px 14px' : '16px 18px' } }}
+        styles={{ body: { padding: isMobile ? '16px 16px' : '20px 22px' } }}
       >
-        <div style={{ position: 'absolute', top: -44, right: -44, width: 150, height: 150, borderRadius: '50%', background: token.colorWhite, opacity: 0.1, pointerEvents: 'none' }} />
-        <div style={{ position: 'absolute', bottom: -36, left: '26%', width: 100, height: 100, borderRadius: '50%', background: token.colorWhite, opacity: 0.06, pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', top: -44, right: -44, width: 150, height: 150, borderRadius: '50%', background: '#f7f1e8', opacity: 0.08, pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', bottom: -36, left: '26%', width: 100, height: 100, borderRadius: '50%', background: '#f7f1e8', opacity: 0.05, pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(90deg, rgba(255,255,255,0.04) 0%, transparent 22%, transparent 78%, rgba(255,255,255,0.03) 100%)', pointerEvents: 'none' }} />
 
         <div
           style={{
@@ -137,16 +208,26 @@ export default function BookshelfPage({
           }}
         >
           <div>
+            <div style={{
+              fontSize: 11,
+              letterSpacing: '0.18em',
+              textTransform: 'uppercase',
+              color: heroMutedInk,
+              marginBottom: 8,
+            }}>
+              Library
+            </div>
             <div
               style={{
-                fontSize: isMobile ? 18 : 22,
-                fontWeight: 700,
-                color: token.colorWhite,
+                fontSize: isMobile ? 22 : 30,
+                fontWeight: 600,
+                color: '#f7f1e8',
                 lineHeight: 1.3,
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
-                textShadow: `0 2px 4px ${alphaColor(token.colorText, 0.2)}`,
+                fontFamily: designDisplayFont,
+                letterSpacing: '-0.03em',
               }}
             >
               <BookOutlined style={{ opacity: 0.92 }} />
@@ -154,12 +235,14 @@ export default function BookshelfPage({
             </div>
             <div
               style={{
-                marginTop: 4,
-                fontSize: isMobile ? 12 : 13,
-                color: alphaColor(token.colorWhite, 0.9),
+                marginTop: 6,
+                fontSize: isMobile ? 12 : 14,
+                color: heroMutedInk,
+                maxWidth: 520,
+                lineHeight: 1.7,
               }}
             >
-              点击书本即可进入项目，统一查看进度、字数与状态。
+              点击任意书本即可继续创作，也可以从这里统一查看进度、字数和最近更新时间。
             </div>
           </div>
 
@@ -167,7 +250,14 @@ export default function BookshelfPage({
             <Button
               icon={<UploadOutlined />}
               onClick={onOpenImportModal}
-              style={{ borderRadius: 10 }}
+              style={{
+                borderRadius: 999,
+                height: 40,
+                paddingInline: 18,
+                background: alphaColor('#ffffff', 0.08),
+                borderColor: alphaColor('#f7f1e8', 0.12),
+                color: '#f7f1e8',
+              }}
             >
               导入项目
             </Button>
@@ -175,7 +265,11 @@ export default function BookshelfPage({
               icon={<DownloadOutlined />}
               onClick={onOpenExportModal}
               disabled={exportableProjectsCount === 0}
-              style={{ borderRadius: 10 }}
+              style={{
+                borderRadius: 999,
+                height: 40,
+                paddingInline: 18,
+              }}
             >
               导出项目
             </Button>
@@ -213,21 +307,125 @@ export default function BookshelfPage({
           onClose={() => setShowApiTip(false)}
           style={{
             marginBottom: isMobile ? 16 : 24,
-            borderRadius: 12
+            borderRadius: 18,
+            border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
+            boxShadow: `0 18px 32px ${alphaColor(token.colorText, isDark ? 0.14 : 0.06)}`,
           }}
         />
       )}
 
-      <Spin spinning={loading}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.15fr) minmax(300px, 0.9fr)',
+          gap: isMobile ? 12 : 16,
+          marginBottom: isMobile ? 14 : 18,
+        }}
+      >
+        <Card
+          variant="borderless"
+          style={{
+            borderRadius: isMobile ? 18 : 22,
+            border: `1px solid ${alphaColor(token.colorText, isDark ? 0.1 : 0.06)}`,
+            background: isDark
+              ? `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.7)} 0%, ${alphaColor(token.colorBgLayout, 0.86)} 100%)`
+              : `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.94)} 0%, ${alphaColor(token.colorBgLayout, 0.98)} 100%)`,
+            boxShadow: `0 18px 36px ${alphaColor(token.colorText, isDark ? 0.1 : 0.05)}`,
+          }}
+          styles={{ body: { padding: isMobile ? 14 : 18 } }}
+        >
+          <div style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+            Shelf Guide
+          </div>
+          <div style={{ margin: '8px 0 10px', fontSize: isMobile ? 22 : 24, fontWeight: 600, fontFamily: designDisplayFont, letterSpacing: '-0.03em', color: token.colorText }}>
+            书架页阅读顺序
+          </div>
+          <Paragraph type="secondary" style={{ marginBottom: 14, lineHeight: 1.8 }}>
+            这里更像创作项目的入口大厅。先确认你要继续哪本书，再决定是新建、导入，还是回到灵感工作流里补前置想法。
+          </Paragraph>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+            {shelfGuideItems.map((item) => (
+              <div
+                key={item.label}
+                style={{
+                  borderRadius: 16,
+                  padding: '12px 14px',
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  background: token.colorBgContainer,
+                }}
+              >
+                <div style={{ fontSize: 11, color: token.colorTextTertiary, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  {item.label}
+                </div>
+                <div style={{ margin: '6px 0 4px', fontWeight: 600, color: token.colorText }}>
+                  {item.title}
+                </div>
+                <div style={{ fontSize: 12, color: token.colorTextSecondary, lineHeight: 1.7 }}>
+                  {item.description}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card
+          variant="borderless"
+          style={{
+            borderRadius: isMobile ? 18 : 22,
+            border: `1px solid ${alphaColor(token.colorText, isDark ? 0.1 : 0.06)}`,
+            background: isDark
+              ? `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.7)} 0%, ${alphaColor(token.colorBgLayout, 0.86)} 100%)`
+              : `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.94)} 0%, ${alphaColor(token.colorBgLayout, 0.98)} 100%)`,
+            boxShadow: `0 18px 36px ${alphaColor(token.colorText, isDark ? 0.1 : 0.05)}`,
+          }}
+          styles={{ body: { padding: isMobile ? 14 : 18 } }}
+        >
+          <div style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+            Current Shelf
+          </div>
+          <div style={{ margin: '8px 0 10px', fontSize: isMobile ? 22 : 24, fontWeight: 600, fontFamily: designDisplayFont, letterSpacing: '-0.03em', color: token.colorText }}>
+            当前书架焦点
+          </div>
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            {shelfFocusItems.map((item) => (
+              <div
+                key={item.label}
+                style={{
+                  borderRadius: 16,
+                  padding: '12px 14px',
+                  background: token.colorBgContainer,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                }}
+              >
+                <div style={{ marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
+                  {item.label}
+                </div>
+                <div style={{ fontWeight: 600, color: token.colorText, lineHeight: 1.7 }}>
+                  {item.value}
+                </div>
+                <div style={{ fontSize: 12, color: token.colorTextSecondary, lineHeight: 1.7 }}>
+                  {item.detail}
+                </div>
+              </div>
+            ))}
+          </Space>
+        </Card>
+      </div>
+
+      {loading ? (
+        renderBookshelfWorkspaceFallback()
+      ) : (
         <div style={{
           ...bookshelfCardStyles.container,
-          borderRadius: isMobile ? 12 : 16,
-          border: `1px solid ${isDark ? alphaColor(token.colorBorder, 0.42) : alphaColor(token.colorText, 0.06)}`,
-          backgroundColor: isDark ? alphaColor(token.colorBgContainer, 0.42) : alphaColor(token.colorBgContainer, 0.72),
+          borderRadius: isMobile ? 18 : 28,
+          border: `1px solid ${isDark ? alphaColor(token.colorBorder, 0.42) : alphaColor(token.colorText, 0.08)}`,
+          background: isDark
+            ? `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.64)} 0%, ${alphaColor(token.colorBgLayout, 0.82)} 100%)`
+            : `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.84)} 0%, ${alphaColor(token.colorBgLayout, 0.92)} 100%)`,
           backgroundImage: `radial-gradient(${alphaColor(token.colorText, isDark ? 0.16 : 0.08)} 1px, transparent 0)`,
           backgroundSize: '18px 18px',
-          boxShadow: `inset 0 1px 0 ${alphaColor(token.colorWhite, isDark ? 0.08 : 0.45)}`,
-          padding: isMobile ? '12px' : '18px',
+          boxShadow: `inset 0 1px 0 ${alphaColor(token.colorWhite, isDark ? 0.08 : 0.45)}, 0 24px 48px ${alphaColor(token.colorText, isDark ? 0.12 : 0.06)}`,
+          padding: isMobile ? '14px' : '22px',
           ...(isMobile && {
             gridTemplateColumns: '1fr',
             gap: '14px',
@@ -261,6 +459,17 @@ export default function BookshelfPage({
                 position: 'relative',
                 zIndex: 1,
               }}>
+                <div style={{
+                  position: 'absolute',
+                  top: isMobile ? 18 : 22,
+                  left: isMobile ? 18 : 22,
+                  fontSize: 11,
+                  letterSpacing: '0.18em',
+                  textTransform: 'uppercase',
+                  color: token.colorTextTertiary,
+                }}>
+                  Entry Point
+                </div>
                 <div style={{
                   width: isMobile ? 56 : 68,
                   height: isMobile ? 56 : 68,
@@ -317,6 +526,7 @@ export default function BookshelfPage({
                   fontSize: isMobile ? 11 : 12,
                   color: token.colorTextTertiary,
                   letterSpacing: 0.5,
+                  textTransform: 'uppercase',
                 }}>
                   开始一个新的创作旅程
                 </div>
@@ -403,7 +613,7 @@ export default function BookshelfPage({
                         <Tooltip title={project.title}>
                           <div style={{
                             fontSize: isMobile ? 18 : 22,
-                            fontWeight: 700,
+                            fontWeight: 600,
                             color: token.colorText,
                             lineHeight: 1.3,
                             display: '-webkit-box',
@@ -411,7 +621,8 @@ export default function BookshelfPage({
                             WebkitBoxOrient: 'vertical',
                             overflow: 'hidden',
                             wordBreak: 'break-word',
-                            fontFamily: 'Georgia, "Times New Roman", "Noto Serif SC", serif',
+                            fontFamily: designDisplayFont,
+                            letterSpacing: '-0.02em',
                           }}>
                             {project.title}
                           </div>
@@ -510,10 +721,11 @@ export default function BookshelfPage({
                         <div style={{ flex: 1 }}>
                           <div style={{
                             fontSize: isMobile ? 22 : 26,
-                            fontWeight: 700,
+                            fontWeight: 600,
                             color: token.colorText,
                             lineHeight: 1.1,
-                            fontFamily: 'Georgia, "Times New Roman", serif',
+                            fontFamily: designDisplayFont,
+                            letterSpacing: '-0.03em',
                           }}>
                             {formatWordCount(project.current_words || 0)}
                           </div>
@@ -533,10 +745,11 @@ export default function BookshelfPage({
                         <div style={{ flex: 1 }}>
                           <div style={{
                             fontSize: isMobile ? 22 : 26,
-                            fontWeight: 700,
+                            fontWeight: 600,
                             color: progress >= 100 ? token.colorSuccess : progressColor,
                             lineHeight: 1.1,
-                            fontFamily: 'Georgia, "Times New Roman", serif',
+                            fontFamily: designDisplayFont,
+                            letterSpacing: '-0.03em',
                           }}>
                             {formatWordCount(project.target_words || 0)}
                           </div>
@@ -586,7 +799,7 @@ export default function BookshelfPage({
             );
           })}
         </div>
-      </Spin>
+      )}
     </div>
   );
 }

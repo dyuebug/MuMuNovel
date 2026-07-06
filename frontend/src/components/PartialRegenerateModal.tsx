@@ -338,6 +338,35 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
 
   const canStartGenerate = Boolean(userInstructions.trim())
     && (lengthMode !== 'custom' || customWordCount >= 10);
+  const partialRewriteGuideSteps = [
+    '先读清这段原文，再决定这一轮是保留原节奏、扩展细节，还是做更紧凑的局部改写。',
+    '再补充重写要求、长度策略和联网检索，把“局部重写边界”在提交前说清楚。',
+    '最后再开始生成；拿到结果后先比较字数与表达方向，再决定是否接受或继续重写。',
+  ];
+  const partialRewriteWorkspaceFocus = isGenerating
+    ? {
+        title: '跟进当前局部重写进度',
+        note: '当前后台生成已经启动，适合先观察进度、生成提示和结果文本，不要同时继续改动这一轮输入条件。',
+      }
+    : hasGenerated && generatedText.trim()
+      ? {
+          title: '复核这一版局部重写结果',
+          note: '当前已经得到新的片段文本，适合先比较长度变化、语气和信息密度，再决定是否接受并应用到正文。',
+        }
+      : enableWebResearch
+        ? {
+            title: '确认是否需要外部资料支撑这段改写',
+            note: '当前已开启联网检索，更适合用在职业、时代、规则或场景细节明确的片段，不必给普通润色片段增加多余上下文。',
+          }
+        : !userInstructions.trim()
+          ? {
+              title: '先定义这段文字的改写目标',
+              note: '当前还没有输入重写要求，适合先说清楚你想强化的是氛围、动作、情绪还是节奏，再提交这一轮局部重写。',
+            }
+          : {
+              title: `按“${lengthMode === 'similar' ? '保持长度' : lengthMode === 'expand' ? '扩展内容' : lengthMode === 'condense' ? '精简内容' : '自定义字数'}”推进本段重写`,
+              note: '当前已经具备可提交的重写条件，适合先确认要求与长度策略是否一致，再把这一段交给现有局部重写链路。',
+            };
 
   return (
     <Modal
@@ -427,6 +456,81 @@ export const PartialRegenerateModal: React.FC<PartialRegenerateModalProps> = ({
         >
           {selectedText}
         </Paragraph>
+      </Card>
+
+      <Card
+        size="small"
+        style={{
+          marginBottom: 16,
+          borderRadius: 22,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          background: `linear-gradient(135deg, ${token.colorPrimaryBg} 0%, ${token.colorBgContainer} 100%)`,
+        }}
+        styles={{ body: { padding: 16 } }}
+      >
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+            gap: 16,
+          }}
+        >
+          <div>
+            <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+              Partial Rewrite Guide
+            </Text>
+            <Text strong style={{ display: 'block', fontSize: 17, marginBottom: 8 }}>
+              局部重写工作台
+            </Text>
+            <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+              这里不改变原有的局部重写请求、进度回流和应用逻辑，只把输入顺序与结果判断重点提前说明，帮助你更稳定地处理这一小段正文。
+            </Text>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {partialRewriteGuideSteps.map((item, index) => (
+                <span
+                  key={item}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '6px 12px',
+                    borderRadius: 999,
+                    background: token.colorBgContainer,
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    color: token.colorText,
+                    fontSize: 12,
+                  }}
+                >
+                  <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+                  {item}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div
+            style={{
+              borderRadius: 18,
+              padding: '16px 18px 14px',
+              background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
+              border: `1px solid ${token.colorBorderSecondary}`,
+            }}
+          >
+            <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
+              当前工作焦点
+            </Text>
+            <Text strong style={{ display: 'block', fontSize: 16, marginBottom: 8 }}>
+              {partialRewriteWorkspaceFocus.title}
+            </Text>
+            <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
+              {partialRewriteWorkspaceFocus.note}
+            </Text>
+            <Space wrap size={[8, 8]}>
+              <Text type="secondary">{selectedText.length} 字原文</Text>
+              <Text type="secondary">{userInstructions.length} 字要求</Text>
+              <Text type="secondary">{enableWebResearch ? '联网检索已开启' : '联网检索已关闭'}</Text>
+            </Space>
+          </div>
+        </div>
       </Card>
 
       <div

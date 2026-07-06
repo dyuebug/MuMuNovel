@@ -3,7 +3,7 @@ import { useBusyNavigationGuard } from '../hooks/useBusyNavigationGuard';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Form, Input, InputNumber, Select, Button, Card,
-  Row, Col, Typography, Space, message, Radio, theme, Switch, Alert
+  Row, Col, Typography, Space, message, Radio, theme, Switch, Alert, Tag
 } from 'antd';
 import {
   RocketOutlined, ArrowLeftOutlined, CheckCircleOutlined
@@ -25,6 +25,7 @@ import {
   QUALITY_PRESET_OPTIONS,
   STORY_FOCUS_OPTIONS,
 } from '../utils/generationPreferenceOptions';
+import { designDisplayFont } from '../theme/themeConfig';
 
 const { TextArea } = Input;
 const { Title, Paragraph } = Typography;
@@ -35,8 +36,10 @@ export default function ProjectWizardNew() {
   const [form] = Form.useForm();
   const watchedEnableMcp = Boolean(Form.useWatch('enable_mcp', form));
   const watchedModel = Form.useWatch('model', form);
+  const watchedOutlineMode = Form.useWatch('outline_mode', form);
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const { token } = theme.useToken();
+  const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
 
   // 状态管理
   const [currentStep, setCurrentStep] = useState<'form' | 'generating'>('form');
@@ -294,13 +297,45 @@ export default function ProjectWizardNew() {
   };
   // 渲染表单页面
   const renderForm = () => (
-    <Card>
-      <Title level={isMobile ? 4 : 3} style={{ marginBottom: 24 }}>
+    <Card
+      variant="borderless"
+      style={{
+        borderRadius: 22,
+        border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.9)}`,
+        background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.44)} 100%)`,
+        boxShadow: `0 18px 40px ${alphaColor(token.colorTextBase, 0.05)}`,
+      }}
+      styles={{ body: { padding: isMobile ? 16 : 18 } }}
+    >
+      <Typography.Text
+        style={{
+          display: 'block',
+          marginBottom: 6,
+          fontSize: 11,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          color: token.colorTextTertiary,
+        }}
+      >
+        Project Brief
+      </Typography.Text>
+      <Title level={isMobile ? 4 : 3} style={{ marginBottom: 12, fontFamily: designDisplayFont, letterSpacing: '-0.02em' }}>
         创建新项目
       </Title>
-      <Paragraph type="secondary" style={{ marginBottom: 32 }}>
+      <Paragraph type="secondary" style={{ marginBottom: 18, lineHeight: 1.8 }}>
         填写基本信息后，AI将自动生成世界观、角色和开局大纲。建议简介写清“目标→阻力→代价”，主题写成“价值冲突”。
       </Paragraph>
+      <Space wrap size={[8, 8]} style={{ marginBottom: 24 }}>
+        <Tag color="blue" style={{ borderRadius: 999, paddingInline: 12 }}>
+          先定定位
+        </Tag>
+        <Tag color="purple" style={{ borderRadius: 999, paddingInline: 12 }}>
+          再配默认偏好
+        </Tag>
+        <Tag color="gold" style={{ borderRadius: 999, paddingInline: 12 }}>
+          最后确认执行策略
+        </Tag>
+      </Space>
 
       <Form
         form={form}
@@ -383,20 +418,34 @@ export default function ProjectWizardNew() {
           rules={[{ required: true, message: '请选择大纲章节模式' }]}
           tooltip="创建后不可更改，请根据创作习惯选择"
         >
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12, lineHeight: 1.7 }}>
+            这是项目创建后最重要的结构决策之一。你可以把它理解成“每一条大纲与章节之间的映射粒度”。
+          </Typography.Text>
           <Radio.Group size="large">
             <Row gutter={16}>
               <Col xs={24} sm={12}>
                 <Card
                   hoverable
                   style={{
-                    // borderColor: form.getFieldValue('outline_mode') === 'one-to-one' ? token.colorPrimary : token.colorBorder,
+                    borderColor: watchedOutlineMode === 'one-to-one' ? alphaColor(token.colorPrimary, 0.36) : alphaColor(token.colorBorderSecondary, 0.88),
                     borderWidth: 2,
                     height: '100%',
+                    borderRadius: 18,
+                    background: watchedOutlineMode === 'one-to-one'
+                      ? `linear-gradient(180deg, ${alphaColor(token.colorPrimaryBg, 0.92)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`
+                      : `linear-gradient(180deg, ${alphaColor(token.colorBgElevated, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.42)} 100%)`,
+                    boxShadow: watchedOutlineMode === 'one-to-one'
+                      ? `0 18px 36px ${alphaColor(token.colorPrimary, 0.12)}`
+                      : 'none',
                   }}
+                  styles={{ body: { padding: 16 } }}
                   onClick={() => form.setFieldValue('outline_mode', 'one-to-one')}
                 >
                   <Radio value="one-to-one" style={{ width: '100%' }}>
                     <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                      <Tag color={watchedOutlineMode === 'one-to-one' ? 'blue' : 'default'} style={{ width: 'fit-content', borderRadius: 999 }}>
+                        简洁直推
+                      </Tag>
                       <div style={{ fontSize: 16, fontWeight: 'bold' }}>
                         <CheckCircleOutlined style={{ marginRight: 8, color: token.colorSuccess }} />
                         传统模式 (1→1)
@@ -416,14 +465,25 @@ export default function ProjectWizardNew() {
                 <Card
                   hoverable
                   style={{
-                    // borderColor: form.getFieldValue('outline_mode') === 'one-to-many' ? token.colorPrimary : token.colorBorder,
+                    borderColor: watchedOutlineMode === 'one-to-many' ? alphaColor(token.colorPrimary, 0.36) : alphaColor(token.colorBorderSecondary, 0.88),
                     borderWidth: 2,
                     height: '100%',
+                    borderRadius: 18,
+                    background: watchedOutlineMode === 'one-to-many'
+                      ? `linear-gradient(180deg, ${alphaColor(token.colorPrimaryBg, 0.92)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`
+                      : `linear-gradient(180deg, ${alphaColor(token.colorBgElevated, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.42)} 100%)`,
+                    boxShadow: watchedOutlineMode === 'one-to-many'
+                      ? `0 18px 36px ${alphaColor(token.colorPrimary, 0.12)}`
+                      : 'none',
                   }}
+                  styles={{ body: { padding: 16 } }}
                   onClick={() => form.setFieldValue('outline_mode', 'one-to-many')}
                 >
                   <Radio value="one-to-many" style={{ width: '100%' }}>
                     <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                      <Tag color={watchedOutlineMode === 'one-to-many' ? 'gold' : 'default'} style={{ width: 'fit-content', borderRadius: 999 }}>
+                        长篇友好
+                      </Tag>
                       <div style={{ fontSize: 16, fontWeight: 'bold' }}>
                         <CheckCircleOutlined style={{ marginRight: 8, color: token.colorSuccess }} />
                         细化模式 (1→N) 推荐
@@ -440,6 +500,9 @@ export default function ProjectWizardNew() {
               </Col>
             </Row>
           </Radio.Group>
+          <Typography.Text type="secondary" style={{ display: 'block', marginTop: 12, lineHeight: 1.7 }}>
+            当前选择：{watchedOutlineMode === 'one-to-many' ? '细化模式，适合复杂长篇与多章节展开。' : '传统模式，适合节奏直接、结构简单的项目。'}
+          </Typography.Text>
         </Form.Item>
 
         <Row gutter={16}>
@@ -488,11 +551,34 @@ export default function ProjectWizardNew() {
           />
         </Form.Item>
 
-        <Card size="small" title="默认创作偏好" style={{ marginBottom: 24 }}>
+        <Card
+          size="small"
+          style={{
+            marginBottom: 24,
+            borderRadius: 20,
+            border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.85)}`,
+            background: `linear-gradient(180deg, ${alphaColor(token.colorBgElevated, 0.98)} 0%, ${alphaColor(token.colorFillAlter, 0.52)} 100%)`,
+          }}
+          styles={{ body: { padding: 16 } }}
+        >
+          <Typography.Text style={{ display: 'block', marginBottom: 6, fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+            Default Creative Profile
+          </Typography.Text>
+          <Typography.Text strong style={{ display: 'block', marginBottom: 8, fontSize: 16 }}>
+            默认创作偏好
+          </Typography.Text>
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 14, lineHeight: 1.7 }}>
+            这些偏好会成为项目的长期默认值，影响首次大纲和后续章节生成，适合在启动前先定好整体气质。
+          </Typography.Text>
           <Alert
             type="info"
             showIcon
-            style={{ marginBottom: 16 }}
+            style={{
+              marginBottom: 16,
+              borderRadius: 14,
+              border: `1px solid ${alphaColor(token.colorInfo, 0.12)}`,
+              background: `linear-gradient(135deg, ${alphaColor(token.colorInfoBg, 0.88)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`,
+            }}
             message="这些偏好会写入项目默认值，并自动作用于首次大纲与后续章节生成；创建后仍可在世界设定中继续调整。"
           />
 
@@ -577,11 +663,34 @@ export default function ProjectWizardNew() {
           </Form.Item>
         </Card>
 
-        <Card size="small" title="生成前网络检索" style={{ marginBottom: 24 }}>
+        <Card
+          size="small"
+          style={{
+            marginBottom: 24,
+            borderRadius: 20,
+            border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.85)}`,
+            background: `linear-gradient(180deg, ${alphaColor(token.colorBgElevated, 0.98)} 0%, ${alphaColor(token.colorFillAlter, 0.52)} 100%)`,
+          }}
+          styles={{ body: { padding: 16 } }}
+        >
+          <Typography.Text style={{ display: 'block', marginBottom: 6, fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+            Research Before Generate
+          </Typography.Text>
+          <Typography.Text strong style={{ display: 'block', marginBottom: 8, fontSize: 16 }}>
+            生成前网络检索
+          </Typography.Text>
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 14, lineHeight: 1.7 }}>
+            如果你希望模型先借外部资料补齐行业细节、世界设定或说话风格，可以在这里为不同环节设定检索入口。
+          </Typography.Text>
           <Alert
             type="info"
             showIcon
-            style={{ marginBottom: 16 }}
+            style={{
+              marginBottom: 16,
+              borderRadius: 14,
+              border: `1px solid ${alphaColor(token.colorInfo, 0.12)}`,
+              background: `linear-gradient(135deg, ${alphaColor(token.colorInfoBg, 0.88)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`,
+            }}
             message="可选。开启后会在世界观、职业体系、角色和大纲生成前先做联网检索，并把资料归档到项目记忆。"
           />
 
@@ -652,7 +761,29 @@ export default function ProjectWizardNew() {
           <Input type="hidden" />
         </Form.Item>
         <Form.Item>
-          <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <div
+            style={{
+              padding: isMobile ? '14px 14px' : '16px 18px',
+              borderRadius: 20,
+              border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.88)}`,
+              background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.52)} 100%)`,
+            }}
+          >
+            <Typography.Text style={{ display: 'block', marginBottom: 6, fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+              Launch Confirmation
+            </Typography.Text>
+            <Typography.Text strong style={{ display: 'block', marginBottom: 8, fontSize: 16 }}>
+              开始创建项目
+            </Typography.Text>
+            <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 14, lineHeight: 1.7 }}>
+              这里是发起生成前的最后确认区。确认结构模式、执行设置和联网策略后，就可以开始让系统搭建项目骨架。
+            </Typography.Text>
+            <Space wrap size={[8, 8]} style={{ marginBottom: 14 }}>
+              <Tag color="blue" style={{ borderRadius: 999 }}>模式：{watchedOutlineMode === 'one-to-many' ? '细化模式' : '传统模式'}</Tag>
+              <Tag color={watchedEnableMcp ? 'green' : 'default'} style={{ borderRadius: 999 }}>MCP：{watchedEnableMcp ? '开启' : '关闭'}</Tag>
+              <Tag color="purple" style={{ borderRadius: 999 }}>模型：{watchedModel || '系统默认'}</Tag>
+            </Space>
+            <Space direction="vertical" style={{ width: '100%' }} size={12}>
             <Button
               type="primary"
               htmlType="submit"
@@ -669,79 +800,255 @@ export default function ProjectWizardNew() {
             >
               返回首页
             </Button>
-          </Space>
+            </Space>
+          </div>
         </Form.Item>
       </Form>
     </Card>
   );
 
+  const wizardGuideSteps = [
+    '先确认项目定位、章节规模和大纲模式，判断这次是在快速起稿还是搭建可扩写的长期骨架。',
+    '再补默认创作偏好、联网检索和 MCP 设置，只保留会长期影响生成结果的默认项。',
+    '最后再启动 AI 项目生成；进入生成阶段后优先观察回流进度，不在中途频繁改动启动参数。',
+  ];
+  const wizardWorkspaceFocus = currentStep === 'generating'
+    ? {
+        title: resumeProjectId ? '继续未完成项目生成' : '等待 AI 回流项目骨架',
+        note: '当前已经进入生成阶段，适合先观察任务推进和回流结果，避免频繁返回表单改动基础设定。',
+      }
+    : resumeProjectId
+      ? {
+          title: '核对恢复中的向导配置',
+          note: '系统检测到一个未完成项目，适合先确认是否沿用旧配置继续生成，再补充这轮新增的默认偏好。',
+        }
+      : watchedOutlineMode === 'one-to-many'
+        ? {
+            title: '梳理分组式创作骨架',
+            note: '当前是一纲多章模式，更适合先把章节规模、默认偏好和检索策略一次定稳，再交给生成流程展开。',
+          }
+        : watchedEnableMcp
+          ? {
+              title: '校准启动默认设定',
+              note: '当前已启用 MCP，适合把长期默认的创作偏好、检索词和模型设置在启动前一次校准清楚。',
+            }
+          : {
+              title: '收敛首轮启动参数',
+              note: '当前更适合先把项目定位、目标字数和核心偏好填清楚，再决定是否接入额外的外部能力。',
+            };
+
   return (
     <div style={{
       minHeight: '100dvh',
-      background: token.colorBgBase,
+      background: `linear-gradient(180deg, ${token.colorBgLayout} 0%, ${token.colorFillSecondary} 100%)`,
+      padding: isMobile ? '16px 12px 32px' : '24px',
     }}>
-      {/* 顶部标题栏 - 固定不滚动 */}
-      <div style={{
-        position: 'sticky',
-        top: 0,
-        zIndex: 100,
-        background: token.colorPrimary,
-        boxShadow: `0 6px 20px color-mix(in srgb, ${token.colorPrimary} 30%, transparent)`,
-      }}>
+      <div style={{ maxWidth: 1120, margin: '0 auto' }}>
         <div style={{
-          maxWidth: 1200,
-          margin: '0 auto',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: isMobile ? '12px 16px' : '16px 24px',
+          position: 'sticky',
+          top: 0,
+          zIndex: 100,
+          marginBottom: isMobile ? 16 : 20,
         }}>
-          <Button
-            icon={<ArrowLeftOutlined />}
-            onClick={() => navigate('/')}
-            size={isMobile ? 'middle' : 'large'}
-            disabled={shouldDisableNavigation(currentStep === 'generating')}
+          <Card
+            variant="borderless"
             style={{
-              background: `color-mix(in srgb, ${token.colorWhite} 20%, transparent)`,
-              borderColor: `color-mix(in srgb, ${token.colorWhite} 30%, transparent)`,
-              color: token.colorWhite,
+              background: `linear-gradient(135deg,
+                color-mix(in srgb, ${token.colorPrimary} 78%, #6f4537 22%) 0%,
+                color-mix(in srgb, ${token.colorInfo} 28%, #162129 72%) 100%)`,
+              borderRadius: 28,
+              border: `1px solid color-mix(in srgb, ${token.colorBgContainer} 12%, transparent)`,
+              boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
+              overflow: 'hidden',
+              position: 'relative',
             }}
+            styles={{ body: { padding: isMobile ? 20 : 24 } }}
           >
-            {isMobile ? '返回' : '返回首页'}
-          </Button>
-
-          <Title level={isMobile ? 4 : 2} style={{
-            margin: 0,
-            color: token.colorWhite,
-            textShadow: '0 2px 4px color-mix(in srgb, var(--ant-color-black) 18%, transparent)',
-          }}>
-            <RocketOutlined style={{ marginRight: 8 }} />
-            项目创建向导
-          </Title>
-
-          <div style={{ width: isMobile ? 60 : 120 }}></div>
+            <div style={{ position: 'absolute', top: -56, right: -30, width: 176, height: 176, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', pointerEvents: 'none' }} />
+            <div style={{ position: 'absolute', bottom: -30, left: isMobile ? '58%' : '28%', width: 120, height: 120, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', pointerEvents: 'none' }} />
+            <Row gutter={[24, 18]} align="middle" style={{ position: 'relative', zIndex: 1 }}>
+              <Col xs={24} lg={14}>
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <Typography.Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase' }}>
+                    Launchpad
+                  </Typography.Text>
+                  <Title level={isMobile ? 3 : 2} style={{
+                    margin: 0,
+                    color: token.colorWhite,
+                    fontFamily: designDisplayFont,
+                    letterSpacing: '-0.03em',
+                    textShadow: '0 2px 4px color-mix(in srgb, var(--ant-color-black) 18%, transparent)',
+                  }}>
+                    <RocketOutlined style={{ marginRight: 8 }} />
+                    项目创建向导
+                  </Title>
+                  <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.82)', fontSize: 15, lineHeight: 1.8 }}>
+                    把新项目的定位、默认创作偏好和联网检索策略在一页里设置清楚。这里应该像创作启动台，而不是一张普通表单。
+                  </Paragraph>
+                  <Space wrap size={[10, 10]}>
+                    <Tag style={{ borderRadius: 999, paddingInline: 12, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.08)', color: token.colorWhite }}>
+                      当前阶段：{currentStep === 'form' ? '填写向导' : 'AI 生成中'}
+                    </Tag>
+                    <Tag style={{ borderRadius: 999, paddingInline: 12, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.08)', color: token.colorWhite }}>
+                      MCP：{watchedEnableMcp ? '已启用' : '未启用'}
+                    </Tag>
+                    {resumeProjectId ? (
+                      <Tag style={{ borderRadius: 999, paddingInline: 12, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.08)', color: token.colorWhite }}>
+                        支持恢复未完成项目
+                      </Tag>
+                    ) : null}
+                  </Space>
+                </Space>
+              </Col>
+              <Col xs={24} lg={10}>
+                <Row gutter={[12, 12]}>
+                  {[
+                    { label: '章节目标', value: form.getFieldValue('chapter_count') || 30 },
+                    { label: '角色数量', value: form.getFieldValue('character_count') || 5 },
+                    { label: '目标字数', value: form.getFieldValue('target_words') || 100000 },
+                    { label: '生成模型', value: watchedModel || '自动', compact: true },
+                  ].map((item) => (
+                    <Col xs={12} key={item.label}>
+                      <div
+                        style={{
+                          minHeight: 92,
+                          borderRadius: 18,
+                          padding: '12px 14px',
+                          background: 'rgba(255,255,255,0.08)',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          backdropFilter: 'blur(10px)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          justifyContent: 'space-between',
+                        }}
+                      >
+                        <Typography.Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, display: 'block' }}>
+                          {item.label}
+                        </Typography.Text>
+                        <Typography.Text style={{ color: token.colorWhite, fontWeight: 700, fontSize: item.compact ? 15 : 24, lineHeight: 1.2, wordBreak: 'break-word' }}>
+                          {item.value}
+                        </Typography.Text>
+                      </div>
+                    </Col>
+                  ))}
+                </Row>
+              </Col>
+            </Row>
+            <Space wrap size={[10, 10]} style={{ marginTop: 20, position: 'relative', zIndex: 1 }}>
+              <Button
+                icon={<ArrowLeftOutlined />}
+                onClick={() => navigate('/')}
+                size={isMobile ? 'middle' : 'large'}
+                disabled={shouldDisableNavigation(currentStep === 'generating')}
+                style={{
+                  borderRadius: 999,
+                  background: `color-mix(in srgb, ${token.colorWhite} 14%, transparent)`,
+                  borderColor: `color-mix(in srgb, ${token.colorWhite} 20%, transparent)`,
+                  color: token.colorWhite,
+                }}
+              >
+                {isMobile ? '返回' : '返回首页'}
+              </Button>
+            </Space>
+          </Card>
         </div>
-      </div>
 
-      {/* 内容区域 */}
+        <Card
+          variant="borderless"
+          style={{
+            marginBottom: 16,
+            background: `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimary} 10%, white 90%) 0%, color-mix(in srgb, ${token.colorInfo} 10%, white 90%) 100%)`,
+            borderRadius: 22,
+            border: `1px solid color-mix(in srgb, ${token.colorPrimary} 16%, white 84%)`,
+            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+          }}
+          styles={{ body: { padding: isMobile ? 16 : 18 } }}
+        >
+          <Row gutter={[16, 16]}>
+            <Col xs={24} lg={15}>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                  Launch Guide
+                </Typography.Text>
+                <Paragraph style={{ margin: 0, color: token.colorText, lineHeight: 1.75 }}>
+                  这个页面更像新项目启动台。原有的向导表单、恢复未完成生成和 AI 项目生成逻辑都保持不变，这里只把填写顺序和当前应该优先确认的内容提前说明。
+                </Paragraph>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {wizardGuideSteps.map((item, index) => (
+                    <span
+                      key={item}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '6px 12px',
+                        borderRadius: 999,
+                        background: token.colorBgContainer,
+                        border: `1px solid ${token.colorBorderSecondary}`,
+                        color: token.colorTextBase,
+                        fontSize: 12,
+                      }}
+                    >
+                      <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              </Space>
+            </Col>
+            <Col xs={24} lg={9}>
+              <div
+                style={{
+                  height: '100%',
+                  borderRadius: 18,
+                  padding: isMobile ? '14px 14px 12px' : '16px 18px 14px',
+                  background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                }}
+              >
+                <Typography.Text style={{ display: 'block', color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                  当前启动焦点
+                </Typography.Text>
+                <Title level={5} style={{ margin: '8px 0 6px', color: token.colorTextBase, fontFamily: designDisplayFont }}>
+                  {wizardWorkspaceFocus.title}
+                </Title>
+                <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
+                  {wizardWorkspaceFocus.note}
+                </Paragraph>
+              </div>
+            </Col>
+          </Row>
+        </Card>
+
       <div style={{
-        maxWidth: 800,
+        maxWidth: currentStep === 'form' ? 920 : 1120,
         margin: '0 auto',
-        padding: isMobile ? '16px 12px' : '24px 24px',
       }}>
-        {currentStep === 'form' && renderForm()}
-        {currentStep === 'generating' && generationConfig && (
-          <AIProjectGenerator
-            config={generationConfig}
-            storagePrefix="wizard"
-            onComplete={handleComplete}
-            onBack={handleBack}
-            onBusyChange={setIsGenerationBusy}
-            backButtonText="返回向导首页"
-            isMobile={isMobile}
-            resumeProjectId={resumeProjectId ?? undefined}
-          />
-        )}
+        <Card
+          variant="borderless"
+          style={{
+            background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
+            borderRadius: 24,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+          }}
+          styles={{ body: { padding: isMobile ? 16 : 20 } }}
+        >
+          {currentStep === 'form' && renderForm()}
+          {currentStep === 'generating' && generationConfig && (
+            <AIProjectGenerator
+              config={generationConfig}
+              storagePrefix="wizard"
+              onComplete={handleComplete}
+              onBack={handleBack}
+              onBusyChange={setIsGenerationBusy}
+              backButtonText="返回向导首页"
+              isMobile={isMobile}
+              resumeProjectId={resumeProjectId ?? undefined}
+            />
+          )}
+        </Card>
+      </div>
       </div>
     </div>
   );

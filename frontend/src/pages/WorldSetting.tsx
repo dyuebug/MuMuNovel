@@ -1,14 +1,14 @@
-import { Card, Descriptions, Empty, Typography, Button, Modal, Form, Input, message, Flex, InputNumber, Select } from 'antd';
+import { Card, Descriptions, Empty, Typography, Button, Modal, Form, Input, message, Flex, InputNumber, Select, Row, Col, Alert, theme } from 'antd';
 import { GlobalOutlined, EditOutlined, SyncOutlined, FormOutlined } from '@ant-design/icons';
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
 import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgroundTasks';
-import { cardStyles } from '../components/CardStyles';
 import { backgroundTaskApi, projectApi } from '../services/modularApi';
 import { formatBackgroundTaskError } from '../utils/taskPolling';
 import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
 import { isRequestCancelledError } from '../services/core/httpClient';
 import { SSELoadingOverlay } from '../components/SSELoadingOverlay';
+import { designDisplayFont } from '../theme/themeConfig';
 import type { QualityPreset } from '../types';
 import {
   CREATIVE_MODE_OPTIONS,
@@ -102,8 +102,10 @@ const selectWorldReplayTaskSignature = (
 };
 
 export default function WorldSetting() {
+  const { token } = theme.useToken();
   const { currentProject, setCurrentProject } = useStore();
   const activeProjectIdRef = useRef<string | null>(currentProject?.id ?? null);
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [editForm] = Form.useForm();
   const [isSaving, setIsSaving] = useState(false);
@@ -137,6 +139,17 @@ export default function WorldSetting() {
   useEffect(() => {
     activeProjectIdRef.current = currentProject?.id ?? null;
   }, [currentProject?.id]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth <= 768);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, []);
 
   const { currentTaskIdRef, startTaskPolling, stopTaskPolling } = useRestorableBackgroundTaskPolling({
     projectId: currentProject?.id,
@@ -375,278 +388,489 @@ export default function WorldSetting() {
 
   if (!currentProject) return null;
 
-  // 检查是否有世界设定信息
-  const hasWorldSetting = currentProject.world_time_period ||
-    currentProject.world_location ||
-    currentProject.world_atmosphere ||
-    currentProject.world_rules;
+  const editorialInk = token.colorText;
+  const heroBackground = `linear-gradient(135deg, #171411 0%, color-mix(in srgb, #171411 68%, ${token.colorPrimary} 32%) 100%)`;
+  const panelBackground = `linear-gradient(180deg, color-mix(in srgb, ${token.colorBgContainer} 96%, ${token.colorPrimary} 4%) 0%, color-mix(in srgb, ${token.colorBgContainer} 92%, ${token.colorWarning} 8%) 100%)`;
+  const quietPanelBackground = `linear-gradient(180deg, color-mix(in srgb, ${token.colorBgContainer} 98%, ${token.colorBgLayout} 2%) 0%, color-mix(in srgb, ${token.colorBgContainer} 92%, ${token.colorBgLayout} 8%) 100%)`;
+  const panelBorder = `1px solid color-mix(in srgb, ${token.colorPrimary} 12%, ${token.colorBorder} 88%)`;
+  const outlineButtonStyle = {
+    borderRadius: 999,
+    background: 'color-mix(in srgb, var(--ant-color-bg-container) 14%, transparent)',
+    border: '1px solid color-mix(in srgb, var(--ant-color-bg-container) 20%, transparent)',
+    color: editorialInk,
+    boxShadow: `0 10px 18px color-mix(in srgb, ${token.colorText} 18%, transparent)`,
+    backdropFilter: 'blur(8px)',
+  } as const;
+  const worldSections = [
+    {
+      key: 'time',
+      title: '时间设定',
+      color: token.colorPrimary,
+      content: currentProject.world_time_period,
+      summary: '定义时代背景、文明阶段与历史感。',
+    },
+    {
+      key: 'location',
+      title: '地点设定',
+      color: token.colorSuccess,
+      content: currentProject.world_location,
+      summary: '承载地理空间、区域差异与场景分层。',
+    },
+    {
+      key: 'atmosphere',
+      title: '氛围设定',
+      color: token.colorWarning,
+      content: currentProject.world_atmosphere,
+      summary: '决定作品整体情绪、质地和阅读温度。',
+    },
+    {
+      key: 'rules',
+      title: '规则设定',
+      color: token.colorError,
+      content: currentProject.world_rules,
+      summary: '约束力量体系、社会规则与冲突边界。',
+    },
+  ].filter((item) => item.content);
 
-  if (!hasWorldSetting) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        {/* 固定头部 */}
-        <div style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 10,
-          backgroundColor: '#fff',
-          padding: '16px 0',
-          marginBottom: 16,
-          borderBottom: '1px solid var(--color-border-secondary)',
-          display: 'flex',
-          alignItems: 'center'
-        }}>
-          <GlobalOutlined style={{ fontSize: 24, marginRight: 12, color: 'var(--color-primary)' }} />
-          <h2 style={{ margin: 0 }}>世界设定</h2>
-        </div>
+  const projectSummaryItems = [
+    {
+      label: '小说类型',
+      value: currentProject.genre || '未设定',
+    },
+    {
+      label: '叙事视角',
+      value: currentProject.narrative_perspective || '未设定',
+    },
+    {
+      label: '目标字数',
+      value: currentProject.target_words ? `${currentProject.target_words.toLocaleString()} 字` : '未设定',
+    },
+  ];
 
-        {/* 可滚动内容区域 */}
-        <div style={{ flex: 1, overflowY: 'auto' }}>
-          <Empty
-            description="暂无世界设定信息"
-            style={{ marginTop: 60 }}
-          >
-            <Paragraph type="secondary">
-              世界设定信息在创建项目向导中生成，用于构建小说的世界观背景。
-            </Paragraph>
-          </Empty>
-        </div>
-      </div>
-    );
-  }
+  const preferenceSummaryItems = [
+    {
+      label: '默认创作模式',
+      value: resolveOptionLabel(CREATIVE_MODE_OPTIONS, currentProject.default_creative_mode),
+    },
+    {
+      label: '结构侧重点',
+      value: resolveOptionLabel(STORY_FOCUS_OPTIONS, currentProject.default_story_focus),
+    },
+    {
+      label: '剧情阶段',
+      value: resolveOptionLabel(PLOT_STAGE_OPTIONS, currentProject.default_plot_stage),
+    },
+    {
+      label: '质量预设',
+      value: resolveOptionLabel(QUALITY_PRESET_OPTIONS, currentProject.default_quality_preset),
+    },
+  ];
+  const worldGuideItems = [
+    {
+      label: '阅读顺序',
+      value: '先看项目基础信息，再确认创作偏好，最后回到世界四大维度统一校对。',
+    },
+    {
+      label: '当前用途',
+      value: '这里维护的是角色、组织、章节与生成链路共享的世界观母本。',
+    },
+  ];
+  const worldCoverageItems = [
+    {
+      title: '世界框架',
+      description: '时间、地点、氛围、规则四块一起看，才更容易发现设定冲突与信息缺口。',
+    },
+    {
+      title: '生成入口',
+      description: '智能重建适合快速出第一稿，手动编辑更适合后续做精修和一致性治理。',
+    },
+  ];
+  const modalSurfaceStyles = {
+    content: {
+      borderRadius: 24,
+      border: `1px solid ${token.colorBorderSecondary}`,
+      background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, color-mix(in srgb, ${token.colorFillQuaternary} 52%, ${token.colorBgContainer} 48%) 100%)`,
+      boxShadow: `0 28px 56px color-mix(in srgb, ${token.colorText} 12%, transparent)`,
+    },
+    header: {
+      background: 'transparent',
+      borderBottom: 'none',
+      paddingBottom: 0,
+    },
+    body: {
+      paddingTop: 16,
+    },
+  } as const;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18, paddingBottom: 24 }}>
       {contextHolder}
-      {/* 固定头部 */}
-      <div style={{
-        position: 'sticky',
-        top: 0,
-        zIndex: 10,
-        backgroundColor: '#fff',
-        padding: '16px 0',
-        marginBottom: 24,
-        borderBottom: '1px solid #f0f0f0'
-      }}>
-        <Flex
-          justify="space-between"
-          align="flex-start"
-          gap={12}
-          wrap="wrap"
-        >
-          <div style={{ display: 'flex', alignItems: 'center', minWidth: 'fit-content' }}>
-            <GlobalOutlined style={{ fontSize: 24, marginRight: 12, color: 'var(--color-primary)' }} />
-            <h2 style={{ margin: 0, whiteSpace: 'nowrap' }}>世界设定</h2>
-          </div>
-          <Flex gap={8} wrap="wrap" style={{ flex: '0 1 auto' }}>
-            <Button
-              icon={<SyncOutlined />}
-              onClick={handleRegenerateBackground}
-              disabled={Boolean(isRegenerating || activeTrackedWorldTask)}
-              style={{
-                minWidth: 'fit-content',
-                flex: '1 1 auto'
-              }}
-            >
-              <span className="button-text-mobile">智能重新生成</span>
-            </Button>
-            <Button
-              type="primary"
-              icon={<FormOutlined />}
-              onClick={() => {
-                editProjectForm.setFieldsValue({
-                  title: currentProject.title || '',
-                  description: currentProject.description || '',
-                  theme: currentProject.theme || '',
-                  genre: currentProject.genre || '',
-                  narrative_perspective: currentProject.narrative_perspective || '',
-                  target_words: currentProject.target_words || 0,
-                  default_creative_mode: currentProject.default_creative_mode,
-                  default_story_focus: currentProject.default_story_focus,
-                  default_plot_stage: currentProject.default_plot_stage,
-                  default_story_creation_brief: currentProject.default_story_creation_brief || '',
-                  default_quality_preset: currentProject.default_quality_preset,
-                  default_quality_notes: currentProject.default_quality_notes || '',
-                });
-                setIsEditProjectModalVisible(true);
-              }}
-              style={{
-                minWidth: 'fit-content',
-                flex: '1 1 auto'
-              }}
-            >
-              <span className="button-text-mobile">编辑基础信息</span>
-            </Button>
-            <Button
-              type="primary"
-              icon={<EditOutlined />}
-              onClick={() => {
-                editForm.setFieldsValue({
-                  world_time_period: currentProject.world_time_period || '',
-                  world_location: currentProject.world_location || '',
-                  world_atmosphere: currentProject.world_atmosphere || '',
-                  world_rules: currentProject.world_rules || '',
-                });
-                setIsEditModalVisible(true);
-              }}
-              style={{
-                minWidth: 'fit-content',
-                flex: '1 1 auto'
-              }}
-            >
-              <span className="button-text-mobile">编辑世界观</span>
-            </Button>
-          </Flex>
+      <Card
+        variant="borderless"
+        style={{
+          background: heroBackground,
+          borderRadius: 28,
+          border: `1px solid color-mix(in srgb, ${token.colorBgContainer} 12%, transparent)`,
+          boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
+          overflow: 'hidden',
+          position: 'relative',
+        }}
+        styles={{ body: { padding: 24 } }}
+      >
+        <div style={{ position: 'absolute', top: -54, right: -44, width: 180, height: 180, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', bottom: -28, left: '28%', width: 110, height: 110, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', pointerEvents: 'none' }} />
+        <Row gutter={[24, 18]} align="middle" style={{ position: 'relative', zIndex: 1 }}>
+          <Col xs={24} lg={15}>
+            <Flex vertical gap={10}>
+              <Typography.Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase' }}>
+                Story Bible
+              </Typography.Text>
+              <Title level={2} style={{ margin: 0, color: editorialInk, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+                <GlobalOutlined style={{ marginRight: 10, color: 'rgba(255,255,255,0.9)' }} />
+                世界设定
+              </Title>
+              <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.82)', fontSize: 15, lineHeight: 1.8 }}>
+                这里不再只是字段展示，而是一份能被持续打磨的“项目世界观手册”。用更清晰的阅读节奏，统一项目设定、创作偏好与背景生成结果，让后续创作入口都能共享同一套底稿。
+              </Paragraph>
+            </Flex>
+          </Col>
+          <Col xs={24} lg={9}>
+            <Flex vertical gap={12}>
+              {projectSummaryItems.map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    padding: '12px 14px',
+                    borderRadius: 18,
+                    background: 'rgba(255,255,255,0.08)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    backdropFilter: 'blur(10px)',
+                  }}
+                >
+                  <Typography.Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12 }}>{item.label}</Typography.Text>
+                  <Typography.Text style={{ color: editorialInk, fontWeight: 600 }}>{item.value}</Typography.Text>
+                </div>
+              ))}
+            </Flex>
+          </Col>
+        </Row>
+        <Flex wrap gap={10} style={{ marginTop: 20, position: 'relative', zIndex: 1 }}>
+          <Button
+            icon={<SyncOutlined />}
+            onClick={handleRegenerateBackground}
+            disabled={Boolean(isRegenerating || activeTrackedWorldTask)}
+            style={outlineButtonStyle}
+          >
+            智能重新生成
+          </Button>
+          <Button
+            icon={<FormOutlined />}
+            onClick={() => {
+              editProjectForm.setFieldsValue({
+                title: currentProject.title || '',
+                description: currentProject.description || '',
+                theme: currentProject.theme || '',
+                genre: currentProject.genre || '',
+                narrative_perspective: currentProject.narrative_perspective || '',
+                target_words: currentProject.target_words || 0,
+                default_creative_mode: currentProject.default_creative_mode,
+                default_story_focus: currentProject.default_story_focus,
+                default_plot_stage: currentProject.default_plot_stage,
+                default_story_creation_brief: currentProject.default_story_creation_brief || '',
+                default_quality_preset: currentProject.default_quality_preset,
+                default_quality_notes: currentProject.default_quality_notes || '',
+              });
+              setIsEditProjectModalVisible(true);
+            }}
+            style={outlineButtonStyle}
+          >
+            编辑基础信息
+          </Button>
+          <Button
+            type="primary"
+            icon={<EditOutlined />}
+            onClick={() => {
+              editForm.setFieldsValue({
+                world_time_period: currentProject.world_time_period || '',
+                world_location: currentProject.world_location || '',
+                world_atmosphere: currentProject.world_atmosphere || '',
+                world_rules: currentProject.world_rules || '',
+              });
+              setIsEditModalVisible(true);
+            }}
+            style={{ borderRadius: 999, paddingInline: 18 }}
+          >
+            编辑世界观
+          </Button>
         </Flex>
-      </div>
+      </Card>
 
-      {/* 可滚动内容区域 */}
-      <div style={{ flex: 1, overflowY: 'auto' }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.15fr) minmax(320px, 0.95fr)',
+          gap: 16,
+        }}
+      >
         <Card
+          variant="borderless"
           style={{
-            ...cardStyles.base,
-            marginBottom: 16
+            borderRadius: 22,
+            background: quietPanelBackground,
+            border: panelBorder,
+            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
           }}
-          title={
-            <span style={{ fontSize: 18, fontWeight: 500 }}>
-              基础信息
-            </span>
-          }
+          styles={{ body: { padding: 18 } }}
         >
-          <Descriptions bordered column={1} styles={{ label: { width: 120, fontWeight: 500 } }}>
-            <Descriptions.Item label="小说名称">{currentProject.title}</Descriptions.Item>
-            {currentProject.description && (
-              <Descriptions.Item label="小说简介">{currentProject.description}</Descriptions.Item>
-            )}
-            <Descriptions.Item label="小说主题">{currentProject.theme || '未设定'}</Descriptions.Item>
-            <Descriptions.Item label="小说类型">{currentProject.genre || '未设定'}</Descriptions.Item>
-            <Descriptions.Item label="叙事视角">{currentProject.narrative_perspective || '未设定'}</Descriptions.Item>
-            <Descriptions.Item label="目标字数">
-              {currentProject.target_words ? `${currentProject.target_words.toLocaleString()} 字` : '未设定'}
-            </Descriptions.Item>
-            <Descriptions.Item label="默认创作模式">
-              {resolveOptionLabel(CREATIVE_MODE_OPTIONS, currentProject.default_creative_mode)}
-            </Descriptions.Item>
-            <Descriptions.Item label="默认结构侧重点">
-              {resolveOptionLabel(STORY_FOCUS_OPTIONS, currentProject.default_story_focus)}
-            </Descriptions.Item>
-            <Descriptions.Item label="默认剧情阶段">
-              {resolveOptionLabel(PLOT_STAGE_OPTIONS, currentProject.default_plot_stage)}
-            </Descriptions.Item>
-            <Descriptions.Item label="默认质量预设">
-              <Flex vertical gap={2}>
-                <span>{resolveOptionLabel(QUALITY_PRESET_OPTIONS, currentProject.default_quality_preset)}</span>
-                {resolveOptionDescription(QUALITY_PRESET_OPTIONS, currentProject.default_quality_preset) && (
-                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                    {resolveOptionDescription(QUALITY_PRESET_OPTIONS, currentProject.default_quality_preset)}
-                  </Typography.Text>
-                )}
-              </Flex>
-            </Descriptions.Item>
-            <Descriptions.Item label="默认创作总控摘要">
-              <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
-                {currentProject.default_story_creation_brief?.trim() || '未设定'}
-              </Paragraph>
-            </Descriptions.Item>
-            <Descriptions.Item label="默认质量补充偏好">
-              <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
-                {currentProject.default_quality_notes?.trim() || '未设定'}
-              </Paragraph>
-            </Descriptions.Item>
-          </Descriptions>
-        </Card>
-
-        <Card
-          style={{
-            ...cardStyles.base,
-            marginBottom: 16
-          }}
-          title={
-            <span style={{ fontSize: 18, fontWeight: 500 }}>
-              <GlobalOutlined style={{ marginRight: 8 }} />
-              小说世界观
-            </span>
-          }
-        >
-          <div style={{ padding: '16px 0' }}>
-            {currentProject.world_time_period && (
-              <div style={{ marginBottom: 24 }}>
-                <Title level={5} style={{ color: 'var(--color-primary)', marginBottom: 12 }}>
-                  时间设定
-                </Title>
-                <Paragraph style={{
-                  fontSize: 15,
-                  lineHeight: 1.8,
-                  padding: 16,
-                  background: 'var(--color-bg-layout)',
-                  borderRadius: 8,
-                  borderLeft: '4px solid var(--color-primary)'
-                }}>
-                  {currentProject.world_time_period}
-                </Paragraph>
+          <Typography.Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+            World Manual
+          </Typography.Text>
+          <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+            世界观阅读导引
+          </Title>
+          <Paragraph type="secondary" style={{ marginBottom: 14, lineHeight: 1.8 }}>
+            这页更像项目的世界设定手册。先把基础资料和默认偏好看成“创作前提”，再用四大世界维度去校正设定本身是否完整、统一、可落地。
+          </Paragraph>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+            {worldGuideItems.map((item) => (
+              <div
+                key={item.label}
+                style={{
+                  borderRadius: 16,
+                  padding: '12px 14px',
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  background: token.colorBgContainer,
+                }}
+              >
+                <Typography.Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
+                  {item.label}
+                </Typography.Text>
+                <Typography.Text strong style={{ lineHeight: 1.7 }}>
+                  {item.value}
+                </Typography.Text>
               </div>
-            )}
-
-            {currentProject.world_location && (
-              <div style={{ marginBottom: 24 }}>
-                <Title level={5} style={{ color: 'var(--color-success)', marginBottom: 12 }}>
-                  地点设定
-                </Title>
-                <Paragraph style={{
-                  fontSize: 15,
-                  lineHeight: 1.8,
-                  padding: 16,
-                  background: 'var(--color-bg-layout)',
-                  borderRadius: 8,
-                  borderLeft: '4px solid var(--color-success)'
-                }}>
-                  {currentProject.world_location}
-                </Paragraph>
-              </div>
-            )}
-
-            {currentProject.world_atmosphere && (
-              <div style={{ marginBottom: 24 }}>
-                <Title level={5} style={{ color: 'var(--color-warning)', marginBottom: 12 }}>
-                  氛围设定
-                </Title>
-                <Paragraph style={{
-                  fontSize: 15,
-                  lineHeight: 1.8,
-                  padding: 16,
-                  background: 'var(--color-bg-layout)',
-                  borderRadius: 8,
-                  borderLeft: '4px solid var(--color-warning)'
-                }}>
-                  {currentProject.world_atmosphere}
-                </Paragraph>
-              </div>
-            )}
-
-            {currentProject.world_rules && (
-              <div style={{ marginBottom: 0 }}>
-                <Title level={5} style={{ color: 'var(--color-error)', marginBottom: 12 }}>
-                  规则设定
-                </Title>
-                <Paragraph style={{
-                  fontSize: 15,
-                  lineHeight: 1.8,
-                  padding: 16,
-                  background: 'var(--color-bg-layout)',
-                  borderRadius: 8,
-                  borderLeft: '4px solid var(--color-error)'
-                }}>
-                  {currentProject.world_rules}
-                </Paragraph>
-              </div>
-            )}
+            ))}
           </div>
         </Card>
+
+        <Card
+          variant="borderless"
+          style={{
+            borderRadius: 22,
+            background: quietPanelBackground,
+            border: panelBorder,
+            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+          }}
+          styles={{ body: { padding: 18 } }}
+        >
+          <Typography.Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+            Coverage Map
+          </Typography.Text>
+          <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+            当前维护重点
+          </Title>
+          <Flex vertical gap={10}>
+            {worldCoverageItems.map((item) => (
+              <div
+                key={item.title}
+                style={{
+                  borderRadius: 16,
+                  padding: '12px 14px',
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  background: token.colorBgContainer,
+                }}
+              >
+                <Typography.Text strong style={{ display: 'block', marginBottom: 4 }}>
+                  {item.title}
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ lineHeight: 1.7 }}>
+                  {item.description}
+                </Typography.Text>
+              </div>
+            ))}
+          </Flex>
+        </Card>
       </div>
+
+      <Row gutter={[18, 18]}>
+        <Col xs={24} xl={9}>
+          <Flex vertical gap={18}>
+            <Card
+              variant="borderless"
+              style={{
+                borderRadius: 24,
+                background: panelBackground,
+                border: panelBorder,
+                boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+              }}
+              styles={{ body: { padding: 20 } }}
+            >
+              <Flex vertical gap={16}>
+                <div>
+                  <Typography.Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                    Project Profile
+                  </Typography.Text>
+                  <Title level={4} style={{ margin: '8px 0 0', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+                    基础信息
+                  </Title>
+                </div>
+                <Descriptions bordered column={1} styles={{ label: { width: 124, fontWeight: 600 } }}>
+                  <Descriptions.Item label="小说名称">{currentProject.title}</Descriptions.Item>
+                  {currentProject.description && (
+                    <Descriptions.Item label="小说简介">{currentProject.description}</Descriptions.Item>
+                  )}
+                  <Descriptions.Item label="小说主题">{currentProject.theme || '未设定'}</Descriptions.Item>
+                  <Descriptions.Item label="默认创作总控摘要">
+                    <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
+                      {currentProject.default_story_creation_brief?.trim() || '未设定'}
+                    </Paragraph>
+                  </Descriptions.Item>
+                  <Descriptions.Item label="默认质量补充偏好">
+                    <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
+                      {currentProject.default_quality_notes?.trim() || '未设定'}
+                    </Paragraph>
+                  </Descriptions.Item>
+                </Descriptions>
+              </Flex>
+            </Card>
+
+            <Card
+              variant="borderless"
+              style={{
+                borderRadius: 24,
+                background: quietPanelBackground,
+                border: panelBorder,
+                boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+              }}
+              styles={{ body: { padding: 20 } }}
+            >
+              <Flex vertical gap={16}>
+                <div>
+                  <Typography.Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                    Writing Defaults
+                  </Typography.Text>
+                  <Title level={4} style={{ margin: '8px 0 0', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+                    创作偏好速览
+                  </Title>
+                </div>
+                <Flex vertical gap={12}>
+                  {preferenceSummaryItems.map((item) => (
+                    <div
+                      key={item.label}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 12,
+                        padding: '12px 14px',
+                        borderRadius: 16,
+                        background: 'color-mix(in srgb, var(--ant-color-bg-container) 74%, var(--ant-color-bg-layout) 26%)',
+                        border: `1px solid ${token.colorBorderSecondary}`,
+                      }}
+                    >
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>{item.label}</Typography.Text>
+                      <Typography.Text style={{ fontWeight: 600, textAlign: 'right' }}>{item.value}</Typography.Text>
+                    </div>
+                  ))}
+                </Flex>
+                <Typography.Text type="secondary" style={{ fontSize: 12, lineHeight: 1.7 }}>
+                  当前质量预设说明：{resolveOptionDescription(QUALITY_PRESET_OPTIONS, currentProject.default_quality_preset) || '未设置额外质量说明。'}
+                </Typography.Text>
+              </Flex>
+            </Card>
+          </Flex>
+        </Col>
+
+        <Col xs={24} xl={15}>
+          <Card
+            variant="borderless"
+            style={{
+              borderRadius: 24,
+              background: quietPanelBackground,
+              border: panelBorder,
+              boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+            }}
+            styles={{ body: { padding: 20 } }}
+          >
+            <Flex vertical gap={18}>
+              <div>
+                <Typography.Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                  World Notes
+                </Typography.Text>
+                <Title level={3} style={{ margin: '8px 0 0', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+                  小说世界观
+                </Title>
+              </div>
+              {worldSections.length === 0 ? (
+                <Empty description="暂无世界设定信息" style={{ padding: '48px 0 40px' }}>
+                  <Paragraph type="secondary" style={{ maxWidth: 520, margin: '8px auto 20px', lineHeight: 1.8 }}>
+                    世界设定信息会成为角色、组织与章节生成的共同背景。建议先补齐项目基础信息，然后使用智能重建或手动编辑，建立第一版可迭代的世界观母本。
+                  </Paragraph>
+                  <Button
+                    type="primary"
+                    icon={<EditOutlined />}
+                    onClick={() => {
+                      editForm.setFieldsValue({
+                        world_time_period: currentProject.world_time_period || '',
+                        world_location: currentProject.world_location || '',
+                        world_atmosphere: currentProject.world_atmosphere || '',
+                        world_rules: currentProject.world_rules || '',
+                      });
+                      setIsEditModalVisible(true);
+                    }}
+                  >
+                    立即创建世界观
+                  </Button>
+                </Empty>
+              ) : worldSections.map((section) => (
+                <Card
+                  key={section.key}
+                  variant="borderless"
+                  style={{
+                    borderRadius: 20,
+                    background: 'color-mix(in srgb, var(--ant-color-bg-container) 86%, var(--ant-color-bg-layout) 14%)',
+                    border: `1px solid color-mix(in srgb, ${section.color} 18%, ${token.colorBorder} 82%)`,
+                    boxShadow: `0 12px 28px color-mix(in srgb, ${token.colorText} 5%, transparent)`,
+                  }}
+                  styles={{ body: { padding: 18 } }}
+                >
+                  <Flex vertical gap={10}>
+                    <div>
+                      <Title level={5} style={{ margin: 0, color: section.color }}>
+                        {section.title}
+                      </Title>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        {section.summary}
+                      </Typography.Text>
+                    </div>
+                    <Paragraph style={{ marginBottom: 0, whiteSpace: 'pre-wrap', lineHeight: 1.85, fontSize: 15 }}>
+                      {section.content}
+                    </Paragraph>
+                  </Flex>
+                </Card>
+              ))}
+            </Flex>
+          </Card>
+        </Col>
+      </Row>
 
       {/* 编辑世界观模态框 */}
       <Modal
-        title="编辑世界观"
+        title={(
+          <div>
+            <Typography.Text style={{ display: 'block', marginBottom: 4, fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+              World Editor
+            </Typography.Text>
+            <Typography.Text strong style={{ display: 'block', fontSize: 18 }}>
+              编辑世界观
+            </Typography.Text>
+            <Typography.Text type="secondary" style={{ display: 'block', marginTop: 4, lineHeight: 1.7 }}>
+              逐项校对四大维度，把世界观写成一份能长期复用的项目底稿。
+            </Typography.Text>
+          </div>
+        )}
         open={isEditModalVisible}
         centered
         onCancel={() => {
@@ -680,7 +904,15 @@ export default function WorldSetting() {
         width={800}
         okText="保存"
         cancelText="取消"
+        styles={modalSurfaceStyles}
       >
+        <Alert
+          type="info"
+          showIcon
+          style={{ borderRadius: 14, marginBottom: 16 }}
+          message="编辑建议"
+          description="建议用“背景 -> 作用 -> 限制”的方式写每一项，这样后续角色和章节生成更容易复用。"
+        />
         <Form
           form={editForm}
           layout="vertical"
@@ -742,7 +974,19 @@ export default function WorldSetting() {
 
       {/* 编辑项目基础信息模态框 */}
       <Modal
-        title="编辑项目基础信息"
+        title={(
+          <div>
+            <Typography.Text style={{ display: 'block', marginBottom: 4, fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+              Project Profile
+            </Typography.Text>
+            <Typography.Text strong style={{ display: 'block', fontSize: 18 }}>
+              编辑项目基础信息
+            </Typography.Text>
+            <Typography.Text type="secondary" style={{ display: 'block', marginTop: 4, lineHeight: 1.7 }}>
+              这里维护的是世界观手册的前提信息，包括题材、主题、叙事视角与默认创作偏好。
+            </Typography.Text>
+          </div>
+        )}
         open={isEditProjectModalVisible}
         centered
         onCancel={() => {
@@ -784,7 +1028,15 @@ export default function WorldSetting() {
         width={800}
         okText="保存"
         cancelText="取消"
+        styles={modalSurfaceStyles}
       >
+        <Alert
+          type="info"
+          showIcon
+          style={{ borderRadius: 14, marginBottom: 16 }}
+          message="维护建议"
+          description="优先保证简介、主题和默认偏好相互一致，这些信息会持续影响后续的大纲与章节生成。"
+        />
         <Form
           form={editProjectForm}
           layout="vertical"
@@ -1080,7 +1332,16 @@ export default function WorldSetting() {
 
       {/* 预览重新生成的内容模态框 */}
       <Modal
-        title="预览重新生成的世界观"
+        title={(
+          <div>
+            <Typography.Text style={{ display: 'block', marginBottom: 4, fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+              Regenerated Draft
+            </Typography.Text>
+            <Typography.Text strong style={{ display: 'block', fontSize: 18 }}>
+              预览重新生成的世界观
+            </Typography.Text>
+          </div>
+        )}
         open={isPreviewModalVisible}
         centered
         width={900}
@@ -1090,6 +1351,7 @@ export default function WorldSetting() {
         okText="确认替换"
         cancelText="取消"
         okButtonProps={{ danger: true }}
+        styles={modalSurfaceStyles}
       >
         {newWorldData && (
           <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>

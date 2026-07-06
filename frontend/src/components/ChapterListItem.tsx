@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import type { CSSProperties } from 'react';
-import { Badge, Button, List, Popconfirm, Space, Tag } from 'antd';
+import { Badge, Button, List, Popconfirm, Space, Tag, Typography, theme } from 'antd';
 import {
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -17,6 +17,7 @@ import {
 } from '@ant-design/icons';
 import type { Chapter, AnalysisTask } from '../types';
 import { useChapterAnalysisUiStore } from '../store/chapterAnalysisUi';
+import { designDisplayFont } from '../theme/themeConfig';
 
 type ChapterListItemVariant = 'flat' | 'grouped';
 
@@ -62,9 +63,11 @@ const isAnalysisTaskInProgress = (task?: AnalysisTask | null): boolean => (
 
 const mobileActionButtonStyle: CSSProperties = {
   minHeight: 34,
-  paddingInline: 10,
-  borderRadius: 8,
+  paddingInline: 12,
+  borderRadius: 12,
 };
+
+const { Paragraph, Text, Title } = Typography;
 
 const renderAnalysisStatus = (task?: AnalysisTask) => {
   if (!task) {
@@ -135,6 +138,9 @@ function ChapterListItem({
   onShowExpansionPlan,
   onOpenPlanEditor,
 }: ChapterListItemProps) {
+  const { token } = theme.useToken();
+  const alphaColor = (color: string, alpha: number) =>
+    `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
   const analysisTask = useChapterAnalysisUiStore((state) => state.tasksMap[chapter.id]);
   const hasContent = Boolean(chapter.content?.trim());
   const isAnalyzing = isAnalysisTaskInProgress(analysisTask);
@@ -144,21 +150,29 @@ function ChapterListItem({
   const titleText = variant === 'flat'
     ? `#${chapter.chapter_number} ${chapter.title}`
     : `第${chapter.chapter_number}章：${chapter.title}`;
+  const chapterEyebrow = variant === 'flat' ? 'Chapter Workspace' : 'Outline Chapter';
+  const heroBackground = variant === 'flat'
+    ? `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimary} 14%, ${token.colorBgContainer} 86%) 0%, color-mix(in srgb, ${token.colorWarning} 8%, ${token.colorBgContainer} 92%) 100%)`
+    : `linear-gradient(135deg, color-mix(in srgb, ${token.colorInfo} 14%, ${token.colorBgContainer} 86%) 0%, color-mix(in srgb, ${token.colorPrimary} 8%, ${token.colorBgContainer} 92%) 100%)`;
+  const quietPanelBackground = `linear-gradient(180deg, color-mix(in srgb, ${token.colorBgContainer} 95%, ${token.colorFillAlter} 5%) 0%, color-mix(in srgb, ${token.colorBgContainer} 88%, ${token.colorFillAlter} 12%) 100%)`;
 
   const itemStyle: CSSProperties = variant === 'flat'
     ? {
-        padding: '16px',
+        padding: '18px',
         marginBottom: 16,
-        background: '#fff',
-        borderRadius: 8,
-        border: '1px solid #f0f0f0',
+        background: quietPanelBackground,
+        borderRadius: 20,
+        border: `1px solid ${alphaColor(token.colorPrimary, 0.08)}`,
+        boxShadow: `0 20px 38px ${alphaColor(token.colorText, 0.06)}`,
         flexDirection: isMobile ? 'column' : 'row',
         alignItems: isMobile ? 'flex-start' : 'center',
       }
     : {
-        padding: '16px 0',
-        borderRadius: 8,
-        transition: 'background 0.3s ease',
+        padding: '18px 12px',
+        borderRadius: 18,
+        transition: 'background 0.3s ease, border-color 0.3s ease',
+        background: quietPanelBackground,
+        border: `1px solid ${token.colorBorderSecondary}`,
         flexDirection: isMobile ? 'column' : 'row',
         alignItems: isMobile ? 'flex-start' : 'center',
       };
@@ -237,26 +251,73 @@ function ChapterListItem({
     <List.Item id={`chapter-item-${chapter.id}`} style={itemStyle} actions={desktopActions}>
       <div style={{ width: '100%' }}>
         <List.Item.Meta
-          avatar={!isMobile && <FileTextOutlined style={{ fontSize: 32, color: 'var(--color-primary)' }} />}
+          avatar={!isMobile && (
+            <div
+              style={{
+                width: 42,
+                height: 42,
+                borderRadius: 14,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: alphaColor(token.colorPrimary, 0.14),
+                color: token.colorPrimary,
+              }}
+            >
+              <FileTextOutlined style={{ fontSize: 22 }} />
+            </div>
+          )}
           title={
             <div
               style={{
-                display: 'flex',
-                flexDirection: isMobile ? 'column' : 'row',
-                alignItems: isMobile ? 'flex-start' : 'center',
-                gap: isMobile ? 6 : 12,
+                display: 'grid',
+                gap: 12,
                 width: '100%',
               }}
             >
-              <span style={{ fontSize: isMobile ? 14 : 16, fontWeight: 500, minWidth: 0, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                {titleText}
-              </span>
+              <div
+                style={{
+                  padding: isMobile ? '12px 12px 10px' : '14px 14px 12px',
+                  borderRadius: 18,
+                  background: heroBackground,
+                  border: `1px solid ${alphaColor(token.colorPrimary, 0.08)}`,
+                }}
+              >
+                <Text
+                  style={{
+                    display: 'block',
+                    fontSize: 11,
+                    letterSpacing: '0.12em',
+                    textTransform: 'uppercase',
+                    color: token.colorTextTertiary,
+                  }}
+                >
+                  {chapterEyebrow}
+                </Text>
+                <Title
+                  level={isMobile ? 5 : 4}
+                  style={{
+                    margin: '6px 0 0',
+                    fontFamily: designDisplayFont,
+                    fontSize: isMobile ? 16 : 18,
+                    lineHeight: 1.35,
+                    minWidth: 0,
+                    wordBreak: 'break-word',
+                    overflowWrap: 'anywhere',
+                  }}
+                >
+                  {titleText}
+                </Title>
+              </div>
+
               <Space wrap size={isMobile ? 4 : 8} style={{ minWidth: 0 }}>
-                <Tag color={getStatusColor(chapter.status)}>{getStatusText(chapter.status)}</Tag>
-                <Badge count={`${chapter.word_count || 0}字`} style={{ backgroundColor: 'var(--color-success)' }} />
+                <Tag color={getStatusColor(chapter.status)} style={{ margin: 0, borderRadius: 999 }}>
+                  {getStatusText(chapter.status)}
+                </Tag>
+                <Badge count={`${chapter.word_count || 0}字`} style={{ backgroundColor: token.colorSuccess }} />
                 {renderAnalysisStatus(analysisTask)}
                 {!canGenerate ? (
-                  <Tag icon={<LockOutlined />} color="warning" title={generateDisabledReason}>
+                  <Tag icon={<LockOutlined />} color="warning" title={generateDisabledReason} style={{ margin: 0, borderRadius: 999 }}>
                     {"暂不可生成"}
                   </Tag>
                 ) : null}
@@ -287,12 +348,46 @@ function ChapterListItem({
           }
           description={
             hasContent ? (
-              <div style={{ marginTop: 8, color: 'rgba(0,0,0,0.65)', lineHeight: 1.6, fontSize: isMobile ? 12 : 14, wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
-                {previewText}
-                {hasMorePreview ? '...' : ''}
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: isMobile ? '12px 12px' : '14px 14px',
+                  borderRadius: 16,
+                  background: token.colorBgContainer,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                }}
+              >
+                <Text style={{ display: 'block', fontSize: 12, color: token.colorTextTertiary, marginBottom: 6 }}>
+                  正文摘录
+                </Text>
+                <Paragraph
+                  style={{
+                    margin: 0,
+                    color: token.colorTextSecondary,
+                    lineHeight: 1.7,
+                    fontSize: isMobile ? 12 : 14,
+                    wordBreak: 'break-word',
+                    overflowWrap: 'anywhere',
+                  }}
+                >
+                  {previewText}
+                  {hasMorePreview ? '...' : ''}
+                </Paragraph>
               </div>
             ) : (
-              <span style={{ color: 'rgba(0,0,0,0.45)', fontSize: isMobile ? 12 : 14 }}>{"暂无正文"}</span>
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: isMobile ? '12px 12px' : '14px 14px',
+                  borderRadius: 16,
+                  background: token.colorBgContainer,
+                  border: `1px dashed ${token.colorBorderSecondary}`,
+                }}
+              >
+                <Text style={{ color: token.colorTextTertiary, fontSize: isMobile ? 12 : 13 }}>
+                  暂无正文，当前条目仍保留阅读、编辑和后续创作入口。
+                </Text>
+              </div>
             )
           }
         />

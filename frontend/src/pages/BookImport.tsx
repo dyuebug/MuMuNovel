@@ -8,7 +8,6 @@ import {
   Popconfirm,
   Row,
   Space,
-  Spin,
   Steps,
   Tag,
   Typography,
@@ -19,6 +18,8 @@ import { bookImportApi } from '../services/modularApi';
 import { isRequestCancelledError } from '../services/core/httpClient';
 import { MAX_CONSECUTIVE_TASK_POLL_ERRORS } from '../utils/taskPolling';
 import { syncProjectToStoreById } from '../store/hooks';
+import InlineDeferredPanel from '../components/InlineDeferredPanel';
+import { designDisplayFont } from '../theme/themeConfig';
 import type {
   BookImportApplyPayload,
   BookImportPreview,
@@ -26,18 +27,69 @@ import type {
   BookImportTask,
 } from '../types';
 
-const { Text, Title } = Typography;
+const { Text, Title, Paragraph } = Typography;
 
 const LazyBookImportUploadStep = lazy(() => import('../components/BookImportUploadStep'));
 const LazyBookImportTaskStatusStep = lazy(() => import('../components/BookImportTaskStatusStep'));
 const LazyBookImportPreviewStep = lazy(() => import('../components/BookImportPreviewStep'));
 const LazyBookImportProgressStep = lazy(() => import('../components/BookImportProgressStep'));
 
-const bookImportLazyFallback = (
-  <div style={{ padding: 16, textAlign: 'center' }}>
-    <Spin />
-  </div>
-);
+const renderBookImportLazyFallback = (step: number) => {
+  const fallbackByStep = [
+    {
+      eyebrow: 'Book Import Upload',
+      title: '正在整理导入素材入口',
+      message: '系统正在恢复文件上传、任务启动与批量导入说明，原有导入任务创建逻辑保持不变。',
+      tags: [
+        { label: '上传入口', color: 'processing' },
+        { label: '导入任务创建', color: 'volcano' },
+        { label: '启动逻辑保持原样', color: 'green' },
+      ],
+    },
+    {
+      eyebrow: 'Book Import Status',
+      title: '正在接入导入任务状态面板',
+      message: '系统正在恢复任务轮询、取消入口与状态提示，原有后台任务状态流保持不变。',
+      tags: [
+        { label: '任务状态', color: 'cyan' },
+        { label: '后台轮询恢复中', color: 'processing' },
+        { label: '状态流保持原样', color: 'green' },
+      ],
+    },
+    {
+      eyebrow: 'Book Import Preview',
+      title: '正在展开拆书预览工作区',
+      message: '系统正在恢复章节预览、字段校对与应用入口，原有预览数据与确认逻辑保持不变。',
+      tags: [
+        { label: '拆书预览', color: 'gold' },
+        { label: '预览工作区恢复中', color: 'processing' },
+        { label: '确认逻辑保持原样', color: 'green' },
+      ],
+    },
+    {
+      eyebrow: 'Book Import Apply',
+      title: '正在接入导入结果与重试工作区',
+      message: '系统正在恢复导入进度、失败步骤重试与结果提示，原有任务收口和重试逻辑保持不变。',
+      tags: [
+        { label: '导入结果', color: 'blue' },
+        { label: '失败步骤重试', color: 'purple' },
+        { label: '结果逻辑保持原样', color: 'green' },
+      ],
+    },
+  ] as const;
+
+  const fallback = fallbackByStep[step] ?? fallbackByStep[0];
+
+  return (
+    <InlineDeferredPanel
+      eyebrow={fallback.eyebrow}
+      title={fallback.title}
+      message={fallback.message}
+      minHeight={260}
+      tags={[...fallback.tags]}
+    />
+  );
+};
 
 const syncCompletedProjectToStore = async (projectId: string) => {
   try {
@@ -245,6 +297,50 @@ export default function BookImport() {
     { title: '生成导入' },
   ];
   const currentStepText = stepItems[currentStep]?.title || '上传文件';
+  const heroStats = [
+    { label: '当前步骤', value: currentStepText, compact: true },
+    { label: '预览章节', value: preview?.chapters?.length ?? 0 },
+    { label: '失败步骤', value: failedSteps.length },
+    { label: '导入状态', value: isApplyComplete ? '已完成' : retrying ? '重试中' : applying ? '导入中' : '待处理', compact: true },
+  ];
+  const importGuideSteps = [
+    '先看当前步骤与统计卡，确认现在是在上传、解析、预览还是正式导入阶段。',
+    '再进入对应步骤面板处理内容，只在预览阶段改章节细节，在导入阶段观察进度和失败项。',
+    '最后再决定是否重试失败步骤或重新开始，避免在任务仍可恢复时过早清空当前流水线。',
+  ];
+  const importFocus = isApplyComplete
+    ? {
+        title: failedSteps.length > 0 ? '检查失败步骤并决定是否补跑' : '导入已完成，可以回看结果',
+        note: failedSteps.length > 0
+          ? `当前导入主流程已经结束，但还有 ${failedSteps.length} 个失败步骤待处理，适合先判断是否重试或跳过。`
+          : '当前导入已经完成，适合回看生成结果并确认项目内容是否已正确落库。',
+      }
+    : retrying
+      ? {
+          title: '等待失败步骤重试回流',
+          note: '当前正在补跑失败步骤，建议先观察进度反馈，避免重复点击或提前重开任务。',
+        }
+      : applying
+        ? {
+            title: '关注导入与生成进度',
+            note: '当前已经进入正式导入阶段，适合优先观察应用进度、错误提示和失败步骤列表。',
+          }
+        : currentStep === 2
+          ? {
+              title: '逐章校对预览内容',
+              note: '当前处在预览修改阶段，适合集中检查章节切分、标题和局部内容，再决定是否正式导入。',
+            }
+          : currentStep === 1
+            ? {
+                title: '等待解析结果生成',
+                note: '当前任务还在解析中，先关注状态刷新与任务可恢复性，等预览数据就绪后再进入内容校对。',
+              }
+            : {
+                title: taskId ? '继续当前导入流水线' : '从上传文件开始建立任务',
+                note: taskId
+                  ? '当前已经有导入任务上下文，适合沿着现有流水线继续推进，而不是重复创建新任务。'
+                  : '当前还在上传入口，先选定源文件并启动解析任务，再进入后续预览与导入步骤。',
+              };
 
   useEffect(() => {
     const sessionId = beginPageSession();
@@ -689,11 +785,13 @@ export default function BookImport() {
         <Card
           variant="borderless"
           style={{
-            background: `linear-gradient(135deg, ${token.colorPrimary} 0%, ${token.colorPrimaryHover} 100%)`,
+            background: `linear-gradient(135deg,
+              color-mix(in srgb, ${token.colorPrimary} 78%, #6f4537 22%) 0%,
+              color-mix(in srgb, ${token.colorInfo} 24%, #162129 76%) 100%)`,
             borderRadius: isMobile ? 16 : 20,
-            boxShadow: token.boxShadowSecondary,
+            boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
             marginBottom: isMobile ? 14 : 16,
-            border: 'none',
+            border: `1px solid color-mix(in srgb, ${token.colorBgContainer} 12%, transparent)`,
             position: 'relative',
             overflow: 'hidden',
           }}
@@ -704,12 +802,12 @@ export default function BookImport() {
           <Row align="middle" justify="space-between" gutter={[16, 16]} style={{ position: 'relative', zIndex: 1 }}>
             <Col xs={24} sm={12}>
               <Space direction="vertical" size={4}>
-                <Title level={isMobile ? 3 : 2} style={{ margin: 0, color: token.colorWhite, textShadow: `0 2px 4px ${token.colorBgMask}` }}>
+                <Title level={isMobile ? 3 : 2} style={{ margin: 0, color: token.colorWhite, fontFamily: designDisplayFont, letterSpacing: '-0.03em', textShadow: `0 2px 4px ${token.colorBgMask}` }}>
                   <InboxOutlined style={{ color: token.colorWhite, opacity: 0.9, marginRight: 8 }} />
                   拆书导入
                 </Title>
                 <Text style={{ fontSize: isMobile ? 12 : 14, color: token.colorTextLightSolid, opacity: 0.85, marginLeft: isMobile ? 40 : 48 }}>
-                  上传TXT并自动解析为章节、预览并导入项目
+                  上传 TXT 并自动解析为章节、预览并导入项目。这里像一条导入流水线：上传、解析、预览、应用和失败重试都在同一处完成。
                 </Text>
               </Space>
             </Col>
@@ -757,12 +855,37 @@ export default function BookImport() {
             </Col>
           </Row>
 
+          <Row gutter={[12, 12]} style={{ marginTop: isMobile ? 14 : 18, position: 'relative', zIndex: 1 }}>
+            {heroStats.map((item) => (
+              <Col xs={12} md={6} key={item.label}>
+                <div
+                  style={{
+                    minHeight: 88,
+                    borderRadius: 18,
+                    padding: '12px 14px',
+                    background: 'rgba(255,255,255,0.08)',
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    backdropFilter: 'blur(10px)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, display: 'block' }}>{item.label}</Text>
+                  <Text style={{ color: token.colorWhite, fontWeight: 700, fontSize: item.compact ? 15 : 24, lineHeight: 1.2, wordBreak: 'break-word' }}>
+                    {item.value}
+                  </Text>
+                </div>
+              </Col>
+            ))}
+          </Row>
+
           <Card
             variant="borderless"
             style={{
               marginTop: isMobile ? 14 : 18,
               borderRadius: 12,
-              background: token.colorBgContainer,
+              background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
               border: `1px solid ${token.colorBorderSecondary}`,
               boxShadow: token.boxShadow,
             }}
@@ -772,9 +895,76 @@ export default function BookImport() {
           </Card>
         </Card>
 
+        <Card
+          variant="borderless"
+          style={{
+            borderRadius: 22,
+            background: `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimary} 10%, white 90%) 0%, color-mix(in srgb, ${token.colorInfo} 10%, white 90%) 100%)`,
+            border: `1px solid color-mix(in srgb, ${token.colorPrimary} 16%, white 84%)`,
+            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+            marginBottom: 16,
+          }}
+          styles={{ body: { padding: isMobile ? 16 : 18 } }}
+        >
+          <Row gutter={[16, 16]}>
+            <Col xs={24} lg={15}>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                <Text style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                  Import Guide
+                </Text>
+                <Paragraph style={{ margin: 0, color: token.colorText, lineHeight: 1.75 }}>
+                  这个页面更像拆书导入流水线的控制台。原有缓存恢复、任务轮询、预览修改和失败重试逻辑都保持不变，这里只把每一步应该先看什么、后做什么说明得更清楚。
+                </Paragraph>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                  {importGuideSteps.map((item, index) => (
+                    <span
+                      key={item}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '6px 12px',
+                        borderRadius: 999,
+                        background: token.colorBgContainer,
+                        border: `1px solid ${token.colorBorderSecondary}`,
+                        color: token.colorTextBase,
+                        fontSize: 12,
+                      }}
+                    >
+                      <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              </Space>
+            </Col>
+            <Col xs={24} lg={9}>
+              <div
+                style={{
+                  height: '100%',
+                  borderRadius: 18,
+                  padding: isMobile ? '14px 14px 12px' : '16px 18px 14px',
+                  background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                }}
+              >
+                <Text style={{ display: 'block', color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                  当前导入焦点
+                </Text>
+                <Title level={5} style={{ margin: '8px 0 6px', color: token.colorTextBase, fontFamily: designDisplayFont }}>
+                  {importFocus.title}
+                </Title>
+                <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
+                  {importFocus.note}
+                </Paragraph>
+              </div>
+            </Col>
+          </Row>
+        </Card>
+
 
 {currentStep === 0 ? (
-  <Suspense fallback={bookImportLazyFallback}>
+  <Suspense fallback={renderBookImportLazyFallback(0)}>
     <LazyBookImportUploadStep
       file={file}
       creatingTask={creatingTask}
@@ -789,7 +979,7 @@ export default function BookImport() {
 ) : null}
 
 {currentStep === 1 ? (
-  <Suspense fallback={bookImportLazyFallback}>
+  <Suspense fallback={renderBookImportLazyFallback(1)}>
     <LazyBookImportTaskStatusStep
       taskId={taskId}
       taskStatus={taskStatus}
@@ -799,35 +989,46 @@ export default function BookImport() {
   </Suspense>
 ) : null}
 
-      {currentStep === 2 ? (
-        <Suspense fallback={bookImportLazyFallback}>
-          <LazyBookImportPreviewStep
-            applying={applying}
-            loadingPreview={loadingPreview}
-            preview={preview}
-            setPreview={setPreview}
-            updateChapter={updateChapter}
-            onApplyImport={applyImport}
-          />
-        </Suspense>
-      ) : null}
+      <Card
+        variant="borderless"
+        style={{
+          borderRadius: 24,
+          background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+        }}
+        styles={{ body: { padding: isMobile ? 14 : 18 } }}
+      >
+        {currentStep === 2 ? (
+          <Suspense fallback={renderBookImportLazyFallback(2)}>
+            <LazyBookImportPreviewStep
+              applying={applying}
+              loadingPreview={loadingPreview}
+              preview={preview}
+              setPreview={setPreview}
+              updateChapter={updateChapter}
+              onApplyImport={applyImport}
+            />
+          </Suspense>
+        ) : null}
 
-      {currentStep === 3 ? (
-        <Suspense fallback={bookImportLazyFallback}>
-          <LazyBookImportProgressStep
-            applyProgress={applyProgress}
-            applyMessage={applyMessage}
-            applyError={applyError}
-            failedSteps={failedSteps}
-            isApplyComplete={isApplyComplete}
-            retryProgress={retryProgress}
-            retrying={retrying}
-            retryMessage={retryMessage}
-            onRetryFailedSteps={retryFailedSteps}
-            onSkipFailedSteps={skipFailedSteps}
-          />
-        </Suspense>
-      ) : null}
+        {currentStep === 3 ? (
+          <Suspense fallback={renderBookImportLazyFallback(3)}>
+            <LazyBookImportProgressStep
+              applyProgress={applyProgress}
+              applyMessage={applyMessage}
+              applyError={applyError}
+              failedSteps={failedSteps}
+              isApplyComplete={isApplyComplete}
+              retryProgress={retryProgress}
+              retrying={retrying}
+              retryMessage={retryMessage}
+              onRetryFailedSteps={retryFailedSteps}
+              onSkipFailedSteps={skipFailedSteps}
+            />
+          </Suspense>
+        ) : null}
+      </Card>
 
 
       </div>

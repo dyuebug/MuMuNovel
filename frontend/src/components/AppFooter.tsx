@@ -1,26 +1,83 @@
 import { useState, useEffect, useRef } from 'react';
-import { Typography, Space, Divider, Badge, Button, Grid, theme } from 'antd';
-import { GithubOutlined, CopyrightOutlined, HeartFilled, ClockCircleOutlined, GiftOutlined } from '@ant-design/icons';
+import { Typography, Space, Badge, Grid, theme } from 'antd';
+import { GithubOutlined, CopyrightOutlined, HeartFilled, ClockCircleOutlined } from '@ant-design/icons';
 import { VERSION_INFO, getVersionString } from '../config/version';
 import { checkLatestVersion } from '../services/versionService';
+import { useThemeMode } from '../theme/useThemeMode';
 
 const { Text, Link } = Typography;
 const { useBreakpoint } = Grid;
 
 interface AppFooterProps {
   sidebarWidth?: number;
+  floating?: boolean;
 }
 
-export default function AppFooter({ sidebarWidth = 0 }: AppFooterProps) {
+export default function AppFooter({ sidebarWidth = 0, floating = false }: AppFooterProps) {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const [hasUpdate, setHasUpdate] = useState(false);
   const [latestVersion, setLatestVersion] = useState('');
   const [releaseUrl, setReleaseUrl] = useState('');
   const { token } = theme.useToken();
+  const { resolvedMode } = useThemeMode();
   const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
   const mountedRef = useRef(true);
   const requestIdRef = useRef(0);
+  const editorialSurface = resolvedMode === 'dark'
+    ? 'linear-gradient(135deg, #141311 0%, #1d1916 100%)'
+    : 'linear-gradient(135deg, #191613 0%, #241d18 100%)';
+  const editorialText = '#f7f1e8';
+  const editorialTextSoft = alphaColor(editorialText, 0.76);
+  const editorialBorder = alphaColor(editorialText, 0.12);
+
+  // 点击版本号查看更新
+  const handleVersionClick = () => {
+    if (hasUpdate && releaseUrl) {
+      window.open(releaseUrl, '_blank');
+    }
+  };
+
+  const resourceLinks = [
+    {
+      key: 'github',
+      label: 'GitHub 仓库',
+      href: VERSION_INFO.githubUrl,
+      icon: <GithubOutlined style={{ fontSize: 12 }} />,
+    },
+    {
+      key: 'community',
+      label: 'LinuxDO 社区',
+      href: VERSION_INFO.linuxDoUrl,
+    },
+    {
+      key: 'license',
+      label: VERSION_INFO.license,
+      href: VERSION_INFO.licenseUrl,
+      icon: <CopyrightOutlined style={{ fontSize: 11 }} />,
+    },
+  ];
+  const statusItems = [
+    {
+      key: 'version',
+      label: `版本 ${getVersionString()}`,
+      title: hasUpdate ? `发现新版本 v${latestVersion}，点击查看` : '当前版本',
+      clickable: hasUpdate && Boolean(releaseUrl),
+      onClick: handleVersionClick,
+    },
+    {
+      key: 'build',
+      label: `Build ${VERSION_INFO.buildTime}`,
+      title: '当前构建时间',
+    },
+    {
+      key: 'update',
+      label: hasUpdate ? `可更新到 v${latestVersion}` : '已是当前已知版本',
+      title: hasUpdate ? `发现新版本 v${latestVersion}` : '当前未发现新版本',
+      clickable: hasUpdate && Boolean(releaseUrl),
+      onClick: handleVersionClick,
+    },
+  ];
 
   useEffect(() => {
     mountedRef.current = true;
@@ -51,262 +108,113 @@ export default function AppFooter({ sidebarWidth = 0 }: AppFooterProps) {
     };
   }, []);
 
-  // 点击版本号查看更新
-  const handleVersionClick = () => {
-    if (hasUpdate && releaseUrl) {
-      window.open(releaseUrl, '_blank');
-    }
-  };
-
   // 计算左边距：桌面端有侧边栏时需要偏移
   const leftOffset = isMobile ? 0 : sidebarWidth;
 
   return (
     <div
       style={{
-        position: 'fixed',
-        bottom: 0,
-        left: leftOffset,
-        right: 0,
-        backdropFilter: 'blur(20px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-        borderTop: `1px solid ${token.colorBorder}`,
-        padding: isMobile ? '8px 12px' : '10px 16px',
-        zIndex: 100,
-        boxShadow: `0 -2px 16px ${alphaColor(token.colorText, 0.08)}`,
-        backgroundColor: alphaColor(token.colorBgContainer, 0.82), // 半透明背景以支持 backdrop-filter
-        transition: 'left 0.3s ease', // 平滑过渡
+        position: floating ? 'fixed' : 'relative',
+        bottom: floating ? 0 : 'auto',
+        left: floating ? leftOffset : 'auto',
+        right: floating ? 0 : 'auto',
+        width: '100%',
+        padding: isMobile ? '8px 10px' : '8px 16px',
+        zIndex: floating ? 100 : 'auto',
+        transition: floating ? 'left 0.3s ease' : undefined,
+        pointerEvents: floating ? 'none' : 'auto',
+        marginTop: floating ? 0 : (isMobile ? 8 : 12),
       }}
     >
       <div
         style={{
-          maxWidth: 1400,
+          maxWidth: 1240,
           margin: '0 auto',
-          textAlign: 'center',
+          borderRadius: isMobile ? 12 : 14,
+          border: `1px solid ${editorialBorder}`,
+          background: editorialSurface,
+          boxShadow: `0 12px 30px ${alphaColor('#000000', 0.18)}`,
+          padding: isMobile ? '8px 10px' : '8px 14px',
+          pointerEvents: 'auto',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: isMobile ? 8 : 14,
+          flexWrap: 'wrap',
         }}
       >
-        {isMobile ? (
-          // 移动端：紧凑单行布局
-          <div style={{
-            display: 'flex',
-            justifyContent: 'center',
-            alignItems: 'center',
-            gap: 8,
-            flexWrap: 'wrap'
-          }}>
-            <Badge dot={hasUpdate} offset={[-8, 2]}>
-              <Text
-                onClick={handleVersionClick}
-                style={{
-                  fontSize: 11,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  color: token.colorPrimary,
-                  cursor: hasUpdate ? 'pointer' : 'default',
-                }}
-                title={hasUpdate ? `发现新版本 v${latestVersion}，点击查看` : '当前版本'}
-              >
-                <strong style={{ color: token.colorText }}>{VERSION_INFO.projectName}</strong>
-                <span>{getVersionString()}</span>
-              </Text>
-            </Badge>
-            <Divider type="vertical" style={{ margin: '0 4px', borderColor: token.colorBorder }} />
-            <Button
-              type="text"
-              size="small"
-              icon={<GiftOutlined />}
-              onClick={() => window.open('https://mumuverse.space:1588/', '_blank')}
-              style={{
-                color: token.colorTextSecondary,
-                fontSize: 11,
-                height: 24,
-                padding: '0 4px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-              }}
-            >
-              赞助
-            </Button>
-            <Divider type="vertical" style={{ margin: '0 4px', borderColor: token.colorBorder }} />
-            <Link
-              href={VERSION_INFO.githubUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                fontSize: 11,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-                color: token.colorTextSecondary,
-              }}
-            >
-              <GithubOutlined style={{ fontSize: 12 }} />
-            </Link>
-            <Text
-              style={{
-                fontSize: 10,
-                color: token.colorTextTertiary,
-              }}
-            >
-              <ClockCircleOutlined style={{ fontSize: 10, marginRight: 4 }} />
-              {VERSION_INFO.buildTime}
-            </Text>
-          </div>
-        ) : (
-          // PC端：完整布局
-          <Space
-            direction="horizontal"
-            size={12}
-            split={<Divider type="vertical" style={{ borderColor: token.colorBorder }} />}
+        <Badge dot={hasUpdate} offset={[-4, 4]}>
+          <button
+            type="button"
+            onClick={hasUpdate ? handleVersionClick : undefined}
+            title={hasUpdate ? `发现新版本 v${latestVersion}，点击查看` : '当前版本'}
             style={{
-              display: 'flex',
-              justifyContent: 'center',
-              alignItems: 'center'
+              appearance: 'none',
+              border: 0,
+              padding: 0,
+              margin: 0,
+              background: 'transparent',
+              color: editorialText,
+              cursor: hasUpdate ? 'pointer' : 'default',
+              fontWeight: 700,
+              fontSize: isMobile ? 13 : 14,
+              lineHeight: 1.4,
             }}
           >
-            {/* 版本信息 */}
-            <Badge dot={hasUpdate} offset={[-8, 2]}>
-              <Text
-                onClick={handleVersionClick}
-                style={{
-                  fontSize: 12,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  color: token.colorTextSecondary,
-                  textShadow: 'none',
-                  cursor: hasUpdate ? 'pointer' : 'default',
-                  transition: 'all 0.3s',
-                }}
-                onMouseEnter={(e) => {
-                  if (hasUpdate) {
-                    e.currentTarget.style.transform = 'scale(1.05)';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (hasUpdate) {
-                    e.currentTarget.style.transform = 'scale(1)';
-                  }
-                }}
-                title={hasUpdate ? `发现新版本 v${latestVersion}，点击查看` : '当前版本'}
-              >
-                <strong style={{ color: token.colorText }}>{VERSION_INFO.projectName}</strong>
-                <span>{getVersionString()}</span>
-              </Text>
-            </Badge>
+            {VERSION_INFO.projectName}
+          </button>
+        </Badge>
 
-            {/* GitHub 链接 */}
+        <Space wrap size={[8, 6]}>
+          {statusItems.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={item.clickable ? item.onClick : undefined}
+              title={item.title}
+              style={{
+                appearance: 'none',
+                border: `1px solid ${editorialBorder}`,
+                borderRadius: 999,
+                background: alphaColor('#ffffff', 0.03),
+                color: editorialTextSoft,
+                fontSize: 11,
+                lineHeight: 1.4,
+                padding: '4px 9px',
+                cursor: item.clickable ? 'pointer' : 'default',
+              }}
+            >
+              {item.key === 'build' ? <ClockCircleOutlined style={{ marginRight: 5, fontSize: 11 }} /> : null}
+              {item.label}
+            </button>
+          ))}
+        </Space>
+
+        <Space wrap size={[10, 6]}>
+          {resourceLinks.map((item) => (
             <Link
-              href={VERSION_INFO.githubUrl}
+              key={item.key}
+              href={item.href}
               target="_blank"
               rel="noopener noreferrer"
               style={{
-                fontSize: 12,
-                display: 'flex',
+                display: 'inline-flex',
                 alignItems: 'center',
-                gap: 6,
-                color: token.colorTextSecondary,
+                gap: 5,
+                color: editorialTextSoft,
+                fontSize: 12,
               }}
             >
-              <GithubOutlined style={{ fontSize: 13 }} />
-              <span>GitHub</span>
+              {item.icon}
+              <span>{item.label}</span>
             </Link>
-
-            {/* LinuxDO 社区 */}
-            <Link
-              href={VERSION_INFO.linuxDoUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                fontSize: 12,
-                color: token.colorTextSecondary,
-              }}
-            >
-              LinuxDO 社区
-            </Link>
-
-            {/* 赞助按钮 */}
-            <Button
-              type="primary"
-              icon={<GiftOutlined style={{ fontSize: 14 }} />}
-              onClick={() => window.open('https://mumuverse.space:1588/', '_blank')}
-              style={{
-                background: token.colorPrimary,
-                border: 'none',
-                boxShadow: `0 4px 12px ${alphaColor(token.colorPrimary, 0.35)}`,
-                fontSize: 13,
-                height: 32,
-                padding: '0 20px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                fontWeight: 600,
-                transition: 'all 0.3s',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.transform = 'translateY(-2px)';
-                e.currentTarget.style.boxShadow = `0 6px 16px ${alphaColor(token.colorPrimary, 0.5)}`;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = `0 4px 12px ${alphaColor(token.colorPrimary, 0.35)}`;
-              }}
-            >
-              赞助支持
-            </Button>
-
-            {/* 许可证 */}
-            <Link
-              href={VERSION_INFO.licenseUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                fontSize: 12,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                color: token.colorTextSecondary,
-              }}
-            >
-              <CopyrightOutlined style={{ fontSize: 11 }} />
-              <span>{VERSION_INFO.license}</span>
-            </Link>
-
-            {/* 更新时间 */}
-            <Text
-              style={{
-                fontSize: 12,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-                color: token.colorTextTertiary,
-              }}
-            >
-              <ClockCircleOutlined style={{ fontSize: 12 }} />
-              <span>{VERSION_INFO.buildTime}</span>
-            </Text>
-
-            {/* 致谢信息 */}
-            <Text
-              style={{
-                fontSize: 12,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-                color: token.colorTextSecondary,
-                textShadow: `0 1px 3px ${alphaColor(token.colorText, 0.08)}`,
-              }}
-            >
-              <span>Made with</span>
-              <HeartFilled style={{ color: token.colorError, fontSize: 11 }} />
-              <span>by {VERSION_INFO.author}</span>
-            </Text>
-          </Space>
-        )}
+          ))}
+          <Text style={{ fontSize: 12, color: editorialTextSoft }}>
+            <HeartFilled style={{ color: token.colorError, fontSize: 11, marginRight: 5 }} />
+            {VERSION_INFO.author}
+          </Text>
+        </Space>
       </div>
-
     </div>
   );
 }

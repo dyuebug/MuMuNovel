@@ -2,6 +2,7 @@ import { Card } from 'antd';
 import type { CSSProperties } from 'react';
 
 import { renderCompactFactGrid } from './storyCreationCommonUi';
+import { designDisplayFont } from '../theme/themeConfig';
 
 export type CompactInsightGridCard = {
   key: string;
@@ -32,8 +33,41 @@ export const renderCompactInsightCardGrid = (
     >
       {normalizedCards.map((card) => (
         <div key={card.key} style={{ minWidth: 0 }}>
-          <Card size="small" title={card.title} style={{ height: '100%' }}>
-            <div style={{ color: 'var(--color-text-secondary)', fontSize: 12, lineHeight: 1.6, marginBottom: 8 }}>
+          <Card
+            size="small"
+            title={(
+              <div
+                style={{
+                  fontFamily: designDisplayFont,
+                  letterSpacing: '-0.02em',
+                  fontWeight: 700,
+                  fontSize: 15,
+                }}
+              >
+                {card.title}
+              </div>
+            )}
+            style={{
+              height: '100%',
+              borderRadius: 20,
+              border: '1px solid color-mix(in srgb, var(--ant-color-primary) 12%, var(--ant-color-border-secondary) 88%)',
+              background: 'linear-gradient(180deg, color-mix(in srgb, var(--ant-color-primary) 6%, var(--ant-color-bg-container) 94%) 0%, color-mix(in srgb, var(--ant-color-fill-alter) 42%, var(--ant-color-bg-container) 58%) 100%)',
+              boxShadow: '0 16px 32px color-mix(in srgb, var(--ant-color-primary) 7%, transparent)',
+            }}
+            styles={{
+              header: {
+                borderBottom: '1px solid color-mix(in srgb, var(--ant-color-border-secondary) 72%, transparent)',
+              },
+            }}
+          >
+            <div
+              style={{
+                color: 'var(--color-text-secondary)',
+                fontSize: 12,
+                lineHeight: 1.7,
+                marginBottom: 12,
+              }}
+            >
               {card.summary}
             </div>
             {renderCompactFactGrid(

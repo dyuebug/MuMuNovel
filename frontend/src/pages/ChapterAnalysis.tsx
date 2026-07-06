@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Card, List, Button, Space, Empty, Tag, Spin, Alert, Switch, Drawer, message, theme } from 'antd';
+import { Card, List, Button, Space, Empty, Tag, Alert, Switch, Drawer, message, theme, Typography, Row, Col, Divider } from 'antd';
 import {
   EyeOutlined,
   EyeInvisibleOutlined,
@@ -7,13 +7,14 @@ import {
   LeftOutlined,
   RightOutlined,
   UnorderedListOutlined,
-  FundOutlined,
 } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import { useStore } from '../store';
 import { api, chapterApi } from '../services/modularApi';
-import { isRequestCancelledError } from '../services/core/httpClient';
+import { getAxiosErrorStatus, isRequestCancelledError, silentRequestConfig } from '../services/core/httpClient';
 import type { MemoryAnnotation } from '../components/AnnotatedText';
+import InlineDeferredPanel from '../components/InlineDeferredPanel';
+import WorkflowEntryFallback from '../components/WorkflowEntryFallback';
 import type { ChapterAnalysisResponse, ChapterCandidateDraftQualityHighlights, ChapterQualityMetrics, ProjectChapterQualityTrendResponse } from '../types';
 import {
   renderCompactFactCard,
@@ -30,6 +31,9 @@ import {
   getRepairGuidanceDisplay,
   getWeakestQualityMetric,
 } from '../utils/storyCreationQualitySummary';
+import { designDisplayFont } from '../theme/themeConfig';
+
+const { Title, Paragraph, Text } = Typography;
 
 
 const LazyProjectQualityTrendPanel = lazy(() => import('../components/ProjectQualityTrendPanel'));
@@ -122,13 +126,45 @@ const getCandidateAttemptKindLabel = (value?: string | null): string => {
   }
 };
 
-const inlineSpinFallback = (
-  <div style={{ padding: '24px 0', textAlign: 'center' }}>
-    <Spin size="small" />
-  </div>
+const renderAnalysisInlineFallback = (
+  options: {
+    eyebrow: string;
+    title: string;
+    message: string;
+    minHeight?: number;
+    tags?: Array<{ label: string; color?: string }>;
+  },
+) => (
+  <InlineDeferredPanel
+    eyebrow={options.eyebrow}
+    title={options.title}
+    message={options.message}
+    minHeight={options.minHeight ?? 220}
+    tags={options.tags ?? []}
+  />
 );
 
-const comparisonSpinFallback = <Spin size="small" />;
+const comparisonWorkflowFallback = (
+  <WorkflowEntryFallback
+    eyebrow="Candidate Comparison"
+    title="正在接入候选稿对比工作台"
+    message="系统正在恢复候选稿差异视图、质量摘要与应用入口，原有应用、关闭和触发分析逻辑保持不变。"
+    tags={[
+      { label: '候选稿对比', color: 'purple' },
+      { label: '质量摘要恢复中', color: 'processing' },
+      { label: '应用逻辑保持原样', color: 'green' },
+    ]}
+  />
+);
+
+const isChapterAnalysisNotFoundError = (error: unknown) => {
+  if (getAxiosErrorStatus(error) !== 404) {
+    return false;
+  }
+
+  const detail = (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+  return detail === 'Chapter analysis not found' || (error as Error).message === 'Chapter analysis not found';
+};
 
 /**
  * 项目内的章节剧情分析页面
@@ -136,6 +172,7 @@ const comparisonSpinFallback = <Spin size="small" />;
  */
 const ChapterAnalysis: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
+  const currentProject = useStore((state) => state.currentProject);
   
   const [chapters, setChapters] = useState<ChapterItem[]>([]);
   const [selectedChapter, setSelectedChapter] = useState<ChapterItem | null>(null);
@@ -290,7 +327,7 @@ const ChapterAnalysis: React.FC = () => {
           setAnnotationsLoading(false);
         });
 
-      void chapterApi.getChapterAnalysis(chapterId, false, requestConfig)
+      void chapterApi.getChapterAnalysis(chapterId, false, silentRequestConfig(requestConfig))
         .then((analysisResponse) => {
           if (abortController.signal.aborted || chapterLoadAbortRef.current !== abortController) {
             return;
@@ -302,6 +339,10 @@ const ChapterAnalysis: React.FC = () => {
         })
         .catch((error) => {
           if (isRequestCancelledError(error) || abortController.signal.aborted) {
+            return;
+          }
+          if (isChapterAnalysisNotFoundError(error)) {
+            setAnalysisDetail(null);
             return;
           }
           console.error('加载章节分析失败，已降级为空数据:', error);
@@ -939,9 +980,11 @@ const ChapterAnalysis: React.FC = () => {
       style={{ marginBottom: 16 }}
     >
       {qualityAcceptancePending ? (
-        <div style={{ padding: '12px 0', textAlign: 'center' }}>
-          <Spin size="small" />
-        </div>
+        renderCompactSettingHint(
+          '质量验收结果正在汇总',
+          '系统正在整理质量指标、修复建议、候选草稿与验收摘要；当前章节内容不会因此被改写。',
+          { style: { marginBottom: 0 } },
+        )
       ) : !hasQualityAcceptanceData ? (
         renderCompactSettingHint(
           '暂无质量验收数据',
@@ -1263,7 +1306,19 @@ const ChapterAnalysis: React.FC = () => {
               )}
 
               {showAnnotations && hasAnnotations && annotationsData ? (
-                <Suspense fallback={inlineSpinFallback}>
+                <Suspense
+                  fallback={renderAnalysisInlineFallback({
+                    eyebrow: 'Annotated Reading',
+                    title: '正在整理正文标注阅读区',
+                    message: '系统正在恢复正文高亮、标注定位与点击联动，原有正文与标注交互逻辑保持不变。',
+                    minHeight: 260,
+                    tags: [
+                      { label: '正文标注', color: 'processing' },
+                      { label: '定位联动恢复中', color: 'cyan' },
+                      { label: '交互逻辑保持原样', color: 'green' },
+                    ],
+                  })}
+                >
                   <LazyAnnotatedText
                     content={selectedChapter.content}
                     annotations={annotationsData.annotations}
@@ -1297,7 +1352,19 @@ const ChapterAnalysis: React.FC = () => {
             style={{ width: 400, overflow: 'auto' }}
             bodyStyle={{ padding: 0 }}
           >
-            <Suspense fallback={inlineSpinFallback}>
+            <Suspense
+              fallback={renderAnalysisInlineFallback({
+                eyebrow: 'Memory Sidebar',
+                title: '正在展开记忆标注侧栏',
+                message: '系统正在恢复标注列表、定位入口与侧栏滚动位置，原有侧栏联动逻辑保持不变。',
+                minHeight: 320,
+                tags: [
+                  { label: '记忆标注侧栏', color: 'gold' },
+                  { label: '定位入口恢复中', color: 'processing' },
+                  { label: '联动逻辑保持原样', color: 'green' },
+                ],
+              })}
+            >
               <LazyMemorySidebar
                 annotations={annotationsData.annotations}
                 activeAnnotationId={activeAnnotationId}
@@ -1336,7 +1403,19 @@ const ChapterAnalysis: React.FC = () => {
         open={sidebarVisible}
         width={isMobile ? '90%' : '80%'}
       >
-        <Suspense fallback={inlineSpinFallback}>
+        <Suspense
+          fallback={renderAnalysisInlineFallback({
+            eyebrow: 'Memory Drawer',
+            title: '正在接入移动端标注抽屉',
+            message: '系统正在恢复移动端标注列表、点击回跳与抽屉阅读区，原有标注选择与关闭逻辑保持不变。',
+            minHeight: 320,
+            tags: [
+              { label: '移动端标注抽屉', color: 'blue' },
+              { label: '回跳入口恢复中', color: 'processing' },
+              { label: '抽屉逻辑保持原样', color: 'green' },
+            ],
+          })}
+        >
           <LazyMemorySidebar
             annotations={annotationsData.annotations}
             activeAnnotationId={activeAnnotationId}
@@ -1365,7 +1444,7 @@ const ChapterAnalysis: React.FC = () => {
     }
 
     return (
-      <Suspense fallback={comparisonSpinFallback}>
+      <Suspense fallback={comparisonWorkflowFallback}>
         <LazyChapterContentComparison
           visible={candidateComparisonVisible}
           onClose={() => {
@@ -1401,27 +1480,296 @@ const ChapterAnalysis: React.FC = () => {
 
   if (loading) {
     return (
-      <div style={{ textAlign: 'center', padding: '100px 0' }}>
-        <Spin size="large" tip="加载章节中..." />
+      <div
+        style={{
+          minHeight: '100vh',
+          padding: isMobile ? '24px 12px' : '32px 16px',
+          background: `linear-gradient(180deg, ${token.colorBgLayout} 0%, color-mix(in srgb, ${token.colorPrimary} 6%, ${token.colorBgLayout} 94%) 100%)`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <div style={{ width: 'min(680px, 100%)' }}>
+          {renderAnalysisInlineFallback({
+            eyebrow: 'Analysis Workspace',
+            title: '恢复章节分析与候选稿工作台',
+            message: '当前正在读取章节列表、正文标注、导航信息与趋势数据。原有章节切换、候选稿对比和分析结果恢复逻辑保持不变。',
+            minHeight: 320,
+            tags: [
+              { label: '章节列表恢复中', color: 'processing' },
+              { label: '标注与正文同步', color: 'blue' },
+              { label: '趋势数据预热', color: 'default' },
+            ],
+          })}
+        </div>
       </div>
     );
   }
 
+  const heroBackground = `linear-gradient(135deg,
+    color-mix(in srgb, ${token.colorPrimary} 74%, #6f4638 26%) 0%,
+    color-mix(in srgb, ${token.colorInfo} 26%, #18242d 74%) 100%)`;
+  const editorialInk = '#fff9f0';
+  const panelBackground = `linear-gradient(180deg,
+    color-mix(in srgb, ${token.colorBgContainer} 95%, white 5%) 0%,
+    color-mix(in srgb, ${token.colorFillAlter} 44%, ${token.colorBgContainer} 56%) 100%)`;
+  const panelBorder = `1px solid color-mix(in srgb, ${token.colorBorderSecondary} 88%, white 12%)`;
+  const summaryItems: Array<{ label: string; value: number | string; accent: string; compact?: boolean }> = [
+    { label: '章节总数', value: chapters.length, accent: editorialInk },
+    { label: '当前章节', value: selectedChapter ? `第${selectedChapter.chapter_number}章` : '未选择', accent: token.colorSuccess, compact: true },
+    { label: '标注总数', value: annotationsData?.summary.total_annotations ?? 0, accent: token.colorInfo },
+    { label: '趋势数据', value: projectQualityTrend?.items?.length ?? 0, accent: editorialInk },
+  ];
+
+  const analysisGuideSteps = [
+    '先选定当前章节，再看概览卡确认这一轮分析正在覆盖哪一章的质量状态。',
+    '再按趋势、验收摘要、标注与正文的顺序阅读，避免在上下文还没看清时直接处理候选稿。',
+    '最后再打开侧边标注、候选稿对比或切换上下章，把高影响动作放在主面板阅读之后。',
+  ];
+  const analysisWorkspaceFocus = candidateComparisonVisible || candidateComparisonLoading
+    ? {
+        title: '比对候选稿与当前正文',
+        note: '当前已经进入候选稿对比流程，适合先确认差异、高亮和恢复方向，再决定是否应用这一版内容。',
+      }
+    : applyingCandidateDraft
+      ? {
+          title: '等待候选稿恢复完成',
+          note: '系统正在把候选稿恢复到正文，先等待内容回流，避免在结果未稳定时继续切换章节或标注。',
+        }
+      : sidebarVisible
+        ? {
+            title: '核对侧边标注与记忆点',
+            note: '标注侧栏已经打开，适合先顺着标注分布审阅问题与线索，再回到正文定位具体段落。',
+          }
+        : chapterListVisible
+          ? {
+              title: '从章节列表重新选章',
+              note: '移动端章节抽屉已展开，先锁定本轮要看的章节，再回到主分析面板阅读趋势与正文。',
+            }
+          : contentLoading || contentMetaLoading || navigationLoading || annotationsLoading
+            ? {
+                title: '等待分析内容同步',
+                note: '当前章节的正文、标注或导航信息还在刷新，稍后就能继续查看完整的分析面板。',
+              }
+            : trendLoading
+              ? {
+                  title: '等待项目趋势更新',
+                  note: '质量趋势正在刷新，适合先停留在当前章节上下文，等曲线与摘要一并回流后再判断整体走向。',
+                }
+              : selectedChapter && activeAnnotationId
+                ? {
+                    title: `跟进第 ${selectedChapter.chapter_number} 章的重点标注`,
+                    note: '当前已经聚焦到一条标注，适合结合正文位置与分析摘要一起判断它对这一章的作用。',
+                  }
+                : selectedChapter && hasAnnotations
+                  ? {
+                      title: `复盘第 ${selectedChapter.chapter_number} 章分析结果`,
+                      note: '这一章已经有标注与质量结果，适合顺着摘要、趋势和正文标注做一次完整复盘。',
+                    }
+                  : selectedChapter
+                    ? {
+                        title: `等待第 ${selectedChapter.chapter_number} 章分析沉淀`,
+                        note: '当前章节已经选中，但分析标注还不充分，适合先观察主面板结果再决定是否需要进一步处理。',
+                      }
+                    : chapters.length > 0
+                      ? {
+                          title: '先选择本轮分析章节',
+                          note: '项目里已有章节可供巡检，先从列表锁定目标章节，再进入趋势、标注和候选稿阅读。',
+                        }
+                      : {
+                          title: '等待章节进入分析工作台',
+                          note: '当前还没有可分析的章节，等章节内容准备好后，这里才会逐步展开趋势、标注与候选稿视图。',
+                        };
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* 页面标题 - 仅桌面端显示 */}
-      {!isMobile && (
-        <div style={{
-          padding: '16px 0',
-          marginBottom: 16,
-          borderBottom: `1px solid ${token.colorBorderSecondary}`
-        }}>
-          <h2 style={{ margin: 0, fontSize: 24 }}>
-            <FundOutlined style={{ marginRight: 8 }} />
-            剧情分析
-          </h2>
-        </div>
-      )}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 16, overflow: 'hidden', paddingBottom: 24 }}>
+      <Card
+        variant="borderless"
+        style={{
+          background: heroBackground,
+          borderRadius: 28,
+          border: `1px solid color-mix(in srgb, ${token.colorBgContainer} 12%, transparent)`,
+          boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
+          overflow: 'hidden',
+          position: 'relative',
+        }}
+        styles={{ body: { padding: isMobile ? 20 : 24 } }}
+      >
+        <div style={{ position: 'absolute', top: -56, right: -28, width: 170, height: 170, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', bottom: -30, left: isMobile ? '56%' : '28%', width: 120, height: 120, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', pointerEvents: 'none' }} />
+        <Row gutter={[24, 18]} align="middle" style={{ position: 'relative', zIndex: 1 }}>
+          <Col xs={24} lg={14}>
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase' }}>
+                Analysis Deck
+              </Text>
+              <Title level={2} style={{ margin: 0, color: editorialInk, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+                剧情分析
+              </Title>
+              <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.82)', fontSize: 15, lineHeight: 1.8 }}>
+                在这一页集中查看章节质量、记忆标注和候选稿状态。它更像一本分析台账：左侧切换章节，右侧持续查看趋势、验收结论和正文细节。
+              </Paragraph>
+              <Space wrap size={[10, 10]}>
+                <Tag style={{ borderRadius: 999, paddingInline: 12, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.08)', color: editorialInk }}>
+                  {currentProject?.title ?? '当前项目'}
+                </Tag>
+                <Tag style={{ borderRadius: 999, paddingInline: 12, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.08)', color: editorialInk }}>
+                  {selectedChapter ? `${selectedChapter.title}` : '等待选择章节'}
+                </Tag>
+                {isMobile && (
+                  <Button
+                    icon={<UnorderedListOutlined />}
+                    onClick={() => setChapterListVisible(true)}
+                    style={{
+                      borderRadius: 999,
+                      borderColor: 'rgba(255,255,255,0.18)',
+                      background: 'rgba(255,255,255,0.08)',
+                      color: editorialInk,
+                    }}
+                  >
+                    章节列表
+                  </Button>
+                )}
+              </Space>
+            </Space>
+          </Col>
+          <Col xs={24} lg={10}>
+            <Row gutter={[12, 12]}>
+              {summaryItems.map((item) => (
+                <Col xs={12} key={item.label}>
+                  <div
+                    style={{
+                      minHeight: 92,
+                      borderRadius: 18,
+                      padding: '12px 14px',
+                      background: 'rgba(255,255,255,0.08)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      backdropFilter: 'blur(10px)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, display: 'block' }}>{item.label}</Text>
+                    <Text style={{ color: item.accent, fontWeight: 700, fontSize: item.compact ? 15 : 24, lineHeight: 1.2, wordBreak: 'break-word' }}>
+                      {item.value}
+                    </Text>
+                  </div>
+                </Col>
+              ))}
+            </Row>
+          </Col>
+        </Row>
+      </Card>
+
+      <Card
+        variant="borderless"
+        style={{
+          borderRadius: 22,
+          background: `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimary} 10%, white 90%) 0%, color-mix(in srgb, ${token.colorInfo} 10%, white 90%) 100%)`,
+          border: `1px solid color-mix(in srgb, ${token.colorPrimary} 16%, white 84%)`,
+          boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+        }}
+        styles={{ body: { padding: isMobile ? 16 : 18 } }}
+      >
+        <Row gutter={[16, 16]}>
+          <Col xs={24} lg={15}>
+            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+              <Text style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                Analysis Guide
+              </Text>
+              <Paragraph style={{ margin: 0, color: token.colorText, lineHeight: 1.75 }}>
+                这个页面更像章节质量复盘台。原有的章节切换、趋势查询、标注联动和候选稿对比逻辑都保持不变，这里只把阅读顺序和当前观察重点提前标出来。
+              </Paragraph>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {analysisGuideSteps.map((item, index) => (
+                  <span
+                    key={item}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '6px 12px',
+                      borderRadius: 999,
+                      background: token.colorBgContainer,
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      color: token.colorTextBase,
+                      fontSize: 12,
+                    }}
+                  >
+                    <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </Space>
+          </Col>
+          <Col xs={24} lg={9}>
+            <div
+              style={{
+                height: '100%',
+                borderRadius: 18,
+                padding: isMobile ? '14px 14px 12px' : '16px 18px 14px',
+                background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
+                border: `1px solid ${token.colorBorderSecondary}`,
+              }}
+            >
+              <Text style={{ display: 'block', color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                当前分析焦点
+              </Text>
+              <Title level={5} style={{ margin: '8px 0 6px', color: token.colorTextBase, fontFamily: designDisplayFont }}>
+                {analysisWorkspaceFocus.title}
+              </Title>
+              <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
+                {analysisWorkspaceFocus.note}
+              </Paragraph>
+            </div>
+          </Col>
+        </Row>
+      </Card>
+
+      <Card
+        variant="borderless"
+        style={{
+          flex: 1,
+          overflow: 'hidden',
+          background: panelBackground,
+          borderRadius: 24,
+          border: panelBorder,
+          boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+        }}
+        styles={{ body: { height: '100%', padding: isMobile ? 16 : 20 } }}
+      >
+        <Space direction="vertical" size={16} style={{ width: '100%', height: '100%' }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: isMobile ? 'flex-start' : 'center',
+              gap: 12,
+              flexDirection: isMobile ? 'column' : 'row',
+            }}
+          >
+            <Space direction="vertical" size={4}>
+              <Text style={{ fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                Quality Workspace
+              </Text>
+              <Title level={4} style={{ margin: 0, fontFamily: designDisplayFont, color: token.colorTextBase }}>
+                章节分析工作区
+              </Title>
+              <Paragraph style={{ margin: 0, color: token.colorTextSecondary }}>
+                左侧维护章节上下文，右侧集中查看质量趋势、验收摘要、正文标注和候选稿对比。
+              </Paragraph>
+            </Space>
+            {!isMobile && (
+              <Tag color="blue" style={{ borderRadius: 999, paddingInline: 12 }}>
+                选择章节后开始查看分析细节
+              </Tag>
+            )}
+          </div>
+
+          <Divider style={{ margin: 0, borderColor: token.colorBorderSecondary }} />
       
       <div style={{
         flex: 1,
@@ -1434,7 +1782,7 @@ const ChapterAnalysis: React.FC = () => {
         {!isMobile && (
         <Card
           title="章节列表"
-          style={{ width: 280, height: '100%', overflow: 'hidden' }}
+          style={{ width: 280, height: '100%', overflow: 'hidden', borderRadius: 20, border: `1px solid ${token.colorBorderSecondary}` }}
           bodyStyle={{ padding: 0, height: 'calc(100% - 57px)', overflow: 'auto' }}
         >
           {chapterListNode}
@@ -1458,8 +1806,22 @@ const ChapterAnalysis: React.FC = () => {
         {/* 右侧内容区域 */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
         {!selectedChapter ? (
-          <Card style={{ height: '100%' }}>
-            <Empty description="请从左侧选择一个章节查看" style={{ marginTop: 100 }} />
+          <Card
+            variant="borderless"
+            style={{
+              height: '100%',
+              borderRadius: 22,
+              background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
+              border: `1px dashed ${token.colorBorder}`,
+            }}
+          >
+            <Empty description="请先选择一个章节，再查看对应的质量分析、标注和候选稿。" style={{ marginTop: 100 }}>
+              {isMobile ? (
+                <Button type="primary" icon={<UnorderedListOutlined />} onClick={() => setChapterListVisible(true)}>
+                  打开章节列表
+                </Button>
+              ) : null}
+            </Empty>
           </Card>
         ) : (
           <>
@@ -1467,15 +1829,19 @@ const ChapterAnalysis: React.FC = () => {
 
             <Suspense
               fallback={(
-                <Card
-                  title="章节质量趋势"
-                  size={isMobile ? 'small' : 'default'}
-                  style={{ marginBottom: 16 }}
-                >
-                  <div style={{ padding: '12px 0', textAlign: 'center' }}>
-                    <Spin size="small" />
-                  </div>
-                </Card>
+                <div style={{ marginBottom: 16 }}>
+                  {renderAnalysisInlineFallback({
+                    eyebrow: 'Quality Trend',
+                    title: '正在加载章节质量趋势',
+                    message: '系统正在恢复质量曲线、章节维度趋势与紧凑视图，原有趋势查询和展示逻辑保持不变。',
+                    minHeight: isMobile ? 220 : 240,
+                    tags: [
+                      { label: '质量趋势', color: 'processing' },
+                      { label: '趋势曲线恢复中', color: 'cyan' },
+                      { label: '查询逻辑保持原样', color: 'green' },
+                    ],
+                  })}
+                </div>
               )}
             >
               <LazyProjectQualityTrendPanel
@@ -1495,6 +1861,8 @@ const ChapterAnalysis: React.FC = () => {
         )}
         </div>
       </div>
+        </Space>
+      </Card>
     </div>
   );
 };

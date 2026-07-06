@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Button, Modal, Form, Input, Select, message, Row, Col, Empty, Tabs, Card, Tag, Space, Divider, Typography, InputNumber } from 'antd';
+import { Button, Modal, Form, Input, Select, message, Row, Col, Empty, Tabs, Card, Tag, Space, Divider, Typography, InputNumber, theme } from 'antd';
 import { ThunderboltOutlined, PlusOutlined, EditOutlined, DeleteOutlined, TrophyOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import { api } from '../services/modularApi';
@@ -10,6 +10,7 @@ import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgro
 import { formatBackgroundTaskError } from '../utils/taskPolling';
 import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
 import { isRequestCancelledError } from '../services/core/httpClient';
+import { designDisplayFont } from '../theme/themeConfig';
 
 const { TextArea } = Input;
 const { Title, Text, Paragraph } = Typography;
@@ -115,6 +116,7 @@ interface Career {
 }
 
 export default function Careers() {
+    const { token } = theme.useToken();
     const { projectId } = useParams<{ projectId: string }>();
     const [mainCareers, setMainCareers] = useState<Career[]>([]);
     const [subCareers, setSubCareers] = useState<Career[]>([]);
@@ -456,7 +458,17 @@ export default function Careers() {
                     <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(career.id)} />
                 </Space>
             }
-            style={{ marginBottom: 16 }}
+            style={{
+                marginBottom: 16,
+                borderRadius: 22,
+                border: career.source === 'ai'
+                    ? `1px solid color-mix(in srgb, ${token.colorPrimary} 20%, white 80%)`
+                    : `1px solid ${token.colorBorderSecondary}`,
+                background: career.source === 'ai'
+                    ? `linear-gradient(180deg, color-mix(in srgb, ${token.colorPrimary} 7%, ${token.colorBgContainer} 93%) 0%, ${token.colorBgContainer} 100%)`
+                    : token.colorBgContainer,
+                boxShadow: `0 14px 28px color-mix(in srgb, ${token.colorText} 6%, transparent)`,
+            }}
         >
             <Paragraph ellipsis={{ rows: 2 }}>{career.description || '暂无描述'}</Paragraph>
             <Divider style={{ margin: '12px 0' }} />
@@ -503,6 +515,47 @@ export default function Careers() {
         }
     ];
 
+    const heroBackground = `linear-gradient(135deg,
+        color-mix(in srgb, ${token.colorPrimary} 74%, #6f4638 26%) 0%,
+        color-mix(in srgb, ${token.colorInfo} 26%, #18242d 74%) 100%)`;
+    const editorialInk = '#fff9f0';
+    const totalCareers = mainCareers.length + subCareers.length;
+    const aiCareerCount = [...mainCareers, ...subCareers].filter((career) => career.source === 'ai').length;
+    const panelBackground = `linear-gradient(180deg,
+        color-mix(in srgb, ${token.colorBgContainer} 95%, white 5%) 0%,
+        color-mix(in srgb, ${token.colorFillAlter} 44%, ${token.colorBgContainer} 56%) 100%)`;
+    const panelBorder = `1px solid color-mix(in srgb, ${token.colorBorderSecondary} 88%, white 12%)`;
+    const summaryItems: Array<{ label: string; value: number | string; accent: string; compact?: boolean }> = [
+        { label: '职业总数', value: totalCareers, accent: editorialInk },
+        { label: '主职业', value: mainCareers.length, accent: token.colorSuccess },
+        { label: '副职业', value: subCareers.length, accent: token.colorInfo },
+        { label: 'AI 生成', value: aiCareerCount, accent: editorialInk },
+    ];
+    const careerGuideSteps = [
+        '先看主职业、副职业和 AI 生成占比，确认这次是在补主干体系还是补充支线分工。',
+        '再切到对应 Tab 审核职业描述、阶段和能力信息，避免主副职业混在一起修改。',
+        '最后再决定新增、编辑或智能生成，把体系扩展放在已经看清现状之后。',
+    ];
+    const careerFocus = aiGenerating || activeTrackedCareerTask
+        ? {
+            title: '等待职业体系补全回流',
+            note: '当前有一条职业生成任务正在执行，适合先观察进度，等结果回流后再统一整理职业卡片。',
+        }
+        : totalCareers === 0
+            ? {
+                title: '先搭主职业骨架',
+                note: '当前还没有职业条目，优先建立主职业基线，再考虑副职业和阶段延展会更稳。',
+            }
+            : subCareers.length === 0
+                ? {
+                    title: '补充副职业分工',
+                    note: '主职业已经存在，下一步更适合补齐副职业，让世界观里的辅助、生产和支线能力更完整。',
+                }
+                : {
+                    title: '做一次职业体系巡检',
+                    note: '当前主副职业都已成型，适合检查分类是否清晰、阶段是否连贯，以及 AI 生成内容是否需要人工收束。',
+                };
+
     return (
         <>
             {contextHolder}
@@ -510,56 +563,201 @@ export default function Careers() {
             height: '100%',
             display: 'flex',
             flexDirection: 'column',
-            overflow: 'hidden'
+            overflow: 'hidden',
+            gap: 16,
+            paddingBottom: 24,
         }}>
-            {/* 固定头部 */}
-            <div style={{
-                padding: '16px 16px 0 16px',
-                flexShrink: 0
-            }}>
-                <div style={{
-                    marginBottom: 16,
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    flexWrap: 'wrap',
-                    gap: '12px'
-                }}>
-                    <Title level={3} style={{ margin: 0 }}>
-                        <TrophyOutlined style={{ marginRight: 8 }} />
-                        职业管理
-                    </Title>
-                    <Space wrap>
-                        <Button
-                            type="dashed"
-                            icon={<ThunderboltOutlined />}
-                            onClick={() => {
-                                aiForm.resetFields();
-                                setIsAIModalOpen(true);
-                            }}
-                            loading={Boolean(aiGenerating || activeTrackedCareerTask)}
-                        >
-                            智能生成新职业
-                        </Button>
-                        <Button
-                            type="primary"
-                            icon={<PlusOutlined />}
-                            onClick={() => handleOpenModal()}
-                        >
-                            新增职业
-                        </Button>
-                    </Space>
-                </div>
-            </div>
+            <Card
+                variant="borderless"
+                style={{
+                    background: heroBackground,
+                    borderRadius: 28,
+                    border: `1px solid color-mix(in srgb, ${token.colorBgContainer} 12%, transparent)`,
+                    boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
+                    overflow: 'hidden',
+                    position: 'relative',
+                }}
+                styles={{ body: { padding: 24 } }}
+            >
+                <div style={{ position: 'absolute', top: -56, right: -28, width: 172, height: 172, borderRadius: '50%', background: 'rgba(255,255,255,0.08)', pointerEvents: 'none' }} />
+                <div style={{ position: 'absolute', bottom: -32, left: '28%', width: 120, height: 120, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', pointerEvents: 'none' }} />
+                <Row gutter={[24, 18]} align="middle" style={{ position: 'relative', zIndex: 1 }}>
+                    <Col xs={24} lg={14}>
+                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                            <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase' }}>
+                                Career Ledger
+                            </Text>
+                            <Title level={2} style={{ margin: 0, color: editorialInk, fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
+                                <TrophyOutlined style={{ marginRight: 8 }} />
+                                职业管理
+                            </Title>
+                            <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.82)', fontSize: 15, lineHeight: 1.8 }}>
+                                在这里维护世界里的主职业、副职业与阶段体系。它更像职业设定台账：既要能补充新条目，也要能看见整套体系的密度与分工。
+                            </Paragraph>
+                            <Space wrap>
+                                <Button
+                                    type="dashed"
+                                    icon={<ThunderboltOutlined />}
+                                    onClick={() => {
+                                        aiForm.resetFields();
+                                        setIsAIModalOpen(true);
+                                    }}
+                                    loading={Boolean(aiGenerating || activeTrackedCareerTask)}
+                                    style={{
+                                        borderRadius: 999,
+                                        borderColor: 'rgba(255,255,255,0.18)',
+                                        background: 'rgba(255,255,255,0.08)',
+                                        color: editorialInk,
+                                    }}
+                                >
+                                    智能生成新职业
+                                </Button>
+                                <Button
+                                    type="primary"
+                                    icon={<PlusOutlined />}
+                                    onClick={() => handleOpenModal()}
+                                    style={{ borderRadius: 999, paddingInline: 16 }}
+                                >
+                                    新增职业
+                                </Button>
+                            </Space>
+                        </Space>
+                    </Col>
+                    <Col xs={24} lg={10}>
+                        <Row gutter={[12, 12]}>
+                            {summaryItems.map((item) => (
+                                <Col xs={12} key={item.label}>
+                                    <div
+                                        style={{
+                                            minHeight: 92,
+                                            borderRadius: 18,
+                                            padding: '12px 14px',
+                                            background: 'rgba(255,255,255,0.08)',
+                                            border: '1px solid rgba(255,255,255,0.1)',
+                                            backdropFilter: 'blur(10px)',
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            justifyContent: 'space-between',
+                                        }}
+                                    >
+                                        <Text style={{ color: 'rgba(255,255,255,0.72)', fontSize: 12, display: 'block' }}>{item.label}</Text>
+                                        <Text style={{ color: item.accent, fontWeight: 700, fontSize: 24 }}>{item.value}</Text>
+                                    </div>
+                                </Col>
+                            ))}
+                        </Row>
+                    </Col>
+                </Row>
+            </Card>
 
-            {/* 可滚动的内容区域 */}
+            <Card
+                variant="borderless"
+                style={{
+                    borderRadius: 22,
+                    background: `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimary} 10%, white 90%) 0%, color-mix(in srgb, ${token.colorInfo} 10%, white 90%) 100%)`,
+                    border: `1px solid color-mix(in srgb, ${token.colorPrimary} 16%, white 84%)`,
+                    boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+                }}
+                styles={{ body: { padding: 18 } }}
+            >
+                <Row gutter={[16, 16]}>
+                    <Col xs={24} lg={15}>
+                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                            <Text style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                                Career Guide
+                            </Text>
+                            <Paragraph style={{ margin: 0, color: token.colorText, lineHeight: 1.75 }}>
+                                这个页面更像职业台账与体系校对台。原有 Tabs、AI 生成和编辑提交流程都保持不变，这里只把查看顺序和当前维护重点提炼出来，方便长期整理世界职业谱系。
+                            </Paragraph>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                                {careerGuideSteps.map((item, index) => (
+                                    <span
+                                        key={item}
+                                        style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: 8,
+                                            padding: '6px 12px',
+                                            borderRadius: 999,
+                                            background: token.colorBgContainer,
+                                            border: `1px solid ${token.colorBorderSecondary}`,
+                                            color: token.colorTextBase,
+                                            fontSize: 12,
+                                        }}
+                                    >
+                                        <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
+                                        {item}
+                                    </span>
+                                ))}
+                            </div>
+                        </Space>
+                    </Col>
+                    <Col xs={24} lg={9}>
+                        <div
+                            style={{
+                                height: '100%',
+                                borderRadius: 18,
+                                padding: '16px 18px 14px',
+                                background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
+                                border: `1px solid ${token.colorBorderSecondary}`,
+                            }}
+                        >
+                            <Text style={{ display: 'block', color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                                当前维护焦点
+                            </Text>
+                            <Title level={5} style={{ margin: '8px 0 6px', color: token.colorTextBase, fontFamily: designDisplayFont }}>
+                                {careerFocus.title}
+                            </Title>
+                            <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
+                                {careerFocus.note}
+                            </Paragraph>
+                        </div>
+                    </Col>
+                </Row>
+            </Card>
+
+            <Card
+                variant="borderless"
+                style={{
+                    flex: 1,
+                    overflow: 'hidden',
+                    background: panelBackground,
+                    borderRadius: 24,
+                    border: panelBorder,
+                    boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+                }}
+                styles={{ body: { height: '100%', padding: 20 } }}
+            >
+                <Space direction="vertical" size={16} style={{ width: '100%', height: '100%' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                        <Space direction="vertical" size={4}>
+                            <Text style={{ fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+                                Profession Workspace
+                            </Text>
+                            <Title level={4} style={{ margin: 0, fontFamily: designDisplayFont, color: token.colorTextBase }}>
+                                主副职业工作区
+                            </Title>
+                            <Paragraph style={{ margin: 0, color: token.colorTextSecondary }}>
+                                Tabs 继续保留原来的主副职业切换逻辑，只把外层承载改成更适合长期维护的编辑工作区。
+                            </Paragraph>
+                        </Space>
+                        <Space wrap>
+                            <Tag color="blue" style={{ borderRadius: 999, paddingInline: 12 }}>主职业 {mainCareers.length}</Tag>
+                            <Tag color="purple" style={{ borderRadius: 999, paddingInline: 12 }}>副职业 {subCareers.length}</Tag>
+                        </Space>
+                    </div>
+
+                    <Divider style={{ margin: 0, borderColor: token.colorBorderSecondary }} />
+
             <div style={{
                 flex: 1,
                 overflow: 'auto',
-                padding: '0 16px 16px 16px'
+                paddingRight: 4
             }}>
                 <Tabs items={tabItems} />
             </div>
+                </Space>
+            </Card>
 
             {/* 创建/编辑对话框 */}
             <Modal

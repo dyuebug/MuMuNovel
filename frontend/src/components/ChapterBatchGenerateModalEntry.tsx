@@ -1,5 +1,6 @@
 import { Suspense, lazy, memo } from 'react';
 import type { ChapterBatchGenerateModalProps } from './ChapterBatchGenerateModal';
+import WorkflowEntryFallback from './WorkflowEntryFallback';
 
 const LazyChapterBatchGenerateModal = lazy(() => import('./ChapterBatchGenerateModal'));
 
@@ -17,7 +18,19 @@ function ChapterBatchGenerateModalEntry({
   }
 
   return (
-    <Suspense fallback={null}>
+    <Suspense
+      fallback={(
+        <WorkflowEntryFallback
+          eyebrow="Batch Generation"
+          title="正在整理批量生成工作台"
+          message="系统正在恢复批量章节生成面板，现有模型配置、质量预设和任务状态逻辑不会发生变化。"
+          tags={[
+            { label: '批量生成工作流', color: 'purple' },
+            { label: '质量设置保持原样', color: 'green' },
+          ]}
+        />
+      )}
+    >
       <LazyChapterBatchGenerateModal {...modalProps} />
     </Suspense>
   );
