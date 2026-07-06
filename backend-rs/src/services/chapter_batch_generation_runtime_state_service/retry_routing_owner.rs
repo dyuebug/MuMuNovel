@@ -9,7 +9,6 @@ use crate::services::chapter_batch_generation_task_payload_base_service::{
 
 use super::{
     build_batch_generation_runtime_checkpoint_for_stage,
-    build_quality_gate_blocked_runtime_state_patch_from_workflow_state,
     build_retry_quality_runtime_patch_contract_from_workflow_state,
     persist_batch_generation_runtime_plan, upsert_batch_generation_runtime_snapshot,
     BatchGenerationAttemptProgression, BatchGenerationFailureKind,
@@ -20,7 +19,7 @@ use super::{
 pub(crate) fn build_batch_generation_retry_routing_owner_contract() -> Value {
     json!({
         "owner": "chapter_batch_generation_runtime_state_service::retry_failure_quality_gate_routing",
-        "scope": "retry_persistence_generic_failure_quality_gate_retry_progression_and_terminal_stop_routing",
+        "scope": "retry_persistence_generic_failure_quality_gate_retry_progression",
         "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_batch_generation_runtime_state_service.rs",
@@ -382,10 +381,6 @@ pub(crate) enum BatchGenerationQualityGateRoutingPlan {
         persistence_plan: BatchGenerationRetryPersistencePlan,
         next_retry_count: i32,
     },
-    Stop {
-        runtime_state_patch: Value,
-        persistence_plan: BatchGenerationRuntimePersistencePlan,
-    },
 }
 
 impl BatchGenerationQualityGateRoutingPlan {
@@ -398,33 +393,7 @@ impl BatchGenerationQualityGateRoutingPlan {
         terminal_semantics: BatchGenerationFailedTerminalSemantics,
     ) -> Option<Self> {
         match terminal_semantics.kind {
-            BatchGenerationFailedTerminalKind::ManualReview => {
-                let manual_review_label = terminal_semantics.label.clone();
-                let failure_message = format!(
-                    "第{}章触发质量门禁，需人工复核: {}",
-                    chapter_model.chapter_number, manual_review_label
-                );
-                Some(Self::Stop {
-                    runtime_state_patch:
-                        build_quality_gate_blocked_runtime_state_patch_from_workflow_state(
-                            workflow_runtime_state,
-                            chapter_model.chapter_number,
-                            &manual_review_label,
-                        ),
-                    persistence_plan:
-                        BatchGenerationRuntimePersistencePlan::failed_quality_gate_blocked(
-                            Some(&chapter_model.id),
-                            Some(chapter_model.chapter_number),
-                            Some(&chapter_model.title),
-                            progress.completed,
-                            progress.total_chapters,
-                            current_retry_count,
-                            &terminal_semantics,
-                            workflow_runtime_state,
-                            failure_message,
-                        ),
-                })
-            }
+            BatchGenerationFailedTerminalKind::ManualReview => None,
             BatchGenerationFailedTerminalKind::Retry => {
                 let next_retry_count = current_retry_count + 1;
                 if !should_retry_batch_generation_attempt(next_retry_count, max_retries) {
@@ -476,17 +445,6 @@ impl BatchGenerationQualityGateRoutingPlan {
                 BatchGenerationRetryProgressionPlan::new(next_retry_count)
                     .execute()
                     .await
-            }
-            BatchGenerationQualityGateRoutingPlan::Stop {
-                runtime_state_patch,
-                persistence_plan,
-            } => {
-                let _ = upsert_batch_generation_runtime_snapshot(db, task_id, runtime_state_patch)
-                    .await;
-                persist_batch_generation_runtime_plan(db, task_id, persistence_plan).await;
-                BatchGenerationAttemptProgression::Driver(
-                    BatchGenerationRuntimeDriverProgression::Stop,
-                )
             }
         }
     }

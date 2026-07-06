@@ -142,7 +142,7 @@ pub(crate) fn build_current_chapter_quality_summary_from_plot_analysis(
         .unwrap_or_else(|| "当前章节质量分析已完成，建议继续按分析结果微调正文。".to_string());
 
     let (quality_gate_status, quality_gate_decision, quality_gate_label) = if overall_score < 6.0 {
-        ("failed", "manual_review", "需要人工复核")
+        ("warning", "auto_repair", "建议继续修复")
     } else if overall_score < 8.0 {
         ("warning", "auto_repair", "建议继续修复")
     } else {
@@ -250,7 +250,7 @@ pub(crate) fn build_current_chapter_latest_quality_metrics_from_plot_analysis(
         .unwrap_or_else(|| "当前章节质量分析已完成，建议继续按分析结果微调正文。".to_string());
 
     let (quality_gate_status, quality_gate_decision, quality_gate_label) = if overall_score < 6.0 {
-        ("failed", "manual_review", "需要人工复核")
+        ("warning", "auto_repair", "建议继续修复")
     } else if overall_score < 8.0 {
         ("warning", "auto_repair", "建议继续修复")
     } else {

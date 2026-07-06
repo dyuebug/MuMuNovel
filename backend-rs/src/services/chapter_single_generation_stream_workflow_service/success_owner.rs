@@ -47,14 +47,12 @@ impl SingleGenerationStreamAnalysisFollowupPlan {
     ) -> Self {
         let completion_message = match quality_gate_action {
             Some("retry") => "章节生成完成，已转入质量修复",
-            Some("manual_review") => "章节生成完成，已转入人工复核",
             _ => "章节生成完成",
         }
         .to_string();
         let analysis_started_message = analysis_task_id.map(|_| {
             match quality_gate_action {
                 Some("retry") => "质量修复分析任务已启动",
-                Some("manual_review") => "人工复核分析任务已启动",
                 _ => "章节分析任务已启动",
             }
             .to_string()
@@ -158,10 +156,7 @@ impl SingleGenerationStreamSuccessArtifacts {
             map_single_generation_stream_quality_gate_action(quality_gate_snapshot.as_ref());
         let quality_gate_message =
             extract_single_generation_stream_quality_gate_message(quality_gate_snapshot.as_ref());
-        let hard_gate_blocked = matches!(
-            quality_gate_action.as_deref(),
-            Some("retry") | Some("manual_review")
-        );
+        let hard_gate_blocked = matches!(quality_gate_action.as_deref(), Some("retry"));
         let followup_plan = SingleGenerationStreamAnalysisFollowupPlan::from_quality_gate(
             analysis_task_id.as_ref(),
             quality_gate_action.as_deref(),
@@ -449,7 +444,7 @@ async fn resolve_single_generation_stream_candidate_draft(
     if let Some(candidate_draft) = result.candidate_draft.as_ref() {
         return Some(candidate_draft.clone());
     }
-    if !matches!(quality_gate_action, Some("retry") | Some("manual_review")) {
+    if !matches!(quality_gate_action, Some("retry")) {
         return None;
     }
 
@@ -518,7 +513,7 @@ pub(crate) fn map_single_generation_stream_quality_gate_action(
     Some(match decision.as_str() {
         "passed" | "continue" => "continue".to_string(),
         "auto_repair" | "repair" | "retry" => "retry".to_string(),
-        "manual_review" => "manual_review".to_string(),
+        "manual_review" => "continue".to_string(),
         _ => decision,
     })
 }

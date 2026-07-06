@@ -3,8 +3,7 @@ use serde_json::{json, Map, Value};
 use crate::models::{batch_generation_snapshot, batch_generation_task};
 use crate::services::chapter_generation_execution_contract_service::active_story_repair_payload_from_runtime_state;
 use crate::services::chapter_generation_runtime_service::quality_runtime_context_owner::{
-    build_generation_quality_runtime_owner_contract, manual_review_label,
-    manual_review_label_from_quality_context_with_retry_budget,
+    build_generation_quality_runtime_owner_contract,
     resolve_batch_quality_runtime_context_from_snapshot_and_runtime_state, retryable_repair_label,
     retryable_repair_label_from_quality_context_with_retry_budget,
     BatchGenerationQualityRuntimeContext,
@@ -109,13 +108,8 @@ pub(crate) fn insert_batch_generation_terminal_status_payload(
     {
         resolve_failed_terminal_semantics(task, failed_chapters, quality_status_context)
             .map(|semantics| match semantics.kind {
-                BatchGenerationFailedTerminalKind::ManualReview => (
-                    Some(semantics.reason),
-                    Some(semantics.label),
-                    semantics.review_required,
-                    semantics.can_resume,
-                ),
-                BatchGenerationFailedTerminalKind::Retry
+                BatchGenerationFailedTerminalKind::ManualReview
+                | BatchGenerationFailedTerminalKind::Retry
                 | BatchGenerationFailedTerminalKind::Error => {
                     (Some("error"), Some("执行失败".to_string()), false, true)
                 }
@@ -163,26 +157,6 @@ pub(crate) fn resolve_failed_terminal_semantics_from_sources(
     current_retry_count: i32,
     max_retries: i32,
 ) -> Option<BatchGenerationFailedTerminalSemantics> {
-    if let Some(label) = manual_review_label(failed_chapters).or_else(|| {
-        quality_status_context.and_then(|context| {
-            manual_review_label_from_quality_context_with_retry_budget(
-                context.active_story_repair_payload.as_ref(),
-                context.quality_metrics_summary.as_ref(),
-                context.latest_quality_metrics.as_ref(),
-                current_retry_count,
-                max_retries,
-            )
-        })
-    }) {
-        return Some(BatchGenerationFailedTerminalSemantics {
-            kind: BatchGenerationFailedTerminalKind::ManualReview,
-            reason: "manual_review",
-            label,
-            review_required: true,
-            can_resume: false,
-        });
-    }
-
     if let Some(label) = retryable_repair_label(failed_chapters, current_retry_count, max_retries)
         .or_else(|| {
             quality_status_context.and_then(|context| {
@@ -255,14 +229,13 @@ pub(crate) fn build_batch_generation_quality_terminal_status_owner_contract() ->
                 "can_resume"
             ],
             "failed_terminal_contract": {
-                "manual_review": "manual review keeps review_required=true and can_resume=false with explicit quality gate label",
+                "manual_review": "manual review is telemetry-only and must not create review_required terminal semantics",
                 "retry": "retry and generic error keep can_resume=true and preserve execution_failed_label fallback",
                 "completed_cancelled": "completed and cancelled states project stable terminal_reason/terminal_label pairs"
             },
             "quality_context_dependencies": [
                 "resolve_batch_quality_runtime_context_from_snapshot_and_runtime_state",
                 "active_story_repair_payload_from_runtime_state",
-                "manual_review_label_from_quality_context_with_retry_budget",
                 "retryable_repair_label_from_quality_context_with_retry_budget"
             ]
         },

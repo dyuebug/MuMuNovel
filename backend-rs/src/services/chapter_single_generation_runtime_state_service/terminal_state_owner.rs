@@ -23,7 +23,7 @@ pub(crate) struct SingleGenerationFollowUpAnalysisDecision {
 pub(crate) fn build_single_generation_terminal_state_owner_contract() -> Value {
     json!({
         "owner": "chapter_single_generation_runtime_state_service::terminal_state_owner",
-        "scope": "quality_gate_terminal_state_manual_review_retry_error_projection_and_follow_up_decision",
+        "scope": "quality_gate_terminal_state_retry_error_projection_and_non_blocking_manual_review_policy",
         "python_source_map": [],
         "rust_owner_map": [
             "backend-rs/src/services/chapter_single_generation_runtime_state_service/terminal_state_owner.rs",
@@ -42,8 +42,8 @@ pub(crate) fn build_single_generation_terminal_state_owner_contract() -> Value {
                 "failed_entry"
             ],
             "manual_review_contract": [
-                "manual review label follows quality context and retry budget",
-                "analysis payload quality_metrics may override generated result quality_metrics"
+                "manual review labels may still be read from quality context for telemetry",
+                "single generation manual_review must not create a failed terminal state"
             ]
         },
         "active_consumers": [
@@ -88,25 +88,6 @@ pub(crate) fn resolve_single_generation_quality_gate_terminal_state(
     let quality_metrics = analysis_decision
         .and_then(|decision| decision.quality_metrics.as_ref())
         .or(generated_result.quality_metrics.as_ref());
-
-    let manual_review_label = analysis_decision
-        .map(|decision| decision.manual_review_label.clone())
-        .or_else(|| {
-            resolve_single_generation_manual_review_label_from_quality_context(
-                generated_result,
-                quality_metrics,
-                current_retry_count,
-                max_retries,
-            )
-        });
-    if let Some(label) = manual_review_label {
-        return Some(build_single_generation_manual_review_terminal_state(
-            persisted_task,
-            generated_result,
-            &label,
-            quality_metrics,
-        ));
-    }
 
     if generated_result_requires_retry_follow_up(generated_result) {
         let retry_label = resolve_single_generation_retry_terminal_label(
@@ -154,40 +135,6 @@ pub(crate) fn build_single_generation_error_terminal_state(
         error_message: error_message.to_string(),
         failed_entry,
     }
-}
-
-fn resolve_single_generation_manual_review_label_from_quality_context(
-    generated_result: &GeneratedChapterResult,
-    quality_metrics: Option<&Value>,
-    current_retry_count: i32,
-    max_retries: i32,
-) -> Option<String> {
-    if matches!(
-        generated_result.quality_gate_action.as_deref(),
-        Some("manual_review")
-    ) {
-        return generated_result
-            .quality_gate_message
-            .clone()
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| {
-                manual_review_label_from_quality_context_with_retry_budget(
-                    None,
-                    quality_metrics,
-                    quality_metrics,
-                    current_retry_count,
-                    max_retries,
-                )
-            });
-    }
-
-    manual_review_label_from_quality_context_with_retry_budget(
-        None,
-        quality_metrics,
-        quality_metrics,
-        current_retry_count,
-        max_retries,
-    )
 }
 
 fn generated_result_requires_retry_follow_up(generated_result: &GeneratedChapterResult) -> bool {
@@ -266,45 +213,6 @@ fn apply_single_generation_quality_gate_terminal_fields(
             "quality_gate_failed_metrics".to_string(),
             json!(failed_metric_labels),
         );
-    }
-}
-
-fn build_single_generation_manual_review_terminal_state(
-    persisted_task: &Option<batch_generation_task::Model>,
-    generated_result: &GeneratedChapterResult,
-    manual_review_label: &str,
-    quality_metrics: Option<&Value>,
-) -> SingleGenerationQualityGateTerminalState {
-    let error_message = format!("章节触发质量门禁，需人工复核: {manual_review_label}");
-    let mut failed_entry = build_single_generation_failed_chapter_entry(
-        Some(&generated_result.chapter_id),
-        Some(generated_result.chapter_number),
-        Some(&generated_result.title),
-        &error_message,
-        persisted_task
-            .as_ref()
-            .map(|task| task.current_retry_count)
-            .unwrap_or(0),
-    );
-    apply_single_generation_quality_gate_terminal_fields(
-        &mut failed_entry,
-        "manual_review",
-        manual_review_label,
-        "quality_blocked",
-        quality_metrics,
-    );
-
-    SingleGenerationQualityGateTerminalState {
-        checkpoint_payload: json!({
-            "analysis_task_message": "单章生成触发质量门禁，需人工复核",
-            "analysis_task_progress": 100,
-            "analysis_last_error": Value::Null,
-            "quality_gate_decision": "manual_review",
-            "quality_gate_label": manual_review_label,
-            "phase": "quality_blocked",
-        }),
-        error_message,
-        failed_entry,
     }
 }
 

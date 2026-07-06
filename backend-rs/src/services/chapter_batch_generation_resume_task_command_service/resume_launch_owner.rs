@@ -77,7 +77,6 @@ pub(crate) fn build_batch_generation_resume_launch_owner_contract() -> Value {
             },
             "domain_error_surface": [
                 "InvalidStatus",
-                "ManualReviewBlocked",
                 "NoResumableChaptersFound",
                 "NoChaptersLeftToResume",
                 "SingleChapterUnavailable",
@@ -157,9 +156,6 @@ pub(super) fn map_prepare_resume_runtime_state_error(
     match error {
         crate::services::chapter_batch_generation_runtime_state_service::PrepareBatchGenerationResumeRuntimeStateError::InvalidStatus => {
             ResumeBatchGenerationDomainError::InvalidStatus
-        }
-        crate::services::chapter_batch_generation_runtime_state_service::PrepareBatchGenerationResumeRuntimeStateError::ManualReviewBlocked => {
-            ResumeBatchGenerationDomainError::ManualReviewBlocked
         }
     }
 }

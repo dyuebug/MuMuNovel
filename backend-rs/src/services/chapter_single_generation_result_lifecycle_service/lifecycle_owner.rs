@@ -39,7 +39,7 @@ pub(crate) fn build_single_generation_result_lifecycle_owner_contract() -> Value
             "quality_gate_actions": [
                 "continue",
                 "retry",
-                "manual_review"
+                "manual_review_applies_content_without_blocking_single_generation"
             ],
             "draft_lifecycle_fields": [
                 "content_applied",
@@ -226,7 +226,10 @@ pub(crate) fn generated_result_lifecycle_view(
     blocked_attempt_state_fallback: &str,
 ) -> GeneratedResultLifecycleView {
     let quality_gate_action = normalized_non_empty_string(quality_gate_action);
-    let content_applied = matches!(quality_gate_action.as_deref(), None | Some("continue"));
+    let content_applied = matches!(
+        quality_gate_action.as_deref(),
+        None | Some("continue") | Some("manual_review")
+    );
     let provisional_draft_saved = matches!(quality_gate_action.as_deref(), Some("retry"));
     let attempt_state = if content_applied {
         "applied".to_string()
@@ -626,10 +629,10 @@ mod tests {
 
         let manual_review =
             generated_result_lifecycle_view("writing", Some("manual_review"), "candidate");
-        assert_eq!(manual_review.content_applied, false);
+        assert_eq!(manual_review.content_applied, true);
         assert_eq!(manual_review.provisional_draft_saved, false);
-        assert_eq!(manual_review.attempt_state, "manual_review");
-        assert_eq!(manual_review.chapter_status, "writing");
+        assert_eq!(manual_review.attempt_state, "applied");
+        assert_eq!(manual_review.chapter_status, "completed");
 
         let applied = generated_result_lifecycle_view("writing", Some("continue"), "candidate");
         assert_eq!(applied.content_applied, true);

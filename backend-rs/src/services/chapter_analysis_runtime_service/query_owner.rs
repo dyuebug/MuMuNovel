@@ -171,6 +171,36 @@ pub async fn latest_analysis_task(
         .await
 }
 
+async fn has_chapter_analysis_result(
+    db: &DatabaseConnection,
+    chapter_id: &str,
+) -> Result<bool, sea_orm::DbErr> {
+    let result = plot_analysis::Entity::find()
+        .filter(plot_analysis::Column::ChapterId.eq(chapter_id))
+        .limit(1)
+        .one(db)
+        .await?;
+
+    Ok(result.is_some())
+}
+
+fn missing_analysis_result_status_payload(chapter_id: &str) -> Value {
+    json!({
+        "has_task": false,
+        "chapter_id": chapter_id,
+        "status": "none",
+        "progress": 0,
+        "error_message": "分析任务已完成，但分析结果缺失，请重新分析",
+        "error_code": "analysis_missing",
+        "auto_recovered": false,
+        "missing_result": true,
+        "task_id": null,
+        "created_at": null,
+        "started_at": null,
+        "completed_at": null,
+    })
+}
+
 pub async fn analysis_task_status_payload(
     db: &DatabaseConnection,
     chapter_id: &str,
@@ -193,6 +223,10 @@ pub async fn analysis_task_status_payload(
 
     let now = Utc::now().naive_utc();
     let (task, auto_recovered) = recover_analysis_task_if_needed(db, &task, now).await?;
+    if task.status == "completed" && !has_chapter_analysis_result(db, chapter_id).await? {
+        return Ok(missing_analysis_result_status_payload(chapter_id));
+    }
+
     Ok(json!({
         "has_task": true,
         "task_id": task.id,
@@ -456,8 +490,8 @@ mod tests {
     use super::{
         build_batch_analysis_status_request_from_route_payload,
         build_batch_analysis_task_status_payload, classify_analysis_error_code,
-        empty_batch_analysis_task_status_payload, resolve_analysis_task_auto_recovery_error,
-        BatchAnalysisStatusRouteRequest,
+        empty_batch_analysis_task_status_payload, missing_analysis_result_status_payload,
+        resolve_analysis_task_auto_recovery_error, BatchAnalysisStatusRouteRequest,
     };
     use crate::models::analysis_task;
 
@@ -581,6 +615,27 @@ mod tests {
                 "project_id": "",
                 "total": 0,
                 "items": {},
+            })
+        );
+    }
+
+    #[test]
+    fn should_build_missing_analysis_result_status_payload() {
+        assert_eq!(
+            missing_analysis_result_status_payload("chapter-1"),
+            json!({
+                "has_task": false,
+                "chapter_id": "chapter-1",
+                "status": "none",
+                "progress": 0,
+                "error_message": "分析任务已完成，但分析结果缺失，请重新分析",
+                "error_code": "analysis_missing",
+                "auto_recovered": false,
+                "missing_result": true,
+                "task_id": null,
+                "created_at": null,
+                "started_at": null,
+                "completed_at": null,
             })
         );
     }

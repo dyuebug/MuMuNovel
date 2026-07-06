@@ -52,6 +52,7 @@ pub(crate) use self::stream_state_owner::{
 use self::task_recovery_owner::resolve_generation_task_auto_recovery_error;
 pub(crate) use self::task_recovery_owner::{
     build_batch_generation_task_recovery_owner_contract, recover_generation_task_if_needed,
+    recover_generation_task_if_needed_with_snapshot,
 };
 
 use crate::models::batch_generation_task;
@@ -202,8 +203,10 @@ mod tests {
         build_batch_generation_read_context_owner_contract,
         build_batch_generation_stream_progress_owner_contract,
         build_batch_generation_task_recovery_owner_contract,
-        resolve_generation_task_auto_recovery_error, BatchGenerationReadContext,
-        LoadOwnedBatchGenerationTaskError, OwnedBatchGenerationTaskReadState,
+        resolve_generation_task_auto_recovery_error,
+        task_recovery_owner::resolve_generation_task_auto_recovery_error_with_snapshot,
+        BatchGenerationReadContext, LoadOwnedBatchGenerationTaskError,
+        OwnedBatchGenerationTaskReadState,
     };
     use crate::models::{batch_generation_snapshot, batch_generation_task};
     use crate::services::chapter_batch_generation_task_payload_base_service::BatchGenerationQualityStatusContext;
@@ -413,8 +416,24 @@ mod tests {
             "cargo test chapter_batch_generation_read_context_service"
         );
         assert_eq!(
-            contract["behavior_contract"]["entrypoints"][1],
-            "recover_generation_task_if_needed"
+            contract["behavior_contract"]["entrypoints"]
+                .as_array()
+                .expect("entrypoints")
+                .iter()
+                .any(|entry| entry == "recover_generation_task_if_needed_with_snapshot"),
+            true
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"]
+                .as_array()
+                .expect("entrypoints")
+                .iter()
+                .any(|entry| entry == "recover_generation_task_if_needed"),
+            true
+        );
+        assert_eq!(
+            contract["behavior_contract"]["running_timeout_basis"],
+            "latest snapshot/runtime heartbeat, falling back to task.started_at"
         );
         assert_eq!(contract["behavior_contract"]["running_timeout_minutes"], 15);
         assert_eq!(contract["behavior_contract"]["pending_timeout_minutes"], 3);
@@ -576,6 +595,35 @@ mod tests {
 
         assert_eq!(
             error.as_deref(),
+            Some("任务超时（超过15分钟未完成，已自动恢复）")
+        );
+    }
+
+    #[test]
+    fn should_not_recover_running_generation_task_with_recent_runtime_snapshot_activity() {
+        let mut task = build_task("running");
+        let now = naive_datetime(2026, 5, 31, 21, 0, 0);
+        task.started_at = Some(now - ChronoDuration::minutes(40));
+        let mut snapshot = build_snapshot();
+        snapshot.updated_at = Some(now - ChronoDuration::minutes(2));
+
+        assert_eq!(
+            resolve_generation_task_auto_recovery_error_with_snapshot(&task, Some(&snapshot), now),
+            None
+        );
+    }
+
+    #[test]
+    fn should_recover_running_generation_task_when_runtime_snapshot_activity_is_stale() {
+        let mut task = build_task("running");
+        let now = naive_datetime(2026, 5, 31, 21, 0, 0);
+        task.started_at = Some(now - ChronoDuration::minutes(40));
+        let mut snapshot = build_snapshot();
+        snapshot.updated_at = Some(now - ChronoDuration::minutes(16));
+
+        assert_eq!(
+            resolve_generation_task_auto_recovery_error_with_snapshot(&task, Some(&snapshot), now)
+                .as_deref(),
             Some("任务超时（超过15分钟未完成，已自动恢复）")
         );
     }
@@ -1864,25 +1912,20 @@ mod read_context_stream_tests {
     #[test]
     fn should_resolve_stream_status_owner_contract() {
         assert_eq!(
-            BatchGenerationResolvedStreamStatus::from_status("completed").terminal_kind(None, None),
+            BatchGenerationResolvedStreamStatus::from_status("completed").terminal_kind(None),
             Some(BatchGenerationStreamTerminalKind::Completed)
         );
         assert_eq!(
-            BatchGenerationResolvedStreamStatus::from_status("failed").terminal_kind(None, None),
+            BatchGenerationResolvedStreamStatus::from_status("failed").terminal_kind(None),
             Some(BatchGenerationStreamTerminalKind::Failed)
         );
         assert_eq!(
-            BatchGenerationResolvedStreamStatus::from_status("cancelled").terminal_kind(None, None),
+            BatchGenerationResolvedStreamStatus::from_status("cancelled").terminal_kind(None),
             Some(BatchGenerationStreamTerminalKind::Cancelled)
         );
         assert_eq!(
             BatchGenerationResolvedStreamStatus::from_status("failed")
-                .terminal_kind(Some(&"等待人工复核".to_string()), None),
-            Some(BatchGenerationStreamTerminalKind::ManualReview)
-        );
-        assert_eq!(
-            BatchGenerationResolvedStreamStatus::from_status("failed")
-                .terminal_kind(None, Some(&"自动修复后重试".to_string())),
+                .terminal_kind(Some(&"自动修复后重试".to_string())),
             Some(BatchGenerationStreamTerminalKind::Failed)
         );
         assert_eq!(
@@ -1898,7 +1941,7 @@ mod read_context_stream_tests {
             "processing"
         );
         assert_eq!(
-            BatchGenerationResolvedStreamStatus::from_status("running").terminal_kind(None, None),
+            BatchGenerationResolvedStreamStatus::from_status("running").terminal_kind(None),
             None
         );
         assert_eq!(
@@ -1969,7 +2012,7 @@ mod read_context_stream_tests {
     }
 
     #[test]
-    fn should_resolve_manual_review_and_retry_stream_state_from_quality_context_owner() {
+    fn should_keep_manual_review_stream_state_as_telemetry_only_from_quality_context_owner() {
         let manual_review = BatchGenerationStreamState::from_task_state_with_quality_context(
             build_task("failed"),
             None,
@@ -1987,14 +2030,20 @@ mod read_context_stream_tests {
                 active_story_repair_payload: None,
             }),
         );
-        assert_eq!(manual_review.message, "等待人工复核");
+        assert_eq!(manual_review.message, "生成失败");
+        assert_eq!(manual_review.phase, "failed");
         assert_eq!(
             manual_review.terminal_kind,
-            Some(BatchGenerationStreamTerminalKind::ManualReview)
+            Some(BatchGenerationStreamTerminalKind::Failed)
         );
+        assert_eq!(manual_review.terminal_label.as_deref(), None);
         assert_eq!(
-            manual_review.terminal_label.as_deref(),
-            Some("等待人工复核")
+            manual_review
+                .quality_gate
+                .as_ref()
+                .and_then(|gate| gate.get("decision"))
+                .and_then(serde_json::Value::as_str),
+            Some("manual_review")
         );
 
         let retry = BatchGenerationStreamState::from_task_state_with_quality_context(
@@ -2028,7 +2077,7 @@ mod read_context_stream_tests {
     }
 
     #[test]
-    fn should_resolve_manual_review_when_auto_repair_budget_is_exhausted() {
+    fn should_resolve_failed_when_auto_repair_budget_is_exhausted() {
         let state = BatchGenerationStreamState::from_task_state_with_quality_context(
             {
                 let mut task = build_task("failed");
@@ -2052,16 +2101,16 @@ mod read_context_stream_tests {
             }),
         );
 
-        assert_eq!(state.message, "自动修复预算已耗尽");
+        assert_eq!(state.message, "生成失败");
         assert_eq!(
             state.terminal_kind,
-            Some(BatchGenerationStreamTerminalKind::ManualReview)
+            Some(BatchGenerationStreamTerminalKind::Failed)
         );
-        assert_eq!(state.terminal_label.as_deref(), Some("自动修复预算已耗尽"));
+        assert_eq!(state.terminal_label.as_deref(), None);
     }
 
     #[test]
-    fn should_keep_quality_gate_terminal_progress_status_running_before_error_event() {
+    fn should_not_restore_manual_review_quality_blocked_status_from_runtime_state() {
         let manual_review = BatchGenerationStreamState::from_task_state_with_quality_context(
             build_task("failed"),
             Some(&json!({
@@ -2086,6 +2135,17 @@ mod read_context_stream_tests {
                 })),
             }),
         );
+        assert_eq!(manual_review.phase, "failed");
+        assert_eq!(manual_review.message, "生成失败");
+        assert_eq!(manual_review.event_status, "error");
+        assert_eq!(
+            manual_review.terminal_kind,
+            Some(BatchGenerationStreamTerminalKind::Failed)
+        );
+    }
+
+    #[test]
+    fn should_keep_retry_quality_gate_terminal_progress_status_running_before_error_event() {
         let retry = BatchGenerationStreamState::from_task_state_with_quality_context(
             {
                 let mut task = build_task("failed");
@@ -2116,7 +2176,6 @@ mod read_context_stream_tests {
             }),
         );
 
-        assert_eq!(manual_review.event_status, "running");
         assert_eq!(retry.event_status, "running");
     }
 
@@ -2343,10 +2402,10 @@ mod read_context_stream_tests {
             status: "failed".to_string(),
             completed: 0,
             progress: 100,
-            message: "等待人工复核".to_string(),
-            phase: "quality_blocked".to_string(),
+            message: "生成失败".to_string(),
+            phase: "failed".to_string(),
             event_status: "error",
-            terminal_kind: Some(BatchGenerationStreamTerminalKind::ManualReview),
+            terminal_kind: Some(BatchGenerationStreamTerminalKind::Failed),
             analysis_task_id: None,
             analysis_task_message: None,
             analysis_task_progress: None,
@@ -2364,7 +2423,7 @@ mod read_context_stream_tests {
                 "phase": "quality_blocked"
             })),
             candidate_gateway: None,
-            terminal_label: Some("等待人工复核".to_string()),
+            terminal_label: None,
         };
         let cancelled = BatchGenerationStreamState {
             task: build_task("cancelled"),
@@ -2400,8 +2459,9 @@ mod read_context_stream_tests {
         let manual_review_events = manual_review
             .terminal_events()
             .expect("manual review events");
-        assert_eq!(manual_review_events[0]["phase"], "quality_blocked");
-        assert_eq!(manual_review_events[0]["code"], 422);
+        assert_eq!(manual_review_events[0]["phase"], "failed");
+        assert_eq!(manual_review_events[0]["code"], 500);
+        assert_eq!(manual_review_events[0]["error"], "批量生成任务执行失败");
         assert_eq!(manual_review_events[1]["type"], "done");
 
         let cancelled_events = cancelled.terminal_events().expect("cancelled events");
@@ -2410,16 +2470,16 @@ mod read_context_stream_tests {
     }
 
     #[test]
-    fn should_build_quality_gate_progress_payload_for_manual_review_and_retry() {
+    fn should_keep_manual_review_quality_gate_progress_payload_as_telemetry() {
         let manual_review_events = BatchGenerationStreamState {
-            task: build_task("failed"),
-            status: "failed".to_string(),
+            task: build_task("running"),
+            status: "running".to_string(),
             completed: 0,
             progress: 76,
-            message: "等待人工复核".to_string(),
-            phase: "quality_blocked".to_string(),
-            event_status: "error",
-            terminal_kind: Some(BatchGenerationStreamTerminalKind::ManualReview),
+            message: "正在生成正文...".to_string(),
+            phase: "generating".to_string(),
+            event_status: "processing",
+            terminal_kind: None,
             analysis_task_id: None,
             analysis_task_message: None,
             analysis_task_progress: None,
@@ -2437,7 +2497,7 @@ mod read_context_stream_tests {
                 "phase": "quality_blocked"
             })),
             candidate_gateway: None,
-            terminal_label: Some("等待人工复核".to_string()),
+            terminal_label: None,
         }
         .events();
         let retry_events = BatchGenerationStreamState {
@@ -2482,6 +2542,8 @@ mod read_context_stream_tests {
             manual_review_events[0]["active_story_repair_payload"]["phase"],
             "quality_blocked"
         );
+        assert_eq!(manual_review_events[0]["phase"], "generating");
+        assert_eq!(manual_review_events[0]["status"], "processing");
         assert_eq!(retry_events[0]["current_retry_count"], 1);
         assert_eq!(retry_events[0]["quality_gate"]["decision"], "auto_repair");
         assert_eq!(
@@ -2575,14 +2637,14 @@ mod read_context_stream_tests {
     #[test]
     fn should_emit_stream_event_batch_when_phase_or_analysis_fields_change() {
         let baseline = BatchGenerationStreamState {
-            task: build_task("failed"),
-            status: "failed".to_string(),
+            task: build_task("running"),
+            status: "running".to_string(),
             completed: 0,
             progress: 76,
-            message: "等待人工复核".to_string(),
-            phase: "quality_blocked".to_string(),
-            event_status: "running",
-            terminal_kind: Some(BatchGenerationStreamTerminalKind::ManualReview),
+            message: "正在生成正文...".to_string(),
+            phase: "generating".to_string(),
+            event_status: "processing",
+            terminal_kind: None,
             analysis_task_id: None,
             analysis_task_message: None,
             analysis_task_progress: None,
@@ -2600,7 +2662,7 @@ mod read_context_stream_tests {
                 "phase": "quality_blocked"
             })),
             candidate_gateway: None,
-            terminal_label: Some("等待人工复核".to_string()),
+            terminal_label: None,
         };
         let next_phase_state = BatchGenerationStreamState {
             phase: "repair_pending".to_string(),
@@ -2644,12 +2706,12 @@ mod read_context_stream_tests {
         .resolve_event_batch(&next_phase_state)
         .expect("phase change batch");
         match phase_batch {
-            super::BatchGenerationStreamEventResolution::Close { events } => {
+            super::BatchGenerationStreamEventResolution::Continue { events, .. } => {
                 assert_eq!(events[0]["phase"], "repair_pending");
                 assert_eq!(events[0]["quality_gate"]["decision"], "auto_repair");
             }
-            super::BatchGenerationStreamEventResolution::Continue { .. } => {
-                panic!("expected close resolution for terminal phase change")
+            super::BatchGenerationStreamEventResolution::Close { .. } => {
+                panic!("expected continue resolution for non-terminal phase change")
             }
         }
 

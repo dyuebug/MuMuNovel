@@ -96,6 +96,7 @@ pub(crate) enum BatchGenerationFailureKind {
     MissingChapter,
     LoadChapterError,
     GenerationError,
+    #[allow(dead_code)]
     QualityGateBlocked,
 }
 
@@ -153,7 +154,7 @@ pub(crate) fn checkpoint_message_for_batch_generation_failure(
         BatchGenerationFailureKind::MissingChapter => "批量生成失败：章节不存在",
         BatchGenerationFailureKind::LoadChapterError => "批量生成失败：加载章节异常",
         BatchGenerationFailureKind::GenerationError => "批量生成失败",
-        BatchGenerationFailureKind::QualityGateBlocked => "批量生成失败：质量门禁阻断，需人工复核",
+        BatchGenerationFailureKind::QualityGateBlocked => "批量生成失败：质量门禁未通过",
     }
 }
 

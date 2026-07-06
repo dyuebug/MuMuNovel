@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 
 use crate::models::{batch_generation_snapshot, batch_generation_task, chapter};
 use crate::services::chapter_generation_runtime_service::story_repair_quality_context_owner::load_recent_batch_story_repair_quality_summary;
+use crate::services::chapter_generation_runtime_service::GeneratedChapterResult;
 use crate::services::chapter_single_generation_prepare_service::check_chapter_generation_prerequisites;
 
 use super::{
@@ -60,7 +61,8 @@ pub(crate) fn build_batch_generation_runtime_driver_owner_contract() -> Value {
                 "check_chapter_generation_prerequisites",
                 "BatchGenerationAttemptInputPlan::execute",
                 "build_batch_generation_selected_candidate_event_snapshot",
-                "load_recent_batch_story_repair_quality_summary"
+                "load_recent_batch_story_repair_quality_summary",
+                "post_write_guard_requires_non_empty_chapter_content"
             ]
         },
         "active_consumers": [
@@ -343,6 +345,27 @@ impl PreparedBatchGenerationStepExecution {
                         .await;
                     }
 
+                    if let Some(quality_gate_outcome) =
+                        resolve_non_applied_generated_result_quality_gate_outcome(
+                            db,
+                            task_id,
+                            &chapter_model,
+                            progress,
+                            &generated_result,
+                        )
+                        .await
+                    {
+                        match quality_gate_outcome {
+                            BatchGenerationAttemptProgression::Retry(next_retry_count) => {
+                                retry_count = next_retry_count;
+                                continue;
+                            }
+                            BatchGenerationAttemptProgression::Driver(driver_progression) => {
+                                return driver_progression;
+                            }
+                        }
+                    }
+
                     match BatchGenerationPostWriteGuardPlan::for_chapter(&chapter_model.id)
                         .execute(db, task_id)
                         .await
@@ -455,6 +478,110 @@ impl PreparedBatchGenerationStepExecution {
     }
 }
 
+pub(crate) fn build_non_applied_generated_result_quality_runtime_state(
+    generated_result: &GeneratedChapterResult,
+) -> Value {
+    let mut state = serde_json::Map::new();
+
+    if let Some(quality_metrics) = generated_result.quality_metrics.clone() {
+        state.insert(
+            "latest_quality_metrics".to_string(),
+            quality_metrics.clone(),
+        );
+        state.insert("quality_metrics_summary".to_string(), quality_metrics);
+    }
+
+    let active_story_repair_payload = generated_result
+        .candidate_draft
+        .as_ref()
+        .and_then(|draft| draft.get("repair_payload"))
+        .filter(|payload| payload.is_object())
+        .filter(|payload| {
+            payload
+                .get("quality_gate_decision")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .is_some_and(|decision| decision != "manual_review")
+        })
+        .cloned()
+        .or_else(|| {
+            let action = generated_result.quality_gate_action.as_deref()?.trim();
+            if action.is_empty() || action == "continue" || action == "manual_review" {
+                return None;
+            }
+
+            let (decision, phase, fallback_label) = match action {
+                "retry" | "repair" | "auto_repair" => {
+                    ("auto_repair", "repair_pending", "建议继续修复")
+                }
+                _ => (action, "quality_blocked", "质量门禁未通过"),
+            };
+
+            Some(json!({
+                "quality_gate_decision": decision,
+                "quality_gate_label": generated_result
+                    .quality_gate_message
+                    .as_deref()
+                    .filter(|message| !message.trim().is_empty())
+                    .unwrap_or(fallback_label),
+                "phase": phase,
+            }))
+        });
+
+    if let Some(active_story_repair_payload) = active_story_repair_payload {
+        state.insert(
+            "active_story_repair_payload".to_string(),
+            active_story_repair_payload,
+        );
+    }
+
+    Value::Object(state)
+}
+
+async fn resolve_non_applied_generated_result_quality_gate_outcome(
+    db: &DatabaseConnection,
+    task_id: &str,
+    chapter_model: &chapter::Model,
+    progress: &BatchGenerationStepProgress,
+    generated_result: &GeneratedChapterResult,
+) -> Option<BatchGenerationAttemptProgression> {
+    if generated_result.content_applied {
+        return None;
+    }
+
+    let task_retry_context = batch_generation_task::Entity::find_by_id(task_id)
+        .one(db)
+        .await
+        .ok()
+        .flatten();
+    let current_retry_count = task_retry_context
+        .as_ref()
+        .map(|task| task.current_retry_count.max(0))
+        .unwrap_or(0);
+    let max_retries = task_retry_context
+        .as_ref()
+        .map(|task| task.max_retries.max(0))
+        .unwrap_or(0);
+    let workflow_runtime_state =
+        build_non_applied_generated_result_quality_runtime_state(generated_result);
+    let terminal_semantics = resolve_batch_generation_quality_gate_terminal_semantics(
+        None,
+        Some(&workflow_runtime_state),
+        current_retry_count,
+        max_retries,
+    )?;
+    let routing_plan = BatchGenerationQualityGateRoutingPlan::from_terminal_semantics(
+        chapter_model,
+        progress,
+        Some(&workflow_runtime_state),
+        current_retry_count,
+        max_retries,
+        terminal_semantics,
+    )?;
+
+    Some(routing_plan.persist_and_resolve(db, task_id).await)
+}
+
 pub(crate) struct BatchGenerationRuntimeLifecyclePlan {
     pub(crate) session: BatchGenerationRuntimeSession,
     pub(crate) chapter_ids: Vec<String>,
@@ -540,19 +667,31 @@ impl BatchGenerationPostWriteGuardPlan {
             return Ok(Self::resolve(false, true));
         }
 
-        let chapter_exists = chapter::Entity::find_by_id(&self.chapter_id)
+        let Some(chapter_model) = chapter::Entity::find_by_id(&self.chapter_id)
             .one(db)
             .await
             .map_err(|error| error.to_string())?
-            .is_some();
-        Ok(Self::resolve(true, chapter_exists))
+        else {
+            return Ok(Self::resolve(true, false));
+        };
+
+        let chapter_content_written = chapter_model
+            .content
+            .as_ref()
+            .map(|content| !content.trim().is_empty())
+            .unwrap_or(false);
+        if !chapter_content_written {
+            return Err("章节生成完成后正文未写入".to_string());
+        }
+
+        Ok(Self::resolve(true, true))
     }
 
     pub(crate) fn resolve(
         task_exists: bool,
-        chapter_exists: bool,
+        chapter_content_written: bool,
     ) -> BatchGenerationPostWriteGuardOutcome {
-        if task_exists && chapter_exists {
+        if task_exists && chapter_content_written {
             BatchGenerationPostWriteGuardOutcome::Continue
         } else {
             BatchGenerationPostWriteGuardOutcome::Stop

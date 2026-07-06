@@ -216,15 +216,15 @@ impl SingleGenerationRuntimeOutcome {
         }
 
         if let Some(analysis_decision) = self.run_follow_up_analysis(db, generated_result).await {
-            let terminal_state = resolve_single_generation_quality_gate_terminal_state(
+            if let Some(terminal_state) = resolve_single_generation_quality_gate_terminal_state(
                 &persisted_task,
                 generated_result,
                 Some(&analysis_decision),
-            )
-            .expect("analysis decision should produce terminal state");
-            return self
-                .persist_quality_gate_terminal_generation(db, generated_result, terminal_state)
-                .await;
+            ) {
+                return self
+                    .persist_quality_gate_terminal_generation(db, generated_result, terminal_state)
+                    .await;
+            }
         }
 
         self.persist_completed_generation(db, generated_result)

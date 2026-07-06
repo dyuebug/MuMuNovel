@@ -75,6 +75,7 @@ pub(crate) use self::runtime_driver_owner::{
 };
 #[cfg(test)]
 pub(crate) use self::runtime_driver_owner::{
+    build_non_applied_generated_result_quality_runtime_state,
     BatchGenerationPostAnalysisTerminalOutcome, BatchGenerationPostAnalysisTerminalPlan,
     BatchGenerationPostWriteGuardOutcome, BatchGenerationPostWriteGuardPlan,
     PreparedBatchGenerationStepExecution,
@@ -120,9 +121,10 @@ pub(crate) use self::startup_and_command_projection_owner::{
     prepare_batch_generation_cancel_persistence_plan, BatchGenerationCancelledPersistencePlan,
     BatchGenerationResumeSnapshotPlan,
 };
+#[cfg(test)]
+pub(crate) use self::terminal_runtime_patch_owner::build_quality_gate_blocked_runtime_state_patch_from_workflow_state;
 pub(crate) use self::terminal_runtime_patch_owner::{
     apply_manual_review_terminal_fields, build_generation_terminal_runtime_patch_owner_contract,
-    build_quality_gate_blocked_runtime_state_patch_from_workflow_state,
     build_retry_quality_runtime_patch_contract_from_workflow_state,
 };
 pub(crate) use self::terminal_semantics_owner::{
@@ -1627,14 +1629,14 @@ mod tests {
     }
 
     #[test]
-    fn should_reject_resume_restore_when_manual_review_is_blocked() {
+    fn should_allow_resume_restore_when_manual_review_is_telemetry_only() {
         let command_state = ResumeBatchGenerationCommandState::from_task(&build_task("failed"));
         let snapshot = build_snapshot_with_runtime_state(
             json!({
                 "active_story_repair_payload": {
                     "summary": "需要人工处理",
                     "quality_gate_decision": "manual_review",
-                    "quality_gate_label": "等待人工复核"
+                    "quality_gate_label": "建议继续修复"
                 }
             }),
             None,
@@ -1643,10 +1645,7 @@ mod tests {
         let result =
             prepare_batch_generation_resume_restored_runtime_state(&command_state, Some(&snapshot));
 
-        assert!(matches!(
-            result,
-            Err(PrepareBatchGenerationResumeRuntimeStateError::ManualReviewBlocked)
-        ));
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -4559,6 +4558,10 @@ mod tests {
             BatchGenerationPostWriteGuardPlan::resolve(false, true),
             BatchGenerationPostWriteGuardOutcome::Stop
         );
+        assert_eq!(
+            BatchGenerationPostWriteGuardPlan::resolve(true, false),
+            BatchGenerationPostWriteGuardOutcome::Stop
+        );
     }
 
     #[test]
@@ -4589,7 +4592,7 @@ mod tests {
     }
 
     #[test]
-    fn should_continue_post_write_guard_only_when_task_and_chapter_still_exist() {
+    fn should_continue_post_write_guard_only_when_task_exists_and_chapter_content_written() {
         assert_eq!(
             super::BatchGenerationPostWriteGuardPlan::resolve(true, true),
             super::BatchGenerationPostWriteGuardOutcome::Continue
@@ -4605,6 +4608,117 @@ mod tests {
         assert_eq!(
             super::BatchGenerationPostWriteGuardPlan::resolve(false, false),
             super::BatchGenerationPostWriteGuardOutcome::Stop
+        );
+    }
+
+    #[tokio::test]
+    async fn should_fail_post_write_guard_when_generated_chapter_content_is_empty() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite memory db");
+        let builder = db.get_database_backend();
+        let schema = Schema::new(builder);
+        db.execute(builder.build(&schema.create_table_from_entity(batch_generation_task::Entity)))
+            .await
+            .expect("create batch_generation_task table");
+        db.execute(builder.build(&schema.create_table_from_entity(chapter::Entity)))
+            .await
+            .expect("create chapter table");
+
+        let now = chrono::Utc::now().naive_utc();
+        batch_generation_task::ActiveModel {
+            id: Set("batch-empty-content-guard".to_string()),
+            project_id: Set("project-empty-content-guard".to_string()),
+            user_id: Set("user-empty-content-guard".to_string()),
+            start_chapter_number: Set(2),
+            chapter_count: Set(2),
+            chapter_ids: Set(json!([
+                "chapter-empty-content-2",
+                "chapter-empty-content-3"
+            ])),
+            style_id: Set(None),
+            target_word_count: Set(2800),
+            enable_analysis: Set(true),
+            status: Set("running".to_string()),
+            total_chapters: Set(2),
+            completed_chapters: Set(0),
+            failed_chapters: Set(json!([])),
+            current_chapter_id: Set(Some("chapter-empty-content-2".to_string())),
+            current_chapter_number: Set(Some(2)),
+            current_retry_count: Set(0),
+            max_retries: Set(3),
+            created_at: Set(Some(now)),
+            started_at: Set(Some(now)),
+            completed_at: Set(None),
+            error_message: Set(None),
+        }
+        .insert(&db)
+        .await
+        .expect("insert batch task");
+
+        chapter::ActiveModel {
+            id: Set("chapter-empty-content-2".to_string()),
+            project_id: Set("project-empty-content-guard".to_string()),
+            chapter_number: Set(2),
+            title: Set("第二章".to_string()),
+            content: Set(Some("   ".to_string())),
+            summary: Set(None),
+            word_count: Set(0),
+            status: Set("draft".to_string()),
+            outline_id: Set(None),
+            sub_index: Set(0),
+            expansion_plan: Set(None),
+            created_at: Set(now),
+            updated_at: Set(None),
+        }
+        .insert(&db)
+        .await
+        .expect("insert empty chapter");
+
+        let error =
+            super::BatchGenerationPostWriteGuardPlan::for_chapter("chapter-empty-content-2")
+                .execute(&db, "batch-empty-content-guard")
+                .await
+                .expect_err("empty generated content should route to retry failure");
+
+        assert_eq!(error, "章节生成完成后正文未写入");
+    }
+
+    #[test]
+    fn should_not_project_manual_review_generated_result_into_quality_gate_runtime_state() {
+        let runtime_state = super::build_non_applied_generated_result_quality_runtime_state(
+            &GeneratedChapterResult {
+                chapter_id: "chapter-manual-review".to_string(),
+                chapter_number: 2,
+                title: "第二章".to_string(),
+                content: "候选正文".to_string(),
+                word_count: 1200,
+                content_applied: false,
+                provisional_draft_saved: false,
+                quality_gate_action: Some("manual_review".to_string()),
+                quality_gate_message: Some("建议继续修复".to_string()),
+                quality_metrics: Some(json!({
+                    "quality_gate": {
+                        "decision": "manual_review",
+                        "label": "建议继续修复",
+                        "summary": "质量不足"
+                    }
+                })),
+                candidate_draft: Some(json!({
+                    "repair_payload": {
+                        "quality_gate_decision": "manual_review",
+                        "quality_gate_label": "建议继续修复",
+                        "phase": "quality_blocked"
+                    }
+                })),
+                ..Default::default()
+            },
+        );
+
+        assert!(runtime_state.get("active_story_repair_payload").is_none());
+        assert_eq!(
+            runtime_state["latest_quality_metrics"]["quality_gate"]["decision"],
+            "manual_review"
         );
     }
 
@@ -4850,7 +4964,7 @@ mod tests {
             Some("chapter-7"),
             Some(7),
             Some("高潮前夜"),
-            "第7章触发质量门禁，需人工复核: 自动修复预算已耗尽",
+            "第7章质量门禁未通过，建议继续修复: 自动修复预算已耗尽",
             3,
             &BatchGenerationFailedTerminalSemantics {
                 kind: BatchGenerationFailedTerminalKind::ManualReview,
@@ -4906,7 +5020,7 @@ mod tests {
                         }
                     }
                 })),
-                "第7章触发质量门禁，需人工复核: 自动修复预算已耗尽".to_string(),
+                "第7章质量门禁未通过，建议继续修复: 自动修复预算已耗尽".to_string(),
             );
 
         assert_eq!(
@@ -4918,7 +5032,7 @@ mod tests {
         assert_eq!(persistence_plan.total_chapters, 5);
         assert_eq!(
             persistence_plan.error_message.as_deref(),
-            Some("第7章触发质量门禁，需人工复核: 自动修复预算已耗尽")
+            Some("第7章质量门禁未通过，建议继续修复: 自动修复预算已耗尽")
         );
         assert_eq!(persistence_plan.current_retry_count, Some(3));
         assert_eq!(
@@ -4973,19 +5087,19 @@ mod tests {
     #[test]
     fn should_apply_shared_manual_review_terminal_fields_and_quality_gate() {
         let mut payload = serde_json::Map::new();
-        super::apply_manual_review_terminal_fields(&mut payload, "等待人工复核");
+        super::apply_manual_review_terminal_fields(&mut payload, "建议继续修复");
         assert_eq!(payload["quality_gate_decision"], "manual_review");
-        assert_eq!(payload["quality_gate_label"], "等待人工复核");
+        assert_eq!(payload["quality_gate_label"], "建议继续修复");
         assert_eq!(payload["phase"], "quality_blocked");
 
         let mut gate = json!({});
         crate::services::chapter_generation_runtime_service::quality_runtime_context_owner::normalize_terminal_quality_gate_payload(
             &mut gate,
-            "等待人工复核",
+            "建议继续修复",
         );
         assert_eq!(gate["quality_gate"]["status"], "failed");
         assert_eq!(gate["quality_gate"]["decision"], "manual_review");
-        assert_eq!(gate["quality_gate"]["label"], "等待人工复核");
+        assert_eq!(gate["quality_gate"]["label"], "建议继续修复");
     }
 
     #[test]
@@ -5000,10 +5114,10 @@ mod tests {
                 }
             }
         ]);
-        shared_normalize_terminal_quality_history(&mut history, "等待人工复核");
+        shared_normalize_terminal_quality_history(&mut history, "建议继续修复");
         assert_eq!(history[0]["quality_gate"]["status"], "failed");
         assert_eq!(history[0]["quality_gate"]["decision"], "manual_review");
-        assert_eq!(history[0]["quality_gate"]["label"], "等待人工复核");
+        assert_eq!(history[0]["quality_gate"]["label"], "建议继续修复");
 
         let mut context = json!({
             "recent_metrics": [{
@@ -5020,7 +5134,7 @@ mod tests {
             "recent_manual_review_count": 0,
             "recent_auto_repair_count": 1
         });
-        shared_normalize_terminal_quality_history_context(&mut context, "等待人工复核");
+        shared_normalize_terminal_quality_history_context(&mut context, "建议继续修复");
         assert_eq!(
             context["recent_metrics"][0]["quality_gate"]["status"],
             "failed"
@@ -5031,7 +5145,7 @@ mod tests {
         );
         assert_eq!(
             context["recent_metrics"][0]["quality_gate"]["label"],
-            "等待人工复核"
+            "建议继续修复"
         );
         assert_eq!(context["quality_gate_counts"]["manual_review"], 1);
         assert!(context["quality_gate_counts"].get("auto_repair").is_none());
@@ -5091,7 +5205,7 @@ mod tests {
             &mut payload,
             Some(&runtime_state),
             runtime_state.get("active_story_repair_payload"),
-            "等待人工复核",
+            "建议继续修复",
         );
 
         assert_eq!(
@@ -5138,22 +5252,22 @@ mod tests {
             }
         });
 
-        let mut payload = build_manual_review_terminal_runtime_patch_contract(7, "等待人工复核");
+        let mut payload = build_manual_review_terminal_runtime_patch_contract(7, "建议继续修复");
         apply_terminal_quality_runtime_patch_contract(
             &mut payload,
             Some(&runtime_state),
             runtime_state.get("active_story_repair_payload"),
-            "等待人工复核",
+            "建议继续修复",
         );
 
         assert_eq!(
             payload["analysis_task_message"],
-            "第 7 章触发质量门禁，需人工复核"
+            "第 7 章质量门禁未通过，建议继续修复"
         );
         assert_eq!(payload["analysis_task_progress"], 100);
         assert!(payload["analysis_last_error"].is_null());
         assert_eq!(payload["quality_gate_decision"], "manual_review");
-        assert_eq!(payload["quality_gate_label"], "等待人工复核");
+        assert_eq!(payload["quality_gate_label"], "建议继续修复");
         assert_eq!(payload["phase"], "quality_blocked");
         assert_eq!(
             payload["quality_metrics_summary"]["quality_gate"]["decision"],
@@ -5165,7 +5279,7 @@ mod tests {
         );
         assert_eq!(
             payload["active_story_repair_payload"]["quality_gate_label"],
-            "等待人工复核"
+            "建议继续修复"
         );
         assert_eq!(
             payload["active_story_repair_payload"]["phase"],
@@ -5179,7 +5293,7 @@ mod tests {
             "active_story_repair_payload": {
                 "summary": "继续补强冲突",
                 "quality_gate_decision": "manual_review",
-                "quality_gate_label": "等待人工复核",
+                "quality_gate_label": "建议继续修复",
                 "phase": "quality_blocked"
             }
         });
@@ -5257,7 +5371,7 @@ mod tests {
                 "summary": "继续补强冲突",
                 "scope": "batch",
                 "quality_gate_decision": "manual_review",
-                "quality_gate_label": "等待人工复核",
+                "quality_gate_label": "建议继续修复",
                 "phase": "quality_blocked"
             }
         });
@@ -5297,26 +5411,26 @@ mod tests {
     }
 
     #[test]
-    fn should_resolve_manual_review_terminal_semantics_from_current_quality_runtime_state() {
+    fn should_not_resolve_manual_review_terminal_semantics_from_current_quality_runtime_state() {
         let current_quality_runtime_state = json!({
             "quality_metrics_summary": {
                 "quality_gate": {
                     "status": "failed",
                     "decision": "manual_review",
-                    "label": "需要人工复核"
+                    "label": "建议继续修复"
                 }
             },
             "latest_quality_metrics": {
                 "quality_gate": {
                     "status": "failed",
                     "decision": "manual_review",
-                    "label": "需要人工复核"
+                    "label": "建议继续修复"
                 }
             },
             "active_story_repair_payload": {
                 "summary": "继续补强冲突",
                 "quality_gate_decision": "manual_review",
-                "quality_gate_label": "需要人工复核",
+                "quality_gate_label": "建议继续修复",
                 "phase": "quality_blocked"
             }
         });
@@ -5327,16 +5441,13 @@ mod tests {
             3,
             3,
         )
-        .expect("manual review terminal semantics");
+        .expect("fallback terminal semantics");
 
-        assert_eq!(
-            semantics.kind,
-            BatchGenerationFailedTerminalKind::ManualReview
-        );
-        assert_eq!(semantics.reason, "manual_review");
-        assert_eq!(semantics.label, "需要人工复核");
-        assert!(semantics.review_required);
-        assert!(!semantics.can_resume);
+        assert_eq!(semantics.kind, BatchGenerationFailedTerminalKind::Error);
+        assert_eq!(semantics.reason, "error");
+        assert_eq!(semantics.label, "执行失败");
+        assert!(!semantics.review_required);
+        assert!(semantics.can_resume);
     }
 
     #[test]
@@ -5380,7 +5491,7 @@ mod tests {
     }
 
     #[test]
-    fn should_route_quality_gate_manual_review_to_stop_owner() {
+    fn should_not_route_quality_gate_manual_review_to_stop_owner() {
         let chapter_model = chapter::Model {
             id: "chapter-12".to_string(),
             project_id: "project-1".to_string(),
@@ -5402,7 +5513,7 @@ mod tests {
             Some(&json!({
                 "active_story_repair_payload": {
                     "quality_gate_decision": "manual_review",
-                    "quality_gate_label": "需要人工复核",
+                    "quality_gate_label": "建议继续修复",
                     "phase": "quality_blocked"
                 }
             })),
@@ -5411,27 +5522,12 @@ mod tests {
             BatchGenerationFailedTerminalSemantics {
                 kind: BatchGenerationFailedTerminalKind::ManualReview,
                 reason: "manual_review",
-                label: "需要人工复核".to_string(),
+                label: "建议继续修复".to_string(),
                 review_required: true,
                 can_resume: false,
             },
-        )
-        .expect("manual review routing plan");
-
-        assert!(matches!(
-            plan,
-            super::BatchGenerationQualityGateRoutingPlan::Stop {
-                runtime_state_patch,
-                persistence_plan:
-                    super::BatchGenerationRuntimePersistencePlan {
-                        current_retry_count,
-                        error_message,
-                        ..
-                    },
-            } if runtime_state_patch["quality_gate_decision"] == "manual_review"
-                && current_retry_count == Some(3)
-                && error_message.as_deref() == Some("第12章触发质量门禁，需人工复核: 需要人工复核")
-        ));
+        );
+        assert_eq!(plan, None);
     }
 
     #[test]

@@ -187,9 +187,10 @@ pub(crate) async fn load_owned_batch_generation_task_read_state(
                 return Err(LoadOwnedBatchGenerationTaskError::Internal(error))
             }
         };
-    let (task, _) = super::recover_generation_task_if_needed(db, task)
-        .await
-        .map_err(LoadOwnedBatchGenerationTaskError::Internal)?;
+    let (task, _) =
+        super::recover_generation_task_if_needed_with_snapshot(db, task, snapshot.as_ref())
+            .await
+            .map_err(LoadOwnedBatchGenerationTaskError::Internal)?;
 
     Ok(OwnedBatchGenerationTaskReadState { task, snapshot })
 }

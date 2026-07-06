@@ -1,10 +1,11 @@
+#[cfg(test)]
 use std::collections::HashMap;
 
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::{active_batch_generation_statuses, recover_generation_task_if_needed};
+use super::active_batch_generation_statuses;
 use crate::models::{batch_generation_snapshot, batch_generation_task};
 use crate::services::chapter_batch_generation_task_payload_base_service::{
     build_batch_generation_task_view_payload_with_quality_context,
@@ -253,6 +254,7 @@ fn build_batch_generation_read_context_for_task_and_snapshot(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn build_batch_generation_read_contexts_from_snapshot_owner_map(
     tasks: Vec<batch_generation_task::Model>,
     mut snapshots_by_task_id: HashMap<String, batch_generation_snapshot::Model>,
@@ -266,32 +268,32 @@ pub(crate) fn build_batch_generation_read_contexts_from_snapshot_owner_map(
         .collect()
 }
 
-pub(crate) async fn load_batch_generation_read_contexts_for_tasks(
-    db: &DatabaseConnection,
-    tasks: Vec<batch_generation_task::Model>,
-) -> Result<Vec<BatchGenerationReadContext>, String> {
-    let task_ids: Vec<String> = tasks.iter().map(|task| task.id.clone()).collect();
-    let snapshots_by_task_id = load_chapter_generation_snapshot_map(db, &task_ids).await?;
-
-    Ok(build_batch_generation_read_contexts_from_snapshot_owner_map(tasks, snapshots_by_task_id))
-}
-
 pub(crate) async fn load_active_batch_generation_read_contexts_for_tasks(
     db: &DatabaseConnection,
     tasks: Vec<batch_generation_task::Model>,
 ) -> Result<Vec<BatchGenerationReadContext>, String> {
+    let task_ids: Vec<String> = tasks.iter().map(|task| task.id.clone()).collect();
+    let mut snapshots_by_task_id = load_chapter_generation_snapshot_map(db, &task_ids).await?;
     let mut active_tasks = Vec::with_capacity(tasks.len());
 
     for task in tasks {
-        let (task, _) = recover_generation_task_if_needed(db, task).await?;
+        let snapshot = snapshots_by_task_id.remove(&task.id);
+        let (task, _) =
+            super::recover_generation_task_if_needed_with_snapshot(db, task, snapshot.as_ref())
+                .await?;
         if !active_batch_generation_statuses().contains(&task.status.as_str()) {
             continue;
         }
 
-        active_tasks.push(task);
+        active_tasks.push((task, snapshot));
     }
 
-    load_batch_generation_read_contexts_for_tasks(db, active_tasks).await
+    Ok(active_tasks
+        .into_iter()
+        .map(|(task, snapshot)| {
+            build_batch_generation_read_context_for_task_and_snapshot(task, snapshot)
+        })
+        .collect())
 }
 
 pub(crate) async fn load_active_batch_generation_task_list_item_payloads_for_tasks(

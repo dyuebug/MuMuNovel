@@ -867,25 +867,19 @@ mod tests {
 
         let payloads = analysis.ordered_success_event_payloads(&result);
 
-        assert_eq!(
-            analysis.completion_message(),
-            "章节生成完成，已转入人工复核"
-        );
-        assert_eq!(payloads.len(), 4);
+        assert_eq!(analysis.completion_message(), "章节生成完成");
+        assert_eq!(analysis.quality_gate_event(&result), None);
+        assert_eq!(payloads.len(), 3);
         assert!(matches!(
             payloads[0],
             SingleGenerationStreamSuccessEventPayload::Json(_)
         ));
         assert!(matches!(
             payloads[1],
-            SingleGenerationStreamSuccessEventPayload::Json(_)
-        ));
-        assert!(matches!(
-            payloads[2],
             SingleGenerationStreamSuccessEventPayload::Result(_)
         ));
         assert!(matches!(
-            payloads[3],
+            payloads[2],
             SingleGenerationStreamSuccessEventPayload::Json(_)
         ));
     }
@@ -1060,7 +1054,7 @@ mod tests {
                 "decision": "manual_review"
             })))
             .as_deref(),
-            Some("manual_review")
+            Some("continue")
         );
     }
 

@@ -15,7 +15,7 @@ pub(crate) use self::resume_task_command_owner::{
 };
 #[cfg(test)]
 use self::resume_task_command_owner::{
-    prepare_batch_generation_resume, prepare_owned_batch_generation_resume,
+    prepare_owned_batch_generation_resume,
     resolve_resume_active_story_repair_payload_from_runtime_context,
     restore_resume_compat_options_from_runtime_context, restored_resume_quality_runtime_context,
 };
@@ -25,7 +25,6 @@ use crate::services::chapter_batch_generation_runtime_state_service::ResolveResu
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ResumeBatchGenerationDomainError {
     InvalidStatus,
-    ManualReviewBlocked,
     NoResumableChaptersFound,
     NoChaptersLeftToResume,
     SingleChapterUnavailable(String),
@@ -38,9 +37,6 @@ impl ResumeBatchGenerationDomainError {
     pub(crate) fn detail_message(&self) -> String {
         match self {
             Self::InvalidStatus => "Only failed or cancelled tasks can be resumed".to_string(),
-            Self::ManualReviewBlocked => {
-                "Manual review blocked tasks cannot be resumed".to_string()
-            }
             Self::NoResumableChaptersFound => "No resumable chapters found".to_string(),
             Self::NoChaptersLeftToResume => "No chapters left to resume".to_string(),
             Self::SingleChapterUnavailable(detail) => detail.clone(),
@@ -118,7 +114,6 @@ mod tests {
     use crate::services::chapter_batch_generation_task_payload_base_service::BatchGenerationTaskKind;
     use crate::services::chapter_batch_generation_task_payload_base_service::{
         build_batch_generation_command_summary_payload, BatchGenerationCommandProgressSummary,
-        BatchGenerationQualityStatusContext,
     };
     use crate::services::chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig;
     use crate::services::chapter_generation_execution_contract_service::normalize_chapter_generation_target_word_count;
@@ -341,7 +336,7 @@ mod tests {
             "dispatch_batch_generation_runtime"
         );
         assert_eq!(
-            contract["behavior_contract"]["domain_error_surface"][6],
+            contract["behavior_contract"]["domain_error_surface"][5],
             "PrerequisitesBlocked"
         );
         assert_eq!(
@@ -668,17 +663,17 @@ mod tests {
     }
 
     #[test]
-    fn should_detect_quality_blocked_failed_chapter_as_manual_review_blocker() {
+    fn should_detect_quality_blocked_failed_chapter_as_repair_telemetry() {
         assert_eq!(
             manual_review_label(Some(&json!([{
                 "phase": "quality_blocked"
             }]))),
-            Some("需人工复核".to_string())
+            Some("建议继续修复".to_string())
         );
     }
 
     #[test]
-    fn should_detect_exhausted_auto_repair_quality_context_as_manual_review_blocker() {
+    fn should_keep_exhausted_auto_repair_quality_context_label_as_telemetry() {
         assert_eq!(
             crate::services::chapter_generation_runtime_service::quality_runtime_context_owner::manual_review_label_from_quality_context_with_retry_budget(
                 None,
@@ -722,10 +717,6 @@ mod tests {
         assert_eq!(
             ResumeBatchGenerationDomainError::InvalidStatus.detail_message(),
             "Only failed or cancelled tasks can be resumed"
-        );
-        assert_eq!(
-            ResumeBatchGenerationDomainError::ManualReviewBlocked.detail_message(),
-            "Manual review blocked tasks cannot be resumed"
         );
         assert_eq!(
             ResumeBatchGenerationDomainError::NoResumableChaptersFound.detail_message(),
@@ -799,7 +790,7 @@ mod tests {
     }
 
     #[test]
-    fn should_detect_manual_review_resume_blocker_from_shared_quality_semantics() {
+    fn should_keep_manual_review_label_as_telemetry_helper_without_resume_blocking() {
         assert_eq!(
             manual_review_label(Some(&json!([{
                 "quality_gate_decision": "manual_review",
@@ -811,7 +802,7 @@ mod tests {
             manual_review_label(Some(&json!([{
                 "quality_gate_decision": "manual_review"
             }]))),
-            Some("需人工复核".to_string())
+            Some("建议继续修复".to_string())
         );
         assert!(manual_review_label(Some(&json!([{
             "quality_gate_decision": "passed"
@@ -820,7 +811,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_block_resume_when_runtime_active_story_repair_payload_requires_manual_review() {
+    async fn should_allow_resume_when_runtime_active_story_repair_payload_has_manual_review() {
         let command_state = ResumeBatchGenerationCommandState::from_task(&build_task("failed"));
         let workflow_runtime_state = json!({
             "active_story_repair_payload": {
@@ -830,23 +821,15 @@ mod tests {
             }
         });
 
-        let result = super::prepare_batch_generation_resume(
-            &sea_orm::DatabaseConnection::Disconnected,
-            command_state,
-            "user-1",
-            Some(&build_snapshot_with_runtime_state(workflow_runtime_state)),
-            test_single_generation_gateway_config(),
-        )
-        .await;
+        let snapshot = build_snapshot_with_runtime_state(workflow_runtime_state);
+        let result =
+            prepare_batch_generation_resume_restored_runtime_state(&command_state, Some(&snapshot));
 
-        match result {
-            Err(ResumeBatchGenerationDomainError::ManualReviewBlocked) => {}
-            other => panic!("expected ManualReviewBlocked, got {:?}", other),
-        }
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn should_block_resume_when_quality_summary_requires_manual_review_even_without_failed_chapter_label(
+    async fn should_allow_resume_when_quality_summary_has_manual_review_even_without_failed_chapter_label(
     ) {
         let mut task = build_task("failed");
         task.failed_chapters = json!([]);
@@ -864,19 +847,10 @@ mod tests {
             })),
         );
 
-        let result = super::prepare_batch_generation_resume(
-            &sea_orm::DatabaseConnection::Disconnected,
-            command_state,
-            "user-1",
-            Some(&snapshot),
-            test_single_generation_gateway_config(),
-        )
-        .await;
+        let result =
+            prepare_batch_generation_resume_restored_runtime_state(&command_state, Some(&snapshot));
 
-        match result {
-            Err(ResumeBatchGenerationDomainError::ManualReviewBlocked) => {}
-            other => panic!("expected ManualReviewBlocked, got {:?}", other),
-        }
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1132,7 +1106,6 @@ mod tests {
             chapter_ids: vec!["chapter-1".to_string(), "chapter-2".to_string()],
         };
         let restored_runtime_state = RestoredResumeRuntimeStateProjection {
-            quality_status_context: BatchGenerationQualityStatusContext::default(),
             request_runtime_state: BatchGenerationRequestRuntimeState::new(
                 SingleChapterGenerationCompatOptions {
                     enable_analysis: true,
@@ -1885,7 +1858,6 @@ mod tests {
                 .await
                 .expect("validated execution plan");
         let restored_runtime_state = RestoredResumeRuntimeStateProjection {
-            quality_status_context: BatchGenerationQualityStatusContext::default(),
             request_runtime_state: BatchGenerationRequestRuntimeState::new(
                 SingleChapterGenerationCompatOptions {
                     enable_analysis: true,
@@ -1944,7 +1916,6 @@ mod tests {
                 .await
                 .expect("validated single execution plan");
         let restored_runtime_state = RestoredResumeRuntimeStateProjection {
-            quality_status_context: BatchGenerationQualityStatusContext::default(),
             request_runtime_state: BatchGenerationRequestRuntimeState::new(
                 SingleChapterGenerationCompatOptions {
                     enable_analysis: true,
@@ -2131,7 +2102,6 @@ mod tests {
         seed_resume_settings(&db, "user-8").await;
 
         let restored_runtime_state = RestoredResumeRuntimeStateProjection {
-            quality_status_context: BatchGenerationQualityStatusContext::default(),
             request_runtime_state: BatchGenerationRequestRuntimeState::new(
                 SingleChapterGenerationCompatOptions {
                     enable_analysis: true,
@@ -2196,7 +2166,6 @@ mod tests {
         seed_resume_settings(&db, "user-10").await;
 
         let restored_runtime_state = RestoredResumeRuntimeStateProjection {
-            quality_status_context: BatchGenerationQualityStatusContext::default(),
             request_runtime_state: BatchGenerationRequestRuntimeState::new(
                 SingleChapterGenerationCompatOptions {
                     story_repair_summary: Some("沿用单章恢复态摘要".to_string()),

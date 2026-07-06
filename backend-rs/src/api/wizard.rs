@@ -6,7 +6,7 @@ use axum::{
     Json, Router,
 };
 use sea_orm::DatabaseConnection;
-use serde::{Deserialize, Deserializer};
+use serde::{de, Deserialize, Deserializer};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -34,11 +34,23 @@ pub(crate) struct WorldBuildingRequest {
     pub(crate) genre: Option<Value>,
     #[serde(alias = "narrativePerspective")]
     pub(crate) narrative_perspective: Option<String>,
-    #[serde(alias = "targetWords")]
+    #[serde(
+        default,
+        alias = "targetWords",
+        deserialize_with = "deserialize_optional_i32_from_number_or_string"
+    )]
     pub(crate) target_words: Option<i32>,
-    #[serde(alias = "chapterCount")]
+    #[serde(
+        default,
+        alias = "chapterCount",
+        deserialize_with = "deserialize_optional_i32_from_number_or_string"
+    )]
     pub(crate) chapter_count: Option<i32>,
-    #[serde(alias = "characterCount")]
+    #[serde(
+        default,
+        alias = "characterCount",
+        deserialize_with = "deserialize_optional_i32_from_number_or_string"
+    )]
     pub(crate) character_count: Option<i32>,
     #[serde(alias = "outlineMode")]
     pub(crate) outline_mode: Option<String>,
@@ -71,7 +83,10 @@ pub(crate) struct WorldBuildingRequest {
 pub(crate) struct CharactersRequest {
     #[serde(alias = "projectId")]
     pub(crate) project_id: String,
-    #[serde(default = "default_count")]
+    #[serde(
+        default = "default_count",
+        deserialize_with = "deserialize_usize_from_number_or_string"
+    )]
     pub(crate) count: usize,
     #[serde(alias = "worldContext")]
     pub(crate) world_context: Option<Value>,
@@ -95,13 +110,19 @@ pub(crate) struct CharactersRequest {
 pub(crate) struct OutlineRequest {
     #[serde(alias = "projectId")]
     pub(crate) project_id: String,
-    #[serde(default = "default_outline_count")]
-    #[serde(alias = "chapterCount")]
+    #[serde(
+        default = "default_outline_count",
+        alias = "chapterCount",
+        deserialize_with = "deserialize_usize_from_number_or_string"
+    )]
     pub(crate) chapter_count: usize,
     #[serde(alias = "narrativePerspective")]
     pub(crate) narrative_perspective: Option<String>,
-    #[serde(default = "default_target_words")]
-    #[serde(alias = "targetWords")]
+    #[serde(
+        default = "default_target_words",
+        alias = "targetWords",
+        deserialize_with = "deserialize_i32_from_number_or_string"
+    )]
     pub(crate) target_words: i32,
     pub(crate) requirements: Option<String>,
     #[serde(alias = "creativeMode")]
@@ -174,6 +195,63 @@ fn default_outline_count() -> usize {
 
 fn default_target_words() -> i32 {
     100000
+}
+
+fn deserialize_usize_from_number_or_string<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::Number(number) => number
+            .as_u64()
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or_else(|| de::Error::custom("expected non-negative integer for usize")),
+        Value::String(raw) => raw
+            .trim()
+            .parse::<usize>()
+            .map_err(|_| de::Error::custom("expected numeric string for usize")),
+        _ => Err(de::Error::custom("expected integer or numeric string")),
+    }
+}
+
+fn deserialize_i32_from_number_or_string<'de, D>(deserializer: D) -> Result<i32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    deserialize_i32_from_value(value)
+}
+
+fn deserialize_optional_i32_from_number_or_string<'de, D>(
+    deserializer: D,
+) -> Result<Option<i32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::Null => Ok(None),
+        Value::String(raw) if raw.trim().is_empty() => Ok(None),
+        other => deserialize_i32_from_value(other).map(Some),
+    }
+}
+
+fn deserialize_i32_from_value<E>(value: Value) -> Result<i32, E>
+where
+    E: de::Error,
+{
+    match value {
+        Value::Number(number) => number
+            .as_i64()
+            .and_then(|value| i32::try_from(value).ok())
+            .ok_or_else(|| E::custom("expected integer for i32")),
+        Value::String(raw) => raw
+            .trim()
+            .parse::<i32>()
+            .map_err(|_| E::custom("expected numeric string for i32")),
+        _ => Err(E::custom("expected integer or numeric string")),
+    }
 }
 
 pub(crate) fn resolve_effective_user_id(
@@ -551,8 +629,9 @@ mod tests {
     use super::{
         build_cleanup_wizard_data_request_from_route_payload,
         build_wizard_stream_route_owner_contract, normalize_genre_input, resolve_effective_user_id,
-        CleanupWizardDataRouteRequest, WIZARD_CAREER_SYSTEM_ROUTE, WIZARD_CHARACTERS_ROUTE,
-        WIZARD_CLEANUP_ROUTE, WIZARD_OUTLINE_ROUTE, WIZARD_WORLD_BUILDING_PROJECT_ROUTE,
+        CharactersRequest, CleanupWizardDataRouteRequest, OutlineRequest, WorldBuildingRequest,
+        WIZARD_CAREER_SYSTEM_ROUTE, WIZARD_CHARACTERS_ROUTE, WIZARD_CLEANUP_ROUTE,
+        WIZARD_OUTLINE_ROUTE, WIZARD_WORLD_BUILDING_PROJECT_ROUTE,
         WIZARD_WORLD_BUILDING_REGENERATE_ROUTE, WIZARD_WORLD_BUILDING_ROUTE,
     };
     use serde_json::json;
@@ -688,6 +767,45 @@ mod tests {
             resolve_effective_user_id(None, "claims-user"),
             "claims-user"
         );
+    }
+
+    #[test]
+    fn wizard_outline_request_accepts_numeric_string_counts_from_background_payload() {
+        let request: OutlineRequest = serde_json::from_value(json!({
+            "project_id": "project-1",
+            "chapter_count": "5",
+            "targetWords": "120000",
+            "narrative_perspective": "third_person",
+        }))
+        .expect("outline request should accept numeric strings");
+
+        assert_eq!(request.project_id, "project-1");
+        assert_eq!(request.chapter_count, 5);
+        assert_eq!(request.target_words, 120000);
+        assert_eq!(
+            request.narrative_perspective.as_deref(),
+            Some("third_person")
+        );
+    }
+
+    #[test]
+    fn wizard_character_and_world_requests_accept_numeric_string_counts() {
+        let characters: CharactersRequest = serde_json::from_value(json!({
+            "project_id": "project-1",
+            "count": "7",
+        }))
+        .expect("characters request should accept numeric count strings");
+        assert_eq!(characters.count, 7);
+
+        let world: WorldBuildingRequest = serde_json::from_value(json!({
+            "chapterCount": "5",
+            "characterCount": "8",
+            "targetWords": "90000",
+        }))
+        .expect("world request should accept numeric option strings");
+        assert_eq!(world.chapter_count, Some(5));
+        assert_eq!(world.character_count, Some(8));
+        assert_eq!(world.target_words, Some(90000));
     }
 
     #[test]

@@ -129,7 +129,7 @@ pub(crate) fn build_chapter_batch_generation_task_payload_base_owner_contract() 
             "terminal_status_policy": [
                 "completed -> terminal_reason completed and can_resume false",
                 "cancelled -> terminal_reason cancelled and can_resume true",
-                "failed manual_review -> review_required true and can_resume false",
+                "failed manual_review -> telemetry only; review_required stays false",
                 "failed retry_or_error -> execution_failed_label and can_resume true",
                 "non_terminal -> null terminal fields and can_resume false"
             ],
@@ -301,7 +301,7 @@ mod tests {
         );
         assert_eq!(
             contract["behavior_contract"]["terminal_status_policy"][2],
-            "failed manual_review -> review_required true and can_resume false"
+            "failed manual_review -> telemetry only; review_required stays false"
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["owner_profile"],
@@ -1488,14 +1488,14 @@ mod tests {
             Some(&completed.failed_chapters),
             None,
         );
-        assert_eq!(manual_review_payload["terminal_reason"], "manual_review");
-        assert_eq!(manual_review_payload["terminal_label"], "待补充");
-        assert_eq!(manual_review_payload["review_required"], true);
-        assert_eq!(manual_review_payload["can_resume"], false);
+        assert_eq!(manual_review_payload["terminal_reason"], "error");
+        assert_eq!(manual_review_payload["terminal_label"], "执行失败");
+        assert_eq!(manual_review_payload["review_required"], false);
+        assert_eq!(manual_review_payload["can_resume"], true);
     }
 
     #[test]
-    fn should_resolve_terminal_semantics_for_manual_review_failed_task() {
+    fn should_not_require_review_for_manual_review_failed_task() {
         let task = batch_generation_task::Model {
             id: "task-1".to_string(),
             project_id: "project-1".to_string(),
@@ -1526,14 +1526,11 @@ mod tests {
         let semantics = resolve_failed_terminal_semantics(&task, Some(&task.failed_chapters), None)
             .expect("failed terminal semantics");
 
-        assert_eq!(
-            semantics.kind,
-            BatchGenerationFailedTerminalKind::ManualReview
-        );
-        assert_eq!(semantics.reason, "manual_review");
-        assert_eq!(semantics.label, "待补充");
-        assert!(semantics.review_required);
-        assert!(!semantics.can_resume);
+        assert_eq!(semantics.kind, BatchGenerationFailedTerminalKind::Error);
+        assert_eq!(semantics.reason, "error");
+        assert_eq!(semantics.label, "执行失败");
+        assert!(!semantics.review_required);
+        assert!(semantics.can_resume);
     }
 
     #[test]
@@ -1587,12 +1584,12 @@ mod tests {
         .expect("manual review semantics");
         assert_eq!(
             manual_review_semantics.kind,
-            BatchGenerationFailedTerminalKind::ManualReview
+            BatchGenerationFailedTerminalKind::Error
         );
-        assert_eq!(manual_review_semantics.reason, "manual_review");
-        assert_eq!(manual_review_semantics.label, "等待人工复核");
-        assert!(manual_review_semantics.review_required);
-        assert!(!manual_review_semantics.can_resume);
+        assert_eq!(manual_review_semantics.reason, "error");
+        assert_eq!(manual_review_semantics.label, "执行失败");
+        assert!(!manual_review_semantics.review_required);
+        assert!(manual_review_semantics.can_resume);
 
         let retry_semantics = resolve_failed_terminal_semantics_from_sources(
             Some(&json!([])),
@@ -1619,11 +1616,11 @@ mod tests {
         .expect("exhausted semantics");
         assert_eq!(
             exhausted_semantics.kind,
-            BatchGenerationFailedTerminalKind::ManualReview
+            BatchGenerationFailedTerminalKind::Error
         );
-        assert_eq!(exhausted_semantics.reason, "manual_review");
-        assert_eq!(exhausted_semantics.label, "自动修复预算已耗尽");
-        assert!(exhausted_semantics.review_required);
-        assert!(!exhausted_semantics.can_resume);
+        assert_eq!(exhausted_semantics.reason, "error");
+        assert_eq!(exhausted_semantics.label, "执行失败");
+        assert!(!exhausted_semantics.review_required);
+        assert!(exhausted_semantics.can_resume);
     }
 }

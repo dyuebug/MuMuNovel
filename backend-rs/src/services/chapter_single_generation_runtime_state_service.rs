@@ -159,7 +159,8 @@ mod tests {
         build_single_generation_terminal_state_owner_contract,
         merge_single_generation_terminal_checkpoint_payload,
         resolve_single_generation_manual_review_label_from_analysis_payload,
-        resolve_single_generation_quality_gate_terminal_state, SingleGenerationRuntimeLaunchInput,
+        resolve_single_generation_quality_gate_terminal_state,
+        SingleGenerationFollowUpAnalysisDecision, SingleGenerationRuntimeLaunchInput,
         SingleGenerationRuntimeLifecyclePlan, SingleGenerationRuntimeOutcome,
     };
     use crate::models::batch_generation_task;
@@ -422,13 +423,21 @@ mod tests {
     }
 
     #[test]
-    fn should_build_manual_review_terminal_state_from_quality_context() {
+    fn should_not_block_single_generation_on_manual_review_quality_context() {
         let result = GeneratedChapterResult {
             chapter_id: "chapter-1".to_string(),
             chapter_number: 1,
             title: "第一章".to_string(),
+            content_applied: true,
+            attempt_state: "applied".to_string(),
             quality_gate_action: Some("manual_review".to_string()),
             quality_gate_message: Some("连续性需人工复核".to_string()),
+            quality_metrics: Some(json!({
+                "quality_gate": {
+                    "decision": "manual_review",
+                    "label": "连续性需人工复核"
+                }
+            })),
             ..Default::default()
         };
 
@@ -436,23 +445,38 @@ mod tests {
             &Some(build_terminal_task()),
             &result,
             None,
-        )
-        .expect("manual review terminal");
+        );
 
-        assert_eq!(
-            terminal.checkpoint_payload["quality_gate_decision"],
-            "manual_review"
+        assert_eq!(terminal, None);
+    }
+
+    #[test]
+    fn should_not_block_single_generation_on_follow_up_manual_review_analysis() {
+        let result = GeneratedChapterResult {
+            chapter_id: "chapter-1".to_string(),
+            chapter_number: 1,
+            title: "第一章".to_string(),
+            content_applied: true,
+            attempt_state: "applied".to_string(),
+            ..Default::default()
+        };
+        let analysis = SingleGenerationFollowUpAnalysisDecision {
+            manual_review_label: "收束阶段建议复核".to_string(),
+            quality_metrics: Some(json!({
+                "quality_gate": {
+                    "decision": "manual_review",
+                    "label": "收束阶段建议复核"
+                }
+            })),
+        };
+
+        let terminal = resolve_single_generation_quality_gate_terminal_state(
+            &Some(build_terminal_task()),
+            &result,
+            Some(&analysis),
         );
-        assert_eq!(
-            terminal.checkpoint_payload["quality_gate_label"],
-            "连续性需人工复核"
-        );
-        assert_eq!(
-            terminal.failed_entry["quality_gate_decision"],
-            "manual_review"
-        );
-        assert_eq!(terminal.failed_entry["phase"], "quality_blocked");
-        assert!(terminal.error_message.contains("需人工复核"));
+
+        assert_eq!(terminal, None);
     }
 
     #[test]

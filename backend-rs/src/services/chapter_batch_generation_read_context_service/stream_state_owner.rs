@@ -156,7 +156,6 @@ pub(crate) enum BatchGenerationStreamTerminalKind {
     Completed,
     Failed,
     Cancelled,
-    ManualReview,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,14 +190,17 @@ impl BatchGenerationStreamState {
             Some(&task.failed_chapters),
             quality_status_context,
         );
-        let manual_review_terminal_label = failed_terminal_semantics
-            .as_ref()
-            .filter(|semantics| semantics.kind == BatchGenerationFailedTerminalKind::ManualReview)
-            .map(|semantics| semantics.label.clone());
         let retryable_repair_terminal_label = failed_terminal_semantics
             .as_ref()
             .filter(|semantics| semantics.kind == BatchGenerationFailedTerminalKind::Retry)
             .map(|semantics| semantics.label.clone());
+        let quality_gate =
+            resolve_stream_quality_gate(quality_status_context, workflow_runtime_state);
+        let active_story_repair_payload = quality_status_context
+            .and_then(|context| context.active_story_repair_payload.clone())
+            .or_else(|| active_story_repair_payload_from_runtime_state(workflow_runtime_state));
+        let manual_review_is_telemetry_only =
+            is_manual_review_telemetry(&quality_gate, &active_story_repair_payload);
         let progress = workflow_runtime_state
             .and_then(|item| item.get("progress"))
             .and_then(Value::as_i64)
@@ -209,12 +211,10 @@ impl BatchGenerationStreamState {
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(str::to_string)
-            .or_else(|| {
-                manual_review_terminal_label
-                    .as_ref()
-                    .map(|_| "quality_blocked".to_string())
+            .filter(|value| {
+                !(manual_review_is_telemetry_only && matches!(*value, "quality_blocked"))
             })
+            .map(str::to_string)
             .or_else(|| {
                 retryable_repair_terminal_label
                     .as_ref()
@@ -225,8 +225,10 @@ impl BatchGenerationStreamState {
             .and_then(|item| item.get("last_message"))
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
+            .filter(|value| {
+                !(manual_review_is_telemetry_only && looks_like_manual_review_message(value))
+            })
             .map(str::to_string)
-            .or_else(|| manual_review_terminal_label.clone())
             .or_else(|| retryable_repair_terminal_label.clone())
             .unwrap_or_else(|| resolved_status.default_message().to_string())
             .to_string();
@@ -258,11 +260,6 @@ impl BatchGenerationStreamState {
             .and_then(Value::as_array)
             .map(|events| events.to_vec())
             .unwrap_or_default();
-        let quality_gate =
-            resolve_stream_quality_gate(quality_status_context, workflow_runtime_state);
-        let active_story_repair_payload = quality_status_context
-            .and_then(|context| context.active_story_repair_payload.clone())
-            .or_else(|| active_story_repair_payload_from_runtime_state(workflow_runtime_state));
         let candidate_gateway = resolve_stream_candidate_gateway(workflow_runtime_state);
         let event_status = resolve_stream_event_status(
             &resolved_status,
@@ -278,10 +275,7 @@ impl BatchGenerationStreamState {
             message,
             phase,
             event_status,
-            terminal_kind: resolved_status.terminal_kind(
-                manual_review_terminal_label.as_ref(),
-                retryable_repair_terminal_label.as_ref(),
-            ),
+            terminal_kind: resolved_status.terminal_kind(retryable_repair_terminal_label.as_ref()),
             analysis_task_id,
             analysis_task_message,
             analysis_task_progress,
@@ -292,7 +286,7 @@ impl BatchGenerationStreamState {
             active_story_repair_payload,
             candidate_gateway,
             #[cfg(test)]
-            terminal_label: manual_review_terminal_label.or(retryable_repair_terminal_label),
+            terminal_label: retryable_repair_terminal_label,
         }
     }
 
@@ -388,29 +382,22 @@ impl BatchGenerationStreamState {
                 vec![result_event, json!({"type":"done"})]
             }
             BatchGenerationStreamTerminalKind::Failed => {
+                let error_message = self
+                    .task
+                    .error_message
+                    .clone()
+                    .filter(|message| {
+                        !(is_manual_review_telemetry(
+                            &self.quality_gate,
+                            &self.active_story_repair_payload,
+                        ) && looks_like_manual_review_message(message))
+                    })
+                    .unwrap_or_else(|| "批量生成任务执行失败".to_string());
                 let mut error_event = json!({
                     "type": "error",
-                    "error": self
-                        .task
-                        .error_message
-                        .clone()
-                        .unwrap_or_else(|| "批量生成任务执行失败".to_string()),
+                    "error": error_message,
                     "code": 500,
                     "phase": "failed"
-                });
-                insert_stream_candidate_gateway(&mut error_event, self.candidate_gateway.as_ref());
-                vec![error_event, json!({"type":"done"})]
-            }
-            BatchGenerationStreamTerminalKind::ManualReview => {
-                let mut error_event = json!({
-                    "type": "error",
-                    "error": self
-                        .task
-                        .error_message
-                        .clone()
-                        .unwrap_or_else(|| "需人工复核".to_string()),
-                    "code": 422,
-                    "phase": "quality_blocked"
                 });
                 insert_stream_candidate_gateway(&mut error_event, self.candidate_gateway.as_ref());
                 vec![error_event, json!({"type":"done"})]
@@ -418,6 +405,37 @@ impl BatchGenerationStreamState {
             BatchGenerationStreamTerminalKind::Cancelled => vec![json!({"type":"done"})],
         })
     }
+}
+
+fn is_manual_review_telemetry(
+    quality_gate: &Option<Value>,
+    active_payload: &Option<Value>,
+) -> bool {
+    quality_gate.as_ref().is_some_and(is_manual_review_payload)
+        || active_payload
+            .as_ref()
+            .is_some_and(is_manual_review_payload)
+}
+
+fn is_manual_review_payload(payload: &Value) -> bool {
+    let Some(object) = payload.as_object() else {
+        return false;
+    };
+
+    object
+        .get("decision")
+        .or_else(|| object.get("quality_gate_decision"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| value == "manual_review")
+        || object
+            .get("quality_gate")
+            .is_some_and(is_manual_review_payload)
+}
+
+fn looks_like_manual_review_message(message: &str) -> bool {
+    let value = message.trim();
+    value.contains("人工复核") || value.contains("需复核")
 }
 
 pub(crate) fn insert_stream_candidate_gateway(
@@ -511,8 +529,7 @@ fn resolve_stream_event_status(
         BatchGenerationResolvedStreamStatus::Failed
             if matches!(
                 failed_terminal_semantics.map(|semantics| semantics.kind),
-                Some(BatchGenerationFailedTerminalKind::ManualReview)
-                    | Some(BatchGenerationFailedTerminalKind::Retry)
+                Some(BatchGenerationFailedTerminalKind::Retry)
             ) && matches!(phase, "quality_blocked" | "repair_pending" | "saving") =>
         {
             "running"
@@ -574,14 +591,10 @@ impl BatchGenerationResolvedStreamStatus {
 
     pub(crate) fn terminal_kind(
         self,
-        manual_review_terminal_label: Option<&String>,
         retryable_repair_terminal_label: Option<&String>,
     ) -> Option<BatchGenerationStreamTerminalKind> {
         match self {
             Self::Completed => Some(BatchGenerationStreamTerminalKind::Completed),
-            Self::Failed if manual_review_terminal_label.is_some() => {
-                Some(BatchGenerationStreamTerminalKind::ManualReview)
-            }
             Self::Failed if retryable_repair_terminal_label.is_some() => {
                 Some(BatchGenerationStreamTerminalKind::Failed)
             }

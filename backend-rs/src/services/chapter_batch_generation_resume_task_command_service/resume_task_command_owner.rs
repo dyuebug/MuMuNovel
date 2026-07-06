@@ -71,7 +71,6 @@ pub(crate) fn build_batch_generation_resume_task_command_owner_contract() -> Val
             ],
             "domain_errors": [
                 "InvalidStatus",
-                "ManualReviewBlocked",
                 "NoResumableChaptersFound",
                 "NoChaptersLeftToResume",
                 "SingleChapterUnavailable",

@@ -186,6 +186,7 @@ pub(crate) fn build_batch_generation_failed_chapter_entry(
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn build_quality_gate_blocked_failed_chapter_entry(
     chapter_id: Option<&str>,
     chapter_number: Option<i32>,
@@ -217,6 +218,7 @@ pub(crate) fn build_quality_gate_blocked_failed_chapter_entry(
     entry
 }
 
+#[allow(dead_code)]
 pub(crate) fn extract_quality_gate_failed_metrics_from_runtime_state(
     workflow_runtime_state: Option<&Value>,
 ) -> Vec<String> {
@@ -242,6 +244,7 @@ pub(crate) fn extract_quality_gate_failed_metrics_from_runtime_state(
         .collect()
 }
 
+#[allow(dead_code)]
 pub(crate) fn extract_quality_gate_failed_metrics_from_payload(
     value: Option<&Value>,
 ) -> Vec<String> {
@@ -567,6 +570,7 @@ impl BatchGenerationRuntimePersistencePlan {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn failed_quality_gate_blocked(
         chapter_id: Option<&str>,
         chapter_number: Option<i32>,

@@ -981,15 +981,17 @@ fn derive_quality_gate_from_metrics_object(
     let (status, decision, label, reason, summary) = match (overall_score, weak_metric_count) {
         (Some(score), count) if score < 68.0 || count >= 4 => {
             let summary = if stage_label.is_empty() {
-                format!("{scope_label}暂不建议直接保存，建议先人工复核再决定是否重写。")
+                format!("{scope_label}质量短板较明显，建议按修复指引补强后继续。")
             } else {
-                format!("{scope_label}在{stage_label}阶段暂不建议直接保存，建议先人工复核再决定是否重写。")
+                format!(
+                    "{scope_label}在{stage_label}阶段质量短板较明显，建议按修复指引补强后继续。"
+                )
             };
             (
-                "blocked",
-                "manual_review",
-                "需复核",
-                format!("总分 {:.1} 或弱项数量已触发人工复核阈值", score),
+                "repairable",
+                "auto_repair",
+                "需修复",
+                format!("总分 {:.1} 或弱项数量已触发强化修复阈值", score),
                 summary,
             )
         }
@@ -1042,7 +1044,7 @@ fn derive_quality_gate_from_metrics_object(
         "repair_targets": repair_targets,
         "allow_save": status == "pass",
         "can_auto_repair": status == "repairable",
-        "requires_manual_review": status == "blocked",
+        "requires_manual_review": false,
         "weakest_metric_key": weakest_metric
             .map(|item| Value::String(item.descriptor.focus_area.to_string()))
             .unwrap_or(Value::Null),
@@ -2431,7 +2433,7 @@ pub(crate) fn reconciled_quality_gate_from_quality_context(
 ) -> Option<Value> {
     let mut quality_gate =
         merged_quality_gate_from_quality_context(quality_metrics_summary, latest_quality_metrics)?;
-    let Some(manual_review_label) = manual_review_label_from_quality_context(
+    let Some(_manual_review_label) = manual_review_label_from_quality_context(
         None,
         quality_metrics_summary,
         latest_quality_metrics,
@@ -2443,9 +2445,9 @@ pub(crate) fn reconciled_quality_gate_from_quality_context(
         return Some(quality_gate);
     };
 
-    gate_object.insert("status".to_string(), json!("failed"));
-    gate_object.insert("decision".to_string(), json!("manual_review"));
-    gate_object.insert("label".to_string(), json!(manual_review_label));
+    gate_object.insert("status".to_string(), json!("warning"));
+    gate_object.insert("decision".to_string(), json!("auto_repair"));
+    gate_object.insert("label".to_string(), json!("建议继续修复"));
 
     Some(quality_gate)
 }
@@ -2883,7 +2885,7 @@ mod tests {
                 "status": "failed",
                 "decision": "manual_review",
                 "label": "来自 summary",
-                "summary": "需要人工复核",
+                "summary": "建议继续修复",
                 "failed_metrics": [{"label": "节奏"}, {"label": "信息密度"}]
             }
         });
@@ -2894,12 +2896,12 @@ mod tests {
         assert_eq!(gate["status"], "failed");
         assert_eq!(gate["decision"], "auto_repair");
         assert_eq!(gate["label"], "来自 latest");
-        assert_eq!(gate["summary"], "需要人工复核");
+        assert_eq!(gate["summary"], "建议继续修复");
         assert_eq!(gate["failed_metrics"], json!(["节奏", "信息密度"]));
     }
 
     #[test]
-    fn should_reconcile_quality_gate_to_manual_review_when_summary_is_terminal() {
+    fn should_reconcile_quality_gate_to_auto_repair_when_summary_is_terminal() {
         let latest = json!({
             "quality_gate": {
                 "decision": "auto_repair",
@@ -2912,7 +2914,7 @@ mod tests {
                 "status": "failed",
                 "decision": "manual_review",
                 "label": "来自 summary",
-                "summary": "需要人工复核",
+                "summary": "建议继续修复",
                 "failed_metrics": [{"label": "信息密度"}]
             }
         });
@@ -2920,15 +2922,15 @@ mod tests {
         let gate = reconciled_quality_gate_from_quality_context(Some(&summary), Some(&latest))
             .expect("reconciled quality gate");
 
-        assert_eq!(gate["status"], "failed");
-        assert_eq!(gate["decision"], "manual_review");
-        assert_eq!(gate["label"], "来自 summary");
-        assert_eq!(gate["summary"], "需要人工复核");
+        assert_eq!(gate["status"], "warning");
+        assert_eq!(gate["decision"], "auto_repair");
+        assert_eq!(gate["label"], "建议继续修复");
+        assert_eq!(gate["summary"], "建议继续修复");
         assert_eq!(gate["failed_metrics"], json!(["节奏", "信息密度"]));
     }
 
     #[test]
-    fn should_restore_active_payload_with_reconciled_manual_review_gate() {
+    fn should_restore_active_payload_with_reconciled_auto_repair_gate() {
         let latest = json!({
             "repair_guidance": {
                 "summary": "先修正文节奏",
@@ -2946,7 +2948,7 @@ mod tests {
                 "status": "failed",
                 "decision": "manual_review",
                 "label": "自动修复预算已耗尽",
-                "summary": "需要人工复核",
+                "summary": "建议继续修复",
                 "failed_metrics": [{"label": "信息密度"}]
             }
         });
@@ -2960,9 +2962,9 @@ mod tests {
         )
         .expect("active story repair payload");
 
-        assert_eq!(payload["quality_gate_status"], "failed");
-        assert_eq!(payload["quality_gate_decision"], "manual_review");
-        assert_eq!(payload["quality_gate_label"], "自动修复预算已耗尽");
+        assert_eq!(payload["quality_gate_status"], "warning");
+        assert_eq!(payload["quality_gate_decision"], "auto_repair");
+        assert_eq!(payload["quality_gate_label"], "建议继续修复");
         assert_eq!(
             payload["quality_gate_failed_metrics"],
             json!(["节奏", "信息密度"])

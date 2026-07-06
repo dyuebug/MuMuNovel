@@ -28,6 +28,172 @@ The codebase contains both active refactors and compatibility layers, so
 - Keep bootstrap, runtime services, compat wrappers, and HTTP routes in their
   own lanes.
 
+## Scenario: Batch Generation Post-Write Guard
+
+### 1. Scope / Trigger
+
+- Trigger: Batch chapter generation advances from one chapter to the next.
+- Owner: `backend-rs/src/services/chapter_batch_generation_runtime_state_service/runtime_driver_owner.rs`.
+
+### 2. Signatures
+
+- `BatchGenerationPostWriteGuardPlan::execute(db, task_id) -> Result<BatchGenerationPostWriteGuardOutcome, String>`.
+- `BatchGenerationPostWriteGuardPlan::resolve(task_exists, chapter_content_written) -> BatchGenerationPostWriteGuardOutcome`.
+- `build_non_applied_generated_result_quality_runtime_state(result) -> Value`.
+
+### 3. Contracts
+
+- If `GeneratedChapterResult.content_applied == false`, route only retryable
+  quality-gate results through `BatchGenerationQualityGateRoutingPlan` before
+  post-write guard.
+- `quality_gate_action=retry` should retry the current chapter through existing
+  retry persistence.
+- `quality_gate_action=manual_review` is telemetry-only for all chapter
+  generation paths and must not persist failed quality-gate terminal fields or
+  set `review_required=true`.
+- A generated chapter is successful only after the chapter row exists and `chapters.content.trim()` is non-empty.
+- A task row missing after generation resolves to `Stop` because the runtime was externally removed or cancelled.
+- A chapter row missing resolves to `Stop` because the target no longer exists.
+- A chapter row with empty or missing content after an applied result returns
+  `Err("章节生成完成后正文未写入")` so the existing generic retry routing handles the current chapter.
+
+### 4. Validation & Error Matrix
+
+- Task exists + non-empty content -> `Continue`.
+- Task missing -> `Stop`.
+- Chapter missing -> `Stop`.
+- Non-applied candidate result + manual review gate -> no quality-gate terminal;
+  the manual-review metadata remains telemetry only.
+- Non-applied candidate result + retry gate -> retry current chapter.
+- Applied candidate result + empty content -> error routed as current-chapter generation failure.
+
+### 5. Good/Base/Bad Cases
+
+- Good: Chapter 2 writes non-empty content, post-write guard continues, then chapter 3 prerequisite check can pass.
+- Base: Chapter 2 returns a manual-review candidate, quality telemetry is kept
+  but no `需复核` terminal is created.
+- Base: Chapter 2 writes empty content after an applied result, post-write guard fails chapter 2 and retries chapter 2.
+- Bad: Treating chapter-row existence as success lets the driver advance to chapter 3, which later fails with `前置章节尚未完成: 2 章`.
+- Bad: Converting manual-review telemetry into `review_required=true` blocks
+  unattended chapter generation.
+
+### 6. Tests Required
+
+- Unit test `should_continue_post_write_guard_only_when_task_exists_and_chapter_content_written`.
+- DB-backed test `should_fail_post_write_guard_when_generated_chapter_content_is_empty`.
+- Unit test `should_not_project_manual_review_generated_result_into_quality_gate_runtime_state`.
+- Run focused runtime-state tests or `cargo test ... <guard test>` plus `cargo check --manifest-path backend-rs/Cargo.toml`.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+let chapter_exists = chapter::Entity::find_by_id(&chapter_id).one(db).await?.is_some();
+BatchGenerationPostWriteGuardPlan::resolve(task_exists, chapter_exists)
+```
+
+#### Correct
+
+```rust
+let content_written = chapter.content.as_ref().is_some_and(|content| !content.trim().is_empty());
+if !content_written {
+    return Err("章节生成完成后正文未写入".to_string());
+}
+BatchGenerationPostWriteGuardPlan::resolve(task_exists, true)
+```
+
+## Scenario: Chapter Generation Manual Review Policy
+
+### 1. Scope / Trigger
+
+- Trigger: Single-chapter or batch chapter generation receives
+  `quality_gate_action=manual_review` from the candidate gateway or follow-up
+  analysis.
+- Owner:
+  `backend-rs/src/services/chapter_single_generation_result_lifecycle_service/lifecycle_owner.rs`
+  and
+  `backend-rs/src/services/chapter_single_generation_runtime_state_service/terminal_state_owner.rs`
+  and
+  `backend-rs/src/services/chapter_batch_generation_task_payload_base_service/quality_terminal_status_owner.rs`
+  and
+  `backend-rs/src/services/chapter_batch_generation_runtime_state_service/runtime_driver_owner.rs`
+  and
+  `backend-rs/src/services/chapter_batch_generation_read_context_service/stream_state_owner.rs`
+  and
+  `backend-rs/src/services/chapter_generation_runtime_service/story_repair_quality_context_owner.rs`.
+
+### 2. Contracts
+
+- Chapter generation must not stop in `quality_blocked` or create a failed
+  terminal task only because quality metadata says `manual_review`.
+- `manual_review` quality metadata remains valid telemetry in history payloads,
+  candidate gateway payloads, and quality metrics.
+- The generated chapter content is applied like a normal completed generation
+  when the action is `manual_review`; batch generation must not create a
+  `review_required=true` terminal from manual-review metadata.
+- Read/status projection must not convert `manual_review` telemetry back into
+  task-card `quality_blocked`, `review_required`, 422 SSE error events, or
+  user-facing `需复核` / `人工复核` copy.
+- Severe quality analysis should use repair-oriented user-facing copy such as
+  `auto_repair`, `需修复`, or `建议继续修复`; `manual_review` remains a legacy
+  metadata value only.
+- `retry` / `auto_repair` remains the blocking quality gate path for automatic
+  repair attempts.
+
+### 3. Tests Required
+
+- Unit test that `generated_result_lifecycle_view(..., Some("manual_review"), ...)`
+  returns `content_applied=true`, `attempt_state=applied`, and
+  `chapter_status=completed`.
+- Unit test that single-generation terminal-state resolution returns `None`
+  for both direct manual-review candidate metadata and follow-up analysis
+  manual-review metadata.
+- Unit test that batch terminal semantics returns `None` for manual-review
+  quality runtime state and that non-applied manual-review generated results do
+  not create an active repair payload.
+- Unit test that batch read-context projection treats manual-review quality
+  metadata as telemetry only and does not emit `quality_blocked` or a 422
+  manual-review SSE event.
+
+## Scenario: Batch Generation Auto-Recovery Timeout
+
+### 1. Scope / Trigger
+
+- Trigger: Batch task read/status/list queries evaluate whether a `pending` or
+  `running` generation task should be automatically recovered as failed.
+- Owner:
+  `backend-rs/src/services/chapter_batch_generation_read_context_service/task_recovery_owner.rs`
+  and read callers in
+  `backend-rs/src/services/chapter_batch_generation_read_context_service/`.
+
+### 2. Contracts
+
+- `pending` startup recovery still uses `batch_generation_tasks.created_at`
+  and the existing 3-minute startup budget.
+- `running` recovery must not use only `batch_generation_tasks.started_at`.
+  Multi-chapter generation can legitimately exceed 15 minutes while still
+  making progress.
+- `running` recovery must use the latest known activity timestamp from
+  `batch_generation_snapshots.updated_at`,
+  `batch_generation_snapshots.workflow_runtime_state.updated_at`, then fall
+  back to `batch_generation_tasks.started_at`.
+- Owned task reads and active task list reads should pass already loaded
+  snapshots into recovery instead of loading the same snapshot twice.
+- Snapshot writes from chapter-start, retry, analysis, candidate, and terminal
+  checkpoints are the runtime heartbeat source for long-running batches.
+
+### 3. Tests Required
+
+- Unit test that a running task older than 15 minutes is not recovered when its
+  snapshot/runtime heartbeat is recent.
+- Unit test that a running task is recovered when both snapshot/runtime
+  heartbeat and `started_at` are stale.
+- Contract test should expose `running_timeout_basis` so future changes keep
+  the heartbeat-based recovery rule visible.
+- Run `cargo test --manifest-path backend-rs/Cargo.toml chapter_batch_generation_read_context_service`
+  and `cargo check --manifest-path backend-rs/Cargo.toml`.
+
 ## Whole-Module Rust Migration Package Contract
 
 When a backend task is explicitly about accelerating Python-to-Rust migration,
@@ -4234,14 +4400,12 @@ build_chapter_candidate_quality_adapter(
 - Quality gate decisions must normalize to the Python stream contract:
   `passed` / `continue` -> `continue`,
   `auto_repair` / `repair` / `retry` -> `retry`,
-  `manual_review` -> `manual_review`.
+  `manual_review` -> `continue` because manual review is telemetry-only.
 - Completion message must be derived from the normalized action:
   `retry` -> `章节生成完成，已转入质量修复`,
-  `manual_review` -> `章节生成完成，已转入人工复核`,
   otherwise -> `章节生成完成`.
 - Analysis-started message must be derived from the same normalized action:
   `retry` -> `质量修复分析任务已启动`,
-  `manual_review` -> `人工复核分析任务已启动`,
   otherwise -> `章节分析任务已启动`.
 - Ordered success payloads must stay:
   `quality_metrics -> quality_gate -> result -> analysis_started`, omitting
@@ -4257,9 +4421,8 @@ build_chapter_candidate_quality_adapter(
 - `quality_gate.decision = auto_repair` -> action `retry`, quality-gate SSE
   event type `quality_gate_retry`, progress `88`, and analysis-started message
   `质量修复分析任务已启动`.
-- `quality_gate.decision = manual_review` -> action `manual_review`,
-  quality-gate SSE event type `quality_gate_blocked`, progress `95`, and
-  completion message `章节生成完成，已转入人工复核`.
+- `quality_gate.decision = manual_review` -> action `continue`, no
+  quality-gate SSE event, and completion message `章节生成完成`.
 - Missing analysis task id -> no analysis-started event.
 - Missing quality metrics -> no quality-metrics event, but result and done
   must still be emitted.

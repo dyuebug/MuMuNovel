@@ -2,10 +2,7 @@ use sea_orm::DatabaseConnection;
 use serde_json::{json, Value};
 
 use crate::models::batch_generation_snapshot;
-use crate::services::chapter_batch_generation_task_payload_base_service::{
-    resolve_failed_terminal_semantics_from_sources, BatchGenerationFailedTerminalKind,
-    BatchGenerationQualityStatusContext, BatchGenerationTaskKind,
-};
+use crate::services::chapter_batch_generation_task_payload_base_service::BatchGenerationTaskKind;
 use crate::services::chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig;
 use crate::services::chapter_generation_execution_contract_service::{
     active_story_repair_payload_from_runtime_state, parse_batch_generation_request_runtime_state,
@@ -113,7 +110,6 @@ pub(crate) fn build_batch_generation_resume_restore_owner_contract() -> Value {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrepareBatchGenerationResumeRuntimeStateError {
     InvalidStatus,
-    ManualReviewBlocked,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -129,7 +125,6 @@ pub(crate) struct BatchGenerationPersistedRuntimeContext {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RestoredResumeRuntimeStateProjection {
-    pub(crate) quality_status_context: BatchGenerationQualityStatusContext,
     pub(crate) request_runtime_state: BatchGenerationRequestRuntimeState,
     pub(crate) runtime_state_seed: Option<Value>,
 }
@@ -182,10 +177,6 @@ pub(crate) fn prepare_batch_generation_resume_restored_runtime_state(
             command_state.max_retries,
             &persisted_runtime_context,
         );
-    if restored_runtime_state.is_manual_review_blocked(command_state) {
-        return Err(PrepareBatchGenerationResumeRuntimeStateError::ManualReviewBlocked);
-    }
-
     Ok((
         restored_runtime_state,
         snapshot.and_then(|item| item.workflow_runtime_state.clone()),
@@ -243,20 +234,6 @@ impl RestoredResumeRuntimeStateProjection {
             max_retries,
             &persisted_runtime_context,
         )
-    }
-
-    pub(crate) fn is_manual_review_blocked(
-        &self,
-        command_state: &ResumeBatchGenerationCommandState,
-    ) -> bool {
-        resolve_failed_terminal_semantics_from_sources(
-            Some(&command_state.failed_chapters),
-            Some(&self.quality_status_context),
-            command_state.current_retry_count,
-            command_state.max_retries,
-        )
-        .as_ref()
-        .is_some_and(|semantics| semantics.kind == BatchGenerationFailedTerminalKind::ManualReview)
     }
 
     pub(crate) fn into_launch_parts(self) -> RestoredResumeRuntimeLaunchParts {
@@ -481,16 +458,6 @@ impl BatchGenerationPersistedRuntimeContext {
         )
     }
 
-    pub(crate) fn resume_quality_status_context(
-        &self,
-        restored_quality_context: &BatchGenerationQualityRuntimeContext,
-    ) -> BatchGenerationQualityStatusContext {
-        BatchGenerationQualityStatusContext::from_runtime_quality_context_and_active_payload(
-            restored_quality_context,
-            self.explicit_story_repair_payload(),
-        )
-    }
-
     pub(crate) fn build_restored_resume_runtime_state(
         &self,
         task_kind: BatchGenerationTaskKind,
@@ -515,7 +482,6 @@ impl BatchGenerationPersistedRuntimeContext {
             &restored_quality_context,
             runtime_scope,
         );
-        let quality_status_context = self.resume_quality_status_context(&restored_quality_context);
         let runtime_state_seed = build_resume_runtime_state_seed(
             task_kind,
             batch_id,
@@ -525,7 +491,6 @@ impl BatchGenerationPersistedRuntimeContext {
         );
 
         RestoredResumeRuntimeStateProjection {
-            quality_status_context,
             request_runtime_state: restored_request_runtime_state,
             runtime_state_seed,
         }

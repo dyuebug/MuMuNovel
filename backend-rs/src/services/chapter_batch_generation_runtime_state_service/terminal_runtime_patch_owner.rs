@@ -212,6 +212,7 @@ fn build_resolved_terminal_quality_payload_source(workflow_runtime_state: Option
     Value::Object(payload)
 }
 
+#[allow(dead_code)]
 pub(crate) fn apply_manual_review_terminal_fields(
     object: &mut serde_json::Map<String, Value>,
     manual_review_label: &str,
@@ -356,6 +357,7 @@ fn insert_normalized_terminal_quality_payload_field(
     payload.insert(field_name.to_string(), value);
 }
 
+#[allow(dead_code)]
 fn insert_terminal_active_story_repair_payload(
     payload: &mut serde_json::Map<String, Value>,
     active_story_repair_payload: Option<&Value>,
@@ -440,6 +442,7 @@ pub(crate) fn apply_retry_terminal_quality_runtime_patch_contract(
     );
 }
 
+#[allow(dead_code)]
 pub(crate) fn apply_terminal_quality_runtime_patch_contract(
     payload: &mut serde_json::Map<String, Value>,
     workflow_runtime_state: Option<&Value>,
@@ -493,6 +496,7 @@ pub(crate) fn apply_terminal_quality_runtime_patch_contract(
     );
 }
 
+#[allow(dead_code)]
 pub(crate) fn build_manual_review_terminal_runtime_patch_contract(
     chapter_number: i32,
     manual_review_label: &str,
@@ -500,7 +504,10 @@ pub(crate) fn build_manual_review_terminal_runtime_patch_contract(
     serde_json::Map::from_iter([
         (
             "analysis_task_message".to_string(),
-            json!(format!("第 {} 章触发质量门禁，需人工复核", chapter_number)),
+            json!(format!(
+                "第 {} 章质量门禁未通过，建议继续修复",
+                chapter_number
+            )),
         ),
         ("analysis_task_progress".to_string(), json!(100)),
         ("analysis_last_error".to_string(), Value::Null),
@@ -510,6 +517,7 @@ pub(crate) fn build_manual_review_terminal_runtime_patch_contract(
     ])
 }
 
+#[allow(dead_code)]
 pub(crate) fn build_quality_gate_blocked_runtime_state_patch(
     workflow_runtime_state: Option<&Value>,
     active_story_repair_payload: Option<&Value>,
@@ -527,6 +535,7 @@ pub(crate) fn build_quality_gate_blocked_runtime_state_patch(
     Value::Object(payload)
 }
 
+#[allow(dead_code)]
 pub(crate) fn build_quality_gate_blocked_runtime_state_patch_from_workflow_state(
     workflow_runtime_state: Option<&Value>,
     chapter_number: i32,

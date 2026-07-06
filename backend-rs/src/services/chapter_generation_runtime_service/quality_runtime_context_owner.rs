@@ -72,7 +72,7 @@ pub(crate) fn build_generation_quality_runtime_owner_contract() -> Value {
                 "manual_review_decisions": ["manual_review"],
                 "manual_review_phase": "quality_blocked",
                 "retryable_decisions": ["auto_repair", "repair"],
-                "manual_review_default_label": "需人工复核",
+                "manual_review_default_label": "建议继续修复",
                 "retryable_default_label": "可自动修复后重试",
                 "quality_context_lookup_order": [
                     "active_story_repair_payload",
@@ -108,6 +108,7 @@ pub(crate) fn build_generation_quality_runtime_owner_contract() -> Value {
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn manual_review_label(failed_chapters: Option<&Value>) -> Option<String> {
     failed_chapters.and_then(latest_failed_chapter_manual_review_label)
 }
@@ -207,6 +208,7 @@ pub(crate) fn retryable_repair_label_from_quality_context_with_retry_budget(
     })
 }
 
+#[allow(dead_code)]
 fn latest_failed_chapter_manual_review_label(failed_chapters: &Value) -> Option<String> {
     let items = failed_chapters.as_array()?;
     let latest = items.iter().rev().find(|item| item.is_object())?;
@@ -248,7 +250,7 @@ fn manual_review_label_from_payload(value: Option<&Value>) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
-        .or_else(|| Some("需人工复核".to_string()))
+        .or_else(|| Some("建议继续修复".to_string()))
 }
 
 fn retryable_repair_label_from_payload(
@@ -354,7 +356,7 @@ fn exhausted_auto_repair_label_from_payload(
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
-        .or_else(|| Some("需人工复核".to_string()))
+        .or_else(|| Some("建议继续修复".to_string()))
 }
 
 pub(crate) fn append_generation_quality_metrics_history_event(
@@ -1229,6 +1231,7 @@ pub(crate) fn resolve_batch_quality_runtime_context_from_current_quality(
     }
 }
 
+#[allow(dead_code)]
 fn increment_generation_quality_gate_terminal_counts(
     quality_gate_counts: &mut serde_json::Map<String, Value>,
     recent_manual_review_count: &mut i64,
@@ -1252,6 +1255,7 @@ fn increment_generation_quality_gate_terminal_counts(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn normalize_terminal_quality_gate_payload(
     payload: &mut Value,
     manual_review_label: &str,
@@ -1270,6 +1274,7 @@ pub(crate) fn normalize_terminal_quality_gate_payload(
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn normalize_terminal_quality_summary_state(
     summary_state: &mut Value,
     manual_review_label: &str,
@@ -1289,6 +1294,7 @@ pub(crate) fn normalize_terminal_quality_summary_state(
     normalize_terminal_quality_gate_payload(last_metric, manual_review_label);
 }
 
+#[allow(dead_code)]
 pub(crate) fn normalize_terminal_quality_history(
     quality_metrics_history: &mut Value,
     manual_review_label: &str,
@@ -1302,6 +1308,7 @@ pub(crate) fn normalize_terminal_quality_history(
     normalize_terminal_quality_gate_payload(last_metric, manual_review_label);
 }
 
+#[allow(dead_code)]
 pub(crate) fn normalize_terminal_quality_history_context(
     quality_history_context: &mut Value,
     manual_review_label: &str,
@@ -1417,7 +1424,7 @@ mod tests {
             "quality_gate": {
                 "status": "failed",
                 "decision": "manual_review",
-                "label": "需要人工复核"
+                "label": "建议继续修复"
             },
             "repair_guidance": {
                 "summary": "优先修复当前冲突密度"
@@ -1435,7 +1442,7 @@ mod tests {
             "quality_gate": {
                 "status": "failed",
                 "decision": "manual_review",
-                "label": "需要人工复核"
+                "label": "建议继续修复"
             },
             "quality_runtime_context": {
                 "scope": "chapter",
@@ -1575,7 +1582,7 @@ mod tests {
             "quality_gate": {
                 "status": "failed",
                 "decision": "manual_review",
-                "label": "需要人工复核"
+                "label": "建议继续修复"
             },
             "repair_guidance": {
                 "summary": "优先修复当前冲突密度"
@@ -2059,11 +2066,11 @@ mod tests {
             }
         });
 
-        normalize_terminal_quality_gate_payload(&mut payload, "等待人工复核");
+        normalize_terminal_quality_gate_payload(&mut payload, "建议继续修复");
 
         assert_eq!(payload["quality_gate"]["status"], "failed");
         assert_eq!(payload["quality_gate"]["decision"], "manual_review");
-        assert_eq!(payload["quality_gate"]["label"], "等待人工复核");
+        assert_eq!(payload["quality_gate"]["label"], "建议继续修复");
     }
 
     #[test]
@@ -2089,7 +2096,7 @@ mod tests {
             ]
         });
 
-        normalize_terminal_quality_summary_state(&mut summary_state, "等待人工复核");
+        normalize_terminal_quality_summary_state(&mut summary_state, "建议继续修复");
 
         assert_eq!(
             summary_state["recent_history"][0]["quality_gate"]["decision"],
@@ -2122,7 +2129,7 @@ mod tests {
             }
         ]);
 
-        normalize_terminal_quality_history(&mut history, "等待人工复核");
+        normalize_terminal_quality_history(&mut history, "建议继续修复");
 
         assert_eq!(history[0]["quality_gate"]["decision"], "auto_repair");
         assert_eq!(history[1]["quality_gate"]["decision"], "manual_review");
@@ -2159,7 +2166,7 @@ mod tests {
             "recent_auto_repair_count": 2
         });
 
-        normalize_terminal_quality_history_context(&mut context, "等待人工复核");
+        normalize_terminal_quality_history_context(&mut context, "建议继续修复");
 
         assert_eq!(
             context["recent_metrics"][0]["quality_gate"]["decision"],

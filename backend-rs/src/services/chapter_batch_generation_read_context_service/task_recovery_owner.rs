@@ -1,8 +1,9 @@
-use chrono::{Duration as ChronoDuration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, Utc};
 use sea_orm::{ActiveModelTrait, DatabaseConnection};
 use serde_json::{json, Value};
 
-use crate::models::batch_generation_task;
+use crate::models::{batch_generation_snapshot, batch_generation_task};
+use crate::services::chapter_generation_runtime_service::snapshot_persistence_owner::load_chapter_generation_snapshot;
 
 const RUNNING_TASK_AUTO_RECOVERY_TIMEOUT_MINUTES: i64 = 15;
 const PENDING_TASK_AUTO_RECOVERY_TIMEOUT_MINUTES: i64 = 3;
@@ -19,6 +20,8 @@ pub(crate) fn build_batch_generation_task_recovery_owner_contract() -> Value {
         "behavior_contract": {
             "entrypoints": [
                 "resolve_generation_task_auto_recovery_error",
+                "resolve_generation_task_auto_recovery_error_with_snapshot",
+                "recover_generation_task_if_needed_with_snapshot",
                 "recover_generation_task_if_needed"
             ],
             "running_timeout_minutes": RUNNING_TASK_AUTO_RECOVERY_TIMEOUT_MINUTES,
@@ -28,6 +31,7 @@ pub(crate) fn build_batch_generation_task_recovery_owner_contract() -> Value {
                 "error_message",
                 "completed_at"
             ],
+            "running_timeout_basis": "latest snapshot/runtime heartbeat, falling back to task.started_at",
             "error_messages": [
                 "任务超时（超过15分钟未完成，已自动恢复）",
                 "任务启动超时（超过3分钟未启动，已自动恢复）"
@@ -73,13 +77,22 @@ pub(crate) fn build_batch_generation_task_recovery_owner_contract() -> Value {
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn resolve_generation_task_auto_recovery_error(
     task: &batch_generation_task::Model,
     now: NaiveDateTime,
 ) -> Option<String> {
+    resolve_generation_task_auto_recovery_error_with_snapshot(task, None, now)
+}
+
+pub(crate) fn resolve_generation_task_auto_recovery_error_with_snapshot(
+    task: &batch_generation_task::Model,
+    snapshot: Option<&batch_generation_snapshot::Model>,
+    now: NaiveDateTime,
+) -> Option<String> {
     if task.status == "running" {
-        if let Some(started_at) = task.started_at {
-            if now - started_at
+        if let Some(last_activity_at) = resolve_running_task_last_activity_at(task, snapshot) {
+            if now - last_activity_at
                 > ChronoDuration::minutes(RUNNING_TASK_AUTO_RECOVERY_TIMEOUT_MINUTES)
             {
                 return Some("任务超时（超过15分钟未完成，已自动恢复）".to_string());
@@ -98,12 +111,39 @@ pub(crate) fn resolve_generation_task_auto_recovery_error(
     None
 }
 
-pub(crate) async fn recover_generation_task_if_needed(
+fn resolve_running_task_last_activity_at(
+    task: &batch_generation_task::Model,
+    snapshot: Option<&batch_generation_snapshot::Model>,
+) -> Option<NaiveDateTime> {
+    [
+        snapshot.and_then(|item| item.updated_at),
+        snapshot
+            .and_then(|item| item.workflow_runtime_state.as_ref())
+            .and_then(runtime_state_updated_at),
+        task.started_at,
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+}
+
+fn runtime_state_updated_at(value: &Value) -> Option<NaiveDateTime> {
+    value
+        .get("updated_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.naive_utc())
+}
+
+pub(crate) async fn recover_generation_task_if_needed_with_snapshot(
     db: &DatabaseConnection,
     task: batch_generation_task::Model,
+    snapshot: Option<&batch_generation_snapshot::Model>,
 ) -> Result<(batch_generation_task::Model, bool), String> {
     let now = Utc::now().naive_utc();
-    let Some(error_message) = resolve_generation_task_auto_recovery_error(&task, now) else {
+    let Some(error_message) =
+        resolve_generation_task_auto_recovery_error_with_snapshot(&task, snapshot, now)
+    else {
         return Ok((task, false));
     };
 
@@ -117,4 +157,12 @@ pub(crate) async fn recover_generation_task_if_needed(
         .await
         .map(|updated| (updated, true))
         .map_err(|error| error.to_string())
+}
+
+pub(crate) async fn recover_generation_task_if_needed(
+    db: &DatabaseConnection,
+    task: batch_generation_task::Model,
+) -> Result<(batch_generation_task::Model, bool), String> {
+    let snapshot = load_chapter_generation_snapshot(db, &task.id).await?;
+    recover_generation_task_if_needed_with_snapshot(db, task, snapshot.as_ref()).await
 }
