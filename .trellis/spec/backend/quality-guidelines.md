@@ -5352,3 +5352,1006 @@ params.insert(
 - Do not use startup-time schema mutation as a shortcut around migrations.
 - Do not add new functionality to frozen compatibility facades unless the task
   is explicitly transitional.
+---
+
+## Scenario: Background Task Project Scope Admission
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing a Rust `background_tasks` task type whose request may
+  run without a project.
+- Owner: `backend-rs/src/api/background_tasks.rs`.
+
+### 2. Signatures
+
+- `task_type_allows_empty_project(task_type: &str) -> bool` owns the explicit
+  global-task allowlist.
+- `create_task(...)` must call that helper before accepting an empty
+  `project_id`.
+
+### 3. Contracts
+
+- Project-scoped tasks reject an empty `project_id` with the existing bad-request
+  response.
+- Only task types explicitly returned by
+  `task_type_allows_empty_project(...)` may run without a project.
+- A new global task type must update the helper and its positive contract test in
+  the same change; a new project-scoped task must remain covered by the negative
+  contract test.
+- Do not infer project scope from payload fields, route origin, or frontend
+  behavior.
+
+### 4. Validation & Error Matrix
+
+- Known global task + empty `project_id` -> admitted.
+- Known project-scoped task + empty `project_id` -> rejected.
+- Any task + non-empty `project_id` -> continue to normal task-type and access
+  validation.
+- Unknown task type -> project-scope admission does not make it executable; the
+  normal unsupported-task validation still applies.
+
+### 5. Good/Base/Bad Cases
+
+- Good: `inspiration_quick_generate` is listed in the helper and covered by the
+  global-task test.
+- Base: `chapter_regenerate` keeps requiring a project and is covered by the
+  project-scoped test.
+- Bad: duplicating a string allowlist inside `create_task()` or accepting all
+  empty-project tasks because one payload happens to carry enough context.
+
+### 6. Tests Required
+
+- `global_background_task_types_allow_empty_project` asserts every supported
+  global task type.
+- `project_scoped_background_task_types_require_project` asserts representative
+  project-bound generation task types.
+- Run `cargo test --manifest-path backend-rs/Cargo.toml
+  api::background_tasks::tests` and the full Rust suite after changing the
+  allowlist or dispatch table.
+- Owner-contract tests must compare the complete semantic entry set; do not use
+  array indexes that silently drift when an entry is inserted or reordered.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+if project_id.is_empty() && task_type != "one_global_task" {
+    return Err(bad_request());
+}
+```
+
+#### Correct
+
+```rust
+if project_id.is_empty() && !task_type_allows_empty_project(task_type) {
+    return Err(bad_request());
+}
+```
+
+---
+
+## Scenario: Rust Production CI and Real-Backend E2E Ownership
+
+### 1. Scope / Trigger
+
+- Trigger: any change to `backend-rs/**`, backend migration support, frontend
+  real-backend smoke coverage, or the owning GitHub Actions workflows.
+- The production backend owner is `backend-rs`; CI and E2E must exercise that
+  runtime directly instead of using the retired Python FastAPI runtime as a
+  substitute.
+- Python pytest remains a migration/support regression suite and must be named
+  accordingly.
+
+### 2. Signatures
+
+The production Rust CI gate is:
+
+```text
+cargo fmt --manifest-path backend-rs/Cargo.toml -- --check
+cargo check --locked --manifest-path backend-rs/Cargo.toml
+cargo test --locked --manifest-path backend-rs/Cargo.toml
+cargo clippy --locked --manifest-path backend-rs/Cargo.toml --all-targets -- -D clippy::correctness -D clippy::suspicious
+```
+
+The real-backend E2E startup signatures, executed from `backend-rs/`, are:
+
+```text
+cargo run --locked -- migration-executor
+cargo build --locked
+nohup ./target/debug/mumu-novel-backend
+GET http://127.0.0.1:8003/readyz
+npm run e2e -- e2e/auth.spec.ts e2e/background-task-pages.spec.ts
+```
+
+The migration and successful-run evidence signatures, stored under
+`e2e-diagnostics/`, are:
+
+```text
+migration-executor.json
+migration-executor-stderr.log
+migration-executor-exit-code.txt
+rust-backend.pid
+rust-backend-lifecycle.json
+runner-success.json
+```
+
+### 3. Contracts
+
+- Rust toolchain: `1.88`, matching `backend-rs/Dockerfile`.
+- Database service: PostgreSQL `18-alpine`, matching production Compose.
+- Required E2E environment: `DATABASE_URL`, `JWT_SECRET`, `APP_HOST`,
+  `APP_PORT`, `ENABLE_STARTUP_SCHEMA_SYNC=false`, and local-auth credentials.
+- `STATIC_DIR=../backend/static` assumes the Rust process working directory is
+  `backend-rs`; changing the working directory requires changing this path in
+  the same patch.
+- Migration order is strict: PostgreSQL healthy -> Rust `migration-executor` ->
+  Rust `/readyz` confirms DB connectivity and matching migration head -> Playwright.
+- `migration-executor` stdout must contain one machine-readable JSON report only.
+  Tracing, configuration, and connection diagnostics must be written to stderr.
+- The E2E workflow must capture migration stdout, stderr, and the original process
+  exit code into separate evidence files, echo both streams to the runner terminal,
+  and propagate the original non-zero exit code without starting preflight or server.
+- The workflow must build and launch `./target/debug/mumu-novel-backend`
+  directly. The PID persisted to `/tmp/rust-backend.pid` and
+  `e2e-diagnostics/rust-backend.pid` must therefore identify the Rust server,
+  not a `cargo run` wrapper whose child could survive cleanup.
+- Cleanup must run after Playwright and before success evidence or artifact upload.
+  It records `rust-backend-lifecycle.json`, sends `TERM`, waits up to ten seconds,
+  and fails the job after a `KILL` fallback instead of silently accepting a leaked
+  or non-graceful server process.
+- `runner-success.json` may be created only after migration, release preflight,
+  runtime `/readyz`, release `/releasez`, both Playwright smoke specs, and backend
+  lifecycle cleanup succeed. It must identify the Rust runtime owner, PostgreSQL
+  database, each passed gate including `backend_lifecycle`, `GITHUB_SHA`,
+  `GITHUB_RUN_ID`, and `GITHUB_RUN_ATTEMPT`.
+- The existing `rust-readiness-diagnostics` artifact name is compatibility-stable.
+  Its upload step must use `always()` so successful runner evidence and failure
+  diagnostics are both durable; a failed run must never create `runner-success.json`.
+- The current incremental Clippy gate blocks `correctness` and `suspicious`
+  diagnostics. The remaining historical warnings are tracked debt; do not hide
+  them with crate-wide `allow` attributes. Full `-D warnings` is a separate
+  cleanup target.
+
+### 4. Validation & Error Matrix
+
+- PostgreSQL health check fails -> the E2E job fails before migration.
+- Rust migration executor exits non-zero -> preserve the JSON, stderr, and exit-code
+  evidence under `e2e-diagnostics/`, upload it through the existing diagnostics
+  artifact path, propagate the original exit code, and do not start preflight or runtime.
+- Rust `/readyz` does not return success within the workflow timeout -> print
+  `e2e-diagnostics/rust-backend.log` and fail. Database ping success with a missing, empty, or
+  mismatched `alembic_version` head must remain not-ready.
+- Playwright smoke fails -> do not create `runner-success.json`; upload the
+  available Rust diagnostics and Playwright report, print Rust logs, and fail the job.
+- Backend PID file is absent -> write lifecycle status `not_started`; preserve the
+  earlier failure state without inventing a cleanup failure.
+- Backend PID is no longer alive -> write lifecycle status `already_exited`, keep
+  the available Rust log, fail cleanup, and do not create `runner-success.json`.
+- Backend exits after `TERM` -> write lifecycle status `terminated` with signal `TERM`.
+- Backend remains alive for ten seconds after `TERM` -> send `KILL`, write lifecycle
+  status `forced_kill`, fail cleanup, and do not create `runner-success.json`.
+- All Rust release gates, Playwright smoke, and graceful lifecycle cleanup pass ->
+  create a parseable `runner-success.json` bound to the current GitHub SHA/run/attempt,
+  then upload the complete `e2e-diagnostics/` directory including lifecycle evidence.
+- Rust fmt/check/test or high-confidence Clippy diagnostics fail -> fail the
+  production backend CI job.
+- Python pytest fails -> fail only the migration/support job; never relabel that
+  job as the production runtime owner.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a `backend-rs/**` pull request runs Rust fmt/check/test/Clippy and the
+  PostgreSQL-backed Rust E2E smoke; migration evidence remains a parseable JSON report,
+  a separate stderr log, and the original exit-code file; the direct Rust server PID and
+  lifecycle JSON are also durable, while a successful run publishes `runner-success.json`
+  only after graceful cleanup through the compatibility-stable diagnostics artifact.
+- Base: a `backend/**` migration-support change still runs Python pytest and the
+  shared E2E contract without restoring Python runtime ownership.
+- Bad: E2E uses SQLite, `alembic-sqlite.ini`, or
+  `python -m uvicorn app.main:app` and passes while the Rust runtime is broken.
+- Bad: migration output exists only in the runner terminal, tracing is mixed into the
+  JSON report, or `|| true` hides the executor failure and permits later startup steps.
+- Bad: diagnostics upload uses `failure()` only, so a green runner has no durable
+  evidence, a success manifest is written before Playwright or cleanup finishes, or
+  cleanup kills only a `cargo run` wrapper while the Rust server survives.
+
+### 6. Tests Required
+
+- Parse both workflow YAML files and assert they contain no UTF-8 BOM.
+- Assert `backend-rs/**` is present in both workflow path filters.
+- Assert the E2E workflow contains PostgreSQL, `migration-executor`, Rust server
+  startup, `/readyz`, and both Playwright smoke specs; reject a liveness-only
+  `/health` wait gate.
+- Assert the E2E workflow contains neither `uvicorn` nor
+  `alembic-sqlite.ini`.
+- Run
+  `production_ci_contract_tests::e2e_smoke_preserves_migration_executor_evidence_and_structured_stdout`
+  and
+  `production_ci_contract_tests::e2e_smoke_persists_successful_runner_evidence_and_always_uploads_diagnostics`.
+- Parse the workflow YAML, extract the success-evidence and lifecycle shell blocks,
+  validate them with Git Bash `bash -n`, execute success evidence with deterministic
+  GitHub metadata, and parse `runner-success.json` with exact field assertions.
+- Execute the lifecycle block against a TERM-responsive process, a process that exits
+  before cleanup, and a process that ignores TERM; assert `terminated/TERM` returns
+  zero, both `already_exited` and `forced_kill/KILL` return non-zero, and all lifecycle
+  JSON documents parse exactly.
+- Parse the workflow YAML, validate the migration shell block with Git Bash
+  `bash -n`, and run an isolated process probe that parses stdout as JSON while
+  asserting the process exit code equals the report `exit_code`.
+- Run the four Rust CI commands, the frontend production build, and
+  `git diff --check`.
+- A GitHub runner execution is required before declaring the PostgreSQL/Rust
+  E2E rollout fully verified; local static validation is not equivalent.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```yaml
+- name: Migrate PostgreSQL with Rust
+  working-directory: backend-rs
+  run: cargo run --locked -- migration-executor || true
+
+- name: Start backend
+  run: python -m uvicorn app.main:app --port 8003
+```
+
+#### Correct
+
+```yaml
+- name: Migrate PostgreSQL with Rust
+  working-directory: backend-rs
+  run: |
+    mkdir -p ../e2e-diagnostics
+    set +e
+    cargo run --locked -- migration-executor \
+      > ../e2e-diagnostics/migration-executor.json \
+      2> ../e2e-diagnostics/migration-executor-stderr.log
+    migration_exit_code=$?
+    set -e
+    printf '%s\n' "$migration_exit_code" \
+      > ../e2e-diagnostics/migration-executor-exit-code.txt
+    cat ../e2e-diagnostics/migration-executor.json
+    cat ../e2e-diagnostics/migration-executor-stderr.log >&2
+    if [ "$migration_exit_code" -ne 0 ]; then
+      exit "$migration_exit_code"
+    fi
+
+- name: Start Rust backend
+  working-directory: backend-rs
+  run: |
+    cargo build --locked
+    nohup ./target/debug/mumu-novel-backend \
+      > ../e2e-diagnostics/rust-backend.log 2>&1 &
+    backend_pid=$!
+    printf '%s\n' "$backend_pid" > /tmp/rust-backend.pid
+    printf '%s\n' "$backend_pid" > ../e2e-diagnostics/rust-backend.pid
+
+- name: Run auth + background-task smoke against Rust
+  run: npm run e2e -- e2e/auth.spec.ts e2e/background-task-pages.spec.ts
+
+- name: Stop Rust backend and record lifecycle
+  if: always()
+  run: terminate-direct-rust-server-record-lifecycle-and-fail-on-forced-kill
+
+- name: Record successful Rust E2E evidence
+  if: success()
+  run: write-runner-success-json-after-rust-playwright-and-lifecycle-gates
+
+- name: Upload Rust readiness diagnostics
+  if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: rust-readiness-diagnostics
+    path: e2e-diagnostics/
+```
+
+---
+
+## Scenario: Local Gateway System Proxy Isolation
+
+### 1. Scope / Trigger
+
+- Trigger: any Rust AI client or deterministic HTTP mock that targets a loopback or
+  developer-local gateway while `reqwest` is built with its default `system-proxy`
+  feature.
+- This contract prevents Windows or host-level proxy configuration from intercepting
+  local OpenAI-compatible, Gemini, or Anthropic probes without changing remote provider
+  proxy behavior.
+
+### 2. Signatures
+
+The shared decision owner is:
+
+```rust
+pub(super) fn should_bypass_system_proxy(base_url: &str) -> bool
+```
+
+AI clients must apply the result while constructing their private `reqwest::Client`:
+
+```rust
+let mut client_builder = Client::builder().timeout(timeout);
+if super::should_bypass_system_proxy(&normalized_base_url) {
+    client_builder = client_builder.no_proxy();
+}
+let client = client_builder.build()?;
+```
+
+### 3. Contracts
+
+- The only bypass hosts are `127.0.0.1`, `localhost`, IPv6 loopback (`::1` or
+  `[::1]`), and `host.docker.internal`.
+- Host matching is URL-host based; path text, user info, or a remote hostname that merely
+  contains one of those strings must not activate the bypass.
+- Remote provider URLs retain configured/system proxy behavior.
+- OpenAI, Gemini, and Anthropic clients reuse the same helper; do not copy host lists into
+  provider-specific modules.
+- Readiness probes and the subsequent AI request must agree on local transport isolation.
+
+### 4. Validation & Error Matrix
+
+- Local gateway URL + system proxy configured -> build the client with `.no_proxy()` and
+  connect directly to the local listener.
+- Remote provider URL + system proxy configured -> preserve normal `reqwest` proxy
+  discovery.
+- Malformed URL -> return `false`; normal client URL validation remains the error owner.
+- Local mock returns 404/500/502 -> diagnostics must report that mock endpoint, status,
+  and response rather than a proxy-generated or another test's response.
+- Concurrent Settings HTTP mock failure -> treat it as transport isolation evidence;
+  do not hide it with global serialization.
+
+### 5. Good/Base/Bad Cases
+
+- Good: Settings HTTP mock tests run with `--test-threads=32` while a Windows system proxy
+  is configured and consistently observe their own endpoint/status/body.
+- Base: a remote provider continues to use the operator's configured proxy.
+- Bad: disable proxies globally for every provider, add a process-wide mutex, or force
+  `--test-threads=1` to make local HTTP tests appear deterministic.
+
+### 6. Tests Required
+
+- Unit-test every allowed local host and representative remote/lookalike hosts.
+- Run `api::settings::tests::` concurrently with `--test-threads=32`.
+- For a transport-flake fix, preserve before/diagnostic/after stress artifacts and record
+  the failing iteration, endpoint, status, and response marker.
+- Run Rust fmt, the focused proxy-bypass test, the full Settings test module, the full Rust
+  suite, and `git diff --check` before accepting the change.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+let client = Client::builder().timeout(timeout).build()?;
+// A host system proxy may intercept a loopback test or local gateway request.
+```
+
+#### Correct
+
+```rust
+let mut client_builder = Client::builder().timeout(timeout);
+if should_bypass_system_proxy(&normalized_base_url) {
+    client_builder = client_builder.no_proxy();
+}
+let client = client_builder.build()?;
+```
+
+---
+
+## Scenario: Background Task Snapshot Atomic Persistence
+
+### 1. Scope / Trigger
+
+This contract applies whenever `backend-rs/src/tasks/persistence.rs` reads or writes the
+process-owned background-task registry snapshot. It covers crash-safe file persistence only;
+`task_type` recovery classification and business checkpoint semantics belong to R2 and later
+work.
+
+### 2. Signatures
+
+The production entry points remain backward compatible:
+
+```rust
+pub async fn load_from_disk(registry: &TaskRegistry)
+pub async fn save_to_disk(registry: &TaskRegistry)
+pub fn start_periodic_save(registry: TaskRegistry)
+```
+
+Testable directory-injected owners remain private to the module:
+
+```rust
+async fn load_from_dir(registry: &TaskRegistry, dir: &Path) -> LoadOutcome
+async fn save_to_dir(
+    registry: &TaskRegistry,
+    dir: &Path,
+) -> Result<(), SnapshotPersistenceError>
+```
+
+### 3. Contracts
+
+- Snapshot schema version remains `1`; existing version-1 primary snapshots must load unchanged.
+- All candidates live in the same directory and use fixed roles:
+  - `background_tasks.json`: current primary snapshot.
+  - `background_tasks.json.bak`: previous validated primary snapshot.
+  - `background_tasks.json.tmp`: synced but not yet committed candidate.
+  - `<candidate>.corrupt-<timestamp>-<uuid>`: quarantined invalid evidence.
+- Every save is serialized by the same process-local Tokio mutex, including periodic and explicit
+  saves.
+- The write sequence is `serialize -> write_all -> flush -> sync_all(temp) -> validate -> rotate
+  primary to backup -> rename temp to primary`.
+- Windows compatibility requires two renames. Never depend on renaming a temporary file over an
+  existing primary file.
+- Loading order is strictly `primary -> backup -> temporary`; the first valid version-1 snapshot
+  replaces the registry contents.
+- Parent-directory sync is best effort on Unix after commit. Lack of directory-sync support must
+  not cause a fallback to direct primary overwrite.
+- Logs may include candidate role, path, item count, and error details, but must not include task
+  payloads or user content.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| Candidate is missing (`NotFound`) | Continue to the next candidate without treating it as corruption. |
+| Candidate read fails for another I/O reason | Log the failure and continue fallback loading. |
+| JSON is malformed | Rename the candidate to a unique `.corrupt-*` path, then continue fallback. |
+| Snapshot version is not `1` | Treat it as invalid, quarantine it, then continue fallback. |
+| Temporary open/write/flush/sync fails | Return the save error and preserve the existing primary and backup. |
+| Existing primary is valid | Remove only the stale backup, then rename primary to backup before commit. |
+| Existing primary is invalid | Quarantine it and preserve any existing valid backup. |
+| Temporary-to-primary commit fails after rotation | If primary is absent and backup exists, attempt backup-to-primary rollback and retain temp as a recovery candidate. |
+| No valid candidate exists | Start with an empty registry and emit a diagnostic log. |
+
+### 5. Good / Base / Bad Cases
+
+**Good case:** a second successful save leaves the new snapshot in the primary file and the
+previous valid snapshot in the backup file; both parse as version `1`.
+
+**Base case:** the first save creates a synced temporary file and commits it to the unchanged
+production filename without requiring a backup.
+
+**Bad cases:** malformed JSON, unsupported versions, interrupted commits, and a directory placed
+at the temporary-file path must not destroy the last valid primary/backup candidate.
+
+### 6. Tests Required
+
+The persistence module must test these assertion points with an injected temporary directory:
+
+1. First save creates a parseable primary snapshot.
+2. Second save preserves the previous primary as backup.
+3. Corrupt primary is quarantined and backup is loaded.
+4. Missing primary falls back to backup.
+5. Valid temporary snapshot is the last-resort fallback.
+6. Unsupported version is quarantined before backup fallback.
+7. Temporary-file open failure leaves the existing primary unchanged.
+8. Concurrent saves leave primary and backup parseable and no temporary candidate behind.
+9. The production primary filename remains `background_tasks.json`.
+
+Required gates are targeted persistence tests, `cargo fmt --check`, locked `cargo check`, the full
+locked Rust test suite, and Clippy with `correctness` plus `suspicious` denied.
+
+### 7. Wrong vs Correct
+
+Wrong — truncates the only valid snapshot before a durable replacement exists:
+
+```rust
+tokio::fs::write(primary_path, serialized).await?;
+```
+
+Correct — preserve a durable candidate and commit without overwrite-style rename:
+
+```text
+write_all(temp) -> flush(temp) -> sync_all(temp)
+-> rename(valid primary, backup)
+-> rename(temp, primary)
+-> best-effort sync(parent directory)
+```
+
+
+---
+
+## Scenario: Background Task Recovery Policy Registry
+
+### 1. Scope / Trigger
+
+This contract applies whenever a production Rust background task type is added, renamed, or changes
+its restart/checkpoint semantics, and whenever startup orphan recovery changes. The only generic
+startup recovery owner is `backend-rs/src/tasks/recovery.rs`. Business resume commands for chapter
+batch/single generation remain owned by their existing database runtime-state services.
+
+### 2. Signatures
+
+The recovery registry and startup owner are:
+
+```rust
+pub enum TaskRecoveryPolicy {
+    Restartable,
+    CheckpointResumable,
+    ManualConfirmation,
+    NonResumable,
+}
+
+pub const TASK_RECOVERY_POLICIES: &[TaskRecoveryPolicyEntry];
+pub fn has_explicit_recovery_policy(task_type: &str) -> bool;
+pub fn recovery_policy_for(task_type: &str) -> TaskRecoveryPolicy;
+pub async fn recover_orphan_tasks(registry: &TaskRegistry) -> usize;
+```
+
+`TaskRecord::new()` keeps its existing signature. Recovery metadata is optional and backward
+compatible:
+
+```rust
+pub terminal_reason: Option<String>;
+pub terminal_label: Option<String>;
+pub review_required: Option<bool>;
+pub can_resume: Option<bool>;
+```
+
+### 3. Contracts
+
+- The registry contains exactly 23 known production task types: 5 restartable, 2
+  checkpoint-resumable, and 16 manual-confirmation entries.
+- `has_explicit_recovery_policy()` distinguishes an intentional registry decision from the safe
+  fallback. Unknown or unregistered task types always return `false` there and still resolve to
+  `NonResumable` through `recovery_policy_for()`.
+- Startup recovery only mutates `pending` and `running` records. Existing completed, failed, and
+  cancelled records remain byte-for-byte semantically unchanged.
+- Every recovered record remains `failed` for API compatibility and sets all four recovery metadata
+  fields explicitly.
+- `CheckpointResumable` sets `can_resume=true` only when checkpoint is a non-empty JSON object.
+- Recovery preserves result, progress, `started_at` exactly (including `None`), and custom fields
+  from an object checkpoint. Only the normal pending-to-running lifecycle owner may initialize a
+  missing `started_at`; startup recovery must not fabricate an execution start time. A non-object
+  checkpoint is replaced by a structured diagnostic object.
+- Recovery explicitly refreshes `updated_at`; `TaskRegistry::update()` does not do this implicitly.
+  One recovery projection must sample a single timestamp and reuse it for checkpoint `updated_at`,
+  record `completed_at`, and record `updated_at`; independently sampled times for the same projection
+  are forbidden because they weaken audit ordering.
+- Generic startup recovery never replays a payload and never calls a business resume command.
+- `recover_orphan_tasks()` returns the number of active records projected during that invocation; an
+  empty registry or a registry containing only terminal records returns `0`.
+- Startup ordering is `load snapshot -> recover orphans -> conditionally save when count > 0 -> start
+  periodic save/cleanup -> build router`. The recovered projection must reach the existing atomic
+  snapshot owner before the process begins serving requests.
+- The immediate save keeps the existing best-effort `save_to_disk()` error contract: persistence
+  failures are logged and startup continues. Making recovery persistence fail-closed requires a
+  separate availability and operations design.
+- Logs may contain task id, task type, policy, and projected status only; do not log payload, result,
+  checkpoint bodies, prompts, or other user content.
+
+### 4. Validation & Error Matrix
+
+| Input | Required projection |
+|---|---|
+| Known restartable active task | `failed`, `restart_required`, no resume, no review |
+| Chapter checkpoint task with non-empty object | `failed`, `resume_available`, resume allowed |
+| Chapter checkpoint task with missing/null/scalar/array/empty object | `failed`, `checkpoint_missing`, no resume |
+| Known manual-confirmation active task | `failed`, `manual_review`, review required |
+| Unknown active task | `failed`, `non_resumable`, no resume, no review |
+| Existing terminal task | No mutation; return count excludes it. |
+| Active task with `started_at=None` | Preserve `None`; recovery sets only terminal/update timestamps. |
+| Recovered active task | Checkpoint `updated_at`, record `completed_at`, and record `updated_at` represent the exact same instant. |
+| No active records recovered | Return `0`; do not perform an immediate startup save. |
+| One or more active records recovered | Return the exact count and call `save_to_disk()` before periodic workers and router construction. |
+| Immediate snapshot save fails | Log through the existing persistence owner and continue startup; do not silently switch to direct overwrite. |
+
+Adding a new task type without a registry decision is a review failure even though runtime fallback
+remains safe. The source-contract test must derive generic executable task types from the real
+`execute_task()` match arms and assert that every literal has an explicit registry entry; a second
+hand-maintained executable-type list is not sufficient drift protection. Never classify a mutating or
+partially persisted operation as restartable without an idempotency proof.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a chapter generation orphan with a usable checkpoint is marked failed with
+  `resume_available`; the existing chapter resume UI may offer its owner-specific command.
+- Base: a stateless analysis orphan is marked `restart_required`; the user recreates it from the
+  original business page because no payload is persisted.
+- Bad: startup deserializes a generic task and automatically reruns it, an unknown task receives
+  `can_resume=true`, or recovered records remain memory-only until the first periodic save tick.
+
+### 6. Tests Required
+
+1. Assert registry length is 23, entries are unique, and policy counts are 5/2/16.
+2. Assert unknown and future-looking task types use `NonResumable`.
+3. Cover all four policy projections and all checkpoint JSON shapes.
+4. Cover pending/running recovery and terminal-record immutability.
+5. Assert result, progress, object-checkpoint custom fields, and `started_at` are preserved exactly:
+   existing values remain unchanged and missing values remain `None`.
+6. Parse checkpoint `updated_at` and assert it equals both record `updated_at` and `completed_at` for the
+   same recovery projection.
+7. Assert version-1 JSON without recovery fields deserializes with all four values as `None`.
+8. Assert `/background-tasks` compatible payloads expose non-empty recovery fields at both top level
+   and under `data` without changing the success wrapper.
+9. Assert recovery returns `0` for no active records and the exact number of pending/running records.
+10. Keep a startup source-contract test proving the ordered sequence
+   `load -> recover -> conditional save -> periodic workers -> router` in
+   `production_ci_contract_tests.rs`.
+11. Parse the real generic `execute_task()` top-level string match arms, assert the task types are
+    unique, and require `has_explicit_recovery_policy()` for every executable literal.
+12. Run Rust fmt/check/test, Clippy correctness+suspicious, the frontend production build, UTF-8 BOM
+    checks, and `git diff --check`.
+
+### 7. Wrong vs Correct
+
+Wrong — missing payload makes generic automatic replay incomplete and unsafe:
+
+```rust
+if record.status.is_active() {
+    rerun_task(record.task_type).await;
+}
+```
+
+Correct — classify and project an actionable terminal state while leaving execution to the existing
+business owner, then persist any startup recovery before periodic workers and router construction:
+
+```rust
+let recovered_count = recover_orphan_tasks(&task_registry).await;
+if recovered_count > 0 {
+    persistence::save_to_disk(&task_registry).await;
+}
+persistence::start_periodic_save(task_registry.clone());
+
+// recover_orphan_tasks() owns policy projection only; it never replays business payloads.
+```
+
+
+---
+
+## Scenario: Background Task Runtime Terminal Monotonicity
+
+### 1. Scope / Trigger
+
+This contract applies whenever generic Rust background-task lifecycle owners, executor spawn logic,
+channel/stream adapters, cancellation, or `TaskRegistry` conditional mutation changes. It prevents
+terminal-state rollback, stale executor overwrite, and check-then-update races.
+
+### 2. Signatures
+
+```rust
+pub async fn update_if<P, F>(
+    &self,
+    task_id: &str,
+    predicate: P,
+    updater: F,
+) -> Option<TaskRecord>
+where
+    P: FnOnce(&TaskRecord) -> bool,
+    F: FnOnce(&mut TaskRecord);
+```
+
+Lifecycle owners keep these internal contracts:
+
+```text
+mark_task_running(task_id): Pending -> Running, returns execution admission
+complete_task(task_id): active -> Completed
+fail_task(task_id): active -> Failed
+cancel_active_task(task_id, user_id): owned active -> Cancelled
+```
+
+Task-stream owners keep these async contracts:
+
+```text
+TaskStreamHub::subscribe(task_id): atomically reuse or create one broadcast channel
+TaskStreamHub::fanout(task_id, event): wait for sender-map access and deliver when subscribed
+TaskStreamHub::fanout_terminal(task_id, event): remove the sender atomically, then deliver the final event
+subscribe_task_with_latest_snapshot(...): subscribe first, then refresh the connected snapshot
+next_task_stream_data(state): on lag, resubscribe at the channel tail and emit the latest connected snapshot
+```
+
+### 3. Contracts
+
+- `TaskRegistry::update_if()` is the atomic owner for state transitions requiring a predicate. The
+  predicate and updater execute under the same registry write lock. Startup orphan recovery is also a
+  lifecycle projection owner and must use `update_if()` with an active-record predicate.
+- Do not implement lifecycle transitions as `get()` validation followed by unconditional `update()`, or
+  as ordinary `update()` with an early return inside the updater closure. The former races across locks;
+  the latter bypasses the shared predicate-owner contract and obscures stale-candidate outcomes.
+- `Pending -> Running` must return an admission result. A delayed spawn that loses admission exits
+  before executing business logic.
+- `Completed`, `Failed`, and `Cancelled` are irreversible terminal states. Completion, failure,
+  cancellation, and channel progress may mutate only active records.
+- Lifecycle stream fanout must be derived from the record returned by a successful atomic transition.
+  When `update_if()` rejects a stale or terminal lifecycle event, the owner must not emit a progress,
+  result, done, error, or cancellation event for that rejected transition.
+- Concurrent first subscribers for the same task must share one broadcast channel. Channel lookup and
+  first sender creation must execute under one sender-map write lock; do not split them into read/drop/write
+  phases that can overwrite a channel and disconnect an earlier receiver.
+- `TaskStreamHub::fanout()` must await sender-map read access. Lock contention is not permission to drop an
+  event with `try_read()`; clone the sender under the read guard, release the guard, then serialize and send.
+- The SSE route must establish its subscription before refreshing the connected snapshot. A lifecycle
+  transition between authorization and subscription must be represented either by the refreshed connected
+  event or by the queued broadcast stream, never by neither.
+- Final `done`, `error`, and `cancelled` events must use `fanout_terminal()`. Removing the sender and
+  obtaining the sender used for delivery are one write-lock operation: existing receivers retain the
+  channel long enough to consume the buffered terminal event, while a later subscriber creates a fresh
+  channel and obtains the terminal truth from the connected snapshot. Do not retain terminal senders for
+  the process lifetime.
+- An SSE broadcast lag must never be ignored and must not be hidden by only increasing channel capacity.
+  Call `Receiver::resubscribe()` on the existing channel before reading `TaskRegistry`, then emit the latest
+  state through the existing `connected` event. This drops every retained pre-snapshot event and preserves
+  subscribe-then-snapshot ordering without creating a new sender-map entry.
+- After lag recovery, an active snapshot continues from events sent after `resubscribe()`. A terminal snapshot
+  is emitted once and then closes the stream so stale buffered progress cannot regress the client and a
+  terminal task cannot recreate a resident sender. If TTL cleanup removed the record, do not fabricate a new
+  protocol event; continue until the existing channel closes or receives a later event.
+- `complete_task()` is the only generic executor owner of the final `Completed` projection. A
+  channel/stream adapter may copy active progress, message, or result, but channel `success` must not
+  set `TaskStatus::Completed` before the executor owner records result and terminal timestamps.
+- A cancellation projection samples one timestamp and reuses it for checkpoint `updated_at`, record
+  `completed_at`, and record `updated_at`.
+- Recovered terminal metadata (`recovery_policy`, `recovery_action`, `can_resume`, `review_required`)
+  remains immutable under late executor or channel updates.
+- Production task creation uses a new UUID and `TaskRecord::new()`; dedup may return an existing active
+  task only. Do not invent terminal-record reactivation without a separately approved lifecycle design.
+
+### 4. Validation & Error Matrix
+
+| Current state / event | Required result |
+|---|---|
+| `Pending` + executor admission | Atomically become `Running`; return admitted. |
+| `Pending` + concurrent executor admission/cancel | Serialize both transitions under `update_if()`; cancellation owns the final terminal state, and the task cannot be reactivated. |
+| `Cancelled` + delayed executor admission | No mutation; return not admitted; do not execute business logic. |
+| Active + executor success/failure | Atomically become `Completed`/`Failed` with one fact timestamp. |
+| Any terminal + late success/failure | No mutation or stream fanout; preserve status, result, timestamps, and recovery metadata. |
+| Owned active + cancel | Atomically checkpoint and become `Cancelled`. |
+| Completed between cancel validation and mutation | Cancellation predicate fails; never overwrite `Completed`. |
+| Active + channel progress/message/result | Update active projection only. |
+| Channel `success` | Preserve active lifecycle status; final `Completed` belongs to `complete_task()`. |
+| Terminal + late channel update | No mutation; the bridge stops. |
+| Two concurrent first stream subscriptions | Reuse one sender; both receivers remain connected and receive later fanout. |
+| Fanout while sender-map write lock is held | Await the lock, then deliver; never silently discard because of contention. |
+| Terminal transition after authorization but before subscription | Connected snapshot refreshes to the latest terminal record, or the subscribed receiver queues the transition. |
+| Final `done`/`error`/`cancelled` fanout | Existing receivers receive the final event; sender-map entry is removed; later subscription creates a fresh channel. |
+
+A failed predicate is an expected stale-event outcome, not permission to retry with an unconditional
+write. Endpoint-level not-found/ownership responses remain owned by the existing API contract.
+
+### 5. Good/Base/Bad Cases
+
+- Good: executor admission and cancellation race from `Pending`; `update_if()` serializes both owners.
+  Cancellation succeeds in either legal lock order, the final record is `Cancelled`, and later admission
+  fails. If admission won first, `started_at` may remain as execution history.
+- Good: a pending task is cancelled before its delayed spawn runs; admission fails and no business
+  executor starts.
+- Base: an active channel reports success and supplies a result; the record remains active until
+  `complete_task()` commits the final result and terminal timestamps.
+- Good: two callers subscribe to an unseen task concurrently; both receivers share the same sender and
+  receive the next event.
+- Good: fanout waits behind a temporary sender-map write lock and delivers after the guard is released.
+- Base: a task completes after authorization but before stream subscription; the post-subscription refresh
+  emits a `completed` connected snapshot with progress 100.
+- Bad: cancellation performs `get()` and later `update()`, a channel adapter directly writes
+  `Completed`, a late executor changes `Cancelled`/recovered `Failed` into another terminal state,
+  sender creation uses a read/drop/write sequence, fanout uses `try_read()`, or the route snapshots before
+  it subscribes.
+
+### 6. Tests Required
+
+1. Test the `update_if()` primitive directly: missing task executes neither callback; rejected predicate
+   skips the updater and preserves the record; accepted predicate executes each callback once and returns
+   the latest record; two concurrent `Pending` admissions produce exactly one successful transition.
+2. Run `mark_task_running()` and `cancel_active_task()` concurrently from `Pending`; assert cancel
+   succeeds, the final record is `Cancelled`, and later admission fails. If admission won first,
+   `started_at` may be present, but the terminal state must remain `Cancelled`.
+3. Cancel a pending record, subscribe to its task stream, then call running/completion/failure
+   owners; assert status remains `Cancelled`, ordinary cancellation recovery fields remain `None`, and
+   the receiver observes no event from the rejected lifecycle transitions.
+4. Seed a recovered `Failed` record, deliver late running/completion/failure events, and assert all
+   recovery fields, result, checkpoint, and timestamps remain unchanged.
+5. Feed channel `success`; assert it may update active data but not status, then assert
+   `complete_task()` owns final result and `completed_at`.
+6. Deliver late channel progress/message to `Cancelled`; assert no mutation and bridge termination.
+7. Assert cancellation checkpoint `updated_at` equals record `completed_at` and `updated_at`.
+8. Exercise startup orphan recovery across active and terminal candidates; assert terminal candidates are
+   unchanged and repeated recovery is idempotent under the same `update_if()` owner contract. Keep a
+   production source contract that scopes to `recover_orphan_task()` and rejects ordinary `update()` or
+   closure-external recovery metadata while requiring `update_if()` plus the active predicate.
+9. Hold the sender-map write lock while fanout starts; assert fanout waits and the receiver obtains the
+   event after lock release. Start two first subscriptions concurrently; assert both receive one later event.
+10. Complete a task between the authorization snapshot and subscription helper call; assert the refreshed
+    connected event reports `completed` with progress 100 while the newly created receiver remains empty.
+11. Send a terminal event through `fanout_terminal()`; assert the existing receiver consumes the event and
+    then observes channel closure, the sender-map entry is gone, and a later subscriber receives events on
+    a fresh channel.
+12. Overflow a small broadcast channel, then assert lag recovery emits the latest active registry snapshot,
+    discards retained stale progress, receives a later fresh event, emits the latest terminal snapshot after
+    a second lag, and closes without replaying stale buffered events.
+13. Run `api::background_tasks::tests`, `tasks::stream::tests`, `tasks::registry::tests`,
+    `tasks::recovery::tests`, production CI contract tests, full locked Rust tests, fmt/check, Clippy
+    correctness+suspicious, UTF-8/BOM checks, and `git diff --check`.
+
+### 7. Wrong vs Correct
+
+Wrong — validation and mutation use different locks, allowing terminal overwrite:
+
+```rust
+if registry.get(task_id).await.is_some_and(|task| task.status.is_active()) {
+    registry.update(task_id, |task| task.status = TaskStatus::Cancelled).await;
+}
+```
+
+Correct — predicate and transition share one write lock, and stale events become no-ops:
+
+```rust
+registry
+    .update_if(
+        task_id,
+        |task| task.status.is_active(),
+        |task| {
+            task.status = TaskStatus::Cancelled;
+            task.completed_at = Some(now);
+            task.updated_at = now;
+        },
+    )
+    .await;
+```
+
+
+## PostgreSQL Password Verifier Storage Readiness Contract
+
+Rust `/readyz` must treat local-auth verifier storage capacity as a production readiness contract, not
+as an implicit consequence of the migration revision head.
+
+- The password hashing service is the owner of the canonical Argon2 PHC shape and required storage length.
+  Readiness code must reuse that owner contract instead of duplicating a magic number.
+- PostgreSQL checks must be read-only and query `information_schema.columns` for
+  `user_passwords.password_hash`; readiness must not mutate or auto-repair Schema.
+- `TEXT`, unbounded `VARCHAR`, and bounded character storage whose capacity is at least the canonical
+  verifier length may allow readiness. Only the separately approved target type may mark the final R0.1
+  storage contract complete.
+- Missing columns, unsupported types, insufficient bounded capacity, metadata query failures, and an
+  unavailable database must fail closed with `503 not_ready` and structured diagnostics.
+- Non-PostgreSQL test databases must report an explicit not-applicable state. They must not be presented
+  as evidence that the PostgreSQL Auth Schema is compatible.
+- A unit-tested metadata classifier is necessary but not sufficient. Before R0.2 is accepted, run the
+  real PostgreSQL query/decoding path and prove that legacy `VARCHAR(64)` is rejected before auth writes.
+- This readiness check is not permission to change Schema and does not complete R0.1, R0.2, R0.3, or G0.
+- CI readiness polling must retain the last response body and HTTP status. Redirecting `/readyz` to
+  `/dev/null` is forbidden because it removes the structured reason for migration or Auth Schema failure.
+- On runner failure, upload the retained `/readyz` payload together with the Rust backend log as a dedicated
+  diagnostic artifact. A Playwright report alone is insufficient when failure happens before Playwright starts.
+- Runtime readiness and release-gate completion are distinct contracts. `/readyz` owns runtime readiness;
+  `/releasez` owns the production release contract and must require `matches_target_storage_contract=true`.
+  HTTP 200 from `/readyz` alone must not allow a merely compatible bounded column to satisfy R0.1/G0.
+- Production E2E and local R0.2 tooling must call the Rust-owned `/releasez` endpoint instead of duplicating
+  readiness JSON field rules in Workflow, Node, PowerShell, or shell code. This keeps the final target decision
+  in the Rust service that owns the metadata contract.
+- `/releasez` must fail closed for unavailable databases, migration-head mismatch, incompatible storage,
+  compatible-but-non-target storage, and non-PostgreSQL evidence. SQLite runtime readiness is not valid release
+  evidence for the PostgreSQL production contract.
+- CI diagnostics must retain both `/readyz` and `/releasez` response bodies and HTTP statuses when the release
+  gate fails before Playwright.
+
+- Local R0.2 tooling may expose `release-readiness-preflight`, but the command must call the same
+  `production_readiness_service` used by `/readyz` and `/releasez`; duplicating target-storage rules in
+  CLI code is forbidden.
+- `release-readiness-preflight` stdout is a single `/releasez`-compatible JSON document. Tracing and
+  connection/configuration errors must go to stderr so automation can parse stdout without log stripping.
+- The preflight exits `0` only when `release_ready=true`; configuration failure, connection failure,
+  migration-head mismatch, compatible-but-non-target storage, incompatible storage, and non-PostgreSQL
+  evidence must exit non-zero with structured fail-closed JSON.
+- The preflight is read-only: it must not call the migration executor, create temporary schemas, execute
+  DDL, auto-repair metadata, or imply authorization for the R0.1 Schema change.
+- Rust real-E2E workflows must run `release-readiness-preflight` after PostgreSQL migration succeeds and
+  before the Rust server starts. The preflight is an early release-contract gate, not a replacement for runtime
+  `/readyz` and `/releasez` evidence.
+- Runner automation must preserve preflight stdout, stderr, and the original exit code in separate files named
+  `release-preflight.json`, `release-preflight-stderr.log`, and `release-preflight-exit-code.txt`.
+- Workflow logic must temporarily disable immediate shell exit only long enough to capture the preflight status,
+  restore fail-fast behavior, and propagate the original non-zero exit code. `|| true`, swallowed failures, and
+  terminal-only diagnostics are forbidden.
+- Failure artifact upload paths must include all three preflight evidence files. HTTP `/readyz`, `/releasez`, their
+  status files, and the backend log remain required because preflight evidence alone does not prove runtime health.
+
+### R0.3 Linux runner binary identity and cleanup contract (2026-07-13)
+
+- A production real-E2E workflow must build the Rust server binary first and start that binary directly. A
+  background `cargo run` wrapper is not an acceptable server process owner because its PID does not prove the
+  final server lifecycle.
+- Before startup, record the resolved binary path and SHA-256 in diagnostics. After startup, verify both values
+  against Linux `/proc/<pid>/exe` and persist a structured identity record.
+- Cleanup must treat the PID file as an untrusted reference. Validate the PID shape, require the expected path
+  and hash evidence, and re-read `/proc/<pid>/exe` immediately before sending `TERM` or `KILL`.
+- If the PID is invalid, expected identity is missing, `/proc/<pid>/exe` is unavailable, or path/hash comparison
+  fails, cleanup must write `cleanup_status=signal_refused`, return non-zero, and must not signal that PID.
+- The success manifest is written only after verified cleanup succeeds. It must bind the binary path/hash and
+  GitHub SHA/run ID/attempt. Failure must write a separate structured manifest, and the diagnostics directory
+  must be uploaded with `always()`.
+- Playwright output and its original exit code belong in the same diagnostics artifact as migration, preflight,
+  readiness, server log, identity, and lifecycle evidence. A terminal-only Playwright result is insufficient.
+- Static workflow tests and Linux-container probes are required local gates, but they do not complete R0.3.
+  R0.3 passes only when an actual GitHub-hosted runner produces a green, downloadable artifact for the exact
+  commit containing the contract.
+
+### R0.1 approved password verifier storage contract (2026-07-13)
+
+- The approved PostgreSQL target for `user_passwords.password_hash` is `TEXT NOT NULL`; bounded storage is
+  not the final release contract even when it can hold the current canonical verifier.
+- The Rust/Python frozen revision graph head is `20260712_password_hash_phc_text`, with
+  `20260517_project_core_defaults` as its parent. New databases and upgraded databases must converge on the
+  same column type, nullability, comment, and revision head.
+- The production Rust migration executor remains upgrade-only. A guarded downgrade may exist in metadata and
+  the frozen source-map for isolated verification, but production code must not execute `downgrade_steps` or
+  expose a downgrade CLI.
+- Upgrade verification must prove legacy 64-character SHA256 values are byte-for-byte unchanged. Auth
+  verification must prove a successful legacy login can persist the canonical Argon2 PHC without truncation.
+- Guarded downgrade verification must fail before narrowing the column whenever any verifier exceeds 64
+  characters, leaving both the `TEXT` column and stored verifiers unchanged.
+- R0.1 source and isolated-database completion does not authorize production migration and does not complete
+  R0.2, R0.3, or G0. The next mandatory gate is local PostgreSQL + Rust + Playwright real E2E.
+
+## Scenario: Python Migration/Support CI Dependency Boundary
+
+### 1. Scope / Trigger
+
+- Trigger: `.github/workflows/backend-ci.yml` runs the residual Python migration/support regression job.
+- Scope: migration metadata, migrator models, deployment-support tools, and `backend/tests/test_tools` only.
+- The Python job is not the production backend runtime gate; Rust owns production fmt/check/test/Clippy.
+
+### 2. Signatures
+
+```text
+python -m pip install -r requirements-migrator.txt -r requirements-test.txt
+DATABASE_URL=sqlite+aiosqlite:///./data/ci.db pytest tests/test_tools
+```
+
+Workflow identity:
+
+```text
+job: python-migration-support
+python-version: 3.11
+timeout-minutes: 20
+```
+
+### 3. Contracts
+
+- `cache-dependency-path` must include `backend/requirements-migrator.txt` and
+  `backend/requirements-test.txt`.
+- The install step must use only those two files; it must not install `backend/requirements.txt`.
+- The pytest boundary must remain `tests/test_tools` unless the PRD explicitly expands Python ownership.
+- Tests that validate deployment probes require tracked `deploy/strangler-gateway-probes.json` in the checkout.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Full AI runtime requirements are installed | Contract test fails before merge |
+| Python 3.11 cannot collect a support tool | Job fails; fix syntax rather than widening the image/version |
+| Deploy probe manifest is missing | Test fails; restore the tracked support file to the checkout |
+| Any migration/support test fails | Job fails |
+| All scoped tests pass within 20 minutes | Job passes without claiming production-runtime coverage |
+
+### 5. Good / Base / Bad Cases
+
+- Good: cold-cache Python 3.11 installs the two narrow requirement files and passes all `tests/test_tools`.
+- Base: pip cache is warm, but the same dependency files and test boundary remain visible in workflow text.
+- Bad: install `requirements.txt`, downloading Chroma/Transformers/Torch/CUDA while pytest never starts before timeout.
+
+### 6. Tests Required
+
+- Rust workflow contract test asserts the job name, both dependency files, and `pytest tests/test_tools`.
+- The same contract test rejects `-r requirements.txt`.
+- A clean-checkout Python 3.11 probe must install from a cold cache and assert all support tests pass.
+- YAML parsing and `python -m py_compile backend/tools/check_text_encoding_health.py` must pass locally.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```yaml
+run: pip install -r requirements.txt -r requirements-test.txt
+# Downloads the retired Python application AI runtime for a migration/support job.
+```
+
+#### Correct
+
+```yaml
+run: >-
+  python -m pip install
+  -r requirements-migrator.txt
+  -r requirements-test.txt
+
+run: pytest tests/test_tools
+```
