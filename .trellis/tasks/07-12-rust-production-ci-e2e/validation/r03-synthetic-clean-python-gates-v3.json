@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "candidate": "r03-clean-python-v3.tar",
+  "image": "python:3.11-bookworm",
+  "command": "python -m pip install -r requirements-migrator.txt -r requirements-test.txt && DATABASE_URL=sqlite+aiosqlite:///./data/ci.db pytest tests/test_tools",
+  "started_at": "2026-07-13T13:03:09.3894353Z",
+  "finished_at": "2026-07-13T13:03:41.2353597Z",
+  "duration_seconds": 31.846,
+  "exit_code": 0,
+  "status": "PASS",
+  "log": "r03-synthetic-clean-python-gates-v3.log"
+}

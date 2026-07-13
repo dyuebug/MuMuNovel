@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "candidate": "r03-clean-candidate-runner-v4.tar",
+  "image": "rust:1.88-bookworm",
+  "shell": "sh -c",
+  "retry_reason": "bash -lc reset the official image PATH, making rustup unavailable before gates started",
+  "runner_simulation": "removed ephemeral /.dockerenv before executing tests",
+  "commands": [
+    "rustup component add rustfmt clippy",
+    "cargo fmt -- --check",
+    "cargo test --locked production_ci_contract_tests",
+    "cargo check --locked",
+    "cargo test --locked",
+    "cargo clippy --locked --all-targets -- -D clippy::correctness -D clippy::suspicious"
+  ],
+  "started_at": "2026-07-13T13:06:41.2647803Z",
+  "finished_at": "2026-07-13T13:10:34.4461500Z",
+  "duration_seconds": 233.181,
+  "exit_code": 0,
+  "status": "PASS",
+  "log": "r03-synthetic-clean-rust-gates-runner-v4-retry.log"
+}

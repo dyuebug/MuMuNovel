@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "base_head": "d0cff4f5fafeeb22f6b4c0f319e9d493ba7a8346",
+  "archive": ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-clean-frontend-v1.tar",
+  "candidate_file_count": 3,
+  "candidate_files": [
+    "frontend/e2e/auth.spec.ts",
+    "frontend/e2e/helpers/backgroundTaskSmoke.ts",
+    "frontend/src/pages/AuthCallback.tsx"
+  ],
+  "support_files_present_from_head": [
+    "frontend/src/services/modules/backgroundTaskTypes.ts"
+  ],
+  "missing": [],
+  "hash_mismatches": [],
+  "status": "PASS"
+}

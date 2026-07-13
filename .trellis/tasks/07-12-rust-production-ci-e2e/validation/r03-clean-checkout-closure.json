@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-07-13T21:13:43.830579+08:00",
+  "base_head": "d0cff4f5fafeeb22f6b4c0f319e9d493ba7a8346",
+  "gate_state": {
+    "R0.1": "PASS",
+    "R0.2": "PASS",
+    "R0.3": "LOCALLY COMPLETE / GITHUB RUNNER PENDING",
+    "G0": "NO-GO",
+    "R3_allowed": false
+  },
+  "rust_closure": {
+    "minimal_contract_candidate": {
+      "file_count": 24,
+      "files": [
+        ".github/workflows/backend-ci.yml",
+        ".github/workflows/e2e-smoke.yml",
+        "backend-rs/Cargo.toml",
+        "backend-rs/Cargo.lock",
+        "backend-rs/src/main.rs",
+        "backend-rs/src/api/auth.rs",
+        "backend-rs/src/api/background_tasks.rs",
+        "backend-rs/src/api/health.rs",
+        "backend-rs/src/middleware/auth.rs",
+        "backend-rs/src/services/auth.rs",
+        "backend-rs/src/services/mod.rs",
+        "backend-rs/src/services/password_hash_service.rs",
+        "backend-rs/src/services/production_readiness_service.rs",
+        "backend-rs/src/services/schema_migration_initial_schema.sql",
+        "backend-rs/src/services/schema_migration_metadata_service.rs",
+        "backend-rs/src/tasks/checkpoint.rs",
+        "backend-rs/src/tasks/persistence.rs",
+        "backend-rs/src/tasks/recovery.rs",
+        "backend-rs/src/tasks/registry.rs",
+        "backend-rs/src/tasks/stream.rs",
+        "backend-rs/src/tasks/types.rs",
+        "backend-rs/src/production_ci_contract_tests.rs",
+        "deploy/strangler-gateway-probes.json",
+        "frontend/src/services/modules/backgroundTaskTypes.ts"
+      ],
+      "focused_contract_tests": "PASS (16/16)",
+      "full_gate": "FAIL (1601 passed / 11 failed)",
+      "evidence": [
+        "r03-synthetic-clean-rust-gates-retry.log",
+        "r03-synthetic-clean-rust-gates-retry.json"
+      ]
+    },
+    "hosted_runner_candidate": {
+      "file_count": 26,
+      "files": [
+        ".github/workflows/backend-ci.yml",
+        ".github/workflows/e2e-smoke.yml",
+        "backend-rs/Cargo.toml",
+        "backend-rs/Cargo.lock",
+        "backend-rs/src/main.rs",
+        "backend-rs/src/api/auth.rs",
+        "backend-rs/src/api/background_tasks.rs",
+        "backend-rs/src/api/health.rs",
+        "backend-rs/src/middleware/auth.rs",
+        "backend-rs/src/services/auth.rs",
+        "backend-rs/src/services/mod.rs",
+        "backend-rs/src/services/password_hash_service.rs",
+        "backend-rs/src/services/production_readiness_service.rs",
+        "backend-rs/src/services/schema_migration_initial_schema.sql",
+        "backend-rs/src/services/schema_migration_metadata_service.rs",
+        "backend-rs/src/tasks/checkpoint.rs",
+        "backend-rs/src/tasks/persistence.rs",
+        "backend-rs/src/tasks/recovery.rs",
+        "backend-rs/src/tasks/registry.rs",
+        "backend-rs/src/tasks/stream.rs",
+        "backend-rs/src/tasks/types.rs",
+        "backend-rs/src/production_ci_contract_tests.rs",
+        "deploy/strangler-gateway-probes.json",
+        "frontend/src/services/modules/backgroundTaskTypes.ts",
+        "backend-rs/src/services/chapter_generation_runtime_service.rs",
+        "backend-rs/src/services/chapter_generation_execution_contract_service.rs"
+      ],
+      "added_to_close_full_test_dependencies": [
+        "backend-rs/src/services/chapter_generation_runtime_service.rs",
+        "backend-rs/src/services/chapter_generation_execution_contract_service.rs"
+      ],
+      "archive": "r03-clean-candidate-runner-v4.tar",
+      "manifest": "r03-clean-candidate-runner-v4.json",
+      "sha_closure": "PASS",
+      "runner_model": {
+        "os": "Linux",
+        "rust": "1.88.0",
+        "execution_shape": "hosted runner VM (not application Docker runtime)",
+        "docker_simulation_adjustment": "remove ephemeral /.dockerenv before tests"
+      },
+      "focused_contract_tests": "PASS (16/16)",
+      "full_tests": "PASS (1612/1612)",
+      "fmt_check_clippy": "PASS",
+      "result": "r03-synthetic-clean-rust-gates-runner-v4-retry.json",
+      "log": "r03-synthetic-clean-rust-gates-runner-v4-retry.log"
+    },
+    "docker_runner_difference": {
+      "fact": "Application code checks /.dockerenv before enabling the Docker-only host.docker.internal fallback.",
+      "github_hosted_runner_shape": "Cargo executes directly on the Linux VM host and does not have application Docker runtime identity.",
+      "simulation_adjustment": "Remove only the ephemeral validation container /.dockerenv marker before tests.",
+      "excluded_unrelated_files": [
+        "backend-rs/src/api/settings.rs",
+        "backend-rs/src/ai/clients/mod.rs",
+        "backend-rs/src/ai/clients/openai.rs",
+        "backend-rs/src/ai/clients/anthropic.rs",
+        "backend-rs/src/ai/clients/gemini.rs"
+      ]
+    },
+    "preserved_failure_evidence": [
+      "r03-synthetic-clean-rust-gates.log",
+      "r03-synthetic-clean-rust-gates.json",
+      "r03-synthetic-clean-rust-gates-retry.log",
+      "r03-synthetic-clean-rust-gates-retry.json",
+      "r03-synthetic-clean-rust-gates-v2.log",
+      "r03-synthetic-clean-rust-gates-v2.json",
+      "r03-synthetic-clean-rust-gates-runner-v4.log",
+      "r03-synthetic-clean-rust-gates-runner-v4.json"
+    ]
+  },
+  "frontend_closure": {
+    "file_count": 3,
+    "files": [
+      "frontend/e2e/auth.spec.ts",
+      "frontend/e2e/helpers/backgroundTaskSmoke.ts",
+      "frontend/src/pages/AuthCallback.tsx"
+    ],
+    "support_files_from_head": [
+      "frontend/src/services/modules/backgroundTaskTypes.ts"
+    ],
+    "archive": "r03-clean-frontend-v1.tar",
+    "manifest": "r03-clean-frontend-v1.json",
+    "commands": [
+      "npm ci",
+      "npm run lint",
+      "npm run build"
+    ],
+    "status": "PASS",
+    "result": "r03-synthetic-clean-frontend-gates-v1.json",
+    "log": "r03-synthetic-clean-frontend-gates-v1.log"
+  },
+  "python_migration_support_closure": {
+    "file_count": 3,
+    "files": [
+      "backend/alembic/postgres/versions/20260712_1200_password_hash_phc_text.py",
+      "backend/migrator_app/models/user.py",
+      "backend/tools/check_text_encoding_health.py"
+    ],
+    "support_files_from_head": [
+      "backend/requirements-migrator.txt",
+      "backend/requirements-test.txt",
+      "deploy/strangler-gateway-probes.json"
+    ],
+    "archive": "r03-clean-python-v3.tar",
+    "manifest": "r03-clean-python-v3.json",
+    "workflow_boundary": {
+      "dependencies": [
+        "backend/requirements-migrator.txt",
+        "backend/requirements-test.txt"
+      ],
+      "tests": "backend/tests/test_tools",
+      "forbidden_dependency": "backend/requirements.txt"
+    },
+    "cold_cache_full_requirements": {
+      "status": "TIMEOUT",
+      "reason": "Cold-cache installation of full requirements exceeded the workflow 20-minute timeout before pytest started.",
+      "evidence": [
+        "r03-synthetic-clean-python-gates-v1.log",
+        "r03-synthetic-clean-python-gates-v1-container.log",
+        "r03-synthetic-clean-python-gates-v1-container-inspect.json",
+        "r03-synthetic-clean-python-gates-v1-timeout.json"
+      ]
+    },
+    "python_3_11_compatibility_fix": {
+      "file": "backend/tools/check_text_encoding_health.py",
+      "issue": "The original nested double-quoted f-string expression fails collection on Python 3.11.",
+      "resolution": "Use single quotes inside the f-string expression: {','.join(reasons)}."
+    },
+    "tests": "PASS (67/67)",
+    "status": "PASS",
+    "result": "r03-synthetic-clean-python-gates-v3.json",
+    "log": "r03-synthetic-clean-python-gates-v3.log"
+  },
+  "submission_policy": {
+    "temporary_validation_archives": "validation/*.tar are local reconstruction inputs and must not be staged or committed.",
+    "failure_logs": "Preserve historical failure evidence; do not overwrite or delete it.",
+    "git_actions": "No git add/commit/push/branch/switch/reset until explicit high-risk confirmation.",
+    "github_runner_requirement": "R0.3 requires an exact-commit GitHub-hosted Runner execution and downloaded diagnostics artifact."
+  },
+  "post_write_quality_verification": {
+    "recorded_at": "2026-07-13T21:16:37.763481+08:00",
+    "python_source_compile": "PASS",
+    "backend_ci_yaml_parse": "PASS",
+    "cargo_fmt": "PASS",
+    "local_production_ci_contract_tests": "PASS (16/16)",
+    "json_parse": "PASS",
+    "utf8_no_bom_lf_no_trailing_whitespace": "PASS",
+    "targeted_git_diff_check": "PASS",
+    "global_git_diff_check": "PASS",
+    "workspace_pycache_generated": false,
+    "note": "Global git diff emitted pre-existing line-ending conversion warnings but returned exit code 0 with no whitespace errors."
+  }
+}
