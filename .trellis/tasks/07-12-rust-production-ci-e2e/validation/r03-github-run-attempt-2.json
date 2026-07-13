@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "evidence_type": "github_hosted_runner_attempt",
+  "hosted_attempt": 2,
+  "recorded_at": "2026-07-13T23:56:35+08:00",
+  "repository": "dyuebug/MuMuNovel",
+  "pull_request": {
+    "number": 1,
+    "url": "https://github.com/dyuebug/MuMuNovel/pull/1",
+    "state": "open",
+    "draft": true,
+    "runner_only": true,
+    "base_ref": "dev",
+    "base_sha": "936e9401f3bcf4d28545d74e041248710e16acb8",
+    "head_ref": "ci/r03-runner-evidence-20260713",
+    "head_sha": "c2bb1a01439553e5fbd6e399e7177881baa6e547",
+    "execution_sha": "4a415d79a0da136ffb14e7d944164079caaeb302"
+  },
+  "backend_ci": {
+    "run_id": 29261115176,
+    "run_attempt": 1,
+    "event": "pull_request",
+    "head_sha": "c2bb1a01439553e5fbd6e399e7177881baa6e547",
+    "status": "completed",
+    "conclusion": "success",
+    "url": "https://github.com/dyuebug/MuMuNovel/actions/runs/29261115176",
+    "jobs": [
+      {
+        "job_id": 86854332023,
+        "name": "rust-production",
+        "conclusion": "success",
+        "url": "https://github.com/dyuebug/MuMuNovel/actions/runs/29261115176/job/86854332023"
+      },
+      {
+        "job_id": 86854332191,
+        "name": "python-migration-support",
+        "conclusion": "success",
+        "url": "https://github.com/dyuebug/MuMuNovel/actions/runs/29261115176/job/86854332191"
+      }
+    ]
+  },
+  "e2e_smoke": {
+    "run_id": 29261115197,
+    "run_attempt": 1,
+    "event": "pull_request",
+    "head_sha": "c2bb1a01439553e5fbd6e399e7177881baa6e547",
+    "execution_sha": "4a415d79a0da136ffb14e7d944164079caaeb302",
+    "status": "completed",
+    "conclusion": "failure",
+    "url": "https://github.com/dyuebug/MuMuNovel/actions/runs/29261115197",
+    "job": {
+      "job_id": 86854331387,
+      "name": "rust-real-backend-smoke",
+      "conclusion": "failure",
+      "url": "https://github.com/dyuebug/MuMuNovel/actions/runs/29261115197/job/86854331387"
+    },
+    "failed_steps": [
+      {
+        "number": 14,
+        "name": "Run auth + background-task smoke against Rust",
+        "conclusion": "failure"
+      }
+    ],
+    "artifacts": [
+      {
+        "artifact_id": 8283747973,
+        "name": "rust-readiness-diagnostics",
+        "size_in_bytes": 24645,
+        "expired": false,
+        "zip_relative_path": "github-run-29261115197-attempt-1/rust-readiness-diagnostics-8283747973.zip",
+        "zip_sha256": "cfcf8d8d46a09b72cd56f1c409dcb3cec1b0d6b0e6a4295663d080ba77a5ab20",
+        "extracted_relative_path": "github-run-29261115197-attempt-1/rust-readiness-diagnostics",
+        "downloaded": true
+      },
+      {
+        "artifact_id": 8283754943,
+        "name": "playwright-report",
+        "size_in_bytes": 416884040,
+        "expired": false,
+        "github_digest": "sha256:a35e2a903302d5edeb50955a4ae51f5840c4d358323e96969b1b7ecf35175248",
+        "downloaded": false,
+        "reason": "diagnostics artifact already contained the complete Playwright failure log; the 416884040-byte report was not required for root-cause isolation"
+      }
+    ],
+    "diagnostics": {
+      "migration_executor_exit_code": 0,
+      "migration_executor_status": "migration_needed_executor_shell_passed",
+      "release_preflight_exit_code": 0,
+      "release_preflight_status": "ready",
+      "readyz_http_status": 200,
+      "releasez_http_status": 200,
+      "startup_identity_status": "verified",
+      "cleanup_identity_status": "verified",
+      "cleanup_status": "terminated",
+      "termination_signal": "TERM",
+      "playwright_exit_code": 1,
+      "runner_failure_manifest": {
+        "github_sha": "4a415d79a0da136ffb14e7d944164079caaeb302",
+        "github_head_sha": "c2bb1a01439553e5fbd6e399e7177881baa6e547",
+        "github_run_id": "29261115197",
+        "github_run_attempt": "1"
+      }
+    },
+    "playwright": {
+      "total_tests": 14,
+      "passed": 13,
+      "failed": 1,
+      "failed_test": "frontend/e2e/background-task-pages.spec.ts:104:3 creates one outline-expand task without polling storm",
+      "failed_locator": "page.getByRole('button', { name: /展开$/ }).first()",
+      "retry_result": "initial attempt and both retries failed",
+      "failure_signature": "Ant Design Card intercepted pointer events until the click timeout"
+    }
+  },
+  "root_cause": {
+    "category": "playwright_unscoped_pointer_hit_testing",
+    "message": "The full-page first() locator was not bound to the seeded outline card, and pointer hit-testing repeatedly landed on an adjacent Ant Design Card in the hosted Chromium layout.",
+    "facts": [
+      "The failed control's accessible name includes the icon prefix and still ends with 展开, so /展开$/ remains the correct accessible-name contract.",
+      "The outline page uses a fixed-height internal scroll region and content-visibility:auto, which makes a viewport-dependent pointer hit point unstable on the hosted runner.",
+      "Using force:true would hide the hit-testing defect instead of exercising a real user interaction."
+    ]
+  },
+  "local_fix": {
+    "file": "frontend/e2e/background-task-pages.spec.ts",
+    "file_sha256": "8127831f5d88c988e2bd1849718c5e68ad8238b2e3ba2b87cd7f2fd30594c759",
+    "outline_seed": "第一卷：迷雾初现",
+    "locator_scope": ".ant-list-item filtered by seed text, then getByRole('button', { name: /展开$/ })",
+    "activation": "focus the enabled button, assert focus, then press Enter",
+    "force_click_used": false
+  },
+  "local_clean_candidate_validation": {
+    "candidate_base_sha": "c2bb1a01439553e5fbd6e399e7177881baa6e547",
+    "candidate_overlay": "frontend/e2e/background-task-pages.spec.ts",
+    "candidate_overlay_sha256": "8127831f5d88c988e2bd1849718c5e68ad8238b2e3ba2b87cd7f2fd30594c759",
+    "temporary_directory": "C:/Users/yanc/AppData/Local/Temp/MuMuNovel-r03-attempt3-20260713-233614",
+    "database": {
+      "engine": "postgres:18-alpine",
+      "host_port": 55432,
+      "container_name": "mumunovel-r03-attempt3-local",
+      "production_database_touched": false,
+      "cleanup": "container stopped and removed by --rm"
+    },
+    "gates": {
+      "migration_executor": "PASS",
+      "release_readiness_preflight": "PASS",
+      "rust_debug_build": "PASS",
+      "readyz_http_status": 200,
+      "releasez_http_status": 200,
+      "targeted_outline_expand": "PASS (1/1)",
+      "workflow_playwright_smoke": "PASS (14/14)",
+      "frontend_lint": "PASS (0 errors; 33 pre-existing hook warnings)",
+      "frontend_build": "PASS",
+      "target_eslint": "PASS",
+      "cargo_fmt_check": "PASS",
+      "production_ci_contract_tests": "PASS (16/16)",
+      "workflow_yaml_parse": "PASS",
+      "utf8_no_bom_lf_no_trailing_whitespace": "PASS",
+      "targeted_git_diff_check": "PASS"
+    }
+  },
+  "gate_decision": {
+    "R0.1": "PASS",
+    "R0.2": "PASS",
+    "R0.3": "GITHUB_RUNNER_ATTEMPT_2_FAILED_LOCAL_FIX_VERIFIED_HOSTED_RETEST_REQUIRED",
+    "G0": "NO_GO",
+    "R3": "BLOCKED_BY_G0"
+  }
+}

@@ -5,7 +5,7 @@
 ```text
 R0.1 = PASS
 R0.2 = PASS
-R0.3 = LOCALLY COMPLETE / GITHUB RUNNER PENDING
+R0.3 = ATTEMPT 2 FAILED / LOCAL FIX VERIFIED / HOSTED RETEST REQUIRED
 G0   = NO-GO
 ```
 
@@ -1388,3 +1388,99 @@ R3   = BLOCKED BY G0
 
 The fix must be committed and pushed to the existing Runner-only branch. A new SHA must produce new backend-ci and
 e2e-smoke runs; rerunning the old failed run is not sufficient.
+
+## R0.3 GitHub Hosted Runner Attempt 2 Failure and Local Fix (2026-07-13)
+
+### Runner Result
+
+Runner-only Draft PR `#1` executed candidate head
+`c2bb1a01439553e5fbd6e399e7177881baa6e547`. The Rust production and Python
+migration-support jobs passed. The E2E runtime, migration, release, identity,
+and cleanup contracts also passed; only one Playwright test failed.
+
+```text
+backend-ci run 29261115176 / attempt 1                     PASS
+rust-production job 86854332023                            PASS
+python-migration-support job 86854332191                   PASS
+e2e-smoke run 29261115197 / attempt 1                      FAIL
+rust-real-backend-smoke job 86854331387                    FAIL
+step 14 Run auth + background-task smoke against Rust      FAIL
+migration executor / release preflight                     PASS
+readyz / releasez                                          200 / 200
+binary identity / cleanup                                  verified / terminated (TERM)
+Playwright                                                 13 passed / 1 failed
+```
+
+The failure manifest correctly separated execution SHA
+`4a415d79a0da136ffb14e7d944164079caaeb302` from candidate head SHA
+`c2bb1a01439553e5fbd6e399e7177881baa6e547`.
+
+Authoritative machine-readable summary:
+
+```text
+validation/r03-github-run-attempt-2.json
+```
+
+Downloaded diagnostics artifact:
+
+```text
+artifact id                                                 8283747973
+artifact name                                               rust-readiness-diagnostics
+artifact size                                               24645 bytes
+ZIP SHA-256                                                 cfcf8d8d46a09b72cd56f1c409dcb3cec1b0d6b0e6a4295663d080ba77a5ab20
+```
+
+The 416884040-byte Playwright report artifact was not downloaded because the
+small diagnostics artifact already contained the complete Playwright failure
+log required for root-cause isolation.
+
+### Root Cause and Minimal Fix
+
+The only failed test was
+`background-task-pages.spec.ts:104:3 creates one outline-expand task without polling storm`.
+Its full-page `.first()` locator was not scoped to the seeded outline item, and
+hosted Chromium repeatedly placed the pointer hit point under an adjacent Ant
+Design Card. A forced click was rejected because it would hide the interaction
+defect.
+
+The regression now scopes the control to the unique seed outline item
+`第一卷：迷雾初现`, verifies that the button is visible and enabled, focuses it,
+asserts focus, and activates it with `Enter`. The accessible-name matcher remains
+`/展开$/` because the Ant Design icon is part of the computed accessible name.
+
+### Clean Candidate Validation
+
+A clean candidate composed from `c2bb1a0` plus only the final E2E file was tested
+against an isolated PostgreSQL 18 container on host port `55432`. No existing or
+production database was touched, and the temporary container was removed.
+
+```text
+migration executor                                         PASS
+release readiness preflight                                PASS
+Rust debug build                                            PASS
+readyz / releasez                                           200 / 200
+targeted outline-expand regression                          PASS (1/1)
+auth + background-task workflow smoke                       PASS (14/14)
+frontend lint / build                                       PASS / PASS
+target ESLint                                               PASS
+cargo fmt -- --check                                        PASS
+production_ci_contract_tests                                PASS (16/16)
+workflow YAML parse                                         PASS
+UTF-8 no BOM / LF / no trailing whitespace                 PASS
+targeted git diff --check                                   PASS
+```
+
+### Gate Decision After Attempt 2
+
+```text
+R0.1 = PASS
+R0.2 = PASS
+R0.3 = ATTEMPT 2 FAILED / LOCAL FIX VERIFIED / HOSTED RETEST REQUIRED
+G0   = NO-GO
+R3   = BLOCKED BY G0
+```
+
+The code fix and this evidence must be committed as precise, isolated changes
+and pushed to the existing Runner-only branch. Only new run IDs for the new
+candidate SHA can satisfy Attempt 3; rerunning either historical failure is not
+sufficient.
