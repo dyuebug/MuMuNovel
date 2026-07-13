@@ -42,6 +42,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://mumu_e2e:mumu_e2e@127.0.0.1:5432/mumu_e2e
       DEBUG: "false"
+      CORS_ORIGINS: http://127.0.0.1:5175
       JWT_SECRET: e2e-rust-runtime-secret
       ENABLE_STARTUP_SCHEMA_SYNC: "false"
       APP_HOST: 127.0.0.1
@@ -50,6 +51,7 @@ jobs:
       LOCAL_AUTH_USERNAME: admin
       LOCAL_AUTH_PASSWORD: admin123
       STATIC_DIR: ../backend/static
+      GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
     steps:
       - uses: actions/checkout@v4
@@ -418,6 +420,7 @@ jobs:
             "binary_path": "${binary_path}",
             "binary_sha256": "${binary_sha256}",
             "github_sha": "${GITHUB_SHA}",
+            "github_head_sha": "${GITHUB_HEAD_SHA}",
             "github_run_id": "${GITHUB_RUN_ID}",
             "github_run_attempt": "${GITHUB_RUN_ATTEMPT}"
           }
@@ -434,6 +437,7 @@ jobs:
             "runtime_owner": "backend-rs",
             "diagnostics_directory": "e2e-diagnostics",
             "github_sha": "${GITHUB_SHA}",
+            "github_head_sha": "${GITHUB_HEAD_SHA}",
             "github_run_id": "${GITHUB_RUN_ID}",
             "github_run_attempt": "${GITHUB_RUN_ATTEMPT}"
           }

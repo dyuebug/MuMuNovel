@@ -191,6 +191,10 @@ fn e2e_smoke_keeps_postgres_rust_and_playwright_execution_order() {
         ],
     );
     assert!(!E2E_SMOKE_WORKFLOW.contains("http://127.0.0.1:8003/health"));
+    assert!(E2E_SMOKE_WORKFLOW.contains("CORS_ORIGINS: http://127.0.0.1:5175"));
+    assert!(!E2E_SMOKE_WORKFLOW.contains("CORS_ORIGINS: *"));
+    assert!(E2E_SMOKE_WORKFLOW
+        .contains("GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}"));
 }
 
 #[test]
@@ -345,6 +349,7 @@ fn e2e_smoke_persists_successful_runner_evidence_and_always_uploads_diagnostics(
             r#""binary_path": "${binary_path}""#,
             r#""binary_sha256": "${binary_sha256}""#,
             r#""github_sha": "${GITHUB_SHA}""#,
+            r#""github_head_sha": "${GITHUB_HEAD_SHA}""#,
             r#""github_run_id": "${GITHUB_RUN_ID}""#,
             r#""github_run_attempt": "${GITHUB_RUN_ATTEMPT}""#,
             "name: Upload Rust readiness diagnostics",
@@ -443,6 +448,7 @@ fn e2e_smoke_rejects_python_runtime_and_preserves_failure_diagnostics() {
             "runner-failure.json",
             r#""evidence_status": "failed""#,
             r#""github_sha": "${GITHUB_SHA}""#,
+            r#""github_head_sha": "${GITHUB_HEAD_SHA}""#,
             r#""github_run_id": "${GITHUB_RUN_ID}""#,
             r#""github_run_attempt": "${GITHUB_RUN_ATTEMPT}""#,
             "name: Upload Rust readiness diagnostics",
