@@ -6265,6 +6265,84 @@ as an implicit consequence of the migration revision head.
   R0.3 passes only when an actual GitHub-hosted runner produces a green, downloadable artifact for the exact
   commit containing the contract.
 
+## Scenario: R0.3 Hosted Runner Browser Origin and Commit Identity Evidence
+
+### 1. Scope / Trigger
+
+- Trigger: `.github/workflows/e2e-smoke.yml` runs the non-development Rust backend against the Playwright browser smoke on a GitHub-hosted runner.
+- Scope: workflow environment wiring plus `runner-success.json` and `runner-failure.json` commit identity fields.
+- Owner: `.github/workflows/e2e-smoke.yml`, with drift protection in `backend-rs/src/production_ci_contract_tests.rs`.
+
+### 2. Signatures
+
+```text
+CORS_ORIGINS=http://127.0.0.1:5175
+GITHUB_HEAD_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+runner manifest github_sha=${GITHUB_SHA}
+runner manifest github_head_sha=${GITHUB_HEAD_SHA}
+```
+
+### 3. Contracts
+
+- The non-development Rust E2E job must set an explicit, non-wildcard `CORS_ORIGINS` equal to the Playwright browser origin. It must not rely on the Rust development default `*`.
+- `github_sha` is the Actions execution SHA. For a `pull_request` workflow it may be the synthetic merge commit and must not be relabeled as the candidate commit.
+- `github_head_sha` is the candidate source SHA. It uses `github.event.pull_request.head.sha` for pull requests and falls back to `github.sha` for push events.
+- Both success and failure manifests must record `github_sha`, `github_head_sha`, run ID, and run attempt so an artifact can be joined to both the executed merge ref and the reviewed candidate commit.
+- R0.3 evidence is valid only when the run API `head_sha`, manifest `github_head_sha`, and the intended candidate commit are identical.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| Non-development E2E uses `CORS_ORIGINS=*` or omits the explicit origin | Router build fails closed; R0.3 remains failed |
+| Pull request event | `github_sha` may be merge SHA; `github_head_sha` must equal `pull_request.head.sha` |
+| Push event | `github_head_sha` falls back to `github.sha` and equals `github_sha` |
+| Success or failure manifest omits either SHA field | Contract test fails; artifact is insufficient for R0.3 |
+| Artifact head SHA differs from the intended candidate | Reject the evidence and keep G0 No-Go |
+
+### 5. Good / Base / Bad Cases
+
+- Good: Playwright uses `http://127.0.0.1:5175`, the Rust job explicitly allows that origin, and both manifest SHA fields map to the GitHub run and PR metadata.
+- Base: a push run has identical execution and head SHA values through the documented fallback.
+- Bad: a PR failure manifest contains only `${GITHUB_SHA}` and incorrectly treats the synthetic merge SHA as the candidate commit.
+
+### 6. Tests Required
+
+- Assert the workflow contains the explicit Playwright origin and does not contain wildcard `CORS_ORIGINS`.
+- Assert `GITHUB_HEAD_SHA` uses `pull_request.head.sha || github.sha`.
+- Assert both success and failure manifest templates contain `${GITHUB_SHA}` and `${GITHUB_HEAD_SHA}`.
+- Parse the workflow as YAML and parse downloaded manifest JSON before accepting runner evidence.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```yaml
+env:
+  DEBUG: "false"
+# CORS_ORIGINS falls back to '*' and non-development startup fails.
+```
+
+```json
+{ "github_sha": "${GITHUB_SHA}" }
+```
+
+#### Correct
+
+```yaml
+env:
+  DEBUG: "false"
+  CORS_ORIGINS: http://127.0.0.1:5175
+  GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+```
+
+```json
+{
+  "github_sha": "${GITHUB_SHA}",
+  "github_head_sha": "${GITHUB_HEAD_SHA}"
+}
+```
+
 ### R0.1 approved password verifier storage contract (2026-07-13)
 
 - The approved PostgreSQL target for `user_passwords.password_hash` is `TEXT NOT NULL`; bounded storage is

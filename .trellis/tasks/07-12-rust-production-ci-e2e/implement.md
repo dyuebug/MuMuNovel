@@ -1308,3 +1308,83 @@ workspace-local __pycache__ generated                     NO
 
 The global diff check emitted existing line-ending conversion warnings for unrelated working-tree files, but it
 returned exit code 0 and reported no whitespace error. No Git write operation was performed.
+
+## R0.3 GitHub Hosted Runner Attempt 1 Failure and Fix (2026-07-13)
+
+### Runner Result
+
+Runner-only Draft PR `#1` executed candidate head `7b90b1432f8016775e0575e52a2ef36e6c0bf204`.
+
+```text
+backend-ci run 29259268012 / attempt 1                     PASS
+rust-production job 86847829716                            PASS
+python-migration-support job 86847829770                   PASS
+e2e-smoke run 29259268002 / attempt 1                      FAIL
+rust-real-backend-smoke job 86847829735                    FAIL
+step 12 Wait for Rust backend readiness                    FAIL
+step 15 Stop Rust backend and record lifecycle             FAIL
+```
+
+Authoritative machine-readable summary:
+
+```text
+validation/r03-github-run-attempt-1.json
+```
+
+Downloaded artifact:
+
+```text
+artifact id                                                 8282722647
+artifact name                                               rust-readiness-diagnostics
+artifact size                                               13816 bytes
+ZIP SHA-256                                                 7aaf81c463beb5b41dfc094bb3fcc630a03c74bb465e2c12b4a416d4c47b6ca2
+```
+
+### Root Cause
+
+The workflow correctly set `DEBUG=false`, but omitted `CORS_ORIGINS`. Rust therefore received the default `*` and
+correctly rejected wildcard credentialed CORS in non-development mode. Migration and release preflight passed, the
+exact binary path/SHA identity was verified, then router construction failed before readiness.
+
+The failure manifest also exposed a commit-identity ambiguity: `${GITHUB_SHA}` was the PR synthetic merge SHA
+`4246eebdbc9eeb2bbd56a718d448bab9a14e7907`, while the candidate head was
+`7b90b1432f8016775e0575e52a2ef36e6c0bf204`. Both identities are required.
+
+### Minimal Fix
+
+```text
+.github/workflows/e2e-smoke.yml
+  CORS_ORIGINS=http://127.0.0.1:5175
+  GITHUB_HEAD_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+  success/failure manifests record github_sha and github_head_sha
+
+backend-rs/src/production_ci_contract_tests.rs
+  explicit non-wildcard CORS assertion
+  PR head SHA with push fallback assertion
+  success/failure dual-SHA manifest assertions
+```
+
+### Local Validation After Fix
+
+```text
+cargo fmt -- --check                                      PASS
+production_ci_contract_tests                              PASS (16/16)
+e2e-smoke YAML parse                                      PASS
+UTF-8 no BOM / LF / no trailing whitespace               PASS
+targeted git diff --check                                 PASS
+attempt-1 evidence JSON parse and cross-check             PASS
+artifact ZIP SHA-256 cross-check                          PASS
+```
+
+### Gate Decision
+
+```text
+R0.1 = PASS
+R0.2 = PASS
+R0.3 = GITHUB RUNNER ATTEMPT 1 FAILED / FIX REQUIRED
+G0   = NO-GO
+R3   = BLOCKED BY G0
+```
+
+The fix must be committed and pushed to the existing Runner-only branch. A new SHA must produce new backend-ci and
+e2e-smoke runs; rerunning the old failed run is not sufficient.

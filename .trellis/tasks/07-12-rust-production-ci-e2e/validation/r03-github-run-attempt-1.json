@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "evidence_type": "github_hosted_runner_attempt",
+  "recorded_at": "2026-07-13T23:03:36+08:00",
+  "repository": "dyuebug/MuMuNovel",
+  "pull_request": {
+    "number": 1,
+    "url": "https://github.com/dyuebug/MuMuNovel/pull/1",
+    "state": "open",
+    "draft": true,
+    "runner_only": true,
+    "base_ref": "dev",
+    "head_ref": "ci/r03-runner-evidence-20260713",
+    "head_sha": "7b90b1432f8016775e0575e52a2ef36e6c0bf204",
+    "merge_commit_sha": "4246eebdbc9eeb2bbd56a718d448bab9a14e7907"
+  },
+  "backend_ci": {
+    "run_id": 29259268012,
+    "run_attempt": 1,
+    "event": "pull_request",
+    "head_sha": "7b90b1432f8016775e0575e52a2ef36e6c0bf204",
+    "status": "completed",
+    "conclusion": "success",
+    "url": "https://github.com/dyuebug/MuMuNovel/actions/runs/29259268012",
+    "jobs": [
+      {
+        "job_id": 86847829716,
+        "name": "rust-production",
+        "conclusion": "success",
+        "url": "https://github.com/dyuebug/MuMuNovel/actions/runs/29259268012/job/86847829716"
+      },
+      {
+        "job_id": 86847829770,
+        "name": "python-migration-support",
+        "conclusion": "success",
+        "url": "https://github.com/dyuebug/MuMuNovel/actions/runs/29259268012/job/86847829770"
+      }
+    ]
+  },
+  "e2e_smoke": {
+    "run_id": 29259268002,
+    "run_attempt": 1,
+    "event": "pull_request",
+    "head_sha": "7b90b1432f8016775e0575e52a2ef36e6c0bf204",
+    "execution_sha": "4246eebdbc9eeb2bbd56a718d448bab9a14e7907",
+    "status": "completed",
+    "conclusion": "failure",
+    "url": "https://github.com/dyuebug/MuMuNovel/actions/runs/29259268002",
+    "job": {
+      "job_id": 86847829735,
+      "name": "rust-real-backend-smoke",
+      "conclusion": "failure",
+      "url": "https://github.com/dyuebug/MuMuNovel/actions/runs/29259268002/job/86847829735"
+    },
+    "failed_steps": [
+      {
+        "number": 12,
+        "name": "Wait for Rust backend readiness",
+        "conclusion": "failure"
+      },
+      {
+        "number": 15,
+        "name": "Stop Rust backend and record lifecycle",
+        "conclusion": "failure"
+      }
+    ],
+    "artifact": {
+      "artifact_id": 8282722647,
+      "name": "rust-readiness-diagnostics",
+      "size_in_bytes": 13816,
+      "expired": false,
+      "zip_relative_path": "github-run-29259268002-attempt-1/rust-readiness-diagnostics-8282722647.zip",
+      "zip_sha256": "7aaf81c463beb5b41dfc094bb3fcc630a03c74bb465e2c12b4a416d4c47b6ca2",
+      "extracted_relative_path": "github-run-29259268002-attempt-1/rust-readiness-diagnostics"
+    },
+    "diagnostics": {
+      "migration_executor_exit_code": 0,
+      "release_preflight_exit_code": 0,
+      "readyz_http_status": "000",
+      "runner_failure_github_sha": "4246eebdbc9eeb2bbd56a718d448bab9a14e7907",
+      "binary_path": "/home/runner/work/MuMuNovel/MuMuNovel/backend-rs/target/debug/mumu-novel-backend",
+      "binary_sha256": "60e2322ed3ddb959ae6366207cf06deda6239b29efd15687091354048f436c22",
+      "startup_identity_status": "verified",
+      "cleanup_identity_status": "process_unavailable",
+      "cleanup_status": "already_exited"
+    }
+  },
+  "root_cause": {
+    "category": "non_development_cors_configuration",
+    "message": "CORS_ORIGINS='*' is only allowed in development mode; runtime mode non-development requires explicit origins for credentialed requests",
+    "facts": [
+      "The workflow sets DEBUG=false, selecting non-development runtime mode.",
+      "The workflow did not set CORS_ORIGINS, so the Rust default '*' was used.",
+      "The Rust router correctly rejected wildcard credentialed CORS outside development.",
+      "The Playwright smoke origin is http://127.0.0.1:5175."
+    ],
+    "required_fix": [
+      "Set CORS_ORIGINS=http://127.0.0.1:5175 in the E2E job environment.",
+      "Record github_sha as the execution SHA and github_head_sha as the candidate head SHA."
+    ]
+  },
+  "gate_decision": {
+    "R0.1": "PASS",
+    "R0.2": "PASS",
+    "R0.3": "GITHUB_RUNNER_ATTEMPT_1_FAILED_FIX_REQUIRED",
+    "G0": "NO_GO",
+    "R3": "BLOCKED_BY_G0"
+  }
+}
