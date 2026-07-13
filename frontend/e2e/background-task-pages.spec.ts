@@ -112,11 +112,17 @@ test.describe('background task page smoke', () => {
     const tracker = trackBackgroundTaskRequests(page);
     await openProjectSubPage(page, project.id, 'outline');
 
-    const expandButton = page.getByRole('button', { name: /展开$/ }).first();
+    const outlineItem = page.locator('.ant-list-item').filter({ hasText: '第一卷：迷雾初现' });
+    await expect(outlineItem).toHaveCount(1);
+
+    const expandButton = outlineItem.getByRole('button', { name: /展开$/ });
     await expect(expandButton).toBeVisible({ timeout: 15000 });
+    await expect(expandButton).toBeEnabled();
 
     const observationStart = Date.now();
-    await expandButton.click();
+    await expandButton.focus();
+    await expect(expandButton).toBeFocused();
+    await expandButton.press('Enter');
     await expect(page.getByRole('button', { name: '生成规划预览', exact: true }).last()).toBeVisible({ timeout: 15000 });
 
     const createRequestPromise = page.waitForRequest(
