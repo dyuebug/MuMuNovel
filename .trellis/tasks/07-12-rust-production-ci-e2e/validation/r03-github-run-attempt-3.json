@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "evidence_type": "github_hosted_runner_attempt",
+  "hosted_attempt": 3,
+  "recorded_at": "2026-07-14T00:12:33+08:00",
+  "repository": "dyuebug/MuMuNovel",
+  "pull_request": {
+    "number": 1,
+    "url": "https://github.com/dyuebug/MuMuNovel/pull/1",
+    "state": "open",
+    "draft": true,
+    "runner_only": true,
+    "base_ref": "dev",
+    "base_sha": "936e9401f3bcf4d28545d74e041248710e16acb8",
+    "head_ref": "ci/r03-runner-evidence-20260713",
+    "head_sha": "bec8b7b4d764d1662facd3b7cecf323ac4776f3b",
+    "execution_sha": "f7cf653978942c9b5e4e97844856227226f15020",
+    "mergeable": true,
+    "mergeable_state": "clean"
+  },
+  "backend_ci": {
+    "run_id": 29264634399,
+    "run_attempt": 1,
+    "event": "pull_request",
+    "head_sha": "bec8b7b4d764d1662facd3b7cecf323ac4776f3b",
+    "status": "completed",
+    "conclusion": "success",
+    "url": "https://github.com/dyuebug/MuMuNovel/actions/runs/29264634399",
+    "jobs": [
+      {
+        "job_id": 86866562307,
+        "name": "rust-production",
+        "conclusion": "success",
+        "url": "https://github.com/dyuebug/MuMuNovel/actions/runs/29264634399/job/86866562307"
+      },
+      {
+        "job_id": 86866562354,
+        "name": "python-migration-support",
+        "conclusion": "success",
+        "url": "https://github.com/dyuebug/MuMuNovel/actions/runs/29264634399/job/86866562354"
+      }
+    ]
+  },
+  "e2e_smoke": {
+    "run_id": 29264634424,
+    "run_attempt": 1,
+    "event": "pull_request",
+    "head_sha": "bec8b7b4d764d1662facd3b7cecf323ac4776f3b",
+    "execution_sha": "f7cf653978942c9b5e4e97844856227226f15020",
+    "status": "completed",
+    "conclusion": "success",
+    "url": "https://github.com/dyuebug/MuMuNovel/actions/runs/29264634424",
+    "job": {
+      "job_id": 86866562521,
+      "name": "rust-real-backend-smoke",
+      "conclusion": "success",
+      "url": "https://github.com/dyuebug/MuMuNovel/actions/runs/29264634424/job/86866562521"
+    },
+    "key_steps": [
+      {
+        "number": 10,
+        "name": "Verify Rust release readiness preflight",
+        "conclusion": "success"
+      },
+      {
+        "number": 12,
+        "name": "Wait for Rust backend readiness",
+        "conclusion": "success"
+      },
+      {
+        "number": 13,
+        "name": "Verify Rust release readiness contract",
+        "conclusion": "success"
+      },
+      {
+        "number": 14,
+        "name": "Run auth + background-task smoke against Rust",
+        "conclusion": "success"
+      },
+      {
+        "number": 15,
+        "name": "Stop Rust backend and record lifecycle",
+        "conclusion": "success"
+      },
+      {
+        "number": 16,
+        "name": "Record successful Rust E2E evidence",
+        "conclusion": "success"
+      },
+      {
+        "number": 18,
+        "name": "Upload Rust readiness diagnostics",
+        "conclusion": "success"
+      }
+    ],
+    "artifact": {
+      "artifact_id": 8284985490,
+      "name": "rust-readiness-diagnostics",
+      "size_in_bytes": 23163,
+      "expired": false,
+      "github_digest": "sha256:befa834c4504ee3f26bc6334d0f17c570cb3f3c62f2ff80e44025d2570ead695",
+      "zip_relative_path": "github-run-29264634424-attempt-1/rust-readiness-diagnostics-8284985490.zip",
+      "zip_sha256": "befa834c4504ee3f26bc6334d0f17c570cb3f3c62f2ff80e44025d2570ead695",
+      "extracted_relative_path": "github-run-29264634424-attempt-1/rust-readiness-diagnostics",
+      "download_transport": "public artifact proxy; integrity verified against GitHub API digest"
+    },
+    "runner_success_manifest": {
+      "schema_version": 1,
+      "evidence_status": "passed",
+      "runtime_owner": "backend-rs",
+      "database": "postgresql",
+      "migration_executor": "passed",
+      "release_readiness_preflight": "passed",
+      "readyz": "passed",
+      "releasez": "passed",
+      "playwright_smoke": "passed",
+      "backend_identity": "verified",
+      "backend_lifecycle": "passed",
+      "binary_path": "/home/runner/work/MuMuNovel/MuMuNovel/backend-rs/target/debug/mumu-novel-backend",
+      "binary_sha256": "60e2322ed3ddb959ae6366207cf06deda6239b29efd15687091354048f436c22",
+      "github_sha": "f7cf653978942c9b5e4e97844856227226f15020",
+      "github_head_sha": "bec8b7b4d764d1662facd3b7cecf323ac4776f3b",
+      "github_run_id": "29264634424",
+      "github_run_attempt": "1"
+    },
+    "diagnostics": {
+      "migration_executor_exit_code": 0,
+      "migration_executor_status": "migration_needed_executor_shell_passed",
+      "release_preflight_exit_code": 0,
+      "release_preflight_status": "ready",
+      "readyz_http_status": 200,
+      "readyz_status": "ready",
+      "releasez_http_status": 200,
+      "releasez_status": "ready",
+      "playwright_exit_code": 0,
+      "playwright_result": "PASS (14/14)",
+      "outline_expand_result": "PASS",
+      "startup_identity_status": "verified",
+      "cleanup_identity_status": "verified",
+      "cleanup_status": "terminated",
+      "termination_signal": "TERM",
+      "binary_path": "/home/runner/work/MuMuNovel/MuMuNovel/backend-rs/target/debug/mumu-novel-backend",
+      "binary_sha256": "60e2322ed3ddb959ae6366207cf06deda6239b29efd15687091354048f436c22"
+    }
+  },
+  "cross_checks": {
+    "run_api_head_sha_matches_candidate": true,
+    "manifest_github_head_sha_matches_candidate": true,
+    "manifest_github_sha_matches_pr_merge_sha": true,
+    "manifest_run_id_and_attempt_match_api": true,
+    "artifact_zip_matches_github_digest": true,
+    "binary_identity_verified": true,
+    "lifecycle_terminated_without_forced_kill": true
+  },
+  "gate_decision": {
+    "R0.1": "PASS",
+    "R0.2": "PASS",
+    "R0.3": "PASS",
+    "G0": "GO",
+    "R3": "UNBLOCKED_NOT_STARTED"
+  }
+}

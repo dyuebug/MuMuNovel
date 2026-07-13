@@ -5,8 +5,9 @@
 ```text
 R0.1 = PASS
 R0.2 = PASS
-R0.3 = ATTEMPT 2 FAILED / LOCAL FIX VERIFIED / HOSTED RETEST REQUIRED
-G0   = NO-GO
+R0.3 = PASS
+G0   = GO
+R3   = UNBLOCKED / NOT STARTED
 ```
 
 本文后续按时间记录的早期状态仅代表当时切片；以本节和文末
@@ -1484,3 +1485,69 @@ The code fix and this evidence must be committed as precise, isolated changes
 and pushed to the existing Runner-only branch. Only new run IDs for the new
 candidate SHA can satisfy Attempt 3; rerunning either historical failure is not
 sufficient.
+
+## R0.3 GitHub Hosted Runner Attempt 3 Success (2026-07-14)
+
+### Runner Result
+
+Runner-only Draft PR `#1` executed candidate head
+`bec8b7b4d764d1662facd3b7cecf323ac4776f3b`. Both required workflows and every
+required runtime/evidence contract passed with new run IDs.
+
+```text
+backend-ci run 29264634399 / attempt 1                     PASS
+rust-production job 86866562307                            PASS
+python-migration-support job 86866562354                   PASS
+e2e-smoke run 29264634424 / attempt 1                      PASS
+rust-real-backend-smoke job 86866562521                    PASS
+migration executor / release preflight                     PASS
+readyz / releasez                                          200 / 200
+Playwright auth + background-task smoke                    PASS (14/14)
+outline-expand regression                                  PASS
+binary identity / cleanup                                  verified / terminated (TERM)
+success evidence / diagnostics upload                      PASS / PASS
+```
+
+The success manifest proves the required dual identity contract:
+
+```text
+execution / merge SHA  f7cf653978942c9b5e4e97844856227226f15020
+candidate head SHA     bec8b7b4d764d1662facd3b7cecf323ac4776f3b
+GitHub run ID          29264634424
+GitHub run attempt     1
+```
+
+### Artifact Verification
+
+The only artifact is `rust-readiness-diagnostics` (`8284985490`, 23163 bytes).
+Its downloaded ZIP SHA-256 exactly matches the digest returned by the GitHub
+Actions API:
+
+```text
+befa834c4504ee3f26bc6334d0f17c570cb3f3c62f2ff80e44025d2570ead695
+```
+
+The extracted `runner-success.json`, `rust-backend-identity.json`,
+`rust-backend-lifecycle.json`, health payloads, exit-code files, and Playwright
+log were parsed and cross-checked. The Playwright log ends with `14 passed
+(2.0m)` and includes the previously failing outline-expand regression as PASS.
+
+Authoritative machine-readable summary:
+
+```text
+validation/r03-github-run-attempt-3.json
+```
+
+### Final R0 Gate Decision
+
+```text
+R0.1 = PASS
+R0.2 = PASS
+R0.3 = PASS
+G0   = GO
+R3   = UNBLOCKED / NOT STARTED
+```
+
+The Draft PR remains Runner-only and must not be merged. This task remains
+`in_progress`; no archive or R3 implementation is performed by this evidence
+update.
