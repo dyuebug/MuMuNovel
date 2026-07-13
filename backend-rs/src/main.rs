@@ -7,6 +7,8 @@ mod db;
 mod mcp;
 mod middleware;
 mod models;
+#[cfg(test)]
+mod production_ci_contract_tests;
 mod services;
 mod tasks;
 mod utils;
@@ -23,24 +25,28 @@ use uuid::Uuid;
 const MIGRATION_NOOP_EXECUTOR_SMOKE_COMMAND: &str = "migration-noop-executor-smoke";
 const MIGRATION_NEEDED_EXECUTOR_SMOKE_COMMAND: &str = "migration-needed-executor-smoke";
 const MIGRATION_EXECUTOR_COMMAND: &str = "migration-executor";
+const RELEASE_READINESS_PREFLIGHT_COMMAND: &str = "release-readiness-preflight";
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
-
     let command = std::env::args().nth(1);
+    let structured_cli_output = matches!(
+        command.as_deref(),
+        Some(MIGRATION_EXECUTOR_COMMAND | RELEASE_READINESS_PREFLIGHT_COMMAND)
+    );
+    init_tracing(structured_cli_output);
     if matches!(
         command.as_deref(),
         Some(
             MIGRATION_NOOP_EXECUTOR_SMOKE_COMMAND
                 | MIGRATION_NEEDED_EXECUTOR_SMOKE_COMMAND
                 | MIGRATION_EXECUTOR_COMMAND
+                | RELEASE_READINESS_PREFLIGHT_COMMAND
         )
     ) {
+        if command.as_deref() == Some(RELEASE_READINESS_PREFLIGHT_COMMAND) {
+            exit(run_release_readiness_preflight_command().await);
+        }
         if command.as_deref() == Some(MIGRATION_EXECUTOR_COMMAND) {
             exit(run_migration_executor_command().await);
         }
@@ -63,7 +69,10 @@ async fn main() {
     // Initialize background task system
     let task_registry = tasks::registry::TaskRegistry::new();
     tasks::persistence::load_from_disk(&task_registry).await;
-    tasks::recovery::recover_orphan_tasks(&task_registry).await;
+    let recovered_count = tasks::recovery::recover_orphan_tasks(&task_registry).await;
+    if recovered_count > 0 {
+        tasks::persistence::save_to_disk(&task_registry).await;
+    }
     tasks::persistence::start_periodic_save(task_registry.clone());
     start_periodic_cleanup(task_registry.clone());
 
@@ -88,6 +97,23 @@ async fn main() {
         .unwrap();
 }
 
+fn init_tracing(log_to_stderr: bool) {
+    if log_to_stderr {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            )
+            .with_writer(std::io::stderr)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            )
+            .init();
+    }
+}
+
 fn start_periodic_cleanup(registry: tasks::registry::TaskRegistry) {
     tokio::spawn(async move {
         loop {
@@ -95,6 +121,52 @@ fn start_periodic_cleanup(registry: tasks::registry::TaskRegistry) {
             registry.prune_old_tasks().await;
         }
     });
+}
+
+async fn run_release_readiness_preflight_command() -> i32 {
+    let cfg = match config::load() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            tracing::error!("Release readiness preflight configuration error: {}", err);
+            let evaluation =
+                services::production_readiness_service::evaluate_production_readiness(None).await;
+            return print_release_readiness_preflight(evaluation);
+        }
+    };
+
+    let db = match db::connection::connect(&cfg).await {
+        Ok(db) => db,
+        Err(err) => {
+            tracing::error!(
+                "Release readiness preflight database connection error: {}",
+                err
+            );
+            let evaluation =
+                services::production_readiness_service::evaluate_production_readiness(None).await;
+            return print_release_readiness_preflight(evaluation);
+        }
+    };
+
+    let evaluation =
+        services::production_readiness_service::evaluate_production_readiness(Some(&db)).await;
+    print_release_readiness_preflight(evaluation)
+}
+
+fn print_release_readiness_preflight(
+    evaluation: services::production_readiness_service::ProductionReadinessEvaluation,
+) -> i32 {
+    let exit_code = evaluation.release_exit_code();
+    match serde_json::to_string_pretty(&evaluation.release_payload()) {
+        Ok(payload) => println!("{payload}"),
+        Err(err) => {
+            tracing::error!(
+                "Failed to serialize release readiness preflight report: {}",
+                err
+            );
+            return 1;
+        }
+    }
+    exit_code
 }
 
 async fn run_migration_noop_executor_smoke_command() -> i32 {

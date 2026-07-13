@@ -52,6 +52,14 @@ pub struct TaskRecord {
     pub workflow_scope: Option<String>,
     pub checkpoint: Option<serde_json::Value>,
     pub payload_fingerprint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_required: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub can_resume: Option<bool>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
@@ -82,6 +90,10 @@ impl TaskRecord {
             workflow_scope: None,
             checkpoint: None,
             payload_fingerprint: None,
+            terminal_reason: None,
+            terminal_label: None,
+            review_required: None,
+            can_resume: None,
             created_at: now,
             updated_at: now,
             started_at: None,
@@ -149,4 +161,56 @@ pub struct TaskEvent {
     pub data: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::TaskRecord;
+
+    #[test]
+    fn task_record_without_recovery_fields_remains_backward_compatible() {
+        let record = TaskRecord::new(
+            "task-1".to_string(),
+            "chapter_analysis".to_string(),
+            "user-1".to_string(),
+            "project-1".to_string(),
+            "interactive".to_string(),
+        );
+        let serialized = serde_json::to_value(&record).expect("serialize task record");
+
+        assert_eq!(serialized.get("terminal_reason"), None);
+        assert_eq!(serialized.get("terminal_label"), None);
+        assert_eq!(serialized.get("review_required"), None);
+        assert_eq!(serialized.get("can_resume"), None);
+
+        let restored: TaskRecord =
+            serde_json::from_value(serialized).expect("deserialize version-1 task record");
+        assert_eq!(restored.terminal_reason, None);
+        assert_eq!(restored.terminal_label, None);
+        assert_eq!(restored.review_required, None);
+        assert_eq!(restored.can_resume, None);
+    }
+
+    #[test]
+    fn task_record_serializes_non_empty_recovery_fields() {
+        let mut record = TaskRecord::new(
+            "task-1".to_string(),
+            "chapter_single_generate".to_string(),
+            "user-1".to_string(),
+            "project-1".to_string(),
+            "interactive".to_string(),
+        );
+        record.terminal_reason = Some("resume_available".to_string());
+        record.terminal_label = Some("可从检查点恢复".to_string());
+        record.review_required = Some(false);
+        record.can_resume = Some(true);
+
+        let serialized = serde_json::to_value(&record).expect("serialize task record");
+        assert_eq!(serialized["terminal_reason"], "resume_available");
+        assert_eq!(serialized["terminal_label"], "可从检查点恢复");
+        assert_eq!(serialized["review_required"], Value::Bool(false));
+        assert_eq!(serialized["can_resume"], Value::Bool(true));
+    }
 }

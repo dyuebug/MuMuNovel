@@ -1,13 +1,17 @@
 use fs2::FileExt;
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement};
+use sea_orm::{
+    ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement, TransactionTrait,
+};
 use serde_json::{json, Value};
+
+use super::password_hash_service::CANONICAL_ARGON2_VERIFIER_STORAGE_LENGTH;
 use sha1::{Digest, Sha1};
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
-const POSTGRES_ALEMBIC_HEAD: &str = "20260517_project_core_defaults";
+const POSTGRES_ALEMBIC_HEAD: &str = "20260712_password_hash_phc_text";
 const MIGRATION_RUNTIME_OWNER: &str = "rust_db_migrator_migration_executor";
 const RUST_METADATA_OWNER: &str = "schema_migration_metadata_service";
 const MIGRATION_LOCK_NAME: &str = "mumuainovel:alembic";
@@ -17,9 +21,16 @@ const DEFAULT_MIGRATION_LOCK_POLL_INTERVAL_SECONDS: f64 = 1.0;
 const RUST_MIGRATION_TAIL_HARDENING_REPLAY_ENABLED_ENV: &str =
     "RUST_MIGRATION_TAIL_HARDENING_REPLAY_ENABLED";
 const RUST_EXECUTABLE_MIGRATION_COVERAGE: &str =
-    "initial_schema_seed_data_settings_system_prompt_foreshadows_prompt_workshop_character_state_settings_api_compat_writing_style_project_defaults_batch_runtime_and_tail_hardening";
+    "initial_schema_seed_data_settings_system_prompt_foreshadows_prompt_workshop_character_state_settings_api_compat_writing_style_project_defaults_batch_runtime_tail_hardening_and_password_hash_phc_text";
 const INITIAL_SCHEMA_SQL: &str = include_str!("schema_migration_initial_schema.sql");
 const ALEMBIC_VERSION_NUM_LENGTH: i32 = 64;
+const PASSWORD_HASH_STORAGE_METADATA_QUERY: &str =
+    "SELECT data_type, udt_name, character_maximum_length \
+FROM information_schema.columns \
+WHERE table_schema = current_schema() \
+AND table_name = 'user_passwords' \
+AND column_name = 'password_hash' \
+LIMIT 1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MigrationRevisionCatalogEntry {
@@ -120,9 +131,14 @@ const POSTGRES_REVISION_CATALOG: &[MigrationRevisionCatalogEntry] = &[
         filename: "20260517_1500_settings_core_defaults_hardening.py",
     },
     MigrationRevisionCatalogEntry {
-        revision: POSTGRES_ALEMBIC_HEAD,
+        revision: "20260517_project_core_defaults",
         down_revision: Some("20260517_settings_core_defaults"),
         filename: "20260517_1600_project_core_defaults_hardening.py",
+    },
+    MigrationRevisionCatalogEntry {
+        revision: POSTGRES_ALEMBIC_HEAD,
+        down_revision: Some("20260517_project_core_defaults"),
+        filename: "20260712_1200_password_hash_phc_text.py",
     },
 ];
 
@@ -1306,6 +1322,43 @@ const PROJECT_CORE_DEFAULTS_DOWNGRADE_STEPS: &[RustMigrationSqlStep] = &[
     },
 ];
 
+const PASSWORD_HASH_PHC_TEXT_UPGRADE_STEPS: &[RustMigrationSqlStep] = &[
+    RustMigrationSqlStep {
+        sql: "ALTER TABLE user_passwords ALTER COLUMN password_hash TYPE TEXT",
+        statement_kind: "ddl_alter_column_type",
+    },
+    RustMigrationSqlStep {
+        sql: "COMMENT ON COLUMN user_passwords.password_hash IS '密码校验值（Argon2 PHC 或兼容的 legacy SHA256）'",
+        statement_kind: "ddl_comment_column",
+    },
+];
+
+const PASSWORD_HASH_PHC_TEXT_DOWNGRADE_STEPS: &[RustMigrationSqlStep] = &[
+    RustMigrationSqlStep {
+        sql: r#"DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM user_passwords
+        WHERE length(password_hash) > 64
+    ) THEN
+        RAISE EXCEPTION
+            'cannot downgrade password_hash to VARCHAR(64): long verifier exists';
+    END IF;
+END
+$$"#,
+        statement_kind: "ddl_guard_long_password_verifier",
+    },
+    RustMigrationSqlStep {
+        sql: "ALTER TABLE user_passwords ALTER COLUMN password_hash TYPE VARCHAR(64)",
+        statement_kind: "ddl_alter_column_type",
+    },
+    RustMigrationSqlStep {
+        sql: "COMMENT ON COLUMN user_passwords.password_hash IS '密码哈希（SHA256）'",
+        statement_kind: "ddl_comment_column",
+    },
+];
+
 const RUST_EXECUTABLE_POSTGRES_REVISIONS: &[RustMigrationExecutableRevision] = &[
     RustMigrationExecutableRevision {
         revision: "ee0a189f1532",
@@ -1434,11 +1487,18 @@ const RUST_EXECUTABLE_POSTGRES_REVISIONS: &[RustMigrationExecutableRevision] = &
         downgrade_steps: SETTINGS_CORE_DEFAULTS_DOWNGRADE_STEPS,
     },
     RustMigrationExecutableRevision {
-        revision: POSTGRES_ALEMBIC_HEAD,
+        revision: "20260517_project_core_defaults",
         filename: "20260517_1600_project_core_defaults_hardening.py",
         execution_scope: RUST_EXECUTABLE_MIGRATION_COVERAGE,
         upgrade_steps: PROJECT_CORE_DEFAULTS_UPGRADE_STEPS,
         downgrade_steps: PROJECT_CORE_DEFAULTS_DOWNGRADE_STEPS,
+    },
+    RustMigrationExecutableRevision {
+        revision: POSTGRES_ALEMBIC_HEAD,
+        filename: "20260712_1200_password_hash_phc_text.py",
+        execution_scope: RUST_EXECUTABLE_MIGRATION_COVERAGE,
+        upgrade_steps: PASSWORD_HASH_PHC_TEXT_UPGRADE_STEPS,
+        downgrade_steps: PASSWORD_HASH_PHC_TEXT_DOWNGRADE_STEPS,
     },
 ];
 
@@ -1520,6 +1580,138 @@ impl LiveAlembicHeadCheck {
             "matches_catalog_head": self.matches_catalog_head,
             "read_only": true,
             "query": "SELECT version_num FROM alembic_version LIMIT 1",
+            "error": self.error,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PasswordHashStorageCompatibilityCheck {
+    pub(crate) status: &'static str,
+    pub(crate) data_type: Option<String>,
+    pub(crate) udt_name: Option<String>,
+    pub(crate) character_maximum_length: Option<i32>,
+    pub(crate) supports_canonical_argon2: Option<bool>,
+    pub(crate) matches_target_storage_contract: Option<bool>,
+    pub(crate) required_for_readiness: bool,
+    pub(crate) allows_readiness: bool,
+    pub(crate) error: Option<String>,
+}
+
+impl PasswordHashStorageCompatibilityCheck {
+    pub(crate) fn not_checked_database_unavailable() -> Self {
+        Self {
+            status: "not_checked_database_unavailable",
+            data_type: None,
+            udt_name: None,
+            character_maximum_length: None,
+            supports_canonical_argon2: None,
+            matches_target_storage_contract: None,
+            required_for_readiness: true,
+            allows_readiness: false,
+            error: Some("database unavailable".to_string()),
+        }
+    }
+
+    fn not_applicable_non_postgres() -> Self {
+        Self {
+            status: "not_applicable_non_postgres",
+            data_type: None,
+            udt_name: None,
+            character_maximum_length: None,
+            supports_canonical_argon2: None,
+            matches_target_storage_contract: None,
+            required_for_readiness: false,
+            allows_readiness: true,
+            error: None,
+        }
+    }
+
+    fn column_missing() -> Self {
+        Self {
+            status: "blocked_column_missing",
+            data_type: None,
+            udt_name: None,
+            character_maximum_length: None,
+            supports_canonical_argon2: Some(false),
+            matches_target_storage_contract: Some(false),
+            required_for_readiness: true,
+            allows_readiness: false,
+            error: None,
+        }
+    }
+
+    fn query_error(error: impl Into<String>) -> Self {
+        Self {
+            status: "blocked_query_error",
+            data_type: None,
+            udt_name: None,
+            character_maximum_length: None,
+            supports_canonical_argon2: None,
+            matches_target_storage_contract: None,
+            required_for_readiness: true,
+            allows_readiness: false,
+            error: Some(error.into()),
+        }
+    }
+
+    pub(crate) fn from_column_metadata(
+        data_type: String,
+        udt_name: String,
+        character_maximum_length: Option<i32>,
+    ) -> Self {
+        let normalized_data_type = data_type.trim().to_ascii_lowercase();
+        let normalized_udt_name = udt_name.trim().to_ascii_lowercase();
+        let is_text = normalized_data_type == "text" || normalized_udt_name == "text";
+        let is_varchar = normalized_data_type == "character varying"
+            || normalized_data_type == "varchar"
+            || normalized_udt_name == "varchar";
+        let required_length = CANONICAL_ARGON2_VERIFIER_STORAGE_LENGTH as i32;
+
+        let (status, supports_canonical_argon2, matches_target_storage_contract) = if is_text {
+            ("compatible_unbounded_text", true, true)
+        } else if is_varchar && character_maximum_length.is_none() {
+            ("compatible_unbounded_character_varying", true, false)
+        } else if is_varchar
+            && character_maximum_length.is_some_and(|length| length >= required_length)
+        {
+            ("compatible_bounded_capacity", true, false)
+        } else if is_varchar {
+            ("blocked_capacity_too_small", false, false)
+        } else {
+            ("blocked_unsupported_type", false, false)
+        };
+
+        Self {
+            status,
+            data_type: Some(data_type),
+            udt_name: Some(udt_name),
+            character_maximum_length,
+            supports_canonical_argon2: Some(supports_canonical_argon2),
+            matches_target_storage_contract: Some(matches_target_storage_contract),
+            required_for_readiness: true,
+            allows_readiness: supports_canonical_argon2,
+            error: None,
+        }
+    }
+
+    pub(crate) fn to_json(&self) -> Value {
+        json!({
+            "owner": RUST_METADATA_OWNER,
+            "status": self.status,
+            "table_name": "user_passwords",
+            "column_name": "password_hash",
+            "data_type": self.data_type,
+            "udt_name": self.udt_name,
+            "character_maximum_length": self.character_maximum_length,
+            "required_minimum_length": CANONICAL_ARGON2_VERIFIER_STORAGE_LENGTH,
+            "target_storage_contract": "unbounded_text",
+            "supports_canonical_argon2": self.supports_canonical_argon2,
+            "matches_target_storage_contract": self.matches_target_storage_contract,
+            "required_for_readiness": self.required_for_readiness,
+            "allows_readiness": self.allows_readiness,
+            "read_only": true,
+            "query": PASSWORD_HASH_STORAGE_METADATA_QUERY,
             "error": self.error,
         })
     }
@@ -2417,30 +2609,20 @@ pub(crate) async fn run_rust_migration_tail_hardening_replay(
             );
         };
 
-        for step in executable_revision.upgrade_steps {
-            if let Err(error) = execute_raw_sql_step(db, step.sql).await {
+        match execute_rust_migration_revision_atomically(db, executable_revision).await {
+            Ok(executed_steps) => {
+                executed_sql_step_count += executed_steps;
+                executed_revisions.push(executable_revision.revision);
+            }
+            Err(failure) => {
                 return RustMigrationTailHardeningReplayResult::blocked(
-                    "blocked_sql_execution_error",
+                    failure.status,
                     gate_enabled,
                     plan,
-                    format!("failed executing revision {revision_id}: {error}"),
+                    failure.blocker,
                 );
             }
-            executed_sql_step_count += 1;
         }
-
-        if let Err(error) = update_live_alembic_revision(db, executable_revision.revision).await {
-            return RustMigrationTailHardeningReplayResult::blocked(
-                "blocked_alembic_version_update_error",
-                gate_enabled,
-                plan,
-                format!(
-                    "failed updating alembic_version to {}: {error}",
-                    executable_revision.revision
-                ),
-            );
-        }
-        executed_revisions.push(executable_revision.revision);
     }
 
     RustMigrationTailHardeningReplayResult::applied(
@@ -2451,13 +2633,90 @@ pub(crate) async fn run_rust_migration_tail_hardening_replay(
     )
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RustMigrationRevisionExecutionFailure {
+    status: &'static str,
+    blocker: String,
+}
+
+impl RustMigrationRevisionExecutionFailure {
+    fn new(status: &'static str, blocker: String) -> Self {
+        Self { status, blocker }
+    }
+}
+
+async fn execute_rust_migration_revision_atomically(
+    db: &DatabaseConnection,
+    revision: &RustMigrationExecutableRevision,
+) -> Result<usize, RustMigrationRevisionExecutionFailure> {
+    let transaction = db.begin().await.map_err(|error| {
+        RustMigrationRevisionExecutionFailure::new(
+            "blocked_transaction_begin_error",
+            format!(
+                "failed beginning transaction for revision {}: {error}",
+                revision.revision
+            ),
+        )
+    })?;
+
+    for (step_index, step) in revision.upgrade_steps.iter().enumerate() {
+        if let Err(error) = execute_raw_sql_step(&transaction, step.sql).await {
+            let blocker = format!(
+                "failed executing revision {} step {} ({}): {error}",
+                revision.revision,
+                step_index + 1,
+                step.statement_kind
+            );
+            let blocker = append_rollback_diagnostic(blocker, transaction.rollback().await.err());
+            return Err(RustMigrationRevisionExecutionFailure::new(
+                "blocked_sql_execution_error",
+                blocker,
+            ));
+        }
+    }
+
+    if let Err(error) = update_live_alembic_revision(&transaction, revision.revision).await {
+        let blocker = format!(
+            "failed updating alembic_version to {}: {error}",
+            revision.revision
+        );
+        let blocker = append_rollback_diagnostic(blocker, transaction.rollback().await.err());
+        return Err(RustMigrationRevisionExecutionFailure::new(
+            "blocked_alembic_version_update_error",
+            blocker,
+        ));
+    }
+
+    transaction.commit().await.map_err(|error| {
+        RustMigrationRevisionExecutionFailure::new(
+            "blocked_transaction_commit_error",
+            format!(
+                "failed committing transaction for revision {}: {error}",
+                revision.revision
+            ),
+        )
+    })?;
+
+    Ok(revision.upgrade_steps.len())
+}
+
+fn append_rollback_diagnostic(blocker: String, rollback_error: Option<DbErr>) -> String {
+    match rollback_error {
+        Some(error) => format!("{blocker}; transaction rollback also failed: {error}"),
+        None => format!("{blocker}; revision transaction rolled back"),
+    }
+}
+
 fn plan_requires_initial_schema_bootstrap(plan: &RustMigrationReplayPlan) -> bool {
     plan.pending_revisions
         .iter()
         .any(|revision| *revision == "ee0a189f1532")
 }
 
-async fn execute_raw_sql_step(db: &DatabaseConnection, sql: &str) -> Result<(), DbErr> {
+async fn execute_raw_sql_step<C>(db: &C, sql: &str) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+{
     let statements = split_sql_script_statements(sql);
     if statements.len() <= 1 {
         return db
@@ -2510,10 +2769,10 @@ fn is_transaction_control_statement(statement: &str) -> bool {
     )
 }
 
-async fn update_live_alembic_revision(
-    db: &DatabaseConnection,
-    revision: &str,
-) -> Result<(), DbErr> {
+async fn update_live_alembic_revision<C>(db: &C, revision: &str) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+{
     let statement = match db.get_database_backend() {
         DatabaseBackend::Postgres => "UPDATE alembic_version SET version_num = $1",
         _ => "UPDATE alembic_version SET version_num = ?",
@@ -2689,6 +2948,7 @@ async fn run_file_locked_live_head_check(
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&lock_path)
         {
             Ok(file) => match file.try_lock_exclusive() {
@@ -2760,6 +3020,52 @@ fn migration_advisory_lock_key(name: &str) -> i64 {
     i64::from_str_radix(&digest[..15], 16).expect("sha1 lock key prefix should fit in i64")
 }
 
+pub(crate) async fn check_password_hash_storage_compatibility(
+    db: &DatabaseConnection,
+) -> PasswordHashStorageCompatibilityCheck {
+    if db.get_database_backend() != DatabaseBackend::Postgres {
+        return PasswordHashStorageCompatibilityCheck::not_applicable_non_postgres();
+    }
+
+    let statement = Statement::from_string(
+        DatabaseBackend::Postgres,
+        PASSWORD_HASH_STORAGE_METADATA_QUERY.to_string(),
+    );
+
+    match db.query_one(statement).await {
+        Ok(Some(row)) => {
+            let data_type = match row.try_get::<String>("", "data_type") {
+                Ok(value) => value,
+                Err(error) => {
+                    return PasswordHashStorageCompatibilityCheck::query_error(error.to_string());
+                }
+            };
+            let udt_name = match row.try_get::<String>("", "udt_name") {
+                Ok(value) => value,
+                Err(error) => {
+                    return PasswordHashStorageCompatibilityCheck::query_error(error.to_string());
+                }
+            };
+            let character_maximum_length = match row
+                .try_get::<Option<i32>>("", "character_maximum_length")
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    return PasswordHashStorageCompatibilityCheck::query_error(error.to_string());
+                }
+            };
+
+            PasswordHashStorageCompatibilityCheck::from_column_metadata(
+                data_type,
+                udt_name,
+                character_maximum_length,
+            )
+        }
+        Ok(None) => PasswordHashStorageCompatibilityCheck::column_missing(),
+        Err(error) => PasswordHashStorageCompatibilityCheck::query_error(error.to_string()),
+    }
+}
+
 pub(crate) async fn check_live_alembic_head(db: &DatabaseConnection) -> LiveAlembicHeadCheck {
     let statement = Statement::from_string(
         db.get_database_backend(),
@@ -2791,6 +3097,7 @@ fn is_missing_alembic_version_table_error(error: &DbErr) -> bool {
 
 pub(crate) fn build_schema_migration_metadata_contract(
     live_head_check: Option<&LiveAlembicHeadCheck>,
+    password_hash_storage_check: Option<&PasswordHashStorageCompatibilityCheck>,
 ) -> Value {
     let revision_ids = postgres_revision_catalog()
         .iter()
@@ -2822,6 +3129,15 @@ pub(crate) fn build_schema_migration_metadata_contract(
         None => {
             fallback_live_head_check = LiveAlembicHeadCheck::not_checked("database unavailable");
             &fallback_live_head_check
+        }
+    };
+    let fallback_password_hash_storage_check;
+    let password_hash_storage_check = match password_hash_storage_check {
+        Some(check) => check,
+        None => {
+            fallback_password_hash_storage_check =
+                PasswordHashStorageCompatibilityCheck::not_checked_database_unavailable();
+            &fallback_password_hash_storage_check
         }
     };
     let executor_preflight = RustMigrationExecutorPreflight::from_live_head_check(live_head_check);
@@ -2861,6 +3177,7 @@ pub(crate) fn build_schema_migration_metadata_contract(
             "can_replace_python_migrator": true,
         },
         "live_database_head": live_head_check.to_json(),
+        "auth_password_hash_storage": password_hash_storage_check.to_json(),
         "rust_migration_executor": executor_preflight.to_json(),
         "rust_migration_replay_plan": replay_plan.to_json(),
         "python_boundary": {
@@ -2905,11 +3222,61 @@ mod tests {
     use std::collections::BTreeSet;
     use std::fs::OpenOptions;
 
+    const ATOMIC_SUCCESS_STEPS: &[RustMigrationSqlStep] = &[
+        RustMigrationSqlStep {
+            sql: "INSERT INTO migration_probe (value) VALUES ('first')",
+            statement_kind: "test_insert_first",
+        },
+        RustMigrationSqlStep {
+            sql: "INSERT INTO migration_probe (value) VALUES ('second')",
+            statement_kind: "test_insert_second",
+        },
+    ];
+    const ATOMIC_SQL_FAILURE_STEPS: &[RustMigrationSqlStep] = &[
+        RustMigrationSqlStep {
+            sql: "INSERT INTO migration_probe (value) VALUES ('before_failure')",
+            statement_kind: "test_insert_before_failure",
+        },
+        RustMigrationSqlStep {
+            sql: "INSERT INTO missing_migration_probe (value) VALUES ('failure')",
+            statement_kind: "test_missing_table_failure",
+        },
+    ];
+    const ATOMIC_HEAD_FAILURE_STEPS: &[RustMigrationSqlStep] = &[RustMigrationSqlStep {
+        sql: "INSERT INTO migration_probe (value) VALUES ('before_head_failure')",
+        statement_kind: "test_insert_before_head_failure",
+    }];
+
+    const ATOMIC_SUCCESS_REVISION: RustMigrationExecutableRevision =
+        RustMigrationExecutableRevision {
+            revision: "test_atomic_success",
+            filename: "test_atomic_success.py",
+            execution_scope: "test",
+            upgrade_steps: ATOMIC_SUCCESS_STEPS,
+            downgrade_steps: &[],
+        };
+    const ATOMIC_SQL_FAILURE_REVISION: RustMigrationExecutableRevision =
+        RustMigrationExecutableRevision {
+            revision: "test_atomic_sql_failure",
+            filename: "test_atomic_sql_failure.py",
+            execution_scope: "test",
+            upgrade_steps: ATOMIC_SQL_FAILURE_STEPS,
+            downgrade_steps: &[],
+        };
+    const ATOMIC_HEAD_FAILURE_REVISION: RustMigrationExecutableRevision =
+        RustMigrationExecutableRevision {
+            revision: "test_atomic_head_failure",
+            filename: "test_atomic_head_failure.py",
+            execution_scope: "test",
+            upgrade_steps: ATOMIC_HEAD_FAILURE_STEPS,
+            downgrade_steps: &[],
+        };
+
     #[test]
     fn postgres_revision_catalog_matches_current_alembic_single_chain() {
         let catalog = postgres_revision_catalog();
 
-        assert_eq!(catalog.len(), 19);
+        assert_eq!(catalog.len(), 20);
         assert_eq!(catalog[0].revision, "ee0a189f1532");
         assert_eq!(catalog[0].down_revision, None);
         assert_eq!(catalog[catalog.len() - 1].revision, POSTGRES_ALEMBIC_HEAD);
@@ -2938,7 +3305,7 @@ mod tests {
     ) {
         let executable = rust_executable_postgres_revisions();
 
-        assert_eq!(executable.len(), 19);
+        assert_eq!(executable.len(), 20);
         assert_eq!(
             executable.first().map(|entry| entry.revision),
             Some("ee0a189f1532")
@@ -2952,7 +3319,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.upgrade_steps.len())
                 .sum::<usize>(),
-            118
+            120
         );
         assert!(executable
             .iter()
@@ -2992,8 +3359,108 @@ mod tests {
     }
 
     #[test]
+    fn password_hash_phc_text_revision_keeps_upgrade_and_guarded_downgrade_contract() {
+        let revision = rust_executable_revision(POSTGRES_ALEMBIC_HEAD)
+            .expect("password hash PHC text revision should be executable");
+
+        assert_eq!(POSTGRES_ALEMBIC_HEAD, "20260712_password_hash_phc_text");
+        assert_eq!(revision.filename, "20260712_1200_password_hash_phc_text.py");
+        assert_eq!(revision.upgrade_steps.len(), 2);
+        assert!(revision.upgrade_steps[0]
+            .sql
+            .contains("ALTER COLUMN password_hash TYPE TEXT"));
+        assert!(revision.upgrade_steps[1]
+            .sql
+            .contains("Argon2 PHC 或兼容的 legacy SHA256"));
+        assert_eq!(revision.downgrade_steps.len(), 3);
+        assert!(revision.downgrade_steps[0]
+            .sql
+            .contains("length(password_hash) > 64"));
+        assert!(revision.downgrade_steps[0]
+            .sql
+            .contains("cannot downgrade password_hash to VARCHAR(64)"));
+        assert!(revision.downgrade_steps[1]
+            .sql
+            .contains("ALTER COLUMN password_hash TYPE VARCHAR(64)"));
+        assert!(INITIAL_SCHEMA_SQL.contains("password_hash TEXT NOT NULL"));
+        assert!(INITIAL_SCHEMA_SQL.contains("Argon2 PHC 或兼容的 legacy SHA256"));
+        assert!(!INITIAL_SCHEMA_SQL.contains("password_hash VARCHAR(64) NOT NULL"));
+    }
+
+    #[test]
+    fn password_hash_storage_accepts_unbounded_text_target_contract() {
+        let check = PasswordHashStorageCompatibilityCheck::from_column_metadata(
+            "text".to_string(),
+            "text".to_string(),
+            None,
+        );
+
+        assert_eq!(check.status, "compatible_unbounded_text");
+        assert_eq!(check.supports_canonical_argon2, Some(true));
+        assert_eq!(check.matches_target_storage_contract, Some(true));
+        assert!(check.allows_readiness);
+    }
+
+    #[test]
+    fn password_hash_storage_accepts_sufficient_bounded_varchar_without_marking_target_complete() {
+        let check = PasswordHashStorageCompatibilityCheck::from_column_metadata(
+            "character varying".to_string(),
+            "varchar".to_string(),
+            Some(CANONICAL_ARGON2_VERIFIER_STORAGE_LENGTH as i32),
+        );
+
+        assert_eq!(check.status, "compatible_bounded_capacity");
+        assert_eq!(check.supports_canonical_argon2, Some(true));
+        assert_eq!(check.matches_target_storage_contract, Some(false));
+        assert!(check.allows_readiness);
+    }
+
+    #[test]
+    fn password_hash_storage_blocks_legacy_varchar_64_capacity() {
+        let check = PasswordHashStorageCompatibilityCheck::from_column_metadata(
+            "character varying".to_string(),
+            "varchar".to_string(),
+            Some(64),
+        );
+
+        assert_eq!(check.status, "blocked_capacity_too_small");
+        assert_eq!(check.character_maximum_length, Some(64));
+        assert_eq!(check.supports_canonical_argon2, Some(false));
+        assert!(!check.allows_readiness);
+    }
+
+    #[test]
+    fn password_hash_storage_blocks_missing_or_unsupported_columns() {
+        let missing = PasswordHashStorageCompatibilityCheck::column_missing();
+        let unsupported = PasswordHashStorageCompatibilityCheck::from_column_metadata(
+            "bytea".to_string(),
+            "bytea".to_string(),
+            None,
+        );
+
+        assert_eq!(missing.status, "blocked_column_missing");
+        assert!(!missing.allows_readiness);
+        assert_eq!(unsupported.status, "blocked_unsupported_type");
+        assert!(!unsupported.allows_readiness);
+    }
+
+    #[tokio::test]
+    async fn password_hash_storage_check_is_explicitly_not_applicable_for_sqlite() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite memory db");
+
+        let check = check_password_hash_storage_compatibility(&db).await;
+
+        assert_eq!(check.status, "not_applicable_non_postgres");
+        assert!(!check.required_for_readiness);
+        assert!(check.allows_readiness);
+        assert_eq!(check.supports_canonical_argon2, None);
+    }
+
+    #[test]
     fn schema_migration_contract_marks_rust_migration_executor_as_active_boundary() {
-        let contract = build_schema_migration_metadata_contract(None);
+        let contract = build_schema_migration_metadata_contract(None, None);
 
         assert_eq!(contract["owner"], RUST_METADATA_OWNER);
         assert_eq!(contract["runtime_migration_owner"], MIGRATION_RUNTIME_OWNER);
@@ -3003,7 +3470,7 @@ mod tests {
         );
         assert_eq!(contract["startup_schema_sync_allowed"], false);
         assert_eq!(contract["postgres_alembic_head"], POSTGRES_ALEMBIC_HEAD);
-        assert_eq!(contract["postgres_revision_catalog"]["revision_count"], 19);
+        assert_eq!(contract["postgres_revision_catalog"]["revision_count"], 20);
         assert_eq!(
             contract["postgres_revision_catalog"]["head"],
             POSTGRES_ALEMBIC_HEAD
@@ -3014,7 +3481,7 @@ mod tests {
         );
         assert_eq!(
             contract["rust_executable_revision_catalog"]["revision_count"],
-            19
+            20
         );
         assert_eq!(
             contract["rust_executable_revision_catalog"]["coverage"],
@@ -3031,6 +3498,22 @@ mod tests {
         );
         assert_eq!(
             contract["live_database_head"]["matches_catalog_head"],
+            false
+        );
+        assert_eq!(
+            contract["auth_password_hash_storage"]["status"],
+            "not_checked_database_unavailable"
+        );
+        assert_eq!(
+            contract["auth_password_hash_storage"]["required_minimum_length"],
+            CANONICAL_ARGON2_VERIFIER_STORAGE_LENGTH
+        );
+        assert_eq!(
+            contract["auth_password_hash_storage"]["target_storage_contract"],
+            "unbounded_text"
+        );
+        assert_eq!(
+            contract["auth_password_hash_storage"]["allows_readiness"],
             false
         );
         assert_eq!(
@@ -3160,10 +3643,11 @@ mod tests {
                 "20260517_batch_task_defaults",
                 "20260517_regeneration_task_defaults",
                 "20260517_settings_core_defaults",
+                "20260517_project_core_defaults",
                 POSTGRES_ALEMBIC_HEAD,
             ]
         );
-        assert_eq!(plan.pending_files.len(), 19);
+        assert_eq!(plan.pending_files.len(), 20);
         assert_eq!(
             plan.rust_executable_pending_revisions,
             vec![
@@ -3185,13 +3669,33 @@ mod tests {
                 "20260517_batch_task_defaults",
                 "20260517_regeneration_task_defaults",
                 "20260517_settings_core_defaults",
+                "20260517_project_core_defaults",
                 POSTGRES_ALEMBIC_HEAD,
             ]
         );
         assert!(plan.pending_revisions_all_have_rust_steps);
-        assert_eq!(plan.rust_executable_pending_sql_step_count, 118);
+        assert_eq!(plan.rust_executable_pending_sql_step_count, 120);
         assert!(plan.ddl_replay_ready);
         assert!(plan.can_replace_python_migrator);
+    }
+
+    #[test]
+    fn rust_migration_replay_plan_from_previous_head_only_applies_password_hash_revision() {
+        let check =
+            LiveAlembicHeadCheck::from_live_head("20260517_project_core_defaults".to_string());
+
+        let plan = RustMigrationReplayPlan::from_live_head_check(&check);
+
+        assert!(plan.ok);
+        assert_eq!(plan.status, "pending_catalog_revisions_have_rust_steps");
+        assert_eq!(plan.pending_revisions, vec![POSTGRES_ALEMBIC_HEAD]);
+        assert_eq!(
+            plan.rust_executable_pending_revisions,
+            vec![POSTGRES_ALEMBIC_HEAD]
+        );
+        assert_eq!(plan.rust_executable_pending_sql_step_count, 2);
+        assert!(plan.pending_revisions_all_have_rust_steps);
+        assert!(plan.ddl_replay_ready);
     }
 
     #[test]
@@ -3206,6 +3710,64 @@ mod tests {
             .any(|statement| statement.starts_with("INSERT INTO alembic_version")));
         assert!(statements.iter().any(|statement| statement
             .starts_with("CREATE INDEX ix_organization_members_organization_id")));
+    }
+
+    #[tokio::test]
+    async fn revision_transaction_commits_sql_steps_and_head_together() {
+        let db = setup_live_head_db().await;
+        create_migration_probe_table(&db).await;
+        create_alembic_version_table(&db).await;
+        insert_alembic_version(&db, "old_revision").await;
+
+        let executed_steps =
+            execute_rust_migration_revision_atomically(&db, &ATOMIC_SUCCESS_REVISION)
+                .await
+                .expect("atomic revision should commit");
+
+        assert_eq!(executed_steps, 2);
+        assert_eq!(migration_probe_count(&db).await, 2);
+        assert_eq!(
+            live_revision(&db).await.as_deref(),
+            Some("test_atomic_success")
+        );
+    }
+
+    #[tokio::test]
+    async fn revision_transaction_rolls_back_prior_steps_when_sql_fails() {
+        let db = setup_live_head_db().await;
+        create_migration_probe_table(&db).await;
+        create_alembic_version_table(&db).await;
+        insert_alembic_version(&db, "old_revision").await;
+
+        let failure = execute_rust_migration_revision_atomically(&db, &ATOMIC_SQL_FAILURE_REVISION)
+            .await
+            .expect_err("invalid SQL step should fail the revision");
+
+        assert_eq!(failure.status, "blocked_sql_execution_error");
+        assert!(failure
+            .blocker
+            .contains("step 2 (test_missing_table_failure)"));
+        assert!(failure.blocker.contains("revision transaction rolled back"));
+        assert_eq!(migration_probe_count(&db).await, 0);
+        assert_eq!(live_revision(&db).await.as_deref(), Some("old_revision"));
+    }
+
+    #[tokio::test]
+    async fn revision_transaction_rolls_back_sql_when_head_update_fails() {
+        let db = setup_live_head_db().await;
+        create_migration_probe_table(&db).await;
+
+        let failure =
+            execute_rust_migration_revision_atomically(&db, &ATOMIC_HEAD_FAILURE_REVISION)
+                .await
+                .expect_err("missing alembic_version table should fail the revision");
+
+        assert_eq!(failure.status, "blocked_alembic_version_update_error");
+        assert!(failure
+            .blocker
+            .contains("failed updating alembic_version to test_atomic_head_failure"));
+        assert!(failure.blocker.contains("revision transaction rolled back"));
+        assert_eq!(migration_probe_count(&db).await, 0);
     }
 
     #[test]
@@ -3477,6 +4039,7 @@ mod tests {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&config.lock_file_path)
             .expect("open lock file");
         lock_file
@@ -3507,6 +4070,40 @@ mod tests {
         Database::connect("sqlite::memory:")
             .await
             .expect("connect sqlite memory db")
+    }
+
+    async fn create_migration_probe_table(db: &sea_orm::DatabaseConnection) {
+        db.execute(Statement::from_string(
+            db.get_database_backend(),
+            "CREATE TABLE migration_probe (value TEXT NOT NULL)".to_string(),
+        ))
+        .await
+        .expect("create migration probe table");
+    }
+
+    async fn migration_probe_count(db: &sea_orm::DatabaseConnection) -> i64 {
+        db.query_one(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT COUNT(*) AS count FROM migration_probe".to_string(),
+        ))
+        .await
+        .expect("query migration probe count")
+        .expect("migration probe count row")
+        .try_get::<i64>("", "count")
+        .expect("read migration probe count")
+    }
+
+    async fn live_revision(db: &sea_orm::DatabaseConnection) -> Option<String> {
+        db.query_one(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT version_num FROM alembic_version LIMIT 1".to_string(),
+        ))
+        .await
+        .expect("query live revision")
+        .map(|row| {
+            row.try_get::<String>("", "version_num")
+                .expect("read live revision")
+        })
     }
 
     async fn create_alembic_version_table(db: &sea_orm::DatabaseConnection) {

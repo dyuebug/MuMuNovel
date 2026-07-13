@@ -1,7 +1,3 @@
-use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-    Argon2,
-};
 use chrono::Utc;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use sea_orm::{
@@ -9,13 +5,15 @@ use sea_orm::{
     Set,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::config::AppConfig;
 use crate::models::user;
 use crate::models::user as user_entity;
 use crate::models::user_password;
+use crate::services::password_hash_service::{
+    hash_password, is_legacy_sha256, verify_password, PasswordHashError,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Claims {
@@ -28,6 +26,25 @@ pub struct Claims {
 
 pub struct AuthService {
     jwt_secret: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalPasswordDecision {
+    Verified,
+    InvalidCredentials,
+}
+
+fn decide_local_password(
+    password: &str,
+    password_verifier: &str,
+) -> Result<LocalPasswordDecision, PasswordHashError> {
+    verify_password(password, password_verifier).map(|verified| {
+        if verified {
+            LocalPasswordDecision::Verified
+        } else {
+            LocalPasswordDecision::InvalidCredentials
+        }
+    })
 }
 
 impl AuthService {
@@ -63,52 +80,17 @@ impl AuthService {
         Ok(data.claims)
     }
 
-    fn hash_password(password: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let salt = SaltString::generate(&mut OsRng);
-        Argon2::default()
-            .hash_password(password.as_bytes(), &salt)
-            .map(|h| h.to_string())
-            .map_err(|e| format!("password hash failed: {}", e).into())
-    }
-
-    fn hash_password_legacy_sha256(password: &str) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(password.as_bytes());
-        hex::encode(hasher.finalize())
-    }
-
-    fn is_legacy_sha256_hash(password_hash: &str) -> bool {
-        password_hash.len() == 64 && password_hash.chars().all(|ch| ch.is_ascii_hexdigit())
-    }
-
-    fn verify_password_hash(password: &str, password_hash: &str) -> Result<bool, String> {
-        match PasswordHash::new(password_hash) {
-            Ok(parsed) => match Argon2::default().verify_password(password.as_bytes(), &parsed) {
-                Ok(_) => Ok(true),
-                Err(_) => Ok(false),
-            },
-            Err(parse_error) => {
-                if Self::is_legacy_sha256_hash(password_hash) {
-                    Ok(Self::hash_password_legacy_sha256(password)
-                        == password_hash.to_ascii_lowercase())
-                } else {
-                    Err(format!("invalid password hash: {}", parse_error))
-                }
-            }
-        }
-    }
-
     async fn upgrade_legacy_password_hash(
         db: &DatabaseConnection,
         pwd: &user_password::Model,
         password: &str,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if !Self::is_legacy_sha256_hash(&pwd.password_hash) {
+        if !is_legacy_sha256(&pwd.password_hash) {
             return Ok(());
         }
 
         let mut active: user_password::ActiveModel = pwd.clone().into();
-        active.password_hash = Set(Self::hash_password(password)?);
+        active.password_hash = Set(hash_password(password)?);
         active.updated_at = Set(Utc::now());
         active.update(db).await?;
         Ok(())
@@ -169,7 +151,7 @@ impl AuthService {
         u.insert(db).await?;
 
         // Set initial password
-        let hash = Self::hash_password(password)?;
+        let hash = hash_password(password)?;
         let pwd = user_password::ActiveModel {
             user_id: Set(user_id.clone()),
             username: Set(username.to_string()),
@@ -241,8 +223,8 @@ impl AuthService {
             }
         };
 
-        match Self::verify_password_hash(password, &pwd.password_hash) {
-            Ok(true) => {
+        match decide_local_password(password, &pwd.password_hash) {
+            Ok(LocalPasswordDecision::Verified) => {
                 Self::upgrade_legacy_password_hash(db, &pwd, password).await?;
                 let user = user_entity::Entity::find_by_id(&pwd.user_id)
                     .one(db)
@@ -251,7 +233,7 @@ impl AuthService {
                 let token = self.create_token(&user)?;
                 Ok(Some((user, token)))
             }
-            Ok(false) => Ok(None),
+            Ok(LocalPasswordDecision::InvalidCredentials) => Ok(None),
             Err(error) => Err(error.into()),
         }
     }
@@ -265,7 +247,7 @@ impl AuthService {
     ) -> Result<user::Model, Box<dyn std::error::Error + Send + Sync>> {
         let user_id = format!("local_{}", Uuid::new_v4());
 
-        let hash = Self::hash_password(password)?;
+        let hash = hash_password(password)?;
 
         let now = Utc::now();
 
@@ -310,21 +292,234 @@ impl AuthService {
 
 #[cfg(test)]
 mod tests {
-    use super::AuthService;
+    use chrono::{Duration, Utc};
+    use sea_orm::{
+        ActiveModelTrait, ConnectionTrait, Database, DatabaseConnection, DbBackend, EntityTrait,
+        Schema, Set,
+    };
+    use sha2::{Digest, Sha256};
 
-    #[test]
-    fn verify_password_hash_accepts_legacy_sha256_shape() {
-        let legacy_hash = AuthService::hash_password_legacy_sha256("admin123");
-        let valid = AuthService::verify_password_hash("admin123", &legacy_hash)
-            .expect("legacy sha256 hash should verify");
-        assert!(valid);
+    use super::{decide_local_password, AuthService, LocalPasswordDecision};
+    use crate::config::{AppConfig, AppRuntimeMode};
+    use crate::models::{user, user_password};
+    use crate::services::password_hash_service::{
+        hash_password, is_legacy_sha256, verify_password, PasswordHashError,
+    };
+
+    async fn setup_auth_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect auth sqlite memory db");
+        let builder = DbBackend::Sqlite;
+        let schema = Schema::new(builder);
+        db.execute(builder.build(&schema.create_table_from_entity(user::Entity)))
+            .await
+            .expect("create users table");
+        db.execute(builder.build(&schema.create_table_from_entity(user_password::Entity)))
+            .await
+            .expect("create user_passwords table");
+        db
+    }
+
+    fn test_config() -> AppConfig {
+        AppConfig {
+            app_host: "127.0.0.1".to_string(),
+            app_port: 8001,
+            app_name: "MuMuNovel".to_string(),
+            app_version: "0.1.0-rs".to_string(),
+            database_url: "sqlite::memory:".to_string(),
+            database_pool_size: 1,
+            enable_startup_schema_sync: false,
+            log_level: "info".to_string(),
+            debug: false,
+            runtime_mode: AppRuntimeMode::Development,
+            cors_origins: "http://localhost".to_string(),
+            jwt_secret: "test-jwt-secret".to_string(),
+            static_dir: "../backend/static".to_string(),
+            local_auth_enabled: false,
+            local_auth_username: String::new(),
+            local_auth_password: String::new(),
+            local_auth_display_name: "本地管理员".to_string(),
+            linuxdo_client_id: String::new(),
+            linuxdo_client_secret: String::new(),
+            linuxdo_redirect_uri: String::new(),
+            frontend_url: "http://localhost".to_string(),
+            session_expire_minutes: 120,
+            session_refresh_threshold_minutes: 30,
+            chapter_candidate_rust_executor_enabled: true,
+            chapter_candidate_rust_executor_fallback_on_error: false,
+            chapter_candidate_rust_executor_disabled_reason: String::new(),
+            chapter_candidate_rust_executor_rollback_boundary: String::new(),
+            rust_migration_noop_executor_smoke_enabled: false,
+        }
+    }
+
+    async fn seed_user_with_verifier(
+        db: &DatabaseConnection,
+        password_verifier: &str,
+    ) -> chrono::DateTime<Utc> {
+        let user_id = "legacy-user-id".to_string();
+        let username = "legacy-user".to_string();
+        let created_at = Utc::now() - Duration::days(1);
+        user::ActiveModel {
+            user_id: Set(user_id.clone()),
+            username: Set(username.clone()),
+            display_name: Set("Legacy User".to_string()),
+            avatar_url: Set(None),
+            trust_level: Set(0),
+            is_admin: Set(false),
+            linuxdo_id: Set(user_id.clone()),
+            created_at: Set(created_at),
+            last_login: Set(created_at),
+        }
+        .insert(db)
+        .await
+        .expect("insert password test user");
+
+        user_password::ActiveModel {
+            user_id: Set(user_id),
+            username: Set(username),
+            password_hash: Set(password_verifier.to_string()),
+            has_custom_password: Set(true),
+            created_at: Set(created_at),
+            updated_at: Set(created_at),
+        }
+        .insert(db)
+        .await
+        .expect("insert password test verifier");
+
+        created_at
+    }
+
+    async fn seed_legacy_user(db: &DatabaseConnection) -> (String, chrono::DateTime<Utc>) {
+        let legacy_hash = hex::encode(Sha256::digest(b"admin123"));
+        let created_at = seed_user_with_verifier(db, &legacy_hash).await;
+        (legacy_hash, created_at)
     }
 
     #[test]
-    fn verify_password_hash_rejects_wrong_password_for_legacy_sha256_shape() {
-        let legacy_hash = AuthService::hash_password_legacy_sha256("admin123");
-        let valid = AuthService::verify_password_hash("wrong-password", &legacy_hash)
-            .expect("legacy sha256 hash should return boolean result");
-        assert!(!valid);
+    fn local_password_decision_accepts_correct_password() {
+        let verifier = hash_password("admin123").expect("Argon2 hash should succeed");
+
+        let decision = decide_local_password("admin123", &verifier)
+            .expect("valid verifier should produce an authentication decision");
+
+        assert_eq!(decision, LocalPasswordDecision::Verified);
+    }
+
+    #[test]
+    fn local_password_decision_maps_wrong_password_to_invalid_credentials() {
+        let verifier = hash_password("admin123").expect("Argon2 hash should succeed");
+
+        let decision = decide_local_password("wrong-password", &verifier)
+            .expect("wrong password should remain a normal authentication decision");
+
+        assert_eq!(decision, LocalPasswordDecision::InvalidCredentials);
+    }
+
+    #[test]
+    fn local_password_decision_propagates_invalid_verifier() {
+        let error = decide_local_password("admin123", "not-a-valid-password-verifier")
+            .expect_err("corrupted verifier must not be disguised as invalid credentials");
+
+        assert!(matches!(error, PasswordHashError::InvalidVerifier(_)));
+    }
+
+    #[tokio::test]
+    async fn successful_legacy_login_upgrades_password_verifier_to_argon2() {
+        let db = setup_auth_db().await;
+        let (legacy_hash, original_updated_at) = seed_legacy_user(&db).await;
+        let config = test_config();
+        let auth = AuthService::new(&config.jwt_secret);
+
+        let result = auth
+            .login_local(&db, &config, "legacy-user", "admin123")
+            .await
+            .expect("legacy login should succeed")
+            .expect("legacy credentials should authenticate");
+
+        assert_eq!(result.0.user_id, "legacy-user-id");
+        assert!(!result.1.is_empty());
+        let stored = user_password::Entity::find_by_id("legacy-user-id")
+            .one(&db)
+            .await
+            .expect("load upgraded password")
+            .expect("upgraded password row should exist");
+        assert_ne!(stored.password_hash, legacy_hash);
+        assert!(!is_legacy_sha256(&stored.password_hash));
+        assert!(stored.password_hash.starts_with("$argon2id$"));
+        assert!(stored.password_hash.len() > 64);
+        assert!(stored.updated_at > original_updated_at);
+        assert!(verify_password("admin123", &stored.password_hash)
+            .expect("upgraded Argon2 verifier should remain valid"));
+    }
+
+    #[tokio::test]
+    async fn wrong_legacy_password_does_not_upgrade_or_modify_verifier() {
+        let db = setup_auth_db().await;
+        let (legacy_hash, original_updated_at) = seed_legacy_user(&db).await;
+        let config = test_config();
+        let auth = AuthService::new(&config.jwt_secret);
+
+        let result = auth
+            .login_local(&db, &config, "legacy-user", "wrong-password")
+            .await
+            .expect("wrong legacy password should be a normal authentication result");
+
+        assert!(result.is_none());
+        let stored = user_password::Entity::find_by_id("legacy-user-id")
+            .one(&db)
+            .await
+            .expect("load unchanged password")
+            .expect("password row should remain present");
+        assert_eq!(stored.password_hash, legacy_hash);
+        assert_eq!(stored.updated_at, original_updated_at);
+    }
+
+    #[tokio::test]
+    async fn successful_argon2_login_does_not_rehash_or_modify_verifier() {
+        let db = setup_auth_db().await;
+        let verifier = hash_password("admin123").expect("Argon2 hash should succeed");
+        let original_updated_at = seed_user_with_verifier(&db, &verifier).await;
+        let config = test_config();
+        let auth = AuthService::new(&config.jwt_secret);
+
+        let result = auth
+            .login_local(&db, &config, "legacy-user", "admin123")
+            .await
+            .expect("canonical Argon2 login should succeed")
+            .expect("canonical Argon2 credentials should authenticate");
+
+        assert_eq!(result.0.user_id, "legacy-user-id");
+        let stored = user_password::Entity::find_by_id("legacy-user-id")
+            .one(&db)
+            .await
+            .expect("load canonical password")
+            .expect("canonical password row should remain present");
+        assert_eq!(stored.password_hash, verifier);
+        assert_eq!(stored.updated_at, original_updated_at);
+    }
+
+    #[tokio::test]
+    async fn corrupted_verifier_login_returns_error_without_modifying_database() {
+        let db = setup_auth_db().await;
+        let corrupted = "not-a-valid-password-verifier";
+        let original_updated_at = seed_user_with_verifier(&db, corrupted).await;
+        let config = test_config();
+        let auth = AuthService::new(&config.jwt_secret);
+
+        let error = auth
+            .login_local(&db, &config, "legacy-user", "admin123")
+            .await
+            .expect_err("corrupted verifier must propagate an authentication error");
+
+        assert!(error.to_string().starts_with("invalid password hash: "));
+        let stored = user_password::Entity::find_by_id("legacy-user-id")
+            .one(&db)
+            .await
+            .expect("load corrupted password")
+            .expect("corrupted password row should remain present");
+        assert_eq!(stored.password_hash, corrupted);
+        assert_eq!(stored.updated_at, original_updated_at);
     }
 }

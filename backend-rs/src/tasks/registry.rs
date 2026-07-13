@@ -44,6 +44,26 @@ impl TaskRegistry {
         }
     }
 
+    pub async fn update_if<P, F>(
+        &self,
+        task_id: &str,
+        predicate: P,
+        updater: F,
+    ) -> Option<TaskRecord>
+    where
+        P: FnOnce(&TaskRecord) -> bool,
+        F: FnOnce(&mut TaskRecord),
+    {
+        let mut tasks = self.tasks.write().await;
+        let record = tasks.get_mut(task_id)?;
+        if !predicate(record) {
+            return None;
+        }
+
+        updater(record);
+        Some(record.clone())
+    }
+
     pub async fn list_for_user(
         &self,
         user_id: &str,
@@ -173,5 +193,165 @@ impl TaskRegistry {
                 tasks.len()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Barrier;
+
+    fn record(task_id: &str) -> TaskRecord {
+        TaskRecord::new(
+            task_id.to_string(),
+            "polish_text".to_string(),
+            "user-1".to_string(),
+            "project-1".to_string(),
+            "interactive".to_string(),
+        )
+    }
+
+    #[tokio::test]
+    async fn update_if_does_not_evaluate_callbacks_for_missing_task() {
+        let registry = TaskRegistry::new();
+        let predicate_calls = Arc::new(AtomicUsize::new(0));
+        let updater_calls = Arc::new(AtomicUsize::new(0));
+
+        let predicate_counter = Arc::clone(&predicate_calls);
+        let updater_counter = Arc::clone(&updater_calls);
+        let updated = registry
+            .update_if(
+                "missing",
+                move |_| {
+                    predicate_counter.fetch_add(1, Ordering::SeqCst);
+                    true
+                },
+                move |_| {
+                    updater_counter.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+            .await;
+
+        assert!(updated.is_none());
+        assert_eq!(predicate_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(updater_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn update_if_rejected_predicate_skips_updater_and_preserves_record() {
+        let registry = TaskRegistry::new();
+        let original = record("rejected");
+        let original_updated_at = original.updated_at;
+        registry.insert(original).await;
+        let predicate_calls = Arc::new(AtomicUsize::new(0));
+        let updater_calls = Arc::new(AtomicUsize::new(0));
+
+        let predicate_counter = Arc::clone(&predicate_calls);
+        let updater_counter = Arc::clone(&updater_calls);
+        let updated = registry
+            .update_if(
+                "rejected",
+                move |task| {
+                    predicate_counter.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(task.status, TaskStatus::Pending);
+                    false
+                },
+                move |task| {
+                    updater_counter.fetch_add(1, Ordering::SeqCst);
+                    task.status = TaskStatus::Running;
+                },
+            )
+            .await;
+
+        assert!(updated.is_none());
+        assert_eq!(predicate_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(updater_calls.load(Ordering::SeqCst), 0);
+        let preserved = registry.get("rejected").await.expect("preserved task");
+        assert_eq!(preserved.status, TaskStatus::Pending);
+        assert_eq!(preserved.updated_at, original_updated_at);
+    }
+
+    #[tokio::test]
+    async fn update_if_accepted_predicate_runs_updater_once_and_returns_latest_record() {
+        let registry = TaskRegistry::new();
+        registry.insert(record("accepted")).await;
+        let predicate_calls = Arc::new(AtomicUsize::new(0));
+        let updater_calls = Arc::new(AtomicUsize::new(0));
+
+        let predicate_counter = Arc::clone(&predicate_calls);
+        let updater_counter = Arc::clone(&updater_calls);
+        let updated = registry
+            .update_if(
+                "accepted",
+                move |task| {
+                    predicate_counter.fetch_add(1, Ordering::SeqCst);
+                    task.status == TaskStatus::Pending
+                },
+                move |task| {
+                    updater_counter.fetch_add(1, Ordering::SeqCst);
+                    task.status = TaskStatus::Running;
+                    task.message = "admitted".to_string();
+                },
+            )
+            .await
+            .expect("accepted update");
+
+        assert_eq!(predicate_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(updater_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(updated.status, TaskStatus::Running);
+        assert_eq!(updated.message, "admitted");
+        let stored = registry.get("accepted").await.expect("stored task");
+        assert_eq!(stored.status, updated.status);
+        assert_eq!(stored.message, updated.message);
+    }
+
+    #[tokio::test]
+    async fn update_if_serializes_competing_pending_admissions() {
+        let registry = TaskRegistry::new();
+        registry.insert(record("contended")).await;
+        let barrier = Arc::new(Barrier::new(3));
+
+        let first_registry = registry.clone();
+        let first_barrier = Arc::clone(&barrier);
+        let first = tokio::spawn(async move {
+            first_barrier.wait().await;
+            first_registry
+                .update_if(
+                    "contended",
+                    |task| task.status == TaskStatus::Pending,
+                    |task| task.status = TaskStatus::Running,
+                )
+                .await
+                .is_some()
+        });
+
+        let second_registry = registry.clone();
+        let second_barrier = Arc::clone(&barrier);
+        let second = tokio::spawn(async move {
+            second_barrier.wait().await;
+            second_registry
+                .update_if(
+                    "contended",
+                    |task| task.status == TaskStatus::Pending,
+                    |task| task.status = TaskStatus::Running,
+                )
+                .await
+                .is_some()
+        });
+
+        barrier.wait().await;
+        let admitted = usize::from(first.await.expect("first admission task"))
+            + usize::from(second.await.expect("second admission task"));
+
+        assert_eq!(admitted, 1);
+        assert_eq!(
+            registry
+                .get("contended")
+                .await
+                .expect("contended task")
+                .status,
+            TaskStatus::Running
+        );
     }
 }

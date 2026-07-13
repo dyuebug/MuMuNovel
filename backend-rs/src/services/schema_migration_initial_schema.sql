@@ -323,7 +323,7 @@ CREATE UNIQUE INDEX ix_settings_user_id ON settings (user_id);
 CREATE TABLE user_passwords (
     user_id VARCHAR(100) NOT NULL, 
     username VARCHAR(100) NOT NULL, 
-    password_hash VARCHAR(64) NOT NULL, 
+    password_hash TEXT NOT NULL,
     has_custom_password BOOLEAN, 
     created_at TIMESTAMP WITH TIME ZONE DEFAULT now(), 
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT now(), 
@@ -334,7 +334,7 @@ COMMENT ON COLUMN user_passwords.user_id IS '用户ID';
 
 COMMENT ON COLUMN user_passwords.username IS '用户名';
 
-COMMENT ON COLUMN user_passwords.password_hash IS '密码哈希（SHA256）';
+COMMENT ON COLUMN user_passwords.password_hash IS '密码校验值（Argon2 PHC 或兼容的 legacy SHA256）';
 
 COMMENT ON COLUMN user_passwords.has_custom_password IS '是否为自定义密码';
 

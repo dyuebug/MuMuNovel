@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
-use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 use crate::api::careers::execute_career_system_request;
@@ -44,7 +43,7 @@ use crate::services::chapter_regeneration_prepare_service::{
 use crate::services::chapter_regeneration_stream_workflow_service::{
     execute_chapter_regeneration_task, execute_partial_regeneration_task,
 };
-use crate::tasks::checkpoint::touch_checkpoint;
+use crate::tasks::checkpoint::touch_checkpoint_at;
 use crate::tasks::registry::TaskRegistry;
 use crate::tasks::stream::TaskStreamHub;
 use crate::tasks::types::{
@@ -231,6 +230,82 @@ fn build_connected_task_event(task_id: &str, record: &TaskRecord) -> TaskEvent {
     }
 }
 
+async fn subscribe_task_with_latest_snapshot(
+    registry: &TaskRegistry,
+    stream_hub: &TaskStreamHub,
+    task_id: &str,
+    authorized_record: TaskRecord,
+) -> (tokio::sync::broadcast::Receiver<String>, TaskRecord) {
+    let receiver = stream_hub.subscribe(task_id).await;
+    let latest_record = registry.get(task_id).await.unwrap_or(authorized_record);
+    (receiver, latest_record)
+}
+
+struct TaskStreamState {
+    receiver: tokio::sync::broadcast::Receiver<String>,
+    registry: TaskRegistry,
+    task_id: String,
+    close_after_emit: bool,
+}
+
+impl TaskStreamState {
+    fn new(
+        receiver: tokio::sync::broadcast::Receiver<String>,
+        registry: TaskRegistry,
+        task_id: String,
+    ) -> Self {
+        Self {
+            receiver,
+            registry,
+            task_id,
+            close_after_emit: false,
+        }
+    }
+}
+
+async fn next_task_stream_data(mut state: TaskStreamState) -> Option<(String, TaskStreamState)> {
+    if state.close_after_emit {
+        return None;
+    }
+
+    loop {
+        match state.receiver.recv().await {
+            Ok(data) => return Some((data, state)),
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                tracing::warn!(
+                    task_id = %state.task_id,
+                    skipped,
+                    "Background task SSE receiver lagged; resynchronizing latest task snapshot"
+                );
+
+                // Drop every retained event that predates the recovery snapshot. Subscribing to
+                // the current sender tail before reading the registry preserves the same
+                // subscribe-then-snapshot ordering used by the initial SSE connection.
+                state.receiver = state.receiver.resubscribe();
+                let Some(record) = state.registry.get(&state.task_id).await else {
+                    continue;
+                };
+                state.close_after_emit = record.status.is_terminal();
+
+                match serde_json::to_string(&build_connected_task_event(&state.task_id, &record)) {
+                    Ok(data) => return Some((data, state)),
+                    Err(error) => {
+                        tracing::warn!(
+                            task_id = %state.task_id,
+                            error = %error,
+                            "Failed to serialize background task SSE recovery snapshot"
+                        );
+                        if state.close_after_emit {
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 fn build_background_tasks_route_owner_contract() -> serde_json::Value {
     json!({
@@ -329,6 +404,20 @@ fn adapt_organization_generation_task_request(
         .map_err(|error| format!("无效的组织生成任务参数: {}", error))
 }
 
+fn task_type_allows_empty_project(task_type: &str) -> bool {
+    matches!(
+        task_type,
+        "wizard_world_building"
+            | "inspiration_generate_options"
+            | "inspiration_refine_options"
+            | "inspiration_quick_generate"
+            | "book_import_apply"
+            | "book_import_retry_failed_steps"
+            | "polish_text"
+            | "polish_batch"
+    )
+}
+
 /// POST /api/background-tasks
 pub async fn create_task(
     Extension(claims): Extension<Claims>,
@@ -338,18 +427,7 @@ pub async fn create_task(
     Extension(book_import_service): Extension<Arc<BookImportService>>,
     Json(req): Json<TaskCreateRequest>,
 ) -> impl IntoResponse {
-    let allows_empty_project = matches!(
-        req.task_type.as_str(),
-        "wizard_world_building"
-            | "inspiration_generate_options"
-            | "inspiration_refine_options"
-            | "inspiration_quick_generate"
-            | "book_import_apply"
-            | "book_import_retry_failed_steps"
-            | "polish_text"
-            | "polish_batch"
-    );
-    if !allows_empty_project && req.project_id.trim().is_empty() {
+    if !task_type_allows_empty_project(&req.task_type) && req.project_id.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({"success": false, "message": "project_id is required for this task type"})),
@@ -422,7 +500,10 @@ fn spawn_task_execution(
     payload: serde_json::Value,
 ) {
     tokio::spawn(async move {
-        mark_task_running(&registry, &stream_hub, &record.task_id, "任务已开始执行").await;
+        if !mark_task_running(&registry, &stream_hub, &record.task_id, "任务已开始执行").await
+        {
+            return;
+        }
         let result = execute_task(
             &db,
             &registry,
@@ -444,32 +525,42 @@ async fn mark_task_running(
     stream_hub: &TaskStreamHub,
     task_id: &str,
     message: &str,
-) {
+) -> bool {
+    let now = Utc::now();
     let updated = registry
-        .update(task_id, |record| {
-            record.status = TaskStatus::Running;
-            record.started_at.get_or_insert_with(Utc::now);
-            record.updated_at = Utc::now();
-            record.message = message.to_string();
-            if record.progress <= 0 {
-                record.progress = 1;
-            }
-        })
+        .update_if(
+            task_id,
+            |record| record.status == TaskStatus::Pending,
+            |record| {
+                record.status = TaskStatus::Running;
+                record.started_at = Some(now);
+                record.updated_at = now;
+                record.message = message.to_string();
+                if record.progress <= 0 {
+                    record.progress = 1;
+                }
+            },
+        )
         .await;
 
     if let Some(record) = updated {
-        stream_hub.fanout(
-            task_id,
-            &TaskEvent {
-                event_type: "progress".into(),
-                task_id: Some(task_id.to_string()),
-                message: Some(record.message),
-                progress: Some(record.progress),
-                status: Some(record.status.to_string()),
-                data: None,
-                error: None,
-            },
-        );
+        stream_hub
+            .fanout(
+                task_id,
+                &TaskEvent {
+                    event_type: "progress".into(),
+                    task_id: Some(task_id.to_string()),
+                    message: Some(record.message),
+                    progress: Some(record.progress),
+                    status: Some(record.status.to_string()),
+                    data: None,
+                    error: None,
+                },
+            )
+            .await;
+        true
+    } else {
+        false
     }
 }
 
@@ -480,43 +571,52 @@ async fn complete_task(
     result: serde_json::Value,
     message: Option<String>,
 ) {
+    let now = Utc::now();
     let updated = registry
-        .update(task_id, |record| {
-            record.status = TaskStatus::Completed;
-            record.progress = 100;
-            record.result = Some(result.clone());
-            record.error = None;
-            record.completed_at = Some(Utc::now());
-            record.updated_at = Utc::now();
-            record.message = message.unwrap_or_else(|| "任务执行完成".to_string());
-        })
+        .update_if(
+            task_id,
+            |record| record.status.is_active(),
+            |record| {
+                record.status = TaskStatus::Completed;
+                record.progress = 100;
+                record.result = Some(result.clone());
+                record.error = None;
+                record.completed_at = Some(now);
+                record.updated_at = now;
+                record.message = message.unwrap_or_else(|| "任务执行完成".to_string());
+            },
+        )
         .await;
 
     if let Some(record) = updated {
-        stream_hub.fanout(
-            task_id,
-            &TaskEvent {
-                event_type: "result".into(),
-                task_id: Some(task_id.to_string()),
-                message: Some(record.message.clone()),
-                progress: Some(record.progress),
-                status: Some(record.status.to_string()),
-                data: record.result.clone(),
-                error: None,
-            },
-        );
-        stream_hub.fanout(
-            task_id,
-            &TaskEvent {
-                event_type: "done".into(),
-                task_id: Some(task_id.to_string()),
-                message: Some(record.message),
-                progress: Some(100),
-                status: Some("completed".into()),
-                data: record.result,
-                error: None,
-            },
-        );
+        stream_hub
+            .fanout(
+                task_id,
+                &TaskEvent {
+                    event_type: "result".into(),
+                    task_id: Some(task_id.to_string()),
+                    message: Some(record.message.clone()),
+                    progress: Some(record.progress),
+                    status: Some(record.status.to_string()),
+                    data: record.result.clone(),
+                    error: None,
+                },
+            )
+            .await;
+        stream_hub
+            .fanout_terminal(
+                task_id,
+                &TaskEvent {
+                    event_type: "done".into(),
+                    task_id: Some(task_id.to_string()),
+                    message: Some(record.message),
+                    progress: Some(100),
+                    status: Some("completed".into()),
+                    data: record.result,
+                    error: None,
+                },
+            )
+            .await;
     }
 }
 
@@ -526,29 +626,36 @@ async fn fail_task(
     task_id: &str,
     error: &str,
 ) {
+    let now = Utc::now();
     let updated = registry
-        .update(task_id, |record| {
-            record.status = TaskStatus::Failed;
-            record.error = Some(error.to_string());
-            record.completed_at = Some(Utc::now());
-            record.updated_at = Utc::now();
-            record.message = error.to_string();
-        })
+        .update_if(
+            task_id,
+            |record| record.status.is_active(),
+            |record| {
+                record.status = TaskStatus::Failed;
+                record.error = Some(error.to_string());
+                record.completed_at = Some(now);
+                record.updated_at = now;
+                record.message = error.to_string();
+            },
+        )
         .await;
 
     if let Some(record) = updated {
-        stream_hub.fanout(
-            task_id,
-            &TaskEvent {
-                event_type: "error".into(),
-                task_id: Some(task_id.to_string()),
-                message: Some(record.message.clone()),
-                progress: Some(record.progress),
-                status: Some(record.status.to_string()),
-                data: None,
-                error: record.error,
-            },
-        );
+        stream_hub
+            .fanout_terminal(
+                task_id,
+                &TaskEvent {
+                    event_type: "error".into(),
+                    task_id: Some(task_id.to_string()),
+                    message: Some(record.message.clone()),
+                    progress: Some(record.progress),
+                    status: Some(record.status.to_string()),
+                    data: None,
+                    error: record.error,
+                },
+            )
+            .await;
     }
 }
 
@@ -566,36 +673,38 @@ async fn sync_channel_state_to_task(
         return Err(error);
     }
 
+    let now = Utc::now();
     let updated = registry
-        .update(task_id, |record| {
-            if let Some(message) = &state.message {
-                record.message = message.clone();
-            }
-            if let Some(progress) = state.progress {
-                record.progress = progress as i32;
-            }
-            if let Some(status) = &state.status {
-                if status == "success" {
-                    record.status = TaskStatus::Completed;
+        .update_if(
+            task_id,
+            |record| record.status.is_active(),
+            |record| {
+                if let Some(message) = &state.message {
+                    record.message = message.clone();
                 }
-            }
-            record.updated_at = Utc::now();
-        })
+                if let Some(progress) = state.progress {
+                    record.progress = progress as i32;
+                }
+                record.updated_at = now;
+            },
+        )
         .await;
 
     if let Some(record) = updated {
-        stream_hub.fanout(
-            task_id,
-            &TaskEvent {
-                event_type: "progress".into(),
-                task_id: Some(task_id.to_string()),
-                message: Some(record.message),
-                progress: Some(record.progress),
-                status: Some(record.status.to_string()),
-                data: None,
-                error: None,
-            },
-        );
+        stream_hub
+            .fanout(
+                task_id,
+                &TaskEvent {
+                    event_type: "progress".into(),
+                    task_id: Some(task_id.to_string()),
+                    message: Some(record.message),
+                    progress: Some(record.progress),
+                    status: Some(record.status.to_string()),
+                    data: None,
+                    error: None,
+                },
+            )
+            .await;
     }
 
     result.ok_or_else(|| "后台任务未返回结果".to_string())
@@ -625,27 +734,26 @@ fn spawn_channel_progress_bridge(
             let should_stop = state.done || state.error.is_some();
 
             if has_update && changed {
-                let mut should_emit = false;
+                let now = Utc::now();
                 let updated = registry
-                    .update(&task_id, |record| {
-                        if record.status.is_terminal() {
-                            return;
-                        }
-
-                        if let Some(message) = &state.message {
-                            record.message = message.clone();
-                        }
-                        if let Some(progress) = progress {
-                            record.progress = record.progress.max(progress);
-                        }
-                        record.updated_at = Utc::now();
-                        should_emit = true;
-                    })
+                    .update_if(
+                        &task_id,
+                        |record| record.status.is_active(),
+                        |record| {
+                            if let Some(message) = &state.message {
+                                record.message = message.clone();
+                            }
+                            if let Some(progress) = progress {
+                                record.progress = record.progress.max(progress);
+                            }
+                            record.updated_at = now;
+                        },
+                    )
                     .await;
 
-                if should_emit {
-                    if let Some(record) = updated {
-                        stream_hub.fanout(
+                if let Some(record) = updated {
+                    stream_hub
+                        .fanout(
                             &task_id,
                             &TaskEvent {
                                 event_type: "progress".into(),
@@ -656,8 +764,8 @@ fn spawn_channel_progress_bridge(
                                 data: None,
                                 error: None,
                             },
-                        );
-                    }
+                        )
+                        .await;
                 } else {
                     break;
                 }
@@ -1449,20 +1557,30 @@ fn map_task_list_query_request_error(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use axum::http::StatusCode;
-    use chrono::Utc;
+    use chrono::{DateTime, Utc};
     use serde_json::json;
+    use tokio::sync::{Barrier, Mutex};
 
     use super::{
         adapt_character_generation_task_request, adapt_organization_generation_task_request,
         build_background_tasks_route_owner_contract, build_connected_task_event,
-        build_missing_task_payload, build_task_list_response, compatible_task_payload,
-        enrich_task_payload, map_task_list_query_request_error, normalize_task_statuses_query,
-        TaskListQueryRequestError, TaskListRequest, BACKGROUND_TASKS_CANCEL_ROUTE,
-        BACKGROUND_TASKS_DETAIL_ROUTE, BACKGROUND_TASKS_LIST_CREATE_ROUTE,
-        BACKGROUND_TASKS_STREAM_ROUTE, BACKGROUND_TASKS_WORKFLOW_STATE_ROUTE,
+        build_missing_task_payload, build_task_list_response, cancel_active_task,
+        compatible_task_payload, complete_task, enrich_task_payload, fail_task,
+        map_task_list_query_request_error, mark_task_running, next_task_stream_data,
+        normalize_task_statuses_query, spawn_channel_progress_bridge,
+        subscribe_task_with_latest_snapshot, sync_channel_state_to_task,
+        task_type_allows_empty_project, TaskListQueryRequestError, TaskListRequest,
+        TaskStreamState, BACKGROUND_TASKS_CANCEL_ROUTE, BACKGROUND_TASKS_DETAIL_ROUTE,
+        BACKGROUND_TASKS_LIST_CREATE_ROUTE, BACKGROUND_TASKS_STREAM_ROUTE,
+        BACKGROUND_TASKS_WORKFLOW_STATE_ROUTE,
     };
-    use crate::tasks::types::{TaskListQuery, TaskRecord, TaskStatus};
+    use crate::tasks::registry::TaskRegistry;
+    use crate::tasks::stream::TaskStreamHub;
+    use crate::tasks::types::{TaskEvent, TaskListQuery, TaskRecord, TaskStatus};
+    use crate::utils::sse::SseTaskCapture;
 
     fn task_record() -> TaskRecord {
         TaskRecord {
@@ -1480,10 +1598,49 @@ mod tests {
             workflow_scope: Some("outline".to_string()),
             checkpoint: None,
             payload_fingerprint: None,
+            terminal_reason: None,
+            terminal_label: None,
+            review_required: None,
+            can_resume: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             started_at: None,
             completed_at: None,
+        }
+    }
+
+    #[test]
+    fn global_background_task_types_allow_empty_project() {
+        for task_type in [
+            "wizard_world_building",
+            "inspiration_generate_options",
+            "inspiration_refine_options",
+            "inspiration_quick_generate",
+            "book_import_apply",
+            "book_import_retry_failed_steps",
+            "polish_text",
+            "polish_batch",
+        ] {
+            assert!(
+                task_type_allows_empty_project(task_type),
+                "{task_type} should be executable without a project"
+            );
+        }
+    }
+
+    #[test]
+    fn project_scoped_background_task_types_require_project() {
+        for task_type in [
+            "chapter_regenerate",
+            "chapter_partial_regenerate",
+            "world_regenerate",
+            "outline_generate",
+            "character_generate",
+        ] {
+            assert!(
+                !task_type_allows_empty_project(task_type),
+                "{task_type} should require a project"
+            );
         }
     }
 
@@ -1636,6 +1793,289 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn concurrent_running_admission_and_cancellation_leave_task_cancelled() {
+        let registry = TaskRegistry::new();
+        let stream_hub = TaskStreamHub::new();
+        let mut record = task_record();
+        record.status = TaskStatus::Pending;
+        record.progress = 0;
+        record.message = "等待执行".to_string();
+        registry.insert(record).await;
+
+        let barrier = Arc::new(Barrier::new(3));
+        let mark_barrier = barrier.clone();
+        let cancel_barrier = barrier.clone();
+        let mark_future = async {
+            mark_barrier.wait().await;
+            mark_task_running(&registry, &stream_hub, "task-1", "任务已开始执行").await
+        };
+        let cancel_future = async {
+            cancel_barrier.wait().await;
+            cancel_active_task(&registry, "task-1", "user-1").await
+        };
+        let release_future = async {
+            barrier.wait().await;
+        };
+
+        let (running_admitted, cancelled, ()) =
+            tokio::join!(mark_future, cancel_future, release_future);
+        let cancelled = cancelled.expect("pending or running task should be cancelled");
+        let stored = registry.get("task-1").await.expect("task should remain");
+
+        assert_eq!(cancelled.status, TaskStatus::Cancelled);
+        assert_eq!(stored.status, TaskStatus::Cancelled);
+        assert_eq!(stored.message, "任务已取消");
+        assert_eq!(stored.completed_at, cancelled.completed_at);
+        assert_eq!(stored.updated_at, cancelled.updated_at);
+        assert_eq!(
+            stored
+                .checkpoint
+                .as_ref()
+                .and_then(|checkpoint| checkpoint["event"].as_str()),
+            Some("cancelled")
+        );
+        assert!(
+            !mark_task_running(&registry, &stream_hub, "task-1", "不应重新运行").await,
+            "cancelled task must remain terminal after concurrent admission"
+        );
+        if running_admitted {
+            assert!(stored.started_at.is_some());
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_task_is_not_reactivated_or_overwritten_by_executor_completion() {
+        let registry = TaskRegistry::new();
+        let stream_hub = TaskStreamHub::new();
+        let record = task_record();
+        registry.insert(record).await;
+
+        let cancelled = cancel_active_task(&registry, "task-1", "user-1")
+            .await
+            .expect("running task should be cancelled");
+        let completed_at = cancelled
+            .completed_at
+            .expect("cancelled task should record completion time");
+        let checkpoint_updated_at = cancelled
+            .checkpoint
+            .as_ref()
+            .and_then(|checkpoint| checkpoint["updated_at"].as_str())
+            .expect("cancel checkpoint should record updated_at")
+            .parse::<DateTime<Utc>>()
+            .expect("checkpoint updated_at should be RFC3339");
+
+        assert_eq!(cancelled.status, TaskStatus::Cancelled);
+        assert_eq!(cancelled.updated_at, completed_at);
+        assert_eq!(checkpoint_updated_at, completed_at);
+        let mut receiver = stream_hub.subscribe("task-1").await;
+
+        assert!(
+            !mark_task_running(&registry, &stream_hub, "task-1", "不应重新运行").await,
+            "cancelled task must not be admitted for execution"
+        );
+        complete_task(
+            &registry,
+            &stream_hub,
+            "task-1",
+            json!({"late": "result"}),
+            Some("不应完成".to_string()),
+        )
+        .await;
+        fail_task(&registry, &stream_hub, "task-1", "不应失败").await;
+
+        assert!(
+            matches!(
+                receiver.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ),
+            "rejected late lifecycle events must not be broadcast"
+        );
+
+        let unchanged = registry.get("task-1").await.expect("task should remain");
+        assert_eq!(unchanged.status, TaskStatus::Cancelled);
+        assert_eq!(unchanged.message, "任务已取消");
+        assert_eq!(unchanged.completed_at, Some(completed_at));
+        assert_eq!(unchanged.updated_at, completed_at);
+        assert_eq!(unchanged.result, None);
+        assert_eq!(unchanged.error, None);
+        assert_eq!(unchanged.terminal_reason, None);
+        assert_eq!(unchanged.terminal_label, None);
+        assert_eq!(unchanged.review_required, None);
+        assert_eq!(unchanged.can_resume, None);
+    }
+
+    #[tokio::test]
+    async fn recovered_failed_task_remains_terminal_with_recovery_semantics() {
+        let registry = TaskRegistry::new();
+        let stream_hub = TaskStreamHub::new();
+        let mut recovered = task_record();
+        recovered.status = TaskStatus::Failed;
+        recovered.error = Some("服务重启后需要人工确认".to_string());
+        recovered.message = "恢复策略已投影".to_string();
+        recovered.terminal_reason = Some("manual_review".to_string());
+        recovered.terminal_label = Some("需要人工确认".to_string());
+        recovered.review_required = Some(true);
+        recovered.can_resume = Some(false);
+        recovered.completed_at = Some(Utc::now());
+        let original = recovered.clone();
+        registry.insert(recovered).await;
+
+        assert!(
+            !mark_task_running(&registry, &stream_hub, "task-1", "不应重新运行").await,
+            "recovered failed task must not be admitted for execution"
+        );
+        complete_task(
+            &registry,
+            &stream_hub,
+            "task-1",
+            json!({"late": "result"}),
+            Some("不应完成".to_string()),
+        )
+        .await;
+        fail_task(&registry, &stream_hub, "task-1", "不应覆盖恢复诊断").await;
+
+        let unchanged = registry.get("task-1").await.expect("task should remain");
+        assert_eq!(unchanged.status, TaskStatus::Failed);
+        assert_eq!(unchanged.message, original.message);
+        assert_eq!(unchanged.error, original.error);
+        assert_eq!(unchanged.completed_at, original.completed_at);
+        assert_eq!(unchanged.updated_at, original.updated_at);
+        assert_eq!(unchanged.result, None);
+        assert_eq!(unchanged.terminal_reason, original.terminal_reason);
+        assert_eq!(unchanged.terminal_label, original.terminal_label);
+        assert_eq!(unchanged.review_required, original.review_required);
+        assert_eq!(unchanged.can_resume, original.can_resume);
+    }
+
+    #[tokio::test]
+    async fn channel_success_waits_for_complete_task_to_own_terminal_projection() {
+        let registry = TaskRegistry::new();
+        let stream_hub = TaskStreamHub::new();
+        registry.insert(task_record()).await;
+        let state_capture = Arc::new(Mutex::new(SseTaskCapture {
+            message: Some("流式处理完成".to_string()),
+            progress: Some(100),
+            status: Some("success".to_string()),
+            result: Some(json!({"chapter": "done"})),
+            error: None,
+            done: true,
+        }));
+        let result_capture = Arc::new(Mutex::new(None));
+
+        let result = sync_channel_state_to_task(
+            &registry,
+            &stream_hub,
+            "task-1",
+            state_capture,
+            result_capture,
+        )
+        .await
+        .expect("channel result should be returned");
+
+        let active = registry.get("task-1").await.expect("task should remain");
+        assert_eq!(active.status, TaskStatus::Running);
+        assert_eq!(active.progress, 100);
+        assert_eq!(active.completed_at, None);
+        assert_eq!(active.result, None);
+
+        complete_task(
+            &registry,
+            &stream_hub,
+            "task-1",
+            result.clone(),
+            Some("任务执行完成".to_string()),
+        )
+        .await;
+
+        let completed = registry.get("task-1").await.expect("task should remain");
+        assert_eq!(completed.status, TaskStatus::Completed);
+        assert_eq!(completed.result, Some(result));
+        assert!(completed.completed_at.is_some());
+        assert_eq!(completed.updated_at, completed.completed_at.unwrap());
+        assert_eq!(completed.terminal_reason, None);
+        assert_eq!(completed.terminal_label, None);
+        assert_eq!(completed.review_required, None);
+        assert_eq!(completed.can_resume, None);
+    }
+
+    #[tokio::test]
+    async fn channel_state_sync_does_not_mutate_cancelled_terminal_record() {
+        let registry = TaskRegistry::new();
+        let stream_hub = TaskStreamHub::new();
+        registry.insert(task_record()).await;
+        let cancelled = cancel_active_task(&registry, "task-1", "user-1")
+            .await
+            .expect("running task should be cancelled");
+        let state_capture = Arc::new(Mutex::new(SseTaskCapture {
+            message: Some("迟到的成功事件".to_string()),
+            progress: Some(100),
+            status: Some("success".to_string()),
+            result: Some(json!({"late": true})),
+            error: None,
+            done: true,
+        }));
+
+        let result = sync_channel_state_to_task(
+            &registry,
+            &stream_hub,
+            "task-1",
+            state_capture,
+            Arc::new(Mutex::new(None)),
+        )
+        .await
+        .expect("captured result remains available to the executor");
+        assert_eq!(result, json!({"late": true}));
+
+        let unchanged = registry.get("task-1").await.expect("task should remain");
+        assert_eq!(unchanged.status, TaskStatus::Cancelled);
+        assert_eq!(unchanged.message, cancelled.message);
+        assert_eq!(unchanged.progress, cancelled.progress);
+        assert_eq!(unchanged.updated_at, cancelled.updated_at);
+        assert_eq!(unchanged.completed_at, cancelled.completed_at);
+        assert_eq!(unchanged.result, None);
+    }
+
+    #[tokio::test]
+    async fn channel_progress_bridge_stops_after_terminal_update_is_rejected() {
+        let registry = TaskRegistry::new();
+        let stream_hub = TaskStreamHub::new();
+        registry.insert(task_record()).await;
+        let cancelled = cancel_active_task(&registry, "task-1", "user-1")
+            .await
+            .expect("running task should be cancelled");
+        let state_capture = Arc::new(Mutex::new(SseTaskCapture {
+            message: Some("迟到的进度事件".to_string()),
+            progress: Some(99),
+            status: Some("processing".to_string()),
+            result: None,
+            error: None,
+            done: false,
+        }));
+
+        let mut bridge = spawn_channel_progress_bridge(
+            registry.clone(),
+            stream_hub,
+            "task-1".to_string(),
+            state_capture,
+        );
+        if tokio::time::timeout(std::time::Duration::from_secs(1), &mut bridge)
+            .await
+            .is_err()
+        {
+            bridge.abort();
+            panic!("terminal task must stop the channel progress bridge");
+        }
+
+        let unchanged = registry.get("task-1").await.expect("task should remain");
+        assert_eq!(unchanged.status, TaskStatus::Cancelled);
+        assert_eq!(unchanged.message, cancelled.message);
+        assert_eq!(unchanged.progress, cancelled.progress);
+        assert_eq!(unchanged.updated_at, cancelled.updated_at);
+        assert_eq!(unchanged.completed_at, cancelled.completed_at);
+        assert_eq!(unchanged.result, None);
+    }
+
     #[test]
     fn compatible_task_payload_keeps_success_and_data_contract() {
         let payload = compatible_task_payload(&task_record());
@@ -1653,6 +2093,25 @@ mod tests {
         assert_eq!(payload["hello"], "world");
         assert_eq!(payload["project_id"], "project-1");
         assert_eq!(payload["user_id"], "user-1");
+    }
+
+    #[test]
+    fn compatible_task_payload_exposes_recovery_semantics_at_top_level_and_data() {
+        let mut record = task_record();
+        record.status = TaskStatus::Failed;
+        record.terminal_reason = Some("manual_review".to_string());
+        record.terminal_label = Some("需要人工确认".to_string());
+        record.review_required = Some(true);
+        record.can_resume = Some(false);
+
+        let payload = compatible_task_payload(&record);
+
+        for target in [&payload, &payload["data"]] {
+            assert_eq!(target["terminal_reason"], "manual_review");
+            assert_eq!(target["terminal_label"], "需要人工确认");
+            assert_eq!(target["review_required"], true);
+            assert_eq!(target["can_resume"], false);
+        }
     }
 
     #[test]
@@ -1687,6 +2146,108 @@ mod tests {
             event.data.as_ref().and_then(|value| value.get("task_id")),
             Some(&json!("task-1"))
         );
+    }
+
+    #[tokio::test]
+    async fn task_stream_subscription_refreshes_snapshot_after_authorization_gap() {
+        let registry = TaskRegistry::new();
+        let stream_hub = TaskStreamHub::new();
+        let authorized_record = task_record();
+        registry.insert(authorized_record.clone()).await;
+
+        complete_task(
+            &registry,
+            &stream_hub,
+            "task-1",
+            json!({"chapter": "done"}),
+            Some("任务执行完成".to_string()),
+        )
+        .await;
+
+        let (mut receiver, latest_record) = subscribe_task_with_latest_snapshot(
+            &registry,
+            &stream_hub,
+            "task-1",
+            authorized_record,
+        )
+        .await;
+        let connected = build_connected_task_event("task-1", &latest_record);
+
+        assert_eq!(latest_record.status, TaskStatus::Completed);
+        assert_eq!(connected.status.as_deref(), Some("completed"));
+        assert_eq!(connected.progress, Some(100));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+    }
+
+    #[tokio::test]
+    async fn lagged_task_stream_resynchronizes_and_drops_stale_buffer() {
+        let registry = TaskRegistry::new();
+        registry.insert(task_record()).await;
+        registry
+            .update("task-1", |record| {
+                record.progress = 90;
+                record.message = "接近完成".to_string();
+            })
+            .await
+            .expect("task should exist");
+
+        let (sender, receiver) = tokio::sync::broadcast::channel(2);
+        sender.send("stale-progress-1".to_string()).unwrap();
+        sender.send("stale-progress-2".to_string()).unwrap();
+        sender.send("stale-progress-3".to_string()).unwrap();
+
+        let state = TaskStreamState::new(receiver, registry.clone(), "task-1".to_string());
+        let (payload, state) = next_task_stream_data(state)
+            .await
+            .expect("lagged active stream should emit a recovery snapshot");
+        let event: TaskEvent =
+            serde_json::from_str(&payload).expect("snapshot event should be valid JSON");
+
+        assert_eq!(event.event_type, "connected");
+        assert_eq!(event.status.as_deref(), Some("running"));
+        assert_eq!(event.progress, Some(90));
+
+        sender.send("fresh-progress".to_string()).unwrap();
+        let (payload, state) = next_task_stream_data(state)
+            .await
+            .expect("resubscribed stream should keep receiving new events");
+        assert_eq!(payload, "fresh-progress");
+
+        registry
+            .update("task-1", |record| {
+                record.status = TaskStatus::Completed;
+                record.progress = 100;
+                record.message = "任务执行完成".to_string();
+                record.result = Some(json!({"chapter": "done"}));
+                record.completed_at = Some(Utc::now());
+            })
+            .await
+            .expect("task should exist");
+        sender.send("stale-progress-4".to_string()).unwrap();
+        sender.send("stale-progress-5".to_string()).unwrap();
+        sender.send("stale-progress-6".to_string()).unwrap();
+
+        let (payload, terminal_state) = next_task_stream_data(state)
+            .await
+            .expect("lagged terminal stream should emit the latest terminal snapshot");
+        let event: TaskEvent =
+            serde_json::from_str(&payload).expect("terminal snapshot should be valid JSON");
+
+        assert_eq!(event.event_type, "connected");
+        assert_eq!(event.status.as_deref(), Some("completed"));
+        assert_eq!(event.progress, Some(100));
+        assert_eq!(
+            event
+                .data
+                .as_ref()
+                .and_then(|data| data.get("result"))
+                .and_then(|result| result.get("chapter")),
+            Some(&json!("done"))
+        );
+        assert!(next_task_stream_data(terminal_state).await.is_none());
     }
 
     #[test]
@@ -1877,6 +2438,35 @@ pub async fn get_task(
     }
 }
 
+async fn cancel_active_task(
+    registry: &TaskRegistry,
+    task_id: &str,
+    user_id: &str,
+) -> Option<TaskRecord> {
+    let now = Utc::now();
+    registry
+        .update_if(
+            task_id,
+            |record| record.user_id == user_id && record.status.is_active(),
+            |record| {
+                let checkpoint = touch_checkpoint_at(
+                    record.checkpoint.as_ref(),
+                    "cancelled",
+                    Some(record.progress),
+                    Some("任务已取消"),
+                    Some(&json!({"error": "用户取消"})),
+                    now,
+                );
+                record.status = TaskStatus::Cancelled;
+                record.message = "任务已取消".into();
+                record.completed_at = Some(now);
+                record.updated_at = now;
+                record.checkpoint = Some(checkpoint);
+            },
+        )
+        .await
+}
+
 /// POST /api/background-tasks/:task_id/cancel
 pub async fn cancel_task(
     Extension(claims): Extension<Claims>,
@@ -1886,22 +2476,13 @@ pub async fn cancel_task(
 ) -> impl IntoResponse {
     match registry.get(&task_id).await {
         Some(record) if record.user_id == claims.sub && record.status.is_active() => {
-            let new_cp = touch_checkpoint(
-                record.checkpoint.as_ref(),
-                "cancelled",
-                Some(record.progress),
-                Some("任务已取消"),
-                Some(&json!({"error": "用户取消"})),
-            );
-
-            registry
-                .update(&task_id, |r| {
-                    r.status = TaskStatus::Cancelled;
-                    r.message = "任务已取消".into();
-                    r.completed_at = Some(Utc::now());
-                    r.checkpoint = Some(new_cp);
-                })
-                .await;
+            let Some(updated) = cancel_active_task(&registry, &task_id, &claims.sub).await else {
+                return (
+                    StatusCode::OK,
+                    Json(json!({"success": false, "message": "任务不存在或已完成"})),
+                )
+                    .into_response();
+            };
 
             let event = TaskEvent {
                 event_type: "cancelled".into(),
@@ -1912,25 +2493,17 @@ pub async fn cancel_task(
                 data: None,
                 error: None,
             };
-            stream_hub.fanout(&task_id, &event);
-
-            if let Some(updated) = registry.get(&task_id).await {
-                return (
-                    StatusCode::OK,
-                    Json({
-                        let mut payload = compatible_task_payload(&updated);
-                        if let Some(map) = payload.as_object_mut() {
-                            map.insert("message".to_string(), json!("任务已取消"));
-                        }
-                        payload
-                    }),
-                )
-                    .into_response();
-            }
+            stream_hub.fanout_terminal(&task_id, &event).await;
 
             (
                 StatusCode::OK,
-                Json(json!({"success": true, "message": "任务已取消"})),
+                Json({
+                    let mut payload = compatible_task_payload(&updated);
+                    if let Some(map) = payload.as_object_mut() {
+                        map.insert("message".to_string(), json!("任务已取消"));
+                    }
+                    payload
+                }),
             )
                 .into_response()
         }
@@ -1991,7 +2564,7 @@ pub async fn update_workflow_state(
                     data: None,
                     error: None,
                 };
-                stream_hub.fanout(&task_id, &event);
+                stream_hub.fanout(&task_id, &event).await;
 
                 return (StatusCode::OK, Json(compatible_task_payload(&updated))).into_response();
             }
@@ -2041,18 +2614,19 @@ pub async fn stream_task(
         Some(r) => r,
     };
 
-    // Build initial "connected" event with full task state
+    // Subscribe before refreshing the snapshot so a transition after authorization is represented
+    // either by the latest connected snapshot or by the queued broadcast stream.
+    let (rx, record) =
+        subscribe_task_with_latest_snapshot(&registry, &stream_hub, &task_id, record).await;
     let status_event = build_connected_task_event(&task_id, &record);
     let initial_json = serde_json::to_string(&status_event).unwrap_or_default();
 
-    let rx = stream_hub.subscribe(&task_id).await;
-    let events = BroadcastStream::new(rx).filter_map(|result| async move {
-        match result {
-            Ok(data) => Some(Ok::<_, std::convert::Infallible>(
-                axum::response::sse::Event::default().data(data),
-            )),
-            Err(_) => None,
-        }
+    let events = futures::stream::unfold(
+        TaskStreamState::new(rx, registry.clone(), task_id.clone()),
+        next_task_stream_data,
+    )
+    .map(|data| {
+        Ok::<_, std::convert::Infallible>(axum::response::sse::Event::default().data(data))
     });
     let init = tokio_stream::once(Ok::<_, std::convert::Infallible>(
         axum::response::sse::Event::default().data(initial_json),

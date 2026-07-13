@@ -39,13 +39,8 @@ export default function AuthCallback() {
   const redirectResolvedRef = useRef(false);
   const mountedRef = useRef(true);
   const requestIdRef = useRef(0);
-  const callbackSteps = [
-    '校验当前认证状态',
-    '恢复登录前目标地址',
-    '判断是否需要公告或首次密码初始化',
-  ];
-
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       requestIdRef.current += 1;
@@ -213,42 +208,6 @@ export default function AuthCallback() {
                         { label: '首次登录分流', color: 'default' },
                       ]}
                     />
-                  </Col>
-                  <Col xs={24} lg={14}>
-                    <div
-                      style={{
-                        borderRadius: 18,
-                        padding: '16px 18px',
-                        background: alphaColor(token.colorPrimary, 0.04),
-                        border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
-                      }}
-                    >
-                      <Text style={{ display: 'block', color: token.colorTextTertiary, letterSpacing: '0.12em', textTransform: 'uppercase', fontSize: 12 }}>
-                        Callback Guide
-                      </Text>
-                      <Paragraph style={{ margin: '10px 0 12px', lineHeight: 1.75 }}>
-                        登录回调页更像一座桥接站：它只负责确认身份、恢复去向，并根据首次登录状态决定是否进入后续提示流程。
-                      </Paragraph>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        {callbackSteps.map((item, index) => (
-                          <div
-                            key={item}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 10,
-                              padding: '8px 10px',
-                              borderRadius: 14,
-                              background: alphaColor(token.colorBgContainer, 0.72),
-                              border: `1px solid ${alphaColor(token.colorPrimary, 0.08)}`,
-                            }}
-                          >
-                            <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
-                            <Text style={{ color: token.colorTextSecondary }}>{item}</Text>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
                   </Col>
                 </Row>
               </Card>

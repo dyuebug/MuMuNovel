@@ -47,6 +47,7 @@ const EXACT_PUBLIC_PATHS: &[&str] = &[
     "/health",
     "/livez",
     "/readyz",
+    "/releasez",
     "/health/db-sessions",
     "/health/chapter-candidate-route-gateway-smoke",
     "/health/chapter-single-generation-active-gateway-smoke",
@@ -161,6 +162,7 @@ mod tests {
         for path in [
             "/health",
             "/readyz",
+            "/releasez",
             "/health/chapter-candidate-route-gateway-smoke",
             "/health/chapter-single-generation-active-gateway-smoke",
             "/health/chapter-batch-generation-active-gateway-smoke",

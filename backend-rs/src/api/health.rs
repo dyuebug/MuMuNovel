@@ -18,10 +18,8 @@ use crate::services::chapter_regeneration_stream_workflow_service::{
     run_chapter_regeneration_stream_workflow_smoke_suite,
     ChapterRegenerationStreamWorkflowSmokeResult,
 };
-use crate::services::schema_migration_metadata_service::{
-    build_schema_migration_metadata_contract, check_live_alembic_head,
-    run_rust_migration_noop_executor_smoke, LiveAlembicHeadCheck,
-};
+use crate::services::production_readiness_service::evaluate_production_readiness;
+use crate::services::schema_migration_metadata_service::run_rust_migration_noop_executor_smoke;
 
 const CHAPTER_CANDIDATE_ROUTE_GATEWAY_SMOKE_ROUTE: &str =
     "/health/chapter-candidate-route-gateway-smoke";
@@ -41,36 +39,7 @@ async fn liveness_check() -> Json<Value> {
     Json(json!({"status": "ok"}))
 }
 
-async fn readiness_check(db: Option<Extension<DatabaseConnection>>) -> (StatusCode, Json<Value>) {
-    let mut live_alembic_head_check = LiveAlembicHeadCheck::not_checked("database unavailable");
-    let db_healthy = match db {
-        Some(Extension(ref conn)) => {
-            let healthy = conn.ping().await.is_ok();
-            if healthy {
-                live_alembic_head_check = check_live_alembic_head(conn).await;
-            }
-            healthy
-        }
-        None => false,
-    };
-
-    let database_status = json!({
-        "healthy": db_healthy,
-        "message": if db_healthy { "connected" } else { "unavailable" },
-    });
-
-    let startup_ready = true;
-    let is_ready = startup_ready && db_healthy;
-
-    let body = json!({
-        "status": if is_ready { "ready" } else { "not_ready" },
-        "checks": {
-            "startup": {"ready": startup_ready},
-            "database": database_status,
-            "schema_migration": build_schema_migration_metadata_contract(Some(&live_alembic_head_check)),
-        },
-    });
-
+fn readiness_response(is_ready: bool, body: Value) -> (StatusCode, Json<Value>) {
     let code = if is_ready {
         StatusCode::OK
     } else {
@@ -78,6 +47,18 @@ async fn readiness_check(db: Option<Extension<DatabaseConnection>>) -> (StatusCo
     };
 
     (code, Json(body))
+}
+
+async fn readiness_check(db: Option<Extension<DatabaseConnection>>) -> (StatusCode, Json<Value>) {
+    let evaluation = evaluate_production_readiness(db.as_ref().map(|Extension(conn)| conn)).await;
+    readiness_response(evaluation.runtime_ready, evaluation.runtime_payload())
+}
+
+async fn release_readiness_check(
+    db: Option<Extension<DatabaseConnection>>,
+) -> (StatusCode, Json<Value>) {
+    let evaluation = evaluate_production_readiness(db.as_ref().map(|Extension(conn)| conn)).await;
+    readiness_response(evaluation.release_ready, evaluation.release_payload())
 }
 
 async fn db_session_stats(db: Option<Extension<DatabaseConnection>>) -> Json<Value> {
@@ -336,6 +317,7 @@ pub fn routes() -> Router {
         .route("/health", get(health_check))
         .route("/livez", get(liveness_check))
         .route("/readyz", get(readiness_check))
+        .route("/releasez", get(release_readiness_check))
         .route("/health/db-sessions", get(db_session_stats))
         .route(
             RUST_MIGRATION_NOOP_EXECUTOR_SMOKE_ROUTE,
@@ -1159,8 +1141,13 @@ mod chapter_batch_generation_active_gateway_smoke_owner {
                 "chapter_batch_generation_read_context_service::task_recovery_owner"
             );
             assert_eq!(
-                readiness["task_recovery_owner_contract"]["behavior_contract"]["entrypoints"][1],
-                "recover_generation_task_if_needed"
+                readiness["task_recovery_owner_contract"]["behavior_contract"]["entrypoints"],
+                json!([
+                    "resolve_generation_task_auto_recovery_error",
+                    "resolve_generation_task_auto_recovery_error_with_snapshot",
+                    "recover_generation_task_if_needed_with_snapshot",
+                    "recover_generation_task_if_needed"
+                ])
             );
             assert_eq!(
                 readiness["batch_resume_task_command_owner_contract"]["owner"],
@@ -4209,7 +4196,7 @@ mod tests {
     use super::{
         chapter_batch_generation_active_gateway_smoke, chapter_candidate_route_gateway_smoke,
         chapter_regeneration_stream_workflow_smoke, chapter_single_generation_active_gateway_smoke,
-        readiness_check, rust_migration_noop_executor_smoke,
+        readiness_check, release_readiness_check, rust_migration_noop_executor_smoke,
         CHAPTER_BATCH_GENERATION_ACTIVE_GATEWAY_SMOKE_ROUTE,
         CHAPTER_CANDIDATE_ROUTE_GATEWAY_SMOKE_ROUTE,
         CHAPTER_REGENERATION_STREAM_WORKFLOW_SMOKE_ROUTE,
@@ -4274,6 +4261,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn should_fail_release_readiness_closed_for_non_postgres_storage_evidence() {
+        let db = setup_schema_migration_smoke_db("20260712_password_hash_phc_text").await;
+
+        let (status, axum::Json(body)) = release_readiness_check(Some(Extension(db))).await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["status"], "not_ready");
+        assert_eq!(body["readiness_scope"], "production_release");
+        assert_eq!(body["runtime_ready"], true);
+        assert_eq!(body["release_ready"], false);
+        assert_eq!(
+            body["checks"]["schema_migration"]["auth_password_hash_storage"]["status"],
+            "not_applicable_non_postgres"
+        );
+    }
+
+    #[tokio::test]
+    async fn should_report_ready_when_live_alembic_head_matches_catalog() {
+        let db = setup_schema_migration_smoke_db("20260712_password_hash_phc_text").await;
+
+        let (status, axum::Json(body)) = readiness_check(Some(Extension(db))).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["status"], "ready");
+        assert_eq!(body["readiness_scope"], "runtime");
+        assert_eq!(body["runtime_ready"], true);
+        assert_eq!(body["release_ready"], false);
+        assert_eq!(body["checks"]["database"]["healthy"], true);
+        assert_eq!(
+            body["checks"]["schema_migration"]["live_database_head"]["status"],
+            "head_matches"
+        );
+        assert_eq!(
+            body["checks"]["schema_migration"]["live_database_head"]["matches_catalog_head"],
+            true
+        );
+        assert_eq!(
+            body["checks"]["schema_migration"]["auth_password_hash_storage"]["status"],
+            "not_applicable_non_postgres"
+        );
+        assert_eq!(
+            body["checks"]["schema_migration"]["auth_password_hash_storage"]
+                ["required_for_readiness"],
+            false
+        );
+        assert_eq!(
+            body["checks"]["schema_migration"]["auth_password_hash_storage"]["allows_readiness"],
+            true
+        );
+    }
+
+    #[tokio::test]
+    async fn should_report_not_ready_when_live_alembic_head_mismatches_catalog() {
+        let db = setup_schema_migration_smoke_db("old_revision").await;
+
+        let (status, axum::Json(body)) = readiness_check(Some(Extension(db))).await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["status"], "not_ready");
+        assert_eq!(body["checks"]["database"]["healthy"], true);
+        assert_eq!(
+            body["checks"]["schema_migration"]["live_database_head"]["status"],
+            "head_mismatch"
+        );
+        assert_eq!(
+            body["checks"]["schema_migration"]["live_database_head"]["matches_catalog_head"],
+            false
+        );
+    }
+
+    #[tokio::test]
     async fn should_expose_schema_migration_metadata_in_readiness_payload() {
         let (status, axum::Json(body)) = readiness_check(None).await;
 
@@ -4323,11 +4381,11 @@ mod tests {
         );
         assert_eq!(
             body["checks"]["schema_migration"]["postgres_revision_catalog"]["revision_count"],
-            19
+            20
         );
         assert_eq!(
             body["checks"]["schema_migration"]["postgres_revision_catalog"]["head"],
-            "20260517_project_core_defaults"
+            "20260712_password_hash_phc_text"
         );
         assert_eq!(
             body["checks"]["schema_migration"]["postgres_revision_catalog"]["execution_ready"],
@@ -4339,10 +4397,18 @@ mod tests {
         );
         assert_eq!(
             body["checks"]["schema_migration"]["live_database_head"]["expected_head"],
-            "20260517_project_core_defaults"
+            "20260712_password_hash_phc_text"
         );
         assert_eq!(
             body["checks"]["schema_migration"]["live_database_head"]["matches_catalog_head"],
+            false
+        );
+        assert_eq!(
+            body["checks"]["schema_migration"]["auth_password_hash_storage"]["status"],
+            "not_checked_database_unavailable"
+        );
+        assert_eq!(
+            body["checks"]["schema_migration"]["auth_password_hash_storage"]["allows_readiness"],
             false
         );
         assert_eq!(
@@ -4379,7 +4445,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_keep_rust_migration_noop_executor_smoke_disabled_by_default() {
-        let db = setup_schema_migration_smoke_db("20260517_project_core_defaults").await;
+        let db = setup_schema_migration_smoke_db("20260712_password_hash_phc_text").await;
         let config = schema_migration_smoke_config(false);
 
         let (status, axum::Json(body)) =
@@ -4395,7 +4461,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_pass_rust_migration_noop_executor_smoke_for_matching_head_when_gated() {
-        let db = setup_schema_migration_smoke_db("20260517_project_core_defaults").await;
+        let db = setup_schema_migration_smoke_db("20260712_password_hash_phc_text").await;
         let config = schema_migration_smoke_config(true);
 
         let (status, axum::Json(body)) =
@@ -4406,7 +4472,7 @@ mod tests {
         assert_eq!(body["status"], "noop_executor_smoke_passed");
         assert_eq!(body["gate_enabled"], true);
         assert_eq!(body["ddl_executed"], false);
-        assert_eq!(body["live_head"], "20260517_project_core_defaults");
+        assert_eq!(body["live_head"], "20260712_password_hash_phc_text");
         assert_eq!(body["blockers"], json!([]));
     }
 

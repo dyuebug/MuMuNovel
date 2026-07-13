@@ -463,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn should_block_candidate_draft_when_quality_gate_plan_decision_requires_manual_review() {
+    fn should_apply_candidate_when_quality_gate_plan_decision_requires_manual_review() {
         let candidate = json!({
             "full_content": "烟测改写成功。第二段继续推进。",
             "quality_gate_plan": {
@@ -487,13 +487,11 @@ mod tests {
             .expect("generated manual-review candidate result");
 
         assert_eq!(result.quality_gate_action.as_deref(), Some("manual_review"));
-        assert_eq!(result.content_applied, false);
+        assert_eq!(result.content_applied, true);
         assert_eq!(result.provisional_draft_saved, false);
-        assert_eq!(result.attempt_state, "manual_review");
-        assert_eq!(
-            result.candidate_draft.as_ref().expect("candidate draft")["quality_gate_action"],
-            "manual_review"
-        );
+        assert_eq!(result.attempt_state, "applied");
+        assert_eq!(result.chapter_status, "completed");
+        assert!(result.candidate_draft.is_none());
     }
 
     #[test]

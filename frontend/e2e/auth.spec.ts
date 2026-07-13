@@ -159,8 +159,8 @@ test.describe('auth flow', () => {
     await page.goto('/auth/callback?code=fake-code&state=fake-state&first_login=1');
 
     await expect(page.getByRole('dialog', { name: '设置登录密码' })).toBeVisible();
-    await expect(page.getByText('当前账号：')).toBeVisible();
-    await expect(page.getByText('first-oauth-user')).toBeVisible();
+    await expect(page.getByText('当前账号', { exact: true })).toBeVisible();
+    await expect(page.getByText('first-oauth-user', { exact: true })).toBeVisible();
     await page.getByPlaceholder('请输入新密码').fill('custom-pass-123');
     await page.getByPlaceholder('请再次输入密码').fill('custom-pass-123');
     await page.getByRole('button', { name: '确认设置' }).click();

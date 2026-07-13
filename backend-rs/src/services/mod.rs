@@ -47,6 +47,8 @@ pub(crate) mod chapter_single_generation_stream_workflow_service;
 pub mod character_service;
 pub mod foreshadow_service;
 pub mod outline_service;
+pub(crate) mod password_hash_service;
+pub(crate) mod production_readiness_service;
 pub mod project_service;
 pub mod prompt_template_service;
 pub(crate) mod schema_migration_metadata_service;

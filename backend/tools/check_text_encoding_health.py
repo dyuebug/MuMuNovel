@@ -176,7 +176,7 @@ def main() -> int:
         rel = path.relative_to(REPO_ROOT)
         print(f"\n{rel}")
         for line_no, reasons, content in findings:
-            print(f"  L{line_no} [{",".join(reasons)}] {content}")
+            print(f"  L{line_no} [{','.join(reasons)}] {content}")
         findings_total += len(findings)
     if findings_total == 0:
         print("OK: no suspicious encoding issues found.")

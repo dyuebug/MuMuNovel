@@ -120,7 +120,7 @@ mod tests {
         );
         assert_eq!(
             contract["service_runtime_closeout_status"]["status"],
-            "rust_shared_execution_config_owner_ready_for_source_map_closeout_review"
+            "rust_shared_execution_config_owner_with_deleted_python_ai_gateway_source_map"
         );
     }
 

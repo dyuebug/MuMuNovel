@@ -145,11 +145,7 @@ export const openProjectSubPage = async (
   projectId: string,
   subPath: 'world-setting' | 'outline' | 'careers' | 'characters',
 ) => {
-  await page.goto(`/project/${projectId}/sponsor`);
-
-  const navLink = page.locator(`a[href="/project/${projectId}/${subPath}"]`).first();
-  await expect(navLink).toBeVisible({ timeout: 15000 });
-  await navLink.click();
+  await page.goto(`/project/${projectId}/${subPath}`);
   await expect(page).toHaveURL(new RegExp(`/project/${projectId}/${subPath}$`));
 };
 

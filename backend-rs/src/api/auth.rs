@@ -14,11 +14,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 
 use crate::api::user_admin_shared_owner::{
-    api_error, default_password_for_username, find_user, hash_password, UserAdminApiError,
+    api_error, default_password_for_username, find_user, UserAdminApiError,
 };
 use crate::config::AppConfig;
 use crate::models::{user, user_password};
 use crate::services::auth::{AuthService, Claims};
+use crate::services::password_hash_service::hash_password;
 
 const OAUTH_STATE_TTL: Duration = Duration::from_secs(300);
 const OAUTH_STATE_COOKIE: &str = "oauth_states";
@@ -115,7 +116,7 @@ async fn set_password_workflow(
     password: &str,
 ) -> Result<Value, UserAdminApiError> {
     let hashed_password = hash_password(password)
-        .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+        .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     let now = chrono::Utc::now();
     let existing = user_password::Entity::find_by_id(user_id)
         .one(db)
@@ -165,7 +166,7 @@ async fn initialize_password_workflow(
     }
 
     let hashed_password = hash_password(password)
-        .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+        .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     let user = find_user(db, user_id).await?;
     let now = chrono::Utc::now();
     let password = user_password::ActiveModel {
