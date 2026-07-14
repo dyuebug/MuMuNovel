@@ -19,7 +19,10 @@ Split Rust chapter generation seams, hardened batch-generation runtime/status se
 
 ### Main Changes
 
-(Add details)
+- 建立 Rust production CI 阻断门禁，并将 Python job 收敛为 migration/support regression。
+- E2E 使用 PostgreSQL、Rust migration executor 与真实 Rust runtime，不再依赖 Python/SQLite runtime。
+- Playwright smoke 覆盖认证与后台任务主链路，并补齐 backend identity、lifecycle、cleanup 证据。
+- 固化 clean-checkout 与 Hosted Runner 证据，明确 MuMuNovel 后续优化路线和 CI 契约。
 
 ### Git Commits
 
@@ -30,7 +33,11 @@ Split Rust chapter generation seams, hardened batch-generation runtime/status se
 
 ### Testing
 
-- [OK] (Add test results)
+- [OK] Rust fmt、check、clippy 与 1612 个测试全部通过。
+- [OK] Python migration/support regression：67/67 通过。
+- [OK] Frontend lint/build 通过；Playwright smoke：14/14 通过。
+- [OK] Backend binary identity 验证通过，cleanup lifecycle 为 terminated (TERM)。
+- [OK] 最终 SHA 的 5 个 GitHub Hosted Runner checks 全部 success。
 
 ### Status
 
