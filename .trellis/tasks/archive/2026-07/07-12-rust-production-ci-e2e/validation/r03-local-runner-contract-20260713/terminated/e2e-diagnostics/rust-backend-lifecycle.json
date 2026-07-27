@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "runtime_owner": "backend-rs",
+  "process_target": "./target/debug/mumu-novel-backend",
+  "process_pid": 55,
+  "expected_binary_path": "/usr/bin/sleep",
+  "observed_binary_path": "/usr/bin/sleep",
+  "expected_binary_sha256": "0637e6d47579929cb72efa46f361861b319d62c62fe8a9d10731fd7655eb5936",
+  "observed_binary_sha256": "0637e6d47579929cb72efa46f361861b319d62c62fe8a9d10731fd7655eb5936",
+  "identity_status": "verified",
+  "cleanup_status": "terminated",
+  "termination_signal": "TERM"
+}

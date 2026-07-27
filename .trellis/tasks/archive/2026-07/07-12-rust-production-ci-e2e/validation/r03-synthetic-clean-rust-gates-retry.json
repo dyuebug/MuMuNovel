@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "base_head": "d0cff4f5fafeeb22f6b4c0f319e9d493ba7a8346",
+  "candidate_archive": ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-clean-candidate-expanded.tar",
+  "rust_image": "rust:1.88-bookworm",
+  "setup": [
+    "rustup component add rustfmt clippy"
+  ],
+  "commands": [
+    "cargo fmt -- --check",
+    "cargo check --locked",
+    "cargo test --locked",
+    "cargo clippy --locked --all-targets -- -D clippy::correctness -D clippy::suspicious"
+  ],
+  "started_at_utc": "2026-07-13T12:17:05.1376383Z",
+  "finished_at_utc": "2026-07-13T12:19:21.6240811Z",
+  "exit_code": 101,
+  "status": "FAIL",
+  "preserves_initial_failure": [
+    ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-synthetic-clean-rust-gates.log",
+    ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-synthetic-clean-rust-gates.json"
+  ],
+  "log": ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-synthetic-clean-rust-gates-retry.log"
+}

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "base_head": "d0cff4f5fafeeb22f6b4c0f319e9d493ba7a8346",
+  "candidate_archive": ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-clean-python-v2.tar",
+  "candidate_manifest": ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-clean-python-v2.json",
+  "candidate_file_count": 3,
+  "python_image": "python:3.11-bookworm",
+  "environment": {
+    "DATABASE_URL": "sqlite+aiosqlite:///./data/ci.db"
+  },
+  "commands": [
+    "python -m pip install -r requirements-migrator.txt -r requirements-test.txt",
+    "pytest tests/test_tools"
+  ],
+  "started_at_utc": "2026-07-13T12:59:29.5779908Z",
+  "finished_at_utc": "2026-07-13T13:00:19.6729822Z",
+  "exit_code": 1,
+  "status": "FAIL",
+  "supersedes_timeout_evidence": ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-synthetic-clean-python-gates-v1-timeout.json",
+  "log": ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-synthetic-clean-python-gates-v2.log"
+}

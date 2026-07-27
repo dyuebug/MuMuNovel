@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "status": "TIMEOUT",
+  "reason": "Cold-cache installation of full requirements exceeded the workflow 20-minute timeout before pytest started.",
+  "container_id": "9d0aae46d6a9ed262faa98382ae57548d8e28aa24c6a334956628339f4453782",
+  "original_log": ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-synthetic-clean-python-gates-v1.log",
+  "container_log": ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-synthetic-clean-python-gates-v1-container.log",
+  "container_inspect": ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-synthetic-clean-python-gates-v1-container-inspect.json",
+  "replacement_strategy": "requirements-migrator.txt + requirements-test.txt; pytest tests/test_tools",
+  "stopped_ephemeral_validation_container": true,
+  "recorded_at_utc": "2026-07-13T12:58:34.0647412Z"
+}

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "base": "HEAD + explicit candidate overlays",
+  "rust_image": "rust:1.88-bookworm",
+  "candidate_file_count": 24,
+  "commands": [
+    "cargo fmt -- --check",
+    "cargo check --locked",
+    "cargo test --locked",
+    "cargo clippy --locked --all-targets -- -D clippy::correctness -D clippy::suspicious"
+  ],
+  "exit_code": 1,
+  "status": "FAIL",
+  "candidate_files": [
+    ".github/workflows/backend-ci.yml",
+    ".github/workflows/e2e-smoke.yml",
+    "backend-rs/Cargo.toml",
+    "backend-rs/Cargo.lock",
+    "backend-rs/src/main.rs",
+    "backend-rs/src/api/auth.rs",
+    "backend-rs/src/api/background_tasks.rs",
+    "backend-rs/src/api/health.rs",
+    "backend-rs/src/middleware/auth.rs",
+    "backend-rs/src/services/auth.rs",
+    "backend-rs/src/services/mod.rs",
+    "backend-rs/src/services/password_hash_service.rs",
+    "backend-rs/src/services/production_readiness_service.rs",
+    "backend-rs/src/services/schema_migration_initial_schema.sql",
+    "backend-rs/src/services/schema_migration_metadata_service.rs",
+    "backend-rs/src/tasks/checkpoint.rs",
+    "backend-rs/src/tasks/persistence.rs",
+    "backend-rs/src/tasks/recovery.rs",
+    "backend-rs/src/tasks/registry.rs",
+    "backend-rs/src/tasks/stream.rs",
+    "backend-rs/src/tasks/types.rs",
+    "backend-rs/src/production_ci_contract_tests.rs",
+    "deploy/strangler-gateway-probes.json",
+    "frontend/src/services/modules/backgroundTaskTypes.ts"
+  ],
+  "log": ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-synthetic-clean-rust-gates.log"
+}

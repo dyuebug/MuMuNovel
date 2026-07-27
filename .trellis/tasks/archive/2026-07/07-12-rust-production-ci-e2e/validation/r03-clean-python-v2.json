@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "base_head": "d0cff4f5fafeeb22f6b4c0f319e9d493ba7a8346",
+  "archive": ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-clean-python-v2.tar",
+  "candidate_file_count": 3,
+  "candidate_files": [
+    "backend/alembic/postgres/versions/20260712_1200_password_hash_phc_text.py",
+    "backend/migrator_app/models/user.py",
+    "backend/tools/check_text_encoding_health.py"
+  ],
+  "dependency_files_from_head": [
+    "backend/requirements-migrator.txt",
+    "backend/requirements-test.txt"
+  ],
+  "test_scope": [
+    "backend/tests/test_tools"
+  ],
+  "missing": [],
+  "hash_mismatches": [],
+  "status": "PASS"
+}
