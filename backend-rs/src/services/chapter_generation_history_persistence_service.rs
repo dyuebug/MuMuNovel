@@ -3,6 +3,7 @@ pub(crate) mod persistence_owner;
 pub(crate) use persistence_owner::build_generated_history_payload;
 pub(crate) use persistence_owner::{
     build_chapter_generation_history_persistence_owner_contract,
+    build_single_generation_candidate_draft_attempt_active_model,
     persist_single_generation_candidate_draft_attempt, persist_single_generation_generated_result,
 };
 
