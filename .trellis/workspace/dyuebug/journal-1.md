@@ -121,3 +121,36 @@ Completed Rust-only production runtime migration, updated current docs/specs to 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: Chapter repair retry evidence convergence
+
+**Date**: 2026-07-27
+**Task**: Chapter repair retry evidence convergence
+**Branch**: `ci/r03-runner-evidence-20260713`
+
+### Summary
+
+Persist scoped chapter-repair retry candidates and quality feedback atomically, route exhausted retries to one durable manual-review candidate, add regression coverage, and record the retry evidence contract.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `6ff5582` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
