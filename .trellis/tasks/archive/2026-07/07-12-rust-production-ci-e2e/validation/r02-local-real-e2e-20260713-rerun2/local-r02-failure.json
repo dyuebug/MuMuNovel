@@ -1,7 +1,0 @@
-{
-  "schema_version": 1,
-  "evidence_status": "failed",
-  "evidence_scope": "local-r02-real-e2e",
-  "error": "Required local port is already in use: 8005, 8005",
-  "failed_at": "2026-07-13T10:01:41.6247351Z"
-}

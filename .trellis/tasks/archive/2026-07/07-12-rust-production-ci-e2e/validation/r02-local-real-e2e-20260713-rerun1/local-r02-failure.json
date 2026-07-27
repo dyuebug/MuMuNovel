@@ -1,7 +1,0 @@
-{
-  "schema_version": 1,
-  "evidence_status": "failed",
-  "evidence_scope": "local-r02-real-e2e",
-  "error": "C:\\nvm4w\\nodejs\\npm.cmd exited with code 1. See E:\\Code\\ProjectsCode\\WorkSpace\\Codex\\NovelAi\\MuMuNovel\\.trellis\\tasks\\07-12-rust-production-ci-e2e\\validation\\r02-local-real-e2e-20260713-rerun1\\playwright-smoke.log and E:\\Code\\ProjectsCode\\WorkSpace\\Codex\\NovelAi\\MuMuNovel\\.trellis\\tasks\\07-12-rust-production-ci-e2e\\validation\\r02-local-real-e2e-20260713-rerun1\\playwright-smoke-stderr.log",
-  "failed_at": "2026-07-13T10:00:40.5158388Z"
-}

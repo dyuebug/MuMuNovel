@@ -1,9 +1,0 @@
-{
-  "schema_version": 1,
-  "runtime_owner": "backend-rs",
-  "process_target": "./target/debug/mumu-novel-backend",
-  "process_pid_raw": "not-a-pid",
-  "identity_status": "invalid_pid",
-  "cleanup_status": "signal_refused",
-  "termination_signal": null
-}
