@@ -1,0 +1,8 @@
+{"file": ".trellis/tasks/07-16-r7-autopilot-control-api-human-gate/prd.md", "reason": "Confirmed R7 third-slice requirements, constraints, and acceptance criteria."}
+{"file": ".trellis/tasks/07-16-r7-autopilot-control-api-human-gate/design.md", "reason": "Control API authority boundary, strict DTO, reuse strategy, failure matrix, and rollback design."}
+{"file": ".trellis/tasks/07-16-r7-autopilot-control-api-human-gate/implement.md", "reason": "Ordered code and verification plan for the authenticated human-gated control endpoint."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend layer index and mandatory pre-development guidance."}
+{"file": ".trellis/spec/guides/index.md", "reason": "Cross-layer and code-reuse thinking guide index."}
+{"file":"backend-rs/src/api/autopilot.rs","reason":"Authenticated project-scoped R7 control API, strict DTO, human confirmation gate, and focused end-to-end tests."}
+{"file":"backend-rs/src/api/background_tasks.rs","reason":"Reused authenticated generic task creation and strict novel_autopilot execution-payload preservation."}
+{"file":"backend-rs/src/services/autopilot_tool_contract_service.rs","reason":"Reused Tool Contract parsing facade for route-built internal arguments."}

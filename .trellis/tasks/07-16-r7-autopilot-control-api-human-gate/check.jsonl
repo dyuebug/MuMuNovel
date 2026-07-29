@@ -1,0 +1,11 @@
+{"file": ".trellis/tasks/07-16-r7-autopilot-control-api-human-gate/prd.md", "reason": "Confirmed R7 third-slice requirements, constraints, and acceptance criteria."}
+{"file": ".trellis/tasks/07-16-r7-autopilot-control-api-human-gate/design.md", "reason": "Control API authority boundary, strict DTO, reuse strategy, failure matrix, and rollback design."}
+{"file": ".trellis/tasks/07-16-r7-autopilot-control-api-human-gate/implement.md", "reason": "Ordered code and verification plan for the authenticated human-gated control endpoint."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend layer index and mandatory pre-development guidance."}
+{"file": ".trellis/spec/guides/index.md", "reason": "Cross-layer and code-reuse thinking guide index."}
+{"check":"cargo fmt --manifest-path backend-rs/Cargo.toml -- --check","result":"passed"}
+{"check":"cargo check --manifest-path backend-rs/Cargo.toml","result":"passed","notes":"Existing workspace warnings only; no R7 warning introduced."}
+{"check":"cargo test --manifest-path backend-rs/Cargo.toml -j 1 api::autopilot -- --nocapture","result":"passed","tests":"4/4"}
+{"check":"focused Rust regressions","result":"passed","tests":"background_tasks 29/29; autopilot_coordinator_service 3/3; autopilot_tool_contract_service 7/7; novel_workflow_service 17/17"}
+{"check":"cargo test --manifest-path backend-rs/Cargo.toml -j 1 --quiet","result":"passed","tests":"1779/1779"}
+{"check":"modified text encoding","result":"passed","notes":"UTF-8 without BOM, LF-only, no trailing whitespace."}

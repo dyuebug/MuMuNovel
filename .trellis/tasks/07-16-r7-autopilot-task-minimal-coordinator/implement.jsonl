@@ -1,0 +1,8 @@
+{"file": "docs/15-ainovel-cli-comparison-and-mumunovel-optimization.zh-CN.md", "reason": "R7 ordered roadmap, gate boundaries, and remaining scope."}
+{"file": ".trellis/tasks/07-16-r7-controlled-tool-contract/prd.md", "reason": "Completed controlled Tool Contract requirements and error boundary."}
+{"file": ".trellis/tasks/07-16-r7-controlled-tool-contract/design.md", "reason": "Tool dispatch design, project ownership, and rollback constraints."}
+{"file": "backend-rs/src/api/background_tasks.rs", "reason": "Existing generic task creation, lifecycle, cancellation, and executor dispatch owner."}
+{"file": "backend-rs/src/tasks/recovery.rs", "reason": "Explicit recovery-policy contract and safe startup orphan projection."}
+{"file": "backend-rs/src/tasks/types.rs", "reason": "Persisted TaskRecord boundary showing original payload is not durable."}
+{"file": "backend-rs/src/services/autopilot_tool_contract_service.rs", "reason": "Existing static Tool allowlist, confirmation, and workflow adapter."}
+{"file": "backend-rs/src/production_ci_contract_tests.rs", "reason": "Cross-owner task/recovery/frontend contract tests."}

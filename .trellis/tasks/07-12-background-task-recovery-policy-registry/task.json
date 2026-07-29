@@ -1,0 +1,33 @@
+{
+  "id": "background-task-recovery-policy-registry",
+  "name": "background-task-recovery-policy-registry",
+  "title": "后台任务恢复策略注册表",
+  "description": "为 Rust 后台任务按 task_type 建立 restartable、checkpoint_resumable、manual_confirmation、non_resumable 恢复策略注册表，统一孤儿任务恢复结果、诊断信息和前端状态语义。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "backend-rs/src/tasks/recovery.rs, backend-rs/src/tasks/types.rs, backend-rs/src/api/background_tasks.rs",
+  "package": null,
+  "priority": "P0",
+  "creator": "dyuebug",
+  "assignee": "dyuebug",
+  "createdAt": "2026-07-12",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "dev",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "backend-rs/src/tasks/recovery.rs",
+    "backend-rs/src/tasks/types.rs",
+    "backend-rs/src/api/background_tasks.rs",
+    "frontend/src/services/modules/backgroundTaskTypes.ts",
+    "frontend/src/store/backgroundTaskModel.ts",
+    "frontend/src/components/backgroundTaskPresentation.ts"
+  ],
+  "notes": "",
+  "meta": {}
+}

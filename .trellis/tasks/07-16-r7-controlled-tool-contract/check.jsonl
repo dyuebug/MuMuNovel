@@ -1,0 +1,9 @@
+{"file": ".trellis/tasks/07-16-r7-controlled-tool-contract/prd.md", "reason": "Testable R7 first-slice requirements and acceptance criteria."}
+{"file": ".trellis/tasks/07-16-r7-controlled-tool-contract/design.md", "reason": "Contract boundary, dispatch order, and rollback design."}
+{"file": ".trellis/tasks/07-16-r7-controlled-tool-contract/implement.md", "reason": "Ordered implementation and validation plan."}
+{"check": "cargo fmt --manifest-path backend-rs/Cargo.toml -- --check", "result": "pass", "date": "2026-07-16"}
+{"check": "cargo check --manifest-path backend-rs/Cargo.toml", "result": "pass_with_existing_warnings", "date": "2026-07-16", "note": "51 pre-existing workspace warnings; none from R7 module."}
+{"check": "cargo test --manifest-path backend-rs/Cargo.toml -j 1 autopilot_tool_contract_service -- --nocapture", "result": "pass", "date": "2026-07-16", "tests": "5/5", "note": "Test process uses rust-lld workaround for local MSVC LNK1318."}
+{"check": "cargo test --manifest-path backend-rs/Cargo.toml -j 1 novel_workflow_service -- --nocapture", "result": "pass", "date": "2026-07-16", "tests": "17/17"}
+{"check": "cargo test --manifest-path backend-rs/Cargo.toml -j 1 --quiet", "result": "pass", "date": "2026-07-16", "tests": "1766/1766"}
+{"check": "R7 modified file encoding", "result": "pass", "date": "2026-07-16", "note": "UTF-8 without BOM, LF-only, no trailing whitespace."}

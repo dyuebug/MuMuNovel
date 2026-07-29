@@ -1,0 +1,8 @@
+{"file":"docs/15-ainovel-cli-comparison-and-mumunovel-optimization.zh-CN.md","reason":"R6 权威需求、G1 前置门禁与后续路线边界"}
+{"file":".trellis/tasks/07-14-story-packet-generation-intent/design.md","reason":"R4 generation contract 与 input digest runtime-only 事实源"}
+{"file":"backend-rs/src/services/generation_contract_service/schema_owner.rs","reason":"GenerationContractSnapshotV1 typed digest 合同"}
+{"file":"backend-rs/src/services/generation_contract_service/snapshot_owner.rs","reason":"runtime generation contract snapshot 读写语义"}
+{"file":"backend-rs/src/services/chapter_batch_generation_runtime_state_service/runtime_persistence_owner.rs","reason":"章节成功统一 task/snapshot 持久化边界"}
+{"file":"backend-rs/src/services/chapter_batch_generation_runtime_state_service/runtime_snapshot_owner.rs","reason":"现有 workflow_runtime_state additive merge owner"}
+{"file":"backend-rs/src/services/chapter_batch_generation_runtime_state_service/resume_restore_owner.rs","reason":"batch persisted runtime context 与 resume state seed"}
+{"file":"backend-rs/src/services/chapter_batch_generation_resume_task_command_service.rs","reason":"恢复命令 DB owner 与 runtime launch 阻断边界"}

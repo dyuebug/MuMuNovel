@@ -1,0 +1,6 @@
+{"file": ".trellis/tasks/07-16-r7-autopilot-task-minimal-coordinator/prd.md", "reason": "Testable R7 second-slice requirements and scope boundary."}
+{"file": ".trellis/tasks/07-16-r7-autopilot-task-minimal-coordinator/design.md", "reason": "Coordinator/task lifecycle, project scope, recovery, and rollback design."}
+{"file": ".trellis/tasks/07-16-r7-autopilot-task-minimal-coordinator/implement.md", "reason": "Ordered implementation and verification plan."}
+{"check": "scope and authority boundary","result": "pass","evidence": "Coordinator reads actor/project only from TaskRecord; Tool Contract rejects project scope mismatch before workflow mutation."}
+{"check": "background lifecycle and recovery boundary","result": "pass","evidence": "novel_autopilot uses generic execute_task/completion owner and has explicit NonResumable recovery policy."}
+{"check": "quality gates","result": "pass","evidence": "fmt, check, focused backend tests, full Rust suite, frontend lint/build, and UTF-8/LF/trailing-whitespace checks passed on 2026-07-16."}

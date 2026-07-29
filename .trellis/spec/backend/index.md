@@ -22,6 +22,8 @@ patterns, and migration-sensitive areas.
 | [Error Handling](./error-handling.md) | Error types, handling strategies | Filled |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Filled |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | Filled |
+| [Autopilot Invocation Audit](./autopilot-invocation-audit.md) | R7 durable audit schema, lifecycle, privacy, and read contract | Filled |
+| [Durable Novel Autopilot](./durable-novel-autopilot.md) | Resumable whole-book orchestration, API/DB/task fences, privacy, completion, and validation | Filled |
 
 ---
 
@@ -34,6 +36,8 @@ Read these before changing backend code:
 3. [Error Handling](./error-handling.md)
 4. [Logging Guidelines](./logging-guidelines.md)
 5. [Quality Guidelines](./quality-guidelines.md)
+6. [Autopilot Invocation Audit](./autopilot-invocation-audit.md) when changing `novel_autopilot` audit, migration, or history behavior
+7. [Durable Novel Autopilot](./durable-novel-autopilot.md) when changing `novel_book_autopilot`, Run/Step persistence, recovery, completion, or Workbench contracts
 
 Also read `../guides/index.md` when the task involves cross-layer changes,
 repeated patterns, config changes, route/schema payload updates, or task/state

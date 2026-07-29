@@ -1,0 +1,10 @@
+{"file": "docs/15-ainovel-cli-comparison-and-mumunovel-optimization.zh-CN.md", "reason": "R4 路线目标、依赖顺序、交付物和 R5/R6/R7 硬边界"}
+{"file": "docs/11-novel-quality-roadmap.zh-CN.md", "reason": "Story Packet 作为跨生成入口共同输入的质量架构要求"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "跨 API、Service、快照和前端边界的数据合同检查"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "避免多个入口继续复制自由 JSON 字段解析"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Rust service owner、DTO 和模块组织约定"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "无 migration、JSON 快照和事务兼容约束"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "typed service error 到旧 API/SSE 错误形状的映射约定"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "共享类型与禁止页面局部 payload cast 的约定"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "保留 modular API 和旧请求边界"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Zustand/task store 恢复兼容约束"}

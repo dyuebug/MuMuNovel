@@ -1,0 +1,8 @@
+{"file": "docs/15-ainovel-cli-comparison-and-mumunovel-optimization.zh-CN.md", "reason": "R5 路线目标、依赖、G1 门禁与 R6/R7 边界"}
+{"file": ".trellis/tasks/07-14-story-packet-generation-intent/design.md", "reason": "R4 input_digest runtime-only 边界与 R5 接口约束"}
+{"file": "backend-rs/src/services/generation_contract_service/schema_owner.rs", "reason": "GenerationIntentKind canonical enum 与角色映射输入"}
+{"file": "backend-rs/src/services/settings_service.rs", "reason": "全局配置、preferences merge 与 AIConfig 构造 owner"}
+{"file": "backend-rs/src/ai/service.rs", "reason": "模型 fallback 与 tracked execution 接线"}
+{"file": "backend-rs/src/ai/clients/openai.rs", "reason": "endpoint attempts 与脱敏 failover 摘要来源"}
+{"file": "backend-rs/src/services/chapter_generation_execution_contract_service/execution_config_owner.rs", "reason": "单章/批量 prepared execution config owner"}
+{"file": "backend-rs/src/services/chapter_generation_history_persistence_service/persistence_owner.rs", "reason": "additive history audit 持久化边界"}

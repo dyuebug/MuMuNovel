@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Rust backend quality and architecture guidance"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "backend tests, error and compatibility checks"}
+{"file": ".trellis/tasks/07-15-role-model-policy-generation-execution-audit/prd.md", "reason": "R5 acceptance criteria"}
+{"file": ".trellis/tasks/07-15-role-model-policy-generation-execution-audit/design.md", "reason": "R5 contracts, security and rollback boundaries"}
+{"file": ".trellis/tasks/07-15-role-model-policy-generation-execution-audit/implement.md", "reason": "ordered validation and full quality gate"}

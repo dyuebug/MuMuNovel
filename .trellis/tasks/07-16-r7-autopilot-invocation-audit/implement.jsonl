@@ -1,0 +1,7 @@
+{"file": "backend-rs/src/api/autopilot.rs", "reason": "Autopilot route validates the confirmed project-scoped request and delegates generic task creation."}
+{"file": "backend-rs/src/api/background_tasks.rs", "reason": "Generic task lifecycle allocates task IDs, spawns tasks, and retains task presentation ownership."}
+{"file": "backend-rs/src/services/autopilot_coordinator_service.rs", "reason": "Coordinator is the strict Tool execution boundary and lifecycle integration point."}
+{"file": "backend-rs/src/services/novel_workflow_service.rs", "reason": "Workflow transition owns CAS semantics and must participate in the success transaction."}
+{"file": "backend-rs/src/services/schema_migration_metadata_service.rs", "reason": "Rust migration executor catalog must match the new Alembic revision."}
+{"file": ".trellis/spec/backend/autopilot-invocation-audit.md", "reason": "Executable R7 contract added after implementation review."}
+{"file": "backend-rs/src/api/background_tasks.rs", "reason": "Added route-level cancellation audit verification for the real generic task handler path."}

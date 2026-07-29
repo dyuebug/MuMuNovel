@@ -31,6 +31,22 @@ treated as high-risk changes.
   `backend/app/api/background_tasks.py`,
   `backend/app/services/chapter_crud_query_service.py`.
 
+### Convention: Nullable CAS Fences Must Use Explicit NULL Predicates
+
+When a SeaORM optimistic-lock or ownership fence accepts `Option<T>`, branch explicitly:
+
+```rust
+let update = match expected_task_id {
+    Some(task_id) => update.filter(Column::ActiveTaskId.eq(task_id)),
+    None => update.filter(Column::ActiveTaskId.is_null()),
+};
+```
+
+Do not rely on `.eq(Option::None)` to produce portable SQL. A SQLite repository test may pass while
+the production PostgreSQL update affects zero rows and surfaces as a false `stale_version`. Preserve
+all other version/epoch/task/status predicates, add regression coverage for both NULL and non-NULL
+branches, and validate critical orchestration paths against real PostgreSQL.
+
 ---
 
 ## Migrations

@@ -1,0 +1,39 @@
+{
+  "id": "role-model-policy-generation-execution-audit",
+  "name": "role-model-policy-generation-execution-audit",
+  "title": "Role Model Policy 与 Generation Execution Audit",
+  "description": "实现 R5 角色级模型策略、Provider/model 解析优先级、实际执行与 fallback 审计，并保持 R4 input_digest 与现有 API 兼容",
+  "status": "in_progress",
+  "dev_type": "feature",
+  "scope": "backend-rs role model policy, tracked AI execution, and additive generation audit",
+  "package": null,
+  "priority": "P1",
+  "creator": "dyuebug",
+  "assignee": "dyuebug",
+  "createdAt": "2026-07-15",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "ci/r03-runner-evidence-20260713",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "docs/15-ainovel-cli-comparison-and-mumunovel-optimization.zh-CN.md",
+    ".trellis/tasks/07-14-story-packet-generation-intent/design.md",
+    "backend-rs/src/services/generation_contract_service/schema_owner.rs",
+    "backend-rs/src/services/settings_service.rs",
+    "backend-rs/src/ai/service.rs",
+    "backend-rs/src/ai/clients/openai.rs",
+    "backend-rs/src/services/chapter_generation_execution_contract_service/execution_config_owner.rs",
+    "backend-rs/src/services/chapter_generation_history_persistence_service/persistence_owner.rs"
+  ],
+  "notes": "",
+  "meta": {
+    "complexity": "complex",
+    "roadmap": "R5",
+    "predecessor": "R4"
+  }
+}

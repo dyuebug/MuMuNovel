@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Database schema/migration and SeaORM conventions."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Error mapping and redaction standards for the audit boundary."}
+{"file": ".trellis/spec/backend/autopilot-invocation-audit.md", "reason": "R7 durable audit schema, lifecycle, privacy, owner-read, and test contract."}
+{"file": "backend-rs/src/api/background_tasks.rs", "reason": "Direct cancel_task handler regression: a running novel_autopilot task transitions its durable invocation audit to redacted cancelled_by_user without exposing payload data."}

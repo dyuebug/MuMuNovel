@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Background-task recovery policy, startup durability, snapshot compatibility, and executor coverage contracts."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Best-effort persistence failures and conservative unknown-task fallback boundaries."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Structured recovery logs must exclude payload, result, checkpoint bodies, and user content."}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Background-task recovery guidance must reuse the existing task-center presentation boundary."}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Optional recovery fields must flow through existing typed API and store models without parallel contracts."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frontend background-task changes require lint, build, and recovery-flow review."}

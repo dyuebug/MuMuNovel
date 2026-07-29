@@ -1,0 +1,32 @@
+{
+  "id": "r8-eval-creative-archive-metrics",
+  "name": "r8-eval-creative-archive-metrics",
+  "title": "R8 Eval 创作档案与运行指标",
+  "description": "在不新增 Autopilot 运行能力、Schema 或第二份事实 owner 的前提下，建立静态脱敏评测样本、创作档案 allowlist 和运行指标安全摘要。",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": "R8 read-only eval/archive/metrics MVP",
+  "package": null,
+  "priority": "P2",
+  "creator": "dyuebug",
+  "assignee": "dyuebug",
+  "createdAt": "2026-07-16",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "docs/15-ainovel-cli-comparison-and-mumunovel-optimization.zh-CN.md",
+    "docs/21-g2-autopilot-safety-gate-review.zh-CN.md",
+    "backend-rs/src/api/projects.rs",
+    "backend-rs/src/services/generation_execution_audit_service.rs",
+    "backend-rs/src/services/chapter_query_service/query_owner.rs"
+  ],
+  "notes": "",
+  "meta": {}
+}

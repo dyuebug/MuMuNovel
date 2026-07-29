@@ -1,0 +1,33 @@
+{
+  "id": "story-packet-generation-intent",
+  "name": "story-packet-generation-intent",
+  "title": "Story Packet / Generation Intent 统一生成契约",
+  "description": "统一大纲、章节、批量、重生成与审校的 Story Packet / Generation Intent 输入契约",
+  "status": "completed",
+  "dev_type": "feature",
+  "scope": "backend-rs generation contract with compatibility boundary",
+  "package": "single-repo",
+  "priority": "P1",
+  "creator": "dyuebug",
+  "assignee": "dyuebug",
+  "createdAt": "2026-07-14",
+  "completedAt": "2026-07-15T05:47:29+08:00",
+  "branch": null,
+  "base_branch": "ci/r03-runner-evidence-20260713",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "docs/15-ainovel-cli-comparison-and-mumunovel-optimization.zh-CN.md",
+    "docs/11-novel-quality-roadmap.zh-CN.md",
+    "backend-rs/src/services/chapter_generation_runtime_service/runtime_execution_owner.rs",
+    "backend-rs/src/services/chapter_generation_execution_contract_service/single_generation_contract_owner.rs",
+    "backend-rs/src/services/chapter_regeneration_prepare_service.rs",
+    "backend-rs/src/api/outlines.rs"
+  ],
+  "notes": "",
+  "meta": {}
+}

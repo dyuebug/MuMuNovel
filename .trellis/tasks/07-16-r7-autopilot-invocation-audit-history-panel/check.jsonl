@@ -1,0 +1,7 @@
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"lint、build 与 Playwright 质量门禁。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"验证 API 类型、脱敏字段和 UI 行为跨层一致。"}
+{"file":".trellis/spec/backend/autopilot-invocation-audit.md","reason":"验证 UI 不突破审计边界或暗示恢复能力。"}
+{"file":"frontend/src/services/modules/projects.ts","reason":"核对项目作用域 GET 路由与显式 allowlist 读取类型，不把敏感审计字段传给组件。"}
+{"file":"frontend/src/features/projects/workflow/ProjectWorkflowStatePanel.tsx","reason":"核对历史 Modal 仅使用局部读取状态，展示安全摘要，且不触发 workflow/task-control 行为。"}
+{"file":"frontend/e2e/project-workflow-state.spec.ts","reason":"回归成功、空态、错误态、敏感字段缺失与无控制/无乐观状态变更断言。"}
+{"file":"docs/15-ainovel-cli-comparison-and-mumunovel-optimization.zh-CN.md","reason":"同步 R7 audit history panel 已完成但整体仍 in progress 的路线事实与能力边界。"}

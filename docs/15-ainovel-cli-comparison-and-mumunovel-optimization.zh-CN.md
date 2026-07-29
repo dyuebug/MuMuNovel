@@ -70,12 +70,12 @@ ainovel-cli”“先做 Autopilot”或“迁移到 Go/TUI”作为并列候选�
 产品底座（保持不变）
 Web 创作工作台 + Rust Services + PostgreSQL + 统一后台任务
 
-当前 P0 主线
+可靠性主线（已完成）
 Password Hash + Migration Executor 安全前置（已完成）
   -> R0.1 PostgreSQL Auth Schema Compatibility（已完成：源码 + 隔离 PostgreSQL 证据）
   -> R0.2 本地 PostgreSQL + Rust + Playwright 真实 E2E（已完成：14/14）
-  -> R0.3 GitHub runner 真实 E2E 证据（当前）
-  -> G0 生产可靠性门禁
+  -> R0.3 GitHub runner 真实 E2E 证据（已完成）
+  -> G0 生产可靠性门禁（GO）
 
 P1 能力主线
 R3 Workflow State Machine
@@ -90,20 +90,23 @@ P2 反馈闭环
 R8 Eval + 创作档案 + 运行指标
 ```
 
-**当前执行判断**：R1 后台任务快照原子化和 R2 恢复策略注册表已完成并冻结；R0.1 与
-R0.2 均已在 2026-07-13 完成。R0.2 权威证据使用 PostgreSQL 18-alpine、Rust
-`migration-executor`、`release-readiness-preflight`、真实 Rust server、`/readyz`、`/releasez`
-和 Playwright auth/background-task smoke；20 个 revision、120 个 SQL step 全部执行到
-`20260712_password_hash_phc_text`，Playwright 14/14，cleanup 后 lifecycle 为 `terminated`。
-R0.2 当时完整 locked Rust 回归为 1612/1612。R0.3 本地合同现已补齐 binary 绝对路径、
-SHA-256、Linux `/proc/<pid>/exe` 双重身份核验、PID 不匹配拒绝发信号、Playwright 日志/退出码、
-成功与失败 manifest；新增合同测试 16/16、当前完整 locked Rust 回归 1613/1613。当前 P0 唯一
-阻断点是让包含该合同的精确 commit 在实际 GitHub Runner 上绿色执行并产生可下载 artifact。
+**当前执行判断**：R0.1、R0.2、R0.3、G0、R1、R2、R3、R4、R5、R6、G1-Cancel、G1、R7、G2
+与 R8 均已完成并形成可审计证据。R0.3 已通过 GitHub Hosted Runner 真实链路核验，G0 为 GO；R3-R6
+已建立唯一 workflow 事实、统一 Story Packet、角色级模型追溯与 business checkpoint，G1-Cancel
+已补齐进程内 cooperative cancellation 和 terminal ownership 防护。G1 于 2026-07-16 判定为 GO，
+R7 已于 2026-07-16 以受控 Autopilot MVP 形式正式收口；受控 Tool Contract、`novel_autopilot` 最小任务/Coordinator、认证/项目作用域固定/一次性人工确认的控制 API、durable invocation audit，以及项目 workflow 内 owner-scoped、脱敏的只读调用历史面板均已完成并通过本地质量门禁。G2 已在同日完成固定样本和 failure-injection 审查并判定为 GO：`action API → generic task → queued audit → Coordinator/Tool → workflow/audit terminal → readonly history` 在故障下仍保持 owner 边界和安全回滚；history API 继续使用显式输出 allowlist，避免内部 actor、项目和 digest 字段出网。R8 已完成最小只读闭环；history 仍只是审计读取，不是 task runtime owner、checkpoint/recovery/replay 控制面，也不增加 Pause/Resume/Steer、自动重试或多步骤自治。
+
+**R8 是当前已授权路线的终点，当前没有待开发的 R9；任何后续 Autopilot 扩展必须另行立项，并通过新的兼容性、回滚和安全门禁。**
 
 ```text
-R0.2 = PASS
-R0.3 = LOCALLY COMPLETE / GITHUB RUNNER PENDING
-G0   = NO-GO
+R0.1-R0.3 = PASS
+G0          = GO
+R3-R6       = PASS
+G1-Cancel   = PASS
+G1          = GO (2026-07-16)
+R7          = PASS（受控 MVP，2026-07-16 正式收口）
+G2          = GO（当前受控单次 MVP 安全门禁，2026-07-16；不等于无人值守授权）
+R8          = PASS（只读评测 / 创作档案 / 运行指标，2026-07-16）
 ```
 
 **Go / No-Go 规则**：
@@ -114,10 +117,7 @@ G0   = NO-GO
 - 不新建第二套后台任务系统，不新建第二套章节 checkpoint/resume owner；
 - 数据库 Schema 变更必须单独取得明确授权，路线确认本身不等于变更授权。
 
-**下一动作**：将当前已完成的 R0.3 workflow 合同置于精确 commit 上，在实际 GitHub Runner
-运行同一 PostgreSQL + Rust binary + Playwright 链路，并下载核验 migration、release preflight、
-`/readyz`、`/releasez`、Playwright、binary identity/SHA-256、lifecycle、success/failure manifest
-artifact。R0.3 通过后才允许审查 G0。
+**下一动作**：G2 与 R8 已于 2026-07-16 完成；任何后续能力均须独立立项和门禁授权。R8 仅以脱敏 golden sample、既有 owner 的只读导出和运行摘要为最小范围，不能复制 task/workflow/audit/checkpoint 事实。任何 Autopilot 扩展仍须拆分独立任务；不得把 history 或 R8 指标扩展为 Pause/Resume/Steer、checkpoint/recovery/replay、自动重试或任务中心控制面。G2 GO 仅通过当前单次人工确认闭环的安全门禁，仍禁止多步骤无人值守自治。
 R0.1/R0.2 完成不等于生产数据库已经迁移，也不授权任何 production downgrade。
 
 R0.1 的最小授权范围、upgrade/downgrade 数据保护、实施文件边界和验收矩阵已单独固化在：
@@ -141,6 +141,7 @@ R0.1 Auth Schema Compatibility
   -> R4 Story Packet / Generation Intent
   -> R5 Role Model Policy
   -> R6 Business Checkpoint
+  -> G1-Cancel Cooperative Cancellation
   -> G1 Contract Gate
   -> R7 Controlled Autopilot MVP
   -> G2 Autopilot Safety Gate
@@ -149,18 +150,18 @@ R0.1 Auth Schema Compatibility
 
 该基线的执行含义如下：
 
-1. **当前只推进 P0 收口**：R0.1、R0.2 已完成，当前唯一主线是 R0.3；R1、R2 作为已完成的
-   可靠性能力保留，不重复建设同类基础设施。
+1. **Phase 1 Gate 已收口**：R0.1、R0.2、R0.3、G0、R3、R4、R5、R6、G1-Cancel 与 G1 已完成；
+   R1、R2 作为已完成的可靠性能力保留，不重复建设同类基础设施；当前唯一下一主线为 R7。
 2. **Schema 授权已履行**：2026-07-13 的明确授权仅覆盖 `password_hash` 类型、新 revision、
    initial schema、Python frozen source-map、migrator metadata、固定合同测试和隔离数据库验证。
 3. **授权边界继续有效**：未授权生产数据库 migration、真实 downgrade、production downgrade CLI、
-   其他表字段修改或历史 revision 改写；R0.2、R0.3、G0 仍必须逐级验收。
+   其他表字段修改或历史 revision 改写；R0.1-R0.3 与 G0 的通过不扩大该授权边界。
 4. **严格串行过 Gate**：R0.1 完成后才运行 R0.2，R0.2 通过后才采集 R0.3，三者全部通过
    才能审查 G0；G0 通过前不启动 R3，G1 通过前不启动 R7。
 5. **路线变更必须留痕**：只有满足 16.8 节的变更条件时才能调整，并同步更新阶段依赖、
    验收证据、兼容性影响和回滚策略。
 
-当前阶段状态：**路线已确定，R0.1、R0.2 已完成；R0.3 本地合同已完成、GitHub Runner 采证待执行；G0 仍为 No-Go。**
+当前阶段状态（更新于 2026-07-16）：**R0.1、R0.2、R0.3、G0、R3、R4、R5、R6、G1-Cancel、G1、R7 与 G2 已通过。R7 保持单次、人工确认、NonResumable 的受控 MVP 边界；G2 仅确认该闭环在固定样本和故障注入下安全，R8 Eval / 创作档案 / 运行指标已完成，并继续保留冻结边界。**
 
 ### 2.3 Runner 证据硬化裁决
 
@@ -757,9 +758,9 @@ Phase 3  评测、审计和长期反馈闭环
 
 ### 12.1 P0-1：建立 Rust 生产后端 CI
 
-> 当前状态（更新于 2026-07-13）：**workflow 静态实现、R0.1 与 R0.2 已完成，R0.3 待执行**。
-> 本地 PostgreSQL 18/Rust/Playwright 真实链路已通过 migration、release preflight、`/readyz`、
-> `/releasez` 与 14/14 smoke；下一步只采集实际 GitHub Runner 绿色证据，G0 暂不通过。
+> 当前状态（更新于 2026-07-14）：**R0.1、R0.2、R0.3 全部完成，G0 已通过**。
+> 本地 PostgreSQL 18/Rust/Playwright 与 GitHub Hosted Runner 均通过 migration、release preflight、
+> `/readyz`、`/releasez` 和 14/14 smoke；R3 已解除阻塞。
 
 #### 目标
 
@@ -1442,7 +1443,7 @@ R2 的核心实现、前端恢复指引、启动恢复即时持久化、生产�
 
 #### R0：Rust 生产 CI 与真实 E2E 对齐
 
-状态：**workflow 静态实现、R0.1 与 R0.2 已完成；R0.3 为当前步骤，G0 暂不通过**。
+状态（更新于 2026-07-14）：**R0.1、R0.2、R0.3 全部完成；G0 已正式审查为 GO，R3 已解除阻塞**。
 
 已完成：Rust `fmt`、`clippy`、`check`、`test` 已进入生产后端 CI；E2E smoke 已从
 Python Uvicorn 切换为 PostgreSQL 18 + Rust migration executor + Rust server；Python runtime
@@ -1462,9 +1463,9 @@ Query Error: value too long for type character varying(64)
    初始 schema、冻结的 Python migration/source-map 契约与真实 PostgreSQL auth 回归均已通过；
 2. **R0.2 Local Real Rust E2E（已完成）**：PostgreSQL migration、Rust server、`/readyz`、
    `/releasez`、`auth.spec.ts` 和 `background-task-pages.spec.ts` 已 14/14 通过；
-3. **R0.3 GitHub Runner Evidence（当前）**：由实际 GitHub runner 给出同一链路的绿色证据；
-   证据必须包含直接 Rust binary 启动、可验证的进程生命周期、成功 manifest、诊断 artifact，
-   并在采证前补齐 Linux executable identity 与 binary SHA-256 provenance。
+3. **R0.3 GitHub Runner Evidence（已完成）**：实际 GitHub Hosted Runner 已给出同一链路的绿色证据；
+   backend-ci Run `29264634399` 与 e2e-smoke Run `29264634424` 全部通过，包含直接 Rust binary、
+   生命周期、成功 manifest、诊断 artifact、Linux executable identity 与 binary SHA-256 provenance。
 
 R0.1 的无 Schema 安全前置已经完成：Password Hash 已收敛为唯一 Rust Service Owner，且只有
 `password_hash::Error::Password` 映射为普通密码不匹配；unsupported algorithm、version、参数错误
@@ -1648,8 +1649,19 @@ Playwright 合同覆盖恢复终态到 Zustand 与任务中心操作的前端链
 - 任务失败、重启、重试不会产生明显重复写入；
 - 没有新增第二套后台任务基础设施或第二套章节 checkpoint/resume owner。
 
-当前判定：**G0 不通过**。R0.1、R0.2、R1、R2 已满足本地门禁，但 R0.3 尚未取得实际
-GitHub Runner 绿色执行与可审计 artifact，因此不得开始 R3，也不得提前开发 R7。
+当前判定（2026-07-14）：**G0 通过（GO）**。R0.1、R0.2、R0.3、R1、R2 均已满足，
+R3-R6、G1-Cancel 与 G1 已完成；R7 已解除 G1 前置阻塞，且已完成受控 Tool Contract 与最小任务/Coordinator 两个纵切，整体仍在实施中。
+
+G0 逐项审查证据：
+
+| 条件 | 判定 | 权威证据 |
+|---|---|---|
+| R0.1 PostgreSQL 密码哈希容量与迁移回归 | PASS | fresh/old-head PostgreSQL 18、20 revisions / 120 SQL、Argon2 登录升级与 guarded downgrade 失败关闭 |
+| R0.2 本地 E2E + R0.3 Hosted Runner E2E | PASS | 本地 Playwright 14/14；GitHub Runs `29264634399`、`29264634424`；artifact `8284985490` 与 ZIP SHA-256 核对 |
+| 快照原子性与损坏处理 | PASS | primary/backup/temp 原子提交、flush/sync、损坏隔离、并发与失败回滚定向测试；完整 Rust 门禁通过 |
+| 长任务恢复等级与前端语义 | PASS | `TASK_RECOVERY_POLICIES` 覆盖 24 个唯一生产 task type，四类策略、未知类型降级和前端操作指引均有测试 |
+| 失败、重启、重试的重复写入防护 | PASS | `repeated_recovery_is_idempotent`；恢复后立即原子保存；有副作用任务不静默自动重放；终态拒绝迟到覆盖 |
+| 单一基础设施与 checkpoint owner | PASS | 继续复用 Rust `TaskRegistry`、`/background-tasks` 与章节 runtime snapshot/upsert owner；未新增第二套任务或 checkpoint 系统 |
 
 ### 16.4 Phase 1：统一创作状态与生成契约
 
@@ -1658,10 +1670,23 @@ GitHub Runner 绿色执行与可审计 artifact，因此不得开始 R3，也不
 先统一“项目处于哪个创作阶段”，不直接承担后台执行状态。状态机应建立合法转换、
 版本号和人工回退规则，并复用现有 workflow service，避免出现第二套业务事实。
 
+当前判定（2026-07-14）：**R3 已完成本地实现和质量证据**。`projects.status` 已成为唯一小说级
+阶段事实，九阶段转换、兼容入口、CAS 冲突、Rust API、项目详情 UI 和 focused Playwright 均已
+落地；完整 Rust 测试 1646/1646 通过，前端 build/lint 通过。严格全仓 Clippy 仍受非 R3 历史
+基线错误阻塞，R3 新增 owner 文件无命中；当前 SQLite/mock CAS 证据也不宣称替代真实
+PostgreSQL 隔离级并发验证。R3 不新增数据库 migration、工作流表或第二状态字段。
+
 #### R4：Story Packet / Generation Intent
 
 统一大纲、章节、重生成、审校和 Autopilot 的生成输入。所有现有入口通过兼容适配层
 归并到同一个核心契约，不要求一次删除旧 API。
+
+当前判定（2026-07-15）：**R4 已完成本地实现和质量门禁**。统一 Rust schema owner、canonical
+SHA-256 digest、单章/批量/恢复/重生成/大纲/审校适配、版本化 runtime snapshot 与 optional
+history summary 已落地；旧 API DTO、response、SSE event kind、前端请求类型和 Zustand/task store
+保持兼容。当前工作树 focused suites 全部通过，完整 Rust 测试 1689/1689、`cargo fmt --check`、
+`cargo check`、前端 lint（0 error / 33 existing warnings）和 build 均通过；R4 未新增 migration、
+第二套任务系统、第二个小说阶段事实或 Coordinator。R5、R6、G1-Cancel 与 G1 后续均已完成，当前主线正式切换为 R7。
 
 #### R5：角色级模型策略
 
@@ -1673,6 +1698,19 @@ GitHub Runner 绿色执行与可审计 artifact，因此不得开始 R3，也不
 checkpoint 以业务边界为单位，例如“大纲已确认”“章节草稿已保存”“审校结果已生成”，
 而不是尝试从任意 Token 位置继续。必须包含 revision、幂等键、输入摘要和输出引用。
 
+当前判定（2026-07-16）：**R6 已完成本地实现和质量门禁**。首个
+`business-checkpoint/v1` 边界为 `chapter_draft_saved`，checkpoint additive 写入现有
+`workflow_runtime_state.business_checkpoint`，复用 R4 `input_digest`，并以 typed allowlist
+生成 revision、canonical `sha256:` 幂等键和 chapter output reference。resume 会在 reset 和
+runtime dispatch 前校验 schema、payload、幂等键、digest、task/project scope、chapter 存在性与
+非空正文；legacy missing 保持旧恢复路径。
+
+真实 SQLite/SeaORM 测试已经执行 contract snapshot → chapter content save →
+`chapter_succeeded.persist()` → 后续 `failed.persist()` → resume，证明 checkpoint 在既有 snapshot
+merge 后保留且从下一章继续。business checkpoint 14/14、resume 81/81、runtime state 137/137、
+完整 Rust tests 1755/1755、`cargo fmt --check` 与 `cargo check` 全部通过；未新增 migration、表、
+公开 API/SSE 变化或第二套 task/checkpoint system。
+
 #### G1：统一契约门禁
 
 只有同时满足以下条件，才能进入 Phase 2：
@@ -1683,6 +1721,10 @@ checkpoint 以业务边界为单位，例如“大纲已确认”“章节草稿
 - 至少一种长流程通过业务 checkpoint 完成恢复验证；
 - 旧页面和旧 API 仍可通过兼容门面工作；
 - 状态机、任务状态和 checkpoint 的职责边界有文档和测试保护。
+
+当前判定（2026-07-16）：**G1 通过（GO）**。六项条件均具备实现 owner 与测试/质量证据；审查中发现的
+replacement registration 未取消旧 token 缺口已修复，完整 Rust tests 1761/1761 通过。非阻塞风险与
+逐项证据见 `docs/19-g1-contract-gate-review.zh-CN.md`。R7 已解锁并在同日完成受控 MVP 收口；其后 G2 固定样本与 failure-injection 安全门禁也已判定为 GO。
 
 ### 16.5 Phase 2：受控 Autopilot MVP
 
@@ -1696,28 +1738,50 @@ Autopilot 第一版只覆盖：
 
 实施顺序固定为：
 
-1. 定义受控 Tool Contract；
-2. 将 Tool 映射到现有 Rust Service；
-3. 新增 `novel_autopilot` 后台任务；
-4. 实现最小 Coordinator；
-5. 增加 Pause、Resume、Steer 和人工门禁；
-6. 接入任务中心和审计记录。
+1. **已完成**：定义受控 Tool Contract；
+2. **已完成**：将唯一 allowlisted Tool 映射到现有 Rust Service；
+3. **已完成**：新增单次、非可恢复的 `novel_autopilot` 后台任务；
+4. **已完成**：实现只执行一条已确认 Tool 调用的最小 Coordinator；
+5. **已完成（第三纵切）**：增加认证、项目作用域固定的控制 API 与一次性人工确认 gate；
+6. **已完成（第四纵切）**：新增项目 owner 范围的 durable invocation audit；任务创建前持久化 `queued` 事实，成功与 workflow CAS 原子提交，失败/取消仅记录脱敏稳定码；
+7. **已完成（第五纵切）**：项目 workflow 面板提供按需加载、owner-scoped、脱敏的只读 invocation history；该展示不拥有 task runtime、checkpoint 或 recovery/replay，也不提供 Pause、Resume、Steer、重放或自动重试。
 
 Coordinator 无权直接写数据库、绕过权限检查或自行解释内部表结构。业务事务、幂等、
 状态转换和数据写入仍由 Rust Service 负责。
+
+#### R7：最终验收收口（2026-07-16）
+
+**判定：PASS（受控 MVP）**。本判定只覆盖已批准的单次、人工确认、
+`transition_project_workflow` 受控调用；它不授权多 Tool 编排、Provider/Prompt
+运行时调用、Pause/Resume/Steer、checkpoint/recovery/replay、自动重试，或无人值守
+整书/多卷生成。
+
+| 验收项 | 通过证据 |
+| --- | --- |
+| 可信 scope、actor 与确认 | API 仅从 route 注入 `project_id`、仅从 Claims 获取 actor，严格 DTO 拒绝 body scope/actor 注入，并要求 `confirmed_by_user=true`。 |
+| 唯一执行链 | action API 只创建既有 generic `novel_autopilot` task；Coordinator 只调用受控 Tool Contract；workflow CAS 仍由 `novel_workflow_service` 负责。 |
+| Tool schema 与业务边界 | 静态 allowlist 仅暴露 `transition_project_workflow`；参数、公共 phase、确认与项目 scope 在写入前校验。 |
+| audit 与失败安全 | queued audit 先于执行持久化；workflow 成功与 succeeded audit 同事务；失败/取消只记录稳定、脱敏错误码。 |
+| history 隐私与 UI | history route 先验证 owner access，再以显式 allowlist 投影内部 audit read model；前端仅按需展示安全摘要，不派生控制或恢复操作。 |
+| 可重复验证 | 2026-07-16 重跑 `cargo fmt --check`、`cargo check -j 1`、`cargo test -j 1 autopilot`（25/25）、frontend lint/build 及 workflow Playwright（5/5）均通过。 |
+| 负向能力约束 | 未引入第二套 task/workflow owner、自动重试、多步骤自治、Provider/MCP、Pause/Resume/Steer、checkpoint/recovery/replay；`novel_autopilot` 仍显式 NonResumable。 |
+
+详细需求到源码/测试的映射见
+`docs/20-r7-controlled-autopilot-mvp-acceptance-review.zh-CN.md`。R7 的任务目录仍保留
+为可审计实现证据；不因收口结论自动执行 Git 提交或归档。
 
 #### G2：自动驾驶安全门禁
 
 Autopilot 扩大范围前必须满足：
 
-- 用户可以随时暂停，并在业务 checkpoint 继续；
+- 当前 Autopilot 不提供 Pause/Resume；若未来扩展为可中断任务，必须先定义业务 checkpoint owner、恢复幂等与显式人工确认，再通过 G2 审查；
 - 关键阶段默认需要人工确认；
 - Tool 输入输出有 schema 验证；
-- 每次调用可追溯到任务、模型、Prompt、输入摘要和结果；
+- 每次直接业务 Tool 调用可追溯到任务、Tool/schema、用户确认事实、脱敏输入摘要和结果/稳定错误码；Provider、模型、Prompt 不适用时必须为 `NULL`，且不得保存原始 Prompt；
 - Coordinator 失败不会破坏人工工作台；
 - 最小闭环有固定样本回归测试和失败注入测试。
 
-未通过 G2 前，不实现多卷整书无人值守生成。
+G2 最终判定（2026-07-16）：**GO（仅当前受控单次 MVP 安全门禁）**。固定 fixture、queued/terminal audit failure injection、CAS/Tool 拒绝、owner history 故障和前端只读回归均已通过；完整证据见 `docs/21-g2-autopilot-safety-gate-review.zh-CN.md`。该 GO 不授权多卷整书无人值守生成，且不授权 Pause/Resume/Steer、checkpoint/recovery/replay、自动重试、Provider/MCP runtime 或多 Tool/多步骤自治。
 
 ### 16.6 Phase 3：评测、审计和反馈闭环
 
@@ -1728,7 +1792,7 @@ Autopilot 扩大范围前必须满足：
 1. Prompt/Tool Eval 和 golden sample；
 2. 创作档案包导出与脱敏；
 3. 质量指标和任务运行指标关联；
-4. 根据真实失败样本扩展 Autopilot Tool 和流程；
+4. 根据真实失败样本提出未来独立 Autopilot gate 的候选输入；R8 本身不扩展 Tool 或执行流程；
 5. 评估是否需要 Headless API/CLI，而不是预先复制 TUI。
 
 完成标志：每次质量变化都能关联到工作流版本、模型策略、Prompt、Tool 调用和人工反馈，
@@ -1769,20 +1833,20 @@ Autopilot 扩大范围前必须满足：
 |---|---|---|---|---|
 | R0.1 | P0 | PostgreSQL Auth Schema Compatibility（已完成） | workflow 静态实现 + 明确 Schema 授权 | TEXT 容量、升级 migration、初始 schema、隔离 PostgreSQL auth/guard 证据 |
 | R0.2 | P0 | 本地 PostgreSQL + Rust + Playwright 真实 E2E（已完成） | R0.1 | 20 revisions / 120 SQL、readyz/releasez、Playwright 14/14、cleanup 后 success 证据 |
-| R0.3 | P0 | GitHub runner 真实 E2E 证据 | R0.2 | Rust CI/E2E、lifecycle、binary identity/hash、成功与诊断 artifact |
+| R0.3 | P0 | GitHub runner 真实 E2E 证据（已完成） | R0.2 | Runs `29264634399` / `29264634424`、lifecycle、binary identity/hash、artifact `8284985490` |
 | R1 | P0 | 后台任务快照原子化（已实现，本地门禁通过） | 无未完成前置 | 原子写、损坏恢复、跨平台测试 |
 | R2 | P0 | 后台任务恢复策略注册表（已完成并冻结） | R1 | 恢复分类、孤儿任务处理、恢复结果即时持久化、前端可操作指引、慢订阅者快照重同步 |
-| R3 | P1 | 小说级 Workflow State Machine | G0 | schema、转换规则、API、项目进度 UI |
-| R4 | P1 | Story Packet 统一生成契约 | R3 | schema、归并服务、快照、兼容门面 |
-| R5 | P1 | 角色级模型策略 | R4 | 配置、解析、fallback、历史记录 |
-| R6 | P1 | 可恢复业务 checkpoint 标准 | R2、R4 | schema、幂等、恢复测试 |
-| R7 | P1 | Autopilot MVP | G1 | Coordinator、受控 Tool、人工门禁、任务中心 |
-| R8 | P2 | Eval、档案与指标闭环 | G2 | fixture、报告、导出包、可追溯指标 |
+| R3 | P1 | 小说级 Workflow State Machine（已完成，本地门禁通过） | G0 | 九阶段 schema、转换 owner、CAS API、项目进度 UI、兼容入口与 focused E2E |
+| R4 | P1 | Story Packet 统一生成契约（已完成，本地门禁通过） | R3 | schema、归并服务、快照、兼容门面 |
+| R5 | P1 | 角色级模型策略（已完成，本地门禁通过） | R4 | 配置、解析、fallback、历史记录 |
+| R6 | P1 | 可恢复业务 checkpoint 标准（已完成，本地门禁通过） | R2、R4 | schema、幂等、恢复测试 |
+| R7 | P1 | 受控 Autopilot MVP（已完成，2026-07-16） | G1 | 受控 Tool、最小任务/Coordinator、控制 API/人工 gate、durable invocation audit 与 owner-scoped readonly history 已完成；审计不等于恢复/重放能力，仍保持单次、人工确认、NonResumable 边界 |
+| R8 | P2 | Eval、档案与指标闭环（已完成，2026-07-16） | G2 | 静态脱敏 fixture、只读创作档案、运行指标与可追溯验证；不新增控制或执行能力 |
 
-下一项路线门禁已经确定为：
+下一项路线工作已经确定为：
 
-> **R0.1、R0.2 已完成；下一步直接采集 R0.3 GitHub Runner 绿色证据，再执行 G0
-> 生产可靠性门禁审查。G0 通过前不得进入 R3。**
+> **R4、R5、R6、G1-Cancel 与 G1 已完成本地实现、质量证据和门禁审查。
+> G1 已于 2026-07-16 判定为 GO；R7 已完成受控 Tool Contract、最小任务/Coordinator、控制 API/人工 gate 与 durable invocation audit 四个纵切，继续维持人工确认与非可恢复边界。**
 
 R1、R2 已完成本地实现和质量门禁，R2 功能范围已经冻结。R2 的恢复策略、前端可操作指引、
 终态单调性、sender 生命周期和 SSE 慢订阅者 lag 快照重同步均已闭环；孤儿任务恢复投影会
@@ -1793,8 +1857,9 @@ R1、R2 已完成本地实现和质量门禁，R2 功能范围已经冻结。R2 
 R0.1 已完成授权范围内的全部源码和隔离 PostgreSQL 验证：Rust/Python revision graph 为 20 项，
 head 为 `20260712_password_hash_phc_text`；production `migration-executor` 继续保持 upgrade-only。
 guarded `downgrade_steps` 只作为 catalog/source-map 合同，并已证明长 verifier 存在时失败关闭，
-本路线不新增、不执行生产 downgrade CLI。R0.2 本地真实 E2E 已完成；当前第一动作是
-R0.3 GitHub Runner 证据。R0.3 未通过时，G0 保持失败；不得进入 R3，也不得提前开发 R7 Autopilot。
+本路线不新增、不执行生产 downgrade CLI。R0.2 本地真实 E2E 与 R0.3 GitHub Hosted Runner
+证据均已完成，G0、R3、R4、R5、R6、G1-Cancel、G1、R7 与 G2 已通过；R7 保持受控 Tool Contract、最小
+`novel_autopilot` 任务/Coordinator、控制 API/人工 gate 与 durable invocation audit 的单次闭环，G2 仅证明该闭环在故障下安全，仍不得扩张为无人值守多卷生成。
 
 当前优化路线据此固定为五段，不再并行扩张功能面：
 
@@ -1804,37 +1869,36 @@ R0.3 GitHub Runner 证据。R0.3 未通过时，G0 保持失败；不得进入 R
    可重复本地证据，成功清单在 runtime/container cleanup 后生成。
 3. **R0.3 Runner 证据**：把同一链路搬到 GitHub runner，保留 binary identity/hash、生命周期和
    失败诊断 artifact；禁止用 mock 或仅静态合同替代。
-4. **G0 审查后进入 R3-R6**：先小说级状态机，再 Story Packet、模型策略和业务 checkpoint；每层
-   复用 Rust owner 与现有兼容入口，不创建第二套工作流或任务系统。
-5. **最后实施 R7-R8**：只在 G1/G2 满足后开发受控 Autopilot 与 Eval/档案闭环，默认保留人工门禁、
-   pause、恢复和回滚能力。
+4. **G0 审查后的 R3-R6、G1-Cancel 与 G1 已完成**：小说级状态机、Story Packet、模型策略、业务
+   checkpoint 与 cooperative cancellation 均复用 Rust owner 和现有兼容入口，未创建第二套工作流或任务系统。
+5. **R8 已完成**：R7 与 G2 的安全边界下，R8 已交付 Eval、脱敏创作档案和运行指标；继续保留人工确认、NonResumable 与既有回滚边界，不新增 pause、恢复或控制能力。
 
 除非门禁证据发生变化，后续优化任务应按此顺序执行；性能微调、UI 扩展、
 新 Agent/Coordinator 功能均不得绕过 R0.1-R0.3 与 G0。
 
-### 17.1 最终执行路线决议（Roadmap v1.5，2026-07-13）
+### 17.1 最终执行路线决议（Roadmap v1.7，2026-07-16）
 
-R0.1 与 R0.2 已完成，后续工作继续固定为一条主依赖链；不允许借 R0.3/G0 等待期并行扩张
-产品功能。
+R0.1、R0.2、R0.3、G0、R3、R4、R5、R6、G1-Cancel 与 G1 已完成，后续工作继续固定为一条主依赖链；
+R7 已完成受控 Autopilot MVP 收口，G2 已完成安全门禁审查，R8 亦已完成；当前没有待开发的 R9，不并行扩张任何无人值守或控制/恢复产品功能。
 
 ```text
 已完成：R2-SSE-Lag 收口，R2 已冻结
   |
   +-- 当前 P0 主线
-          R0.1 PASS -> R0.2 PASS -> R0.3 CURRENT -> G0
+          R0.1 PASS -> R0.2 PASS -> R0.3 PASS -> G0 PASS
                                     |
                                     v
-                           R3 -> R4 -> R5 + R6
-                                             |
-                                             v
-                                    G1-Cancel -> G1
-                                                   |
-                                                   v
-                                             R7 -> G2 -> R8
+                 R3 PASS -> R4 PASS -> R5 PASS -> R6 PASS
+                                                            |
+                                                            v
+                                           G1-Cancel PASS -> G1 GO
+                                                                 |
+                                                                 v
+                                                     R7 PASS -> G2 GO -> [CURRENT] R8
 ```
 
-其中 `R5 + R6` 表示二者都以 R4 为前置，可以在写入范围和验收证据互不冲突时独立实施；
-它们必须全部通过，且 `G1-Cancel` 通过后，才能进行 G1 审查。其他箭头均为严格串行依赖。
+R5、R6、G1-Cancel、G1、R7、G2 与 R8 已完成并冻结兼容边界。当前没有后续 R9；任何新路线
+必须独立立项，并且不得用 UI、Agent 或新的后台任务基础设施绕过既有 owner 和前置验收。
 
 #### 当前即时队列
 
@@ -1844,33 +1908,212 @@ R0.1 与 R0.2 已完成，后续工作继续固定为一条主依赖链；不允
 | 2 | 冻结 R2 | **已完成** | 恢复策略、终态单调性、sender 生命周期和 lag 重同步形成稳定合同；不再吸收跨业务取消架构 |
 | 3 | R0.1 PostgreSQL Auth Schema Compatibility | **已完成** | 容量、catalog/head、initial schema 和隔离 PostgreSQL auth 回归通过 |
 | 4 | R0.2 本地真实 E2E | **已完成** | PostgreSQL migration、Rust `/readyz`/`/releasez`、auth、后台任务页面和 Playwright 14/14 全绿 |
-| 5 | R0.3 Runner 证据 | **本地合同完成 / GitHub Runner Pending** | 精确 commit 的 GitHub runner 真实 binary、SHA-256 provenance、生命周期、成功/失败 manifest 与可下载 artifact 完整 |
-| 6 | G0 审查 | **No-Go，等待 R0.3** | R0.1、R0.2、R0.3、R1、R2 全部满足且证据可审计 |
+| 5 | R0.3 Runner 证据 | **已完成** | Runs `29264634399` / `29264634424`；真实 binary、SHA-256 provenance、生命周期、成功 manifest 与 artifact `8284985490` 完整 |
+| 6 | G0 审查 | **GO（2026-07-14）** | R0.1、R0.2、R0.3、R1、R2 全部满足且证据可审计；R3 已解除阻塞 |
+| 7 | R3 小说级 Workflow State Machine | **已完成，本地门禁通过** | 九阶段 owner、CAS/409、兼容写入口、Rust API、项目详情 UI；Rust 1646/1646、前端 build/lint、focused E2E 1/1 通过 |
+| 8 | R4 Story Packet / Generation Intent | **已完成，本地门禁通过** | 统一输入 owner、digest、各生成入口适配、snapshot/history 兼容；Rust 1689/1689、前端 lint/build、兼容审计通过 |
+| 9 | R5 Role Model Policy | **已完成，本地门禁通过** | Role Policy、解析优先级、tracked execution、实际 Provider/model/fallback 审计；Rust 1736/1736、digest/安全/兼容审计通过 |
+| 10 | R6 Business Checkpoint | **已完成，本地门禁通过** | `business-checkpoint/v1`、monotonic revision、canonical 幂等键、R4 digest、typed output 与 DB-backed success→failure→resume；Rust 1755/1755 |
+| 11 | G1-Cancel Cooperative Cancellation | **已完成，本地门禁通过** | 统一 token/registration owner、generic/batch 传播、commit 后 signal、terminal CAS、迟到结果拒绝、failure injection、cancel-vs-completion 竞态；Rust 1761/1761 |
+| 12 | G1 统一契约门禁 | **GO（2026-07-16）** | 六项统一契约均有 owner 与测试/质量证据；replacement cancellation 缺口已修复；审查报告见 `docs/19-g1-contract-gate-review.zh-CN.md` |
+| 13 | R7 受控 Autopilot MVP | **PASS（2026-07-16）** | 单次非可恢复任务、最小 Coordinator、认证项目作用域控制 API/人工 gate、durable invocation audit 与 owner-scoped readonly history 均已收口；不提供 Pause/Resume/Steer、checkpoint、恢复或重放。 |
+| 14 | G2 Autopilot Safety Gate | **GO（2026-07-16）** | fixture、CAS/Tool 拒绝、queued/terminal audit failure injection、history 故障与 frontend readonly 回归通过；不扩大无人值守或控制/恢复能力。 |
+| 15 | R8 Eval / 创作档案 / 运行指标 | **已完成（2026-07-16）** | 静态脱敏 golden sample、owner-scoped 创作档案 allowlist、`runtime-metrics/v1` 派生只读摘要和 UI/E2E 证据均已完成；不新增 Autopilot Tool 或执行流程。 |
 
-R2 已冻结，R0.1 与 R0.2 已完成，R0.3 本地合同也已完成。当前不得以“继续优化后台任务”、
-UI 扩展或 Agent 功能为理由延迟实际 GitHub Runner 采证。
+R2 已冻结，R0.1、R0.2、R0.3、G0、R3、R4、R5、R6、G1-Cancel、G1、R7 与 G2 已完成。当前不得继续扩张后台任务基础设施；
+R8 已完成；任何下一主线必须独立立项，UI 或 Agent 功能不得绕过既有 owner、人工确认与已冻结的安全边界。
+
+#### R5 完成证据与边界（2026-07-15）
+
+- `role-model-policy/v1` 建立 canonical role mapping，以及
+  `route > role > global > default` 的 provider/model 分字段解析；provider 切换不会继承不兼容模型。
+- `AIService` 保留旧公开方法，并新增 tracked non-stream/stream execution；实际 provider/model、
+  model fallback、endpoint failover、candidate fallback 与失败分类统一进入 typed audit。
+- single、batch create/resume、regeneration、Wizard Outline、Batch Outline、ChapterReview/Repair
+  均按既有契约返回有序 `generation_execution_audit`；核心章节生成 history additive 持久化。
+- canonical audit 采用 allowlist，不保存 Prompt、正文、API key、Authorization 或完整 endpoint URL；
+  未新增 migration、SSE event kind，未删除或重命名旧公开字段。
+- R4 `input_digest` 忽略 policy/provider/model/fallback 等 runtime-only 字段，专项回归 1/1 通过。
+- `cargo fmt --check`、`cargo check` 与完整 Rust tests 1736/1736 通过；R5 无 frontend 契约变化，
+  frontend lint/build/E2E 记录为 N/A。
+- ChapterReview 的审计边界是 analysis result；后台 wrapper 和现有数据库没有独立 durable audit
+  字段。R5 不新增 checkpoint/schema，也不污染 `analysis_report` 等业务字段。该 durable gap 由
+  R6 Business Checkpoint 在独立版本化业务边界中评估，而不是在 R5 临时增加 migration。
+
+
+#### R6 完成证据与边界（2026-07-16）
+
+- `business-checkpoint/v1` 使用单一 typed owner，字段仅包含 schema、boundary、revision、
+  canonical idempotency key、R4 `input_digest`、typed chapter output reference 与 recorded time。
+- `chapter_succeeded` 在章节正文已持久化后，通过现有 runtime persistence/snapshot merge owner
+  写 checkpoint；revision 取成功章节数与已有 revision 的最大值，legacy 缺 contract 时保持旧行为。
+- resume 在 task reset 与 runtime dispatch 前完成 checkpoint schema/payload/key/digest/output 校验；
+  unknown、invalid、mismatch、missing、empty、task/project out-of-scope 均返回固定 typed error。
+- DB-backed 证明执行真实 `chapter_succeeded.persist()`，再写入后续失败并恢复 chapter-2；checkpoint
+  在 additive merge 中保留，旧 `workflow_runtime_state.checkpoint` 与其他 runtime 字段未被替换。
+- checkpoint allowlist 和错误文本不保存或回显 Prompt、正文、API Key、Authorization、完整 URL；
+  未新增 migration、表、task store、公开 API 必填字段或 SSE event kind。
+- `cargo fmt --check`、`cargo check`、business checkpoint 14/14、resume 81/81、runtime state 137/137
+  与完整 Rust tests 1755/1755 全部通过；frontend 契约无变化，lint/build/E2E 记录为 N/A。
+
+#### R7 首个受控 Tool Contract 纵切完成证据（2026-07-16）
+
+- 新增 `autopilot-tool-contract/v1` 内部 registry，目前静态 allowlist 仅暴露
+  `transition_project_workflow`；provider `ToolDef` 仅承载 schema 投影，不是执行安全边界。
+- dispatcher 固定执行 `allowlist -> 严格 typed 参数解析 -> 用户确认 ->
+  novel_workflow_service::transition`；actor `user_id` 只来自内部 execution context，拒绝 JSON
+  注入、未知字段、非 object、未知 phase 与空 project id。
+- 写入仍完全委托既有 workflow owner 的权限检查、合法 phase 转换和 `expected_phase` CAS；未新增
+  HTTP/SSE API、migration、后台 task、Coordinator、第二套 workflow/task/checkpoint 事实或直接 SQL。
+- `autopilot_tool_contract_service` 5/5、`novel_workflow_service` 17/17 聚焦测试通过；使用
+  `rust-lld`、`debuginfo=0` 与 `/DEBUG:NONE` 的测试进程规避本地 MSVC `LNK1318` 后，完整 Rust
+  tests **1766/1766** 通过。`cargo fmt --check` 和 `cargo check` 通过；后者仅保留工作区既有
+  51 条 warning，R7 新模块未新增 warning。
+- 首个纵切不等于 R7 完成。其后已完成最小 Coordinator 与单次、非可恢复的 `novel_autopilot`
+  后台任务；仍未开发 typed control API、人工 gate、Pause/Resume/Steer、任务中心控制面、durable Tool
+  audit、更多业务 Tool、可恢复 Autopilot invocation，以及 G2 所需的 Eval/取消联动与安全验收。
+
+#### R7 第二纵切：最小后台任务与确定性 Coordinator 完成证据（2026-07-16）
+
+- 新增严格 `NovelAutopilotTaskPayload`：仅接受 `tool_name`、原始 `arguments` 与
+  `confirmed_by_user`，拒绝未知字段；actor 与 project scope 分别只能来自 `TaskRecord.user_id` 和
+  `TaskRecord.project_id`，payload 不可注入 user/project。
+- Tool Contract execution context 增加可选 canonical `project_scope`。后台任务调用时，
+  `transition_project_workflow.arguments.project_id` 必须与 `TaskRecord.project_id` 相同；不匹配会在
+  workflow 写入前 fail closed。无 task scope 的既有 direct Tool 调用保持兼容。
+- `novel_autopilot` 进入既有 `spawn_task_execution -> execute_task -> complete_task/fail_task` 生命周期；
+  沿用 cancellation、TaskRegistry、SSE 和 result projection，未创建第二套 terminal owner、task store 或 SSE kind。
+- Coordinator 不调用 Provider/MCP、不读取 Prompt、不自行解析自然语言，也不直接写数据库；它只把已确认
+  Tool 调用委托给 `autopilot_tool_contract_service -> novel_workflow_service::transition`，并仅将版本化
+  `autopilot-tool-contract/v1` receipt 写入既有 task result。
+- 因 `TaskRecord` 不持久化 payload、确认和 Tool arguments，`novel_autopilot` 显式登记为
+  `NonResumable`；进程重启时只投影“不可恢复，请重新发起”，绝不 replay 写操作。
+- 前端只补充 `BackgroundTaskType` 与“小说自动驾驶”展示标签；本纵切未新增 Autopilot 启动入口、控制 UI、
+  API、migration、checkpoint/audit 表或 Provider Tool Calling。
+- `cargo fmt --check`、`cargo check`、Tool Contract 7/7、Coordinator 3/3、background task 27/27、
+  recovery 12/12、production contract 16/16、完整 Rust suite、frontend lint/build 均通过。前端 lint 的
+  既有 Hook 依赖 warning 与 R7 文件无关；本纵切文本已验证 UTF-8 无 BOM、LF-only、无尾随空白。
+
+R7 仍为 **IN PROGRESS**：认证、项目作用域固定的控制 API 与一次性人工 gate 已完成；后续必须先以独立任务审查 Pause/Resume/Steer、durable audit、任务中心控制面、更多 allowlisted Tool、可恢复 invocation 与多步骤自治的 owner、恢复和审计边界。这些能力完成并满足 G2 前，禁止扩展为无人值守多卷/整书生成。
+
+
+#### R7 第三纵切：认证控制 API 与一次性人工 gate 完成证据（2026-07-16）
+
+- 新增唯一入口 `POST /api/projects/:project_id/autopilot/actions`；actor 仅来自认证 `Claims`，
+  项目作用域仅来自 route path，并在创建 task 前复用既有项目访问校验。
+- 请求顶层与 `arguments` 均拒绝未知字段，拒绝请求体注入 `project_id` / `user_id`，仅接受
+  `transition_project_workflow`、canonical public phase 与明确的 `confirmed_by_user: true`。
+- route 只构建已确认的 `novel_autopilot` invocation 并委托既有 generic task lifecycle；它不直接
+  调用 workflow service、不写 SQL、不创建第二套 task、SSE、terminal、checkpoint 或 recovery owner。
+- 修复 generic task lifecycle 的严格 payload 边界：`novel_autopilot` 原样接收严格 invocation
+  payload，`project_id` / `user_id` 的可信 authority 仍在 `TaskRecord`；其它 task type 保持既有
+  runtime enrichment，从而不放宽 Coordinator 的 `deny_unknown_fields`。
+- API 集成测试覆盖 `API create -> generic task -> queued audit -> Coordinator -> Tool Contract ->
+  novel_workflow_service::transition -> terminal audit -> readonly history`，并断言 result receipt schema 为
+  `autopilot-tool-contract/v1`、workflow/audit phase 一致，以及 history response 只含 UI allowlist。
+- `cargo fmt --check`、`cargo check`、API 4/4、background tasks 29/29、Coordinator 3/3、
+  Tool Contract 7/7、workflow 17/17 以及完整 Rust suite **1779/1779** 均通过。未改动前端
+  源码，因此未重复执行 frontend lint/build。
+
+R7 仍为 **IN PROGRESS**。本纵切不是 Pause/Resume/Steer、任务中心控制 UI、
+可恢复 invocation、更多 Tool 或多步骤自治的授权，更不代表 G2 已通过。
+
+#### R7 Workflow Panel Launch 完成证据与边界（2026-07-16）
+
+- 完成 R7 的第四个可验证纵切：既有 Workflow Panel 增加独立的“后台受控切换”入口；
+  用户只能从服务端提供的 `allowed_transitions` 选择目标，且每次都必须在确认弹窗中确认
+  当前/目标阶段与可选 reason，才会创建一条 `novel_autopilot` 任务。
+- 前端请求严格限定为 `transition_project_workflow`、canonical phase 与
+  `confirmed_by_user: true`；project ID 只在 `/projects/:project_id/autopilot/actions` 路径，
+  请求体不接受/不注入 `project_id` 或 `user_id`。成功响应复用既有 task store 同步，未建立
+  第二套任务、SSE、workflow 或恢复 owner。
+- 成功后仅提示并打开既有 Background Task Center；不调用原同步 `transition()`，不调用
+  `updateProject()`，不对 canonical workflow phase 做乐观写入。失败保留弹窗和 reason，
+  显示后端错误且不自动重试。
+- 修复延迟挂载竞态：任务中心可能在首屏约一秒后才注册事件监听；一次性、非持久化的
+  pending open-request 确保快速创建任务后的任务中心仍会打开。该标记仅可靠投递 UI
+  view-switch intent，不保存业务任务、阶段、checkpoint 或恢复状态。
+- Playwright 已覆盖严格 payload、无 scope/actor 注入、无工作流乐观变更、任务中心开启及
+  `novel_autopilot` 可见性。`novel_autopilot` 的 recovery policy 仍为 `NonResumable`，
+  UI 不得暗示可 resume。
+- 已通过 frontend lint/build、聚焦 E2E（2/2）、Rust fmt/check 与 Autopilot API（4/4）回归。
+  lint/Rust 输出的 warning 均为未改动模块的既有告警，不改变本纵切验收结论。
+
+R7 仍然 **IN PROGRESS**。durable invocation audit 已完成；后续未开发项仍包括 Pause /
+Resume / Steer、durable invocation recovery、更多 allowlisted tools、多步骤自治和 G2。**G2
+判定为 GO 前，禁止开发无人值守整书或多卷生成。**
+
+#### G1-Cancel 完成证据与边界（2026-07-16）
+
+- 建立进程内 cooperative cancellation registry，以 scope、task ID 和唯一 registration ID 标识执行实例；
+  replacement 会取消旧 token，旧实例 cleanup 不能删除新 registration，cancel/cleanup/Drop 均保持幂等。
+- generic background task 与 batch startup/resume 均在生命周期 owner 使用 biased `tokio::select!`；所有 child
+  progress bridge 监听同一 token，取消分支退出但不投影 `Failed`。
+- runtime task patch 与 snapshot patch 在同一事务中提交，并通过 `status NOT IN
+  ('completed', 'failed', 'cancelled')` 拒绝迟到结果；cancel 只对 `pending/running` 获取 terminal ownership，
+  task 与 cancelled snapshot 同事务提交。
+- cancellation signal 仅在持久化事务 commit 成功后发送；failure injection 证明回滚时 token 不 signal、task
+  保持 `running`。barrier 驱动的 cancel-vs-completion 竞态证明只有一个 terminal owner 可以成功，且 task 与
+  snapshot 终态一致。
+- DB-backed 回归覆盖 cancelled/completed/failed 后迟到 preparing/success/failure patch 拒绝、replacement cleanup、
+  resume checkpoint 生命周期与异步 dispatch 断言边界；未新增公开 API 必填字段、SSE event kind、状态字符串、
+  schema、migration、Cargo 直接依赖、task store、项目事实或恢复协议。
+- `cargo fmt --check`、`cargo check`、`cargo check --tests` 全部通过；使用 `rust-lld`、`debuginfo=0` 与
+  `/DEBUG:NONE` 链接后，完整 Rust tests **1761/1761** 通过。默认 MSVC PDB 链接仍可能触发 `LNK1318:
+  LIMIT (12)`，属于本地工具链环境限制，不是产品代码失败。
+- cancellation 仅提供当前进程内协作停止能力，不跨进程持久化，也不等于任意 token 位置 durable resume；
+  G1 已于 2026-07-16 判定为 GO；同日 R7 收口为 PASS、G2 判定为 GO，后续顺序进入 `R8`。
 
 #### G0 之后的产品能力顺序
 
 1. **R3 Novel Workflow State Machine**：建立唯一小说级阶段事实，不复制后台任务状态；
 2. **R4 Story Packet**：统一生成输入、版本、来源和兼容门面；
-3. **R5 Role Model Policy 与 R6 Business Checkpoint**：均基于 R4，分别解决模型路由和可恢复业务边界；
-4. **G1-Cancel**：另立 Trellis 任务，为已经进入 Running 的长操作设计统一 cooperative cancellation，
-   覆盖 token 传播、幂等清理、迟到结果拒绝与失败注入；该能力不得混入当前 R2；
-5. **G1 审查后实施 R7**：只做受控 Tool、人工门禁、Pause/Resume 和可追溯的 Autopilot MVP；
-6. **G2 审查后实施 R8**：使用 golden sample、运行指标、人工反馈和失败样本决定后续扩展。
+3. **R5 Role Model Policy 与 R6 Business Checkpoint 已完成**：已建立可追溯模型策略和可恢复业务边界；
+4. **G1-Cancel 与 G1 已完成**：已为进入 Running 的长操作建立统一 cooperative cancellation，
+   覆盖 token 传播、replacement cancellation、幂等清理、迟到结果拒绝、失败注入与 terminal ownership 竞态；
+5. **R7 已完成**：受控 Tool Contract、`novel_autopilot` 最小任务/Coordinator、认证项目作用域控制 API、一次性人工 gate、Workflow Panel 人工确认启动与 owner-scoped readonly history 均已形成单次受控闭环；durable invocation audit 在启动前记录 queued、与 workflow CAS 同事务投影 succeeded、对失败/取消记录稳定脱敏码。该审计**不等于 durable invocation recovery**：`novel_autopilot` 仍为 `NonResumable`，未新增 Pause/Resume/Steer、checkpoint、重放或自动重试；
+6. **G2 与 R8 已完成**：G2 证明 fixed sample、failure injection 和 readonly UI 仍满足安全 owner 边界；R8 已以脱敏 golden sample、运行指标、人工反馈和失败样本完成最小评测/档案闭环，未扩展 Autopilot Tool 或执行流程。
 
 #### 硬性冻结与 No-Go
 
 - 不执行生产数据库 migration、production downgrade 或超出既有授权边界的其他 Schema 变更；
 - 未通过 R0.1-R0.3 和 G0，不进入 R3，也不以 UI/Agent 功能绕过生产可靠性门禁；
-- 未完成 R3-R6、G1-Cancel 和 G1，不开发整书或多卷 Autopilot；
+- G2 已判定为 GO，但其范围仅限当前受控单次 MVP；仍不开发无人值守整书或多卷 Autopilot，也不得由 R8、UI 或 Agent 绕过独立的后续能力门禁；
 - 不新增第二套 task store、项目阶段状态、恢复协议或 Coordinator 业务事实；
 - 不承诺任意 Token 位置断点续跑，不新增生产 downgrade CLI，不执行生产 downgrade；
 - 性能优化必须由 profile、运行指标或真实失败证据驱动，不能用扩大 broadcast capacity 掩盖一致性问题。
 
 这份决议是后续 Trellis 任务排序和范围审查的默认依据。只有满足 16.8 的路线变更条件并记录新的
 兼容性、回滚方式和验收门禁后，才允许调整依赖顺序。
+
+
+#### R8 完成证据与冻结边界（2026-07-16）
+
+- 静态评测样本仅在 Rust `cfg(test)` 下使用，评测器只读取 generation contract/audit 的安全摘要：
+  schema version、生成意图、执行角色和质量摘要是否存在。未知 schema 稳定拒绝，测试证明不输出
+  Prompt、target/project/chapter 标识、digest、provider/model、fallback 或 endpoint 细节。
+- `GET /projects/{project_id}/creative-archive` 复用既有 owner-scoped project export context，使用显式
+  allowlist 导出生成时间、章节反馈关联、contract/audit 的版本与安全枚举、质量分数和门禁结论；
+  legacy、非 JSON 或未知 history 一律 fail-closed 为缺失安全摘要，不复制原始历史或审计 read model。
+- `GET /projects/{project_id}/runtime-metrics` 返回版本化
+  `runtime-metrics/v1` / `derived_readonly` DTO。workflow 来自 canonical workflow service；task 来自
+  runtime `TaskRegistry`；quality 来自项目质量趋势 read model；受控调用审计来自 durable invocation audit。
+  端点先验证 project owner，任一子读取失败仅投影对应段为 `unavailable`，不泄露存储错误。
+- `available`、`empty`、`unavailable` 只表示派生 read model 的读取语义：`empty` 表示当前无可观测记录，
+  `unavailable` 表示读取失败，均不代表 workflow/task/audit 失败。task 与 invocation audit 为固定最多
+  100 条的 runtime-observed 样本，不是 canonical history、恢复点或控制状态。
+- 项目详情仅显示一次性请求的 typed readonly 摘要，明确“不自动刷新”；没有 R8 的 Pause/Resume/Steer、
+  retry、replay、checkpoint/recovery 或 Autopilot 启动入口。前端 mock E2E 验证了 empty/unavailable
+  展示、敏感哨兵字段不渲染及卡片内无控制按钮。
+- focused 质量证据：R8 Rust focused tests **11/11**、`cargo check`、frontend `lint` 与 `build` 均通过；
+  `project-workflow-state.spec.ts` **6/6** 通过。
+- 路线级最终回归（2026-07-16）：Rust 全量 `cargo test` **1801 passed**；frontend 全量 E2E
+  **14 passed / 13 skipped**。health readiness 的 migration revision count 断言从 Rust-owned canonical
+  `postgres_revision_catalog().len()` 读取，避免新增 migration 后的硬编码计数漂移。
+- 恢复语义 E2E 的 mock 终态时间使用动态近时刻，避免测试 fixture 被 production 的 12 小时 terminal-task
+  retention 合法压缩；该修复不改变生产 retention、恢复策略、UI 或 API 合约。R8 **不授权**无人值守
+  整书/多卷、多 Tool 或多步骤自治，也不放开 Provider/MCP runtime、真实 Prompt 评测、自动重试、恢复、
+  重放或新的事实 owner。
 
 ---
 
@@ -2030,3 +2273,15 @@ MuMuNovel 当前最需要的不是继续增加孤立的 AI 功能入口，而是
 - `../ainovel-cli/internal/store/checkpoints.go:174`
 - `../ainovel-cli/internal/bootstrap/configfile.go:53`
 - `../ainovel-cli/internal/bootstrap/config.go:97`
+
+---
+
+## 23. 2026-07-19 可观察性补强：模型实际输出双通道
+
+在既定 R0.1–R8 路线完成后，MuMuNovel 增加一项不改变业务事实 owner 的可观察性补强：生成进度界面可选展示模型正在生成的具体业务文本，以及 Provider API 明确返回的 reasoning/thinking 内容。
+
+该能力沿用既有 Provider adapter、SSE、后台任务和通用进度 Modal，不建立新的 task/workflow/audit/checkpoint 系统。`reasoning_chunk` 与正文 `chunk` 独立，reasoning 不进入正式业务结果、任务快照或持久化数据。详细输出默认关闭，浏览器每通道仅保留最近 50,000 个字符，后台 transient queue 总量限制为 64 KiB。
+
+这不是隐藏 chain-of-thought 提取能力，也不是新的 R9。完整实现边界与验收方法见：
+
+- `docs/23-model-reasoning-content-stream-panel-acceptance.zh-CN.md`

@@ -1,0 +1,9 @@
+{"file":".trellis/spec/backend/autopilot-invocation-audit.md","reason":"R7 durable audit、owner history 和前端只读 allowlist 边界。"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Rust API/service 跨层验证、错误与测试约定。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端 lint、build 与 Playwright 回归门禁。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"action API、task、service、audit、UI 的 owner/数据流复核。"}
+{"file":".trellis/tasks/07-16-r7-autopilot-control-api-human-gate/implement.md","reason":"已实现 action API 的契约和验证证据。"}
+{"file":".trellis/tasks/07-16-r7-autopilot-task-minimal-coordinator/implement.md","reason":"已实现一次性 Coordinator 的执行和终态边界。"}
+{"file":".trellis/tasks/07-16-r7-autopilot-invocation-audit/implement.md","reason":"durable audit 的事务、安全投影和迁移证据。"}
+{"file":".trellis/tasks/07-16-r7-autopilot-workflow-panel-launch/implement.md","reason":"前端创建入口与 no-optimistic-mutation 回归。"}
+{"file":".trellis/tasks/07-16-r7-autopilot-invocation-audit-history-panel/implement.md","reason":"只读 history UI 的脱敏与无控制行为回归。"}

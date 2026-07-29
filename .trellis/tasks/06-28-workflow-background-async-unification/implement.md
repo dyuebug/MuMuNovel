@@ -36,3 +36,47 @@ npm exec tsc -b
 ## Rollback
 
 前端可回退到原 `inspirationApi.generateOptions/refineOptions/quickGenerate` 同步方法；后端原同步/SSE 路由不删除。
+## Completion Record (2026-07-12)
+
+### Contract hardening
+
+- Extracted `task_type_allows_empty_project()` from the task creation path so
+  global-task admission has one testable owner.
+- Added positive and negative project-scope contract tests for background task
+  types.
+- Updated three stale Rust contract tests to match the current recovery-owner,
+  execution-owner, and manual-review lifecycle contracts.
+
+### Final validation
+
+```text
+cargo fmt --manifest-path backend-rs/Cargo.toml -- --check  PASS
+cargo test --manifest-path backend-rs/Cargo.toml api::background_tasks::tests  16/16 PASS
+cargo test --manifest-path backend-rs/Cargo.toml  1524/1524 PASS
+cargo check --manifest-path backend-rs/Cargo.toml  PASS
+npm run build --prefix frontend  PASS
+```
+
+### Remaining non-blocking warnings
+
+- Existing Rust dead-code warnings remain.
+- Existing Vite circular chunk warning remains:
+  `vendor-utils -> vendor-react -> vendor-utils`.
+- No Git commit or branch operation was performed.
+## Revalidation Record (2026-07-14)
+
+Validated against the current mixed worktree after later background-task
+reliability changes:
+
+```text
+cargo fmt --manifest-path backend-rs/Cargo.toml -- --check  PASS
+cargo test --manifest-path backend-rs/Cargo.toml api::background_tasks::tests  25/25 PASS
+cargo test --manifest-path backend-rs/Cargo.toml  1613/1613 PASS
+cargo check --manifest-path backend-rs/Cargo.toml  PASS
+npm run build --prefix frontend  PASS
+npm run lint --prefix frontend  PASS (0 errors, 33 existing warnings)
+```
+
+The task remains functionally complete. Trellis archive/commit bookkeeping is
+deferred because the worktree contains unrelated parallel changes and Git
+operations require explicit confirmation.

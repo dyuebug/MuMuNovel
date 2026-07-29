@@ -1,0 +1,7 @@
+{"file":"backend-rs/src/api/autopilot.rs","reason":"确认 action route 的 Claims/path/strict DTO/canonical payload 边界。"}
+{"file":"backend-rs/src/api/background_tasks.rs","reason":"确认 generic task 创建、audit queued before spawn 和取消 terminal owner。"}
+{"file":"backend-rs/src/services/autopilot_coordinator_service.rs","reason":"确认 validated task 到 Tool/workflow/audit transaction 的执行边界。"}
+{"file":"backend-rs/src/services/autopilot_tool_contract_service.rs","reason":"确认 Tool allowlist、schema、confirmation 和 scope delegation。"}
+{"file":"backend-rs/src/services/autopilot_invocation_audit_service.rs","reason":"确认安全审计投影和 owner-scoped history read model。"}
+{"file":"frontend/e2e/project-workflow-state.spec.ts","reason":"确认创建入口无 optimistic mutation，history 只读且不泄露敏感字段。"}
+{"file":"docs/15-ainovel-cli-comparison-and-mumunovel-optimization.zh-CN.md","reason":"R7→G2→R8 路线、门禁和禁止能力边界。"}

@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Rust owner focused tests、完整回归和禁止平行 runtime 的质量门禁"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "契约错误、恢复 fallback 与敏感信息日志边界"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "lint/build/targeted E2E 和请求链回归要求"}
+{"file": "docs/15-ainovel-cli-comparison-and-mumunovel-optimization.zh-CN.md", "reason": "验证 R4 完成条件并更新下一路线主线"}

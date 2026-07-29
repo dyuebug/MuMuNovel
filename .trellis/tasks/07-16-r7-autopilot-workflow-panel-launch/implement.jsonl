@@ -1,0 +1,9 @@
+{"file":"frontend/src/features/projects/workflow/ProjectWorkflowStatePanel.tsx","reason":"Existing canonical workflow state, direct transition, dropdown and confirmation UI to preserve."}
+{"file":"frontend/src/services/modules/backgroundTasks.ts","reason":"Existing generic background-task HTTP module and store synchronization owner."}
+{"file":"frontend/src/services/modules/backgroundTaskTypes.ts","reason":"Typed background-task request/response boundary including novel_autopilot."}
+{"file":"frontend/src/constants/backgroundTaskEvents.ts","reason":"Established event for opening the existing task center."}
+{"file":"frontend/src/features/background-tasks/hooks/useBackgroundTaskCenterController.ts","reason":"Existing generic task polling and cancellation behavior."}
+{"file":"backend-rs/src/api/autopilot.rs","reason":"Strict authenticated project-scoped backend contract to consume."}
+{"file":"docs/15-ainovel-cli-comparison-and-mumunovel-optimization.zh-CN.md","reason":"R7 scope, G2 guardrails and remaining roadmap constraints."}
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend pre-development guidance and required specific guides."}
+{"file":".trellis/spec/guides/index.md","reason":"Cross-layer and code-reuse guidance."}

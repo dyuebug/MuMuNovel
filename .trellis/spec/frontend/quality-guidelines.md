@@ -84,3 +84,65 @@ and E2E-aware validation matter more than in a heavily unit-tested UI repo.
 - Do not bypass typed/shared APIs with ad hoc `fetch` in pages.
 - Do not ship route-visible UI changes without checking lazy-loading and route
   registration consistency.
+
+## Async Effect and Real E2E Contracts
+
+### React StrictMode mounted guards
+
+React development StrictMode may replay an effect as setup → cleanup → setup. Any async effect that uses a
+mutable mounted guard must restore the guard at the beginning of every setup, not only initialize the ref once.
+
+```tsx
+// Wrong: cleanup from the StrictMode probe permanently disables the next setup.
+const mountedRef = useRef(true);
+useEffect(() => () => {
+  mountedRef.current = false;
+}, []);
+
+// Correct: every setup owns an active lifecycle; final cleanup rejects late work.
+const mountedRef = useRef(true);
+useEffect(() => {
+  mountedRef.current = true;
+  return () => {
+    mountedRef.current = false;
+    requestIdRef.current += 1;
+  };
+}, []);
+```
+
+Required assertions:
+
+- StrictMode setup/cleanup replay must still allow the active OAuth/auth request to complete.
+- A real unmount must reject late responses and prevent navigation or state updates.
+- Targeted Playwright auth coverage must reach the post-callback UI, not stop at a loading-state assertion.
+
+Reference: `frontend/src/pages/AuthCallback.tsx` and `frontend/e2e/auth.spec.ts`.
+
+### Stable route ownership in Playwright
+
+`src/app/router/AppRouter.tsx` is the route registry. E2E helpers must not use a removed, unregistered, or
+page-layout-specific route as a navigation trampoline to reach the behavior under test.
+
+```tsx
+// Wrong: depends on an unrelated historical page and its current link layout.
+await page.goto(`/project/${projectId}/sponsor`);
+await page.locator(`a[href="/project/${projectId}/${subPath}"]`).click();
+
+// Correct: enter the registered target route and assert the route contract.
+await page.goto(`/project/${projectId}/${subPath}`);
+await expect(page).toHaveURL(
+  new RegExp(`/project/${projectId}/${subPath}$`),
+);
+```
+
+Validation matrix:
+
+| Case | Required result |
+|---|---|
+| Target route is registered | Direct navigation reaches the real page and business request assertions run |
+| Target route is renamed/removed | Router and E2E contract must be updated together; do not hide drift with a fallback page |
+| Navigation layout changes | Business smoke remains stable unless navigation itself is the behavior under test |
+| Helper points to an unregistered route | Test must fail during review; never accept it as a valid setup path |
+
+Reference: `frontend/e2e/helpers/backgroundTaskSmoke.ts` and
+`frontend/src/app/router/AppRouter.tsx`.

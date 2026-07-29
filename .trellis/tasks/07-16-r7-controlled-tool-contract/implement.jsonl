@@ -1,0 +1,10 @@
+{"file": "docs/15-ainovel-cli-comparison-and-mumunovel-optimization.zh-CN.md", "reason": "R7 roadmap, sequence, ownership prohibitions, and gate status."}
+{"file": "docs/19-g1-contract-gate-review.zh-CN.md", "reason": "G1 GO evidence and retained R7 design risks."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Rust service boundary and module placement conventions."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Backend typed-error and safe error-boundary conventions."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verification, compatibility, and code-quality requirements."}
+{"file": "backend-rs/src/services/autopilot_tool_contract_service.rs", "reason": "Public service facade for the internal controlled Tool contract."}
+{"file": "backend-rs/src/services/autopilot_tool_contract_service/schema_owner.rs", "reason": "Static allowlist, strict typed arguments, ToolDef schema projection, and safe result/error DTOs."}
+{"file": "backend-rs/src/services/autopilot_tool_contract_service/dispatch_owner.rs", "reason": "Authenticated confirmation-gated dispatcher delegating only to the canonical workflow service."}
+{"file": "backend-rs/src/services/autopilot_tool_contract_service/tests.rs", "reason": "SQLite-backed contract, authorization, CAS, and redaction regression coverage."}
+{"file": "backend-rs/src/services/mod.rs", "reason": "Registers the new Rust service module without changing any public route."}

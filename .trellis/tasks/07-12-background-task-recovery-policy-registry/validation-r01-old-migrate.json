@@ -1,0 +1,71 @@
+{
+  "exit_code": 0,
+  "owner": "schema_migration_metadata_service",
+  "replay_plan": {
+    "already_at_head": false,
+    "blockers": [],
+    "can_replace_python_migrator": true,
+    "current_revision": "20260517_project_core_defaults",
+    "ddl_executed": false,
+    "ddl_replay_ready": true,
+    "next_action": "run Rust migration-executor under single-flight, then delete or archive frozen Python migrator source-map files",
+    "ok": true,
+    "owner": "schema_migration_metadata_service",
+    "pending_files": [
+      "20260712_1200_password_hash_phc_text.py"
+    ],
+    "pending_revision_count": 1,
+    "pending_revisions": [
+      "20260712_password_hash_phc_text"
+    ],
+    "pending_revisions_all_have_rust_steps": true,
+    "rust_executable_pending_revisions": [
+      "20260712_password_hash_phc_text"
+    ],
+    "rust_executable_pending_sql_step_count": 2,
+    "status": "pending_catalog_revisions_have_rust_steps",
+    "target_revision": "20260712_password_hash_phc_text"
+  },
+  "single_flight": {
+    "ddl_executed": false,
+    "error": null,
+    "fallback_reason": null,
+    "held_during_live_head_check": true,
+    "lock_acquired": true,
+    "lock_key": 658213001019093484,
+    "lock_mode": "postgres_advisory_lock",
+    "lock_name": "mumuainovel:alembic",
+    "ok": true,
+    "owner": "schema_migration_metadata_service",
+    "poll_interval_millis": 1000,
+    "status": "lock_acquired",
+    "timeout_seconds": 300
+  },
+  "smoke": {
+    "blockers": [],
+    "ddl_executed": false,
+    "execution_mode": "read_only_noop_executor_smoke",
+    "expected_head": "20260712_password_hash_phc_text",
+    "gate_enabled": true,
+    "live_head": "20260712_password_hash_phc_text",
+    "ok": true,
+    "owner": "schema_migration_metadata_service",
+    "rollback_boundary": "python_db_migrator_alembic",
+    "status": "noop_executor_smoke_passed"
+  },
+  "status": "migration_needed_executor_shell_passed",
+  "tail_hardening_replay": {
+    "blockers": [],
+    "ddl_executed": true,
+    "executed_revisions": [
+      "20260712_password_hash_phc_text"
+    ],
+    "executed_sql_step_count": 2,
+    "final_revision": "20260712_password_hash_phc_text",
+    "gate_enabled": true,
+    "gate_env": "RUST_MIGRATION_TAIL_HARDENING_REPLAY_ENABLED",
+    "ok": true,
+    "owner": "schema_migration_metadata_service",
+    "status": "tail_hardening_replay_applied"
+  }
+}

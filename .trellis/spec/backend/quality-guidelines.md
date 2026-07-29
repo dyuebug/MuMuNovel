@@ -5890,8 +5890,9 @@ pub can_resume: Option<bool>;
 
 ### 3. Contracts
 
-- The registry contains exactly 23 known production task types: 5 restartable, 2
-  checkpoint-resumable, and 16 manual-confirmation entries.
+- The registry contains exactly 24 known production task types: 5 restartable, 2
+  checkpoint-resumable, 16 manual-confirmation, and 1 explicit non-resumable entry
+  (`novel_autopilot`).
 - `has_explicit_recovery_policy()` distinguishes an intentional registry decision from the safe
   fallback. Unknown or unregistered task types always return `false` there and still resolve to
   `NonResumable` through `recovery_policy_for()`.
@@ -5994,6 +5995,145 @@ if recovered_count > 0 {
 persistence::start_periodic_save(task_registry.clone());
 
 // recover_orphan_tasks() owns policy projection only; it never replays business payloads.
+```
+
+
+---
+
+## Scenario: Versioned Business Checkpoints in Batch Runtime State
+
+### 1. Scope / Trigger
+
+This contract applies when a database-backed batch workflow records a durable business boundary or
+uses that boundary to resume execution. The first supported owner is batch chapter generation at
+`chapter_draft_saved`. This checkpoint is separate from the process-owned background-task recovery
+checkpoint and must reuse the existing batch task, generation contract, and runtime snapshot owners.
+
+### 2. Signatures
+
+The typed owner remains internal to the Rust service layer:
+
+```rust
+pub const BUSINESS_CHECKPOINT_SCHEMA_VERSION: &str = "business-checkpoint/v1";
+
+pub(crate) enum BusinessCheckpointBoundary {
+    ChapterDraftSaved,
+}
+
+pub(crate) enum BusinessCheckpointOutputReferenceV1 {
+    Chapter { id: String },
+}
+
+pub(crate) struct BusinessCheckpointV1 {
+    pub(crate) schema_version: String,
+    pub(crate) boundary: BusinessCheckpointBoundary,
+    pub(crate) revision: u64,
+    pub(crate) idempotency_key: String,
+    pub(crate) input_digest: String,
+    pub(crate) output_reference: BusinessCheckpointOutputReferenceV1,
+    pub(crate) recorded_at: String,
+}
+
+pub(crate) fn build_business_checkpoint(...) -> Result<BusinessCheckpointV1, BusinessCheckpointError>;
+pub(crate) fn read_business_checkpoint_runtime_state(&Value) -> BusinessCheckpointRead;
+pub(crate) fn merge_business_checkpoint_runtime_state(
+    &mut Value,
+    &BusinessCheckpointV1,
+) -> Result<(), BusinessCheckpointError>;
+pub(crate) fn validate_business_checkpoint_idempotency_key(
+    batch_task_id: &str,
+    checkpoint: &BusinessCheckpointV1,
+) -> Result<(), BusinessCheckpointError>;
+```
+
+The persisted location is additive and fixed:
+
+```text
+batch_generation_snapshots.workflow_runtime_state.business_checkpoint
+```
+
+### 3. Contracts
+
+- The only current schema is `business-checkpoint/v1`; the only current boundary is
+  `chapter_draft_saved`, and its output reference is exactly `{ "kind": "chapter", "id": "..." }`.
+- `revision` is positive and monotonic within one batch task. Chapter success uses the greater of the
+  persisted successful-chapter count and the previous valid business-checkpoint revision.
+- `idempotency_key` is a `sha256:` digest of canonical allowlisted fields: schema version, batch task
+  id, boundary, revision, R4 `input_digest`, and typed output reference. Resume must recompute it from
+  persisted fields; validating only its prefix is insufficient.
+- `input_digest` reuses the validated R4 generation-contract snapshot. Do not derive a second input
+  identity or accept a checkpoint whose digest differs from the current persisted contract.
+- Persist only the typed allowlist. Prompts, chapter bodies, API keys, authorization headers, provider
+  payloads, and complete URLs must never enter the business-checkpoint subtree or safe domain errors.
+- Merge under `workflow_runtime_state.business_checkpoint`. Do not replace the existing runtime
+  `checkpoint`, create another task store, create another project-state fact, or add a migration for
+  this JSON-only extension.
+- A missing business checkpoint is legacy-compatible. An unsupported, invalid, tampered, mismatched,
+  dangling, cross-project, or empty-output checkpoint fails before task reset and runtime dispatch.
+- Resume validation must prove that the chapter id belongs to the batch selection, exists in the
+  current project, and has non-empty trimmed content. Valid recovery continues from the next
+  incomplete chapter while preserving unrelated runtime-state fields.
+- If a legacy success snapshot has no valid R4 generation contract, preserve the old success
+  persistence behavior and skip business-checkpoint creation rather than fabricating an input digest.
+
+### 4. Validation & Error Matrix
+
+| Persisted state | Required behavior |
+|---|---|
+| `business_checkpoint` missing | Continue through the legacy resume path. |
+| Unknown `schema_version` | Return a typed safe resume-domain error; do not reset or dispatch. |
+| Invalid fields, zero revision, malformed digest, or malformed output | Return a typed safe error; preserve task and snapshot. |
+| Canonical idempotency key does not match persisted fields | Reject as tampered; do not expose expected/actual digests to the API caller. |
+| R4 `input_digest` differs | Reject as stale input before runtime launch. |
+| Chapter id is outside the task selection | Reject before task reset and runtime dispatch. |
+| Chapter is missing or belongs to another project | Reject the dangling/cross-project reference. |
+| Chapter content is empty after trimming | Reject because the business boundary is not durable. |
+| Valid chapter output and matching input contract | Preserve the checkpoint and resume from the next incomplete chapter. |
+| Chapter success without a valid generation contract | Persist the legacy success snapshot without adding a business checkpoint. |
+
+### 5. Good / Base / Bad Cases
+
+- Good: chapter 1 content is saved, the production success persistence owner writes revision `1`, a
+  later chapter fails, and resume validates the stored chapter before continuing from chapter 2.
+- Base: an old snapshot has no `business_checkpoint`; existing resume behavior remains unchanged.
+- Bad: a caller supplies an arbitrary `sha256:` idempotency key, resume trusts a chapter id without
+  project/content validation, or checkpoint serialization copies the full runtime/provider payload.
+
+### 6. Tests Required
+
+1. Round-trip the exact typed allowlist and reject unknown schema, invalid revision, malformed digest,
+   invalid output reference, and invalid timestamp values.
+2. Prove canonical idempotency stability and identity sensitivity, then reject a persisted tampered key.
+3. Prove runtime-state merge preserves unrelated fields and the legacy `checkpoint` projection.
+4. Prove chapter-success persistence uses the R4 digest and never decreases revision across retry/resume.
+5. Run a real SQLite/SeaORM success -> checkpoint persistence -> failure -> resume test through the
+   production persistence and resume owners; do not create the valid checkpoint directly in the test.
+6. Cover missing legacy state, unsupported/invalid checkpoint, digest mismatch, chapter outside task,
+   missing chapter, cross-project chapter, and empty chapter content.
+7. Assert validation failures leave the task/snapshot unchanged and do not start the runtime.
+8. Assert the serialized checkpoint excludes prompt, body, credentials, authorization, and complete URL
+   markers; public resume errors must remain fixed safe text.
+9. Run the `business_checkpoint`, resume-command, runtime-state, and full Rust test suites plus fmt/check.
+
+### 7. Wrong vs Correct
+
+Wrong — a syntactically shaped digest and output id are trusted without recomputing identity or
+validating the durable business result:
+
+```rust
+if checkpoint.idempotency_key.starts_with("sha256:") {
+    reset_task_and_resume(checkpoint.output_reference.id()).await?;
+}
+```
+
+Correct — validate the typed checkpoint, canonical identity, R4 input identity, and database-backed
+output before any task mutation or runtime dispatch:
+
+```rust
+validate_business_checkpoint_idempotency_key(&batch_task_id, checkpoint)?;
+ensure_input_digest_matches_generation_contract(checkpoint, persisted_contract)?;
+validate_saved_chapter_output(db, project_id, task_chapter_ids, checkpoint).await?;
+reset_task_and_resume_from_next_incomplete_chapter().await?;
 ```
 
 
@@ -6433,3 +6573,345 @@ run: >-
 
 run: pytest tests/test_tools
 ```
+
+
+## Scenario: Cooperative Cancellation and Terminal Persistence Ownership
+
+### 1. Scope / Trigger
+
+- Trigger: a generic background task or batch-generation runtime can continue producing progress or terminal
+  persistence after a user cancellation request races the active execution.
+- Scope: in-process token registration and propagation, generic/background and batch lifecycle owners, progress
+  bridges, task/snapshot transactions, terminal conditional updates, and their Rust tests.
+- This contract does not make cancellation durable across process restarts and does not promise resume from an
+  arbitrary token position.
+
+### 2. Signatures
+
+```rust
+pub(crate) enum CooperativeCancellationScope {
+    BackgroundTask,
+    BatchGeneration,
+}
+
+impl CooperativeCancellationRegistry {
+    pub(crate) fn register(
+        &self,
+        scope: CooperativeCancellationScope,
+        task_id: impl Into<String>,
+    ) -> CooperativeCancellationRegistration;
+
+    pub(crate) fn cancel(&self, scope: CooperativeCancellationScope, task_id: &str) -> bool;
+    fn remove_if_current(&self, key: &CooperativeCancellationKey, registration_id: u64) -> bool;
+}
+
+impl CooperativeCancellationToken {
+    pub(crate) fn cancel(&self) -> bool;
+    pub(crate) async fn cancelled(&self);
+}
+
+impl CooperativeCancellationRegistration {
+    pub(crate) fn token(&self) -> CooperativeCancellationToken;
+    pub(crate) fn cleanup(&self) -> bool;
+}
+```
+
+Database ownership predicates:
+
+```text
+runtime persistence: status NOT IN ('completed', 'failed', 'cancelled')
+cancel persistence:  status IN ('pending', 'running')
+rows_affected == 0:  rejected terminal-ownership attempt
+```
+
+### 3. Contracts
+
+- A registration identity is `(scope, task ID, unique registration ID)`. Registering a replacement cancels the
+  previous token, but cleanup from the old execution must not remove the replacement.
+- The cancellation registry is an in-process control plane, not durable task state. The database remains the
+  terminal-state source of truth.
+- Generic and batch lifecycle owners must race their execution future against the token with biased
+  `tokio::select!`; the cancellation branch must exit without calling a failed-task projection.
+- Every child progress bridge must observe the same token as its lifecycle owner and stop forwarding after the
+  signal.
+- Durable cancellation must update the task and cancelled snapshot in one transaction. The token may be
+  signalled only after that transaction commits successfully.
+- Runtime task changes and their snapshot changes must share one transaction. Terminal rows reject late
+  preparing, progress, success, cancellation, or failure patches without overwriting the snapshot.
+- Runtime conditional updates reject `completed`, `failed`, and `cancelled`; cancellation conditional updates
+  accept only `pending` and `running`. A zero affected-row count is an ownership rejection, never success.
+- Tests for asynchronously dispatched work may assert the initial state on the synchronous command response,
+  but must not assume a later database read still remains at `pending/queued` after the runtime has spawned.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| New registration replaces an active registration | Previous token is cancelled; old cleanup cannot remove the new registration |
+| Cancellation persistence commits | Task and snapshot are both cancelled, then the current token is signalled |
+| Cancellation persistence rolls back or is rejected | Token remains unsignalled and durable state remains unchanged |
+| Runtime patch reaches a terminal task | Conditional update affects zero rows; snapshot is not overwritten |
+| Cancellation races completion | Exactly one conditional update commits; task and snapshot expose the same terminal owner |
+| Cancellation wins the lifecycle `select!` | Execution exits without projecting `Failed`; child bridges stop |
+| Completion wins before cancellation | Completion remains durable and a rejected cancellation must not signal the token |
+| Local MSVC test link fails with PDB `LNK1318` | Re-run local verification with `rust-lld`, `debuginfo=0`, and `/DEBUG:NONE`; do not change product logic |
+
+Expected ownership-rejection errors remain stable internal messages:
+
+```text
+Batch generation runtime persistence rejected by terminal task status
+Batch generation cancel persistence rejected by inactive task status
+```
+
+### 5. Good / Base / Bad Cases
+
+- Good: cancellation and final completion start from the same barrier; one transaction wins, the losing owner
+  receives a zero-row rejection, task/snapshot agree, and only a committed cancellation signals the token.
+- Base: a running task receives cancellation without a competing terminal write; cancelled task and snapshot
+  commit together, bridges exit, registration cleanup is idempotent, and the public API/SSE contract is unchanged.
+- Bad: signal the token before database commit, update task and snapshot in separate transactions, treat zero
+  affected rows as success, call `fail_task` from the cancellation branch, or let old cleanup delete a resumed
+  execution's replacement registration.
+
+### 6. Tests Required
+
+- Unit-test registration uniqueness, replacement cancellation, idempotent cleanup, and old-cleanup safety.
+- Test generic lifecycle and every progress bridge with the same token; assert cancellation exits without a
+  failed projection or leaked forwarding task.
+- DB-test successful cancellation, then attempt late preparing/progress/success/failure writes and assert both
+  task and snapshot remain cancelled.
+- Inject a database failure into cancellation persistence; assert rollback, unchanged running state, and an
+  unsignalled token.
+- Use a barrier-driven cancel-vs-completion race; assert exactly one terminal owner succeeds and task/snapshot
+  terminal states match. Repeat the race to detect timing-sensitive regressions.
+- Keep resume fixtures in a valid lifecycle order (`running -> checkpoint -> failed -> resume`).
+- Run `cargo fmt --check`, `cargo check`, `cargo check --tests`, focused Rust tests, and the full Rust suite.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+// Signal first: execution may stop even when durable cancellation later rolls back.
+registry.cancel(scope, task_id);
+task_model.update(db).await?;
+snapshot.persist(db).await?;
+```
+
+```rust
+// Unconditional late runtime write can move a terminal task backwards.
+task_model.update(db).await?;
+snapshot.persist(db).await?;
+```
+
+#### Correct
+
+```rust
+let transaction = db.begin().await?;
+let result = batch_generation_task::Entity::update_many()
+    .set(cancelled_active_model)
+    .filter(batch_generation_task::Column::Id.eq(task_id))
+    .filter(batch_generation_task::Column::Status.is_in(["pending", "running"]))
+    .exec(&transaction)
+    .await?;
+if result.rows_affected == 0 {
+    return Err(inactive_task_error());
+}
+upsert_cancelled_snapshot(&transaction, task_id).await?;
+transaction.commit().await?;
+registry.cancel(CooperativeCancellationScope::BatchGeneration, task_id);
+```
+
+```rust
+let transaction = db.begin().await?;
+let result = batch_generation_task::Entity::update_many()
+    .set(runtime_active_model)
+    .filter(batch_generation_task::Column::Id.eq(task_id))
+    .filter(batch_generation_task::Column::Status.is_not_in([
+        "completed",
+        "failed",
+        "cancelled",
+    ]))
+    .exec(&transaction)
+    .await?;
+if result.rows_affected == 0 {
+    return Err(terminal_ownership_rejected());
+}
+upsert_runtime_snapshot(&transaction, task_id).await?;
+transaction.commit().await?;
+```
+
+
+## R7 Controlled Autopilot Task and Minimal Coordinator Contract (2026-07-16)
+
+### 1. Scope / Trigger
+
+- Trigger: a confirmed `novel_autopilot` background task executes the first controlled workflow Tool.
+- Scope: `autopilot_coordinator_service`, the internal Tool Contract, generic background-task dispatch,
+  recovery registry, and frontend task-type presentation.
+- This is not a Provider-agent loop, a public Autopilot control API, a durable Tool audit store, or a
+  resumable invocation protocol.
+
+### 2. Signatures
+
+```rust
+pub async fn execute_novel_autopilot_task(
+    db: &DatabaseConnection,
+    record: &TaskRecord,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String>;
+
+pub struct AutopilotToolExecutionContext<'a> {
+    pub actor_user_id: &'a str,
+    pub confirmation: AutopilotToolConfirmation,
+    pub project_scope: Option<&'a str>,
+}
+```
+
+`execute_task` owns the `"novel_autopilot"` match arm. It must project success with the existing
+`complete_task` owner and must not introduce a second registry, terminal-state owner, task table, or SSE kind.
+
+### 3. Contracts
+
+- `NovelAutopilotTaskPayload` is strict (`deny_unknown_fields`) and contains only `tool_name`, raw JSON
+  `arguments`, and `confirmed_by_user`.
+- The task actor is always `TaskRecord.user_id`; the canonical project scope is always
+  `TaskRecord.project_id`. Neither value is accepted from the payload or Tool arguments.
+- `transition_project_workflow` is the only current allowlisted Tool. Its strict project ID must equal the
+  optional task `project_scope` before calling `novel_workflow_service::transition`.
+- A true `confirmed_by_user` maps to `ConfirmedByUser`; false maps to `Missing`. The coordinator only
+  forwards the raw argument string to the Tool Contract and never becomes a JSON/permission boundary.
+- The result is the versioned `autopilot-tool-contract/v1` receipt serialized into the existing task result.
+- Because `TaskRecord` does not persist the payload, confirmation, or raw arguments, `novel_autopilot` is
+  explicitly `NonResumable`; orphan recovery fails safely and never replays the write.
+
+### 4. Validation & Error Matrix
+
+| Input or lifecycle state | Required outcome |
+|---|---|
+| Empty task project ID, malformed payload, unknown payload field, unknown Tool, malformed arguments | Fail before workflow mutation with a stable safe message |
+| Tool project differs from `TaskRecord.project_id` | Fail closed before the workflow service call |
+| `confirmed_by_user=false` | Return confirmation-required error; project workflow is unchanged |
+| Authenticated task actor lacks project ownership | Preserve canonical workflow not-found/access-denied behavior |
+| Valid confirmed CAS transition | Delegate to workflow owner and persist only the versioned receipt |
+| Orphaned running task after restart | Mark failed as non-resumable; require a new user-initiated task |
+
+Do not log raw arguments, prompts, tokens, URLs, API keys, or internal database errors. Map a project-scope
+mismatch to the safe invalid-task-payload message; map internal failures to a stable execution-failed message.
+
+### 5. Good / Base / Bad Cases
+
+- Good: a task for `project-a` created by `user-a` carries a confirmed `transition_project_workflow` payload
+  for `project-a`; the Tool Contract delegates the CAS transition to the canonical workflow service and the
+  generic task result stores the receipt.
+- Base: a direct internal Tool Contract caller has `project_scope: None`; existing first-slice compatibility
+  remains valid while canonical workflow authorization continues to apply.
+- Bad: read a user ID or project ID from the payload, let `arguments.project_id` cross task scope, deserialize
+  model output in the coordinator, call a Provider/MCP, perform direct SQL, or mark the task restartable even
+  though its invocation inputs were not persisted.
+
+### 6. Tests Required
+
+- Tool Contract tests: static allowlist/schema, missing confirmation, strict argument rejection, matching and
+  mismatching project scope, canonical authorization, and stale CAS propagation.
+- Coordinator SQLite tests: confirmed success, cross-project failure without mutation, strict payload rejection,
+  and error redaction.
+- Generic task tests: `novel_autopilot` result projection, project requirement, cancellation/terminal ownership
+  reuse, recovery registry, and frontend/executor/recovery lockstep contract.
+- Run formatting, `cargo check`, focused tests, the full Rust suite, frontend lint/build, and UTF-8/LF/trailing
+  whitespace checks for every changed text file.
+
+### 7. Wrong vs Correct
+
+```rust
+// Wrong: the payload becomes an authority boundary and bypasses the task scope.
+let actor = payload.user_id;
+let project_id = payload.project_id;
+workflow_service::transition(db, project_id, actor, /* ... */).await?;
+```
+
+```rust
+// Correct: TaskRecord supplies authority; Tool Contract validates the argument scope before its canonical call.
+let context = AutopilotToolExecutionContext {
+    actor_user_id: &record.user_id,
+    confirmation,
+    project_scope: Some(&record.project_id),
+};
+let receipt = dispatch_autopilot_tool_call(db, context, &payload.tool_name, &payload.arguments).await?;
+```
+
+## Health Migration Catalog Regression Rule (2026-07-16)
+
+### 1. Scope / Trigger
+
+- Trigger: a health/readiness test asserts metadata derived from the Rust PostgreSQL migration catalog.
+- Scope: test-only readiness assertions in `backend-rs/src/api/health.rs`; the canonical catalog remains
+  `schema_migration_metadata_service::postgres_revision_catalog()`.
+
+### 2. Signatures
+
+```rust
+pub fn postgres_revision_catalog() -> &'static [PostgresRevisionMetadata];
+```
+
+### 3. Contracts
+
+- The readiness payload exposes its migration revision count from the canonical Rust-owned catalog.
+- Tests asserting that count must derive the expected value from `postgres_revision_catalog().len()` rather
+  than duplicating a numeric literal.
+
+### 4. Validation & Error Matrix
+
+| Change | Required result |
+|---|---|
+| A revision is added to the canonical catalog | The readiness count test remains aligned without a second count update |
+| Catalog construction fails or changes contract | The canonical catalog/service tests fail; do not mask the failure in health tests |
+| A test hardcodes the old catalog length | Treat it as a regression-prone duplicate of migration metadata |
+
+### 5. Good / Base / Bad Cases
+
+- Good: health tests compare the JSON revision count with `json!(postgres_revision_catalog().len())`.
+- Base: tests for a specific revision head may assert the named head when that exact contract is intended.
+- Bad: change an expected count from one literal to another after every migration, or reconstruct the catalog
+  in the health test.
+
+### 6. Tests Required
+
+- Run the targeted readiness metadata test and the canonical catalog single-chain test after changing
+  migration metadata.
+- Run the full Rust suite when the health readiness contract or catalog is modified.
+
+### 7. Wrong vs Correct
+
+```rust
+// Wrong: a duplicate count drifts whenever a migration is added.
+assert_eq!(body["checks"]["schema_migration"]["postgres_revision_catalog"]["revision_count"], json!(20));
+```
+
+```rust
+// Correct: the test follows the Rust-owned catalog.
+assert_eq!(
+    body["checks"]["schema_migration"]["postgres_revision_catalog"]["revision_count"],
+    json!(postgres_revision_catalog().len()),
+);
+```
+## Deterministic AI Smoke Prompt Classification Rule (2026-07-19)
+
+Deterministic OpenAI-compatible smoke providers must classify a request from the prompt's
+**current task instruction**, not from arbitrary numbers appearing elsewhere in the template.
+
+- Prefer explicit smoke output markers and task-specific sentences such as `撰写第 X 章`,
+  `全面分析第 X 章`, or `章节：第 X 章`.
+- Do not collect every chapter-like number in the whole prompt and choose `min` or `max`.
+- Do not prioritize parameter guidance, JSON examples, output schemas, or explanatory text such as
+  `chapter_number为2或3`; those numbers describe the template rather than the current task.
+- Keep regression examples for chapter generation, analysis, repair, and polish prompt shapes. When
+  production system templates change, update the classifier tests with the real task sentence before
+  changing the classifier fallback order.
+- Smoke failure summaries and persisted artifacts must not include complete prompts, generated prose,
+  provider reasoning/thinking, credentials, or raw provider errors. Store only allowlisted status,
+  counters, identifiers, hashes, and explicit non-sensitive markers.
+
+The regression class is an implicit-assumption and coverage-gap failure: a generic structured field may
+appear in instructions or examples and is not necessarily the active request value. The prevention
+mechanism is task-sentence-first parsing plus real-template regression fixtures.

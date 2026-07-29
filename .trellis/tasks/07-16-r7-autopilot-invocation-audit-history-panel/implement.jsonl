@@ -1,0 +1,10 @@
+{"file":".trellis/spec/frontend/index.md","reason":"前端实施前的规范索引和必读清单。"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Ant Design/React 组件结构、交互和可访问性约束。"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"局部 UI 状态与全局 store 边界。"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"前端质量与测试验证要求。"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"既有后端 read contract 到前端安全投影的数据流检查。"}
+{"file":".trellis/spec/backend/autopilot-invocation-audit.md","reason":"durable audit 的隐私、安全边界与非恢复语义。"}
+{"file":"frontend/src/services/modules/projects.ts","reason":"项目工作流审计历史的最小、脱敏类型化 API 读取模型。"}
+{"file":"frontend/src/features/projects/workflow/ProjectWorkflowStatePanel.tsx","reason":"按需加载的组件局部只读审计历史 Modal，不改变任务或 workflow 语义。"}
+{"file":"frontend/e2e/project-workflow-state.spec.ts","reason":"审计历史 UI 的安全边界和既有后台受控切换不回归的 Playwright 证据。"}
+{"file":".trellis/spec/backend/autopilot-invocation-audit.md","reason":"记录前端 allowlist read model、无控制行为和对应 E2E 的跨层契约。"}
