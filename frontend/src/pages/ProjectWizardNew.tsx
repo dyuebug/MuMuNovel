@@ -807,36 +807,6 @@ export default function ProjectWizardNew() {
     </Card>
   );
 
-  const wizardGuideSteps = [
-    '先确认项目定位、章节规模和大纲模式，判断这次是在快速起稿还是搭建可扩写的长期骨架。',
-    '再补默认创作偏好、联网检索和 MCP 设置，只保留会长期影响生成结果的默认项。',
-    '最后再启动 AI 项目生成；进入生成阶段后优先观察回流进度，不在中途频繁改动启动参数。',
-  ];
-  const wizardWorkspaceFocus = currentStep === 'generating'
-    ? {
-        title: resumeProjectId ? '继续未完成项目生成' : '等待 AI 回流项目骨架',
-        note: '当前已经进入生成阶段，适合先观察任务推进和回流结果，避免频繁返回表单改动基础设定。',
-      }
-    : resumeProjectId
-      ? {
-          title: '核对恢复中的向导配置',
-          note: '系统检测到一个未完成项目，适合先确认是否沿用旧配置继续生成，再补充这轮新增的默认偏好。',
-        }
-      : watchedOutlineMode === 'one-to-many'
-        ? {
-            title: '梳理分组式创作骨架',
-            note: '当前是一纲多章模式，更适合先把章节规模、默认偏好和检索策略一次定稳，再交给生成流程展开。',
-          }
-        : watchedEnableMcp
-          ? {
-              title: '校准启动默认设定',
-              note: '当前已启用 MCP，适合把长期默认的创作偏好、检索词和模型设置在启动前一次校准清楚。',
-            }
-          : {
-              title: '收敛首轮启动参数',
-              note: '当前更适合先把项目定位、目标字数和核心偏好填清楚，再决定是否接入额外的外部能力。',
-            };
-
   return (
     <div style={{
       minHeight: '100dvh',
@@ -952,73 +922,6 @@ export default function ProjectWizardNew() {
             </Space>
           </Card>
         </div>
-
-        <Card
-          variant="borderless"
-          style={{
-            marginBottom: 16,
-            background: `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimary} 10%, white 90%) 0%, color-mix(in srgb, ${token.colorInfo} 10%, white 90%) 100%)`,
-            borderRadius: 22,
-            border: `1px solid color-mix(in srgb, ${token.colorPrimary} 16%, white 84%)`,
-            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
-          }}
-          styles={{ body: { padding: isMobile ? 16 : 18 } }}
-        >
-          <Row gutter={[16, 16]}>
-            <Col xs={24} lg={15}>
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <Typography.Text style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                  Launch Guide
-                </Typography.Text>
-                <Paragraph style={{ margin: 0, color: token.colorText, lineHeight: 1.75 }}>
-                  这个页面更像新项目启动台。原有的向导表单、恢复未完成生成和 AI 项目生成逻辑都保持不变，这里只把填写顺序和当前应该优先确认的内容提前说明。
-                </Paragraph>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {wizardGuideSteps.map((item, index) => (
-                    <span
-                      key={item}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        padding: '6px 12px',
-                        borderRadius: 999,
-                        background: token.colorBgContainer,
-                        border: `1px solid ${token.colorBorderSecondary}`,
-                        color: token.colorTextBase,
-                        fontSize: 12,
-                      }}
-                    >
-                      <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
-                      {item}
-                    </span>
-                  ))}
-                </div>
-              </Space>
-            </Col>
-            <Col xs={24} lg={9}>
-              <div
-                style={{
-                  height: '100%',
-                  borderRadius: 18,
-                  padding: isMobile ? '14px 14px 12px' : '16px 18px 14px',
-                  background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                }}
-              >
-                <Typography.Text style={{ display: 'block', color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                  当前启动焦点
-                </Typography.Text>
-                <Title level={5} style={{ margin: '8px 0 6px', color: token.colorTextBase, fontFamily: designDisplayFont }}>
-                  {wizardWorkspaceFocus.title}
-                </Title>
-                <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
-                  {wizardWorkspaceFocus.note}
-                </Paragraph>
-              </div>
-            </Col>
-          </Row>
-        </Card>
 
       <div style={{
         maxWidth: currentStep === 'form' ? 920 : 1120,

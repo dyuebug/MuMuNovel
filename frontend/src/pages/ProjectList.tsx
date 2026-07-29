@@ -254,12 +254,21 @@ export default function ProjectList() {
 
   const getStatusTag = (status: string) => {
     const statusConfig: Record<string, { color: string; text: string; icon: ReactNode }> = {
-      planning: { color: 'blue', text: '规划', icon: <CalendarOutlined /> },
+      inspiration: { color: 'cyan', text: '灵感', icon: <BulbOutlined /> },
+      foundation: { color: 'blue', text: '基础设定', icon: <CalendarOutlined /> },
+      world_building: { color: 'geekblue', text: '世界构建', icon: <BookOutlined /> },
+      character_design: { color: 'gold', text: '角色设计', icon: <FileTextOutlined /> },
+      outline: { color: 'processing', text: '大纲', icon: <FileSearchOutlined /> },
       writing: { color: 'green', text: '创作', icon: <EditOutlined /> },
-      revising: { color: 'orange', text: '修订', icon: <FileTextOutlined /> },
+      reviewing: { color: 'orange', text: '审校', icon: <FileSearchOutlined /> },
+      polishing: { color: 'magenta', text: '润色', icon: <FileTextOutlined /> },
       completed: { color: 'purple', text: '已完结', icon: <TrophyOutlined /> },
+      planning: { color: 'blue', text: '基础设定', icon: <CalendarOutlined /> },
+      draft: { color: 'blue', text: '基础设定', icon: <CalendarOutlined /> },
+      active: { color: 'green', text: '创作', icon: <EditOutlined /> },
+      revising: { color: 'orange', text: '审校', icon: <FileSearchOutlined /> },
     };
-    const config = statusConfig[status] || statusConfig.planning;
+    const config = statusConfig[status] || statusConfig.foundation;
     return (
       <Tag color={config.color} icon={config.icon} style={{ margin: 0, borderRadius: 4, flexShrink: 0 }}>
         {config.text}
@@ -267,13 +276,8 @@ export default function ProjectList() {
     );
   };
 
-  // 根据进度获取显示状态（进度达到100%时显示已完结）
-  const getDisplayStatus = (status: string, progress: number): string => {
-    if (progress >= 100) {
-      return 'completed';
-    }
-    return status;
-  };
+  // 项目阶段只来自服务端 workflow 状态；字数进度仅作为独立指标展示。
+  const getDisplayStatus = (status: string): string => status;
 
   const getProgress = (current: number, target: number) => {
     if (!target) return 0;
@@ -301,51 +305,8 @@ export default function ProjectList() {
 
   const totalWords = projects.reduce((sum, p) => sum + (p.current_words || 0), 0);
   const activeProjects = projects.filter(p => p.status === 'writing').length;
-  // 计算已完结项目数（进度>=100%或状态为completed）
-  const completedProjects = projects.filter(p => {
-    const progress = getProgress(p.current_words || 0, p.target_words || 0);
-    return progress >= 100 || p.status === 'completed';
-  }).length;
-
-  const projectListGuideSteps = [
-    '先看顶栏统计和当前视图，确认这次是在巡检项目总览，还是准备进入某个工具页。',
-    '再从书架区筛选、进入、导入或导出项目，把高影响操作放在看清当前项目分布之后。',
-    '最后再切到设置、MCP、提示词或导书入口，避免在项目列表和工具页之间来回跳动。',
-  ];
-  const projectListFocus = importModalVisible || validating || importing
-    ? {
-        title: '确认本轮项目导入结果',
-        note: '当前正在校验或导入项目文件，适合先看清文件状态和结果提示，再继续进入书架或工具页。',
-      }
-    : exportModalVisible || exporting
-      ? {
-          title: '整理要导出的项目批次',
-          note: '导出面板已经打开，适合先确认勾选范围与导出内容，再批量触发项目归档或迁移。',
-        }
-      : loading
-        ? {
-            title: '等待项目书架同步',
-            note: '项目列表正在刷新，稍后就能继续巡检项目状态、进入创作或执行导入导出操作。',
-          }
-        : selectedProjectIds.length > 0
-          ? {
-              title: `处理 ${selectedProjectIds.length} 个已选项目`,
-              note: '当前已经选中一批项目，适合先完成这一轮导出或检查，再回到全量书架继续筛选。',
-            }
-          : showApiTip
-            ? {
-                title: '先浏览当前工作台提示',
-                note: '书架页仍有入口提示信息，适合先确认本轮要走新建、灵感、导入还是继续已有项目。',
-              }
-            : projects.length > 0
-              ? {
-                  title: '巡检现有项目书架',
-                  note: '当前项目库已经有内容，适合先看项目分布、状态与字数体量，再决定进入哪一个项目继续创作。',
-                }
-              : {
-                  title: '建立第一批项目入口',
-                  note: '当前书架还是空的，适合先创建项目或导入已有项目，再逐步补齐后续创作工作流。',
-                };
+  // 已完结项目数只读取服务端权威 workflow 阶段。
+  const completedProjects = projects.filter(p => p.status === 'completed').length;
 
   const renderWorkspaceFallback = (
     view: ProjectListView,
@@ -1134,73 +1095,6 @@ export default function ProjectList() {
               })}
             >
               <>
-                <div
-                  style={{
-                    marginBottom: 18,
-                    borderRadius: 24,
-                    padding: isMobile ? '16px 16px 14px' : '18px 20px',
-                    background: `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimary} 10%, white 90%) 0%, color-mix(in srgb, ${token.colorInfo} 10%, white 90%) 100%)`,
-                    border: `1px solid color-mix(in srgb, ${token.colorPrimary} 16%, white 84%)`,
-                    boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
-                  }}
-                >
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.7fr) minmax(260px, 0.9fr)',
-                      gap: 16,
-                    }}
-                  >
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      <div style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                        Library Guide
-                      </div>
-                      <div style={{ color: token.colorText, lineHeight: 1.75 }}>
-                        这个页面更像项目书架与工具入口的总控壳层。原有的项目进入、导入导出、侧边导航和工具页切换逻辑都保持不变，这里只把总览顺序和当前处理重点提前说明。
-                      </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                        {projectListGuideSteps.map((item, index) => (
-                          <span
-                            key={item}
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 8,
-                              padding: '6px 12px',
-                              borderRadius: 999,
-                              background: token.colorBgContainer,
-                              border: `1px solid ${token.colorBorderSecondary}`,
-                              color: token.colorTextBase,
-                              fontSize: 12,
-                            }}
-                          >
-                            <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
-                            {item}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                    <div
-                      style={{
-                        borderRadius: 18,
-                        padding: isMobile ? '14px 14px 12px' : '16px 18px 14px',
-                        background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
-                        border: `1px solid ${token.colorBorderSecondary}`,
-                      }}
-                    >
-                      <div style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                        当前工作焦点
-                      </div>
-                      <div style={{ margin: '8px 0 6px', color: token.colorTextBase, fontSize: 22, lineHeight: 1.2, fontFamily: designDisplayFont }}>
-                        {projectListFocus.title}
-                      </div>
-                      <div style={{ color: token.colorTextSecondary, lineHeight: 1.75 }}>
-                        {projectListFocus.note}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
                 <LazyBookshelfPage
                   isMobile={isMobile}
                   loading={loading}
@@ -1307,9 +1201,7 @@ export default function ProjectList() {
             token={token}
             formatWordCount={formatWordCount}
             renderProjectStatus={(project) =>
-              getStatusTag(
-                getDisplayStatus(project.status, getProgress(project.current_words || 0, project.target_words || 0))
-              )
+              getStatusTag(getDisplayStatus(project.status))
             }
             onOk={handleExport}
             onCancel={handleCloseExportModal}

@@ -80,15 +80,6 @@ export default function Sponsor() {
         { label: '项目版本', value: VERSION_INFO.version, accent: token.colorInfo },
         { label: '联系入口', value: '微信 / QQ', accent: token.colorWarning },
     ];
-    const supportReadingSequence = [
-        '先看权益覆盖范围',
-        '再选符合预期的支持档位',
-        '支付后通过微信或 QQ 对接权益',
-    ];
-    const supportFocusNote = selectedOption
-        ? `当前准备支持 ${selectedOption.description}，扫码后即可继续领取对应权益。`
-        : '当前还没有选择金额，建议先对照权益区确认你最在意的是更新、支持还是一键包。';
-
     const handleCardClick = (option: SponsorOption) => {
         setSelectedOption(option);
         setModalVisible(true);
@@ -204,75 +195,6 @@ export default function Sponsor() {
                         styles={{ body: { padding: '20px' } }}
                     >
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-                            <Card
-                                bordered={false}
-                                style={{
-                                    borderRadius: 20,
-                                    background: token.colorBgContainer,
-                                    border: `1px solid ${alphaColor(token.colorPrimary, 0.08)}`,
-                                    boxShadow: `0 18px 34px -30px ${alphaColor(token.colorTextBase, 0.24)}`,
-                                }}
-                                styles={{ body: { padding: '18px' } }}
-                            >
-                                <Row gutter={[16, 16]}>
-                                    <Col xs={24} lg={15}>
-                                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                            <Text style={{ fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-                                                Sponsor Guide
-                                            </Text>
-                                            <Title level={4} style={{ margin: 0, fontFamily: designDisplayFont }}>
-                                                赞助页阅读顺序
-                                            </Title>
-                                            <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.8 }}>
-                                                这一页更像支持说明台。先确认权益覆盖，再选择档位，最后通过弹窗二维码完成支付并联系领取对应权益。
-                                            </Paragraph>
-                                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                                                {supportReadingSequence.map((item, index) => (
-                                                    <span
-                                                        key={item}
-                                                        style={{
-                                                            display: 'inline-flex',
-                                                            alignItems: 'center',
-                                                            gap: 8,
-                                                            padding: '6px 12px',
-                                                            borderRadius: 999,
-                                                            background: alphaColor(token.colorPrimary, 0.06),
-                                                            border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
-                                                            color: token.colorTextSecondary,
-                                                            fontSize: 12,
-                                                        }}
-                                                    >
-                                                        <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
-                                                        {item}
-                                                    </span>
-                                                ))}
-                                            </div>
-                                        </Space>
-                                    </Col>
-                                    <Col xs={24} lg={9}>
-                                        <div
-                                            style={{
-                                                height: '100%',
-                                                borderRadius: 18,
-                                                padding: '16px 18px',
-                                                background: quietPanelBackground,
-                                                border: `1px solid ${alphaColor(token.colorPrimary, 0.08)}`,
-                                            }}
-                                        >
-                                            <Text style={{ display: 'block', fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-                                                当前支持焦点
-                                            </Text>
-                                            <Title level={5} style={{ margin: '8px 0 6px', fontFamily: designDisplayFont }}>
-                                                {selectedOption ? '已进入档位选择阶段' : '先对照权益再决定金额'}
-                                            </Title>
-                                            <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
-                                                {supportFocusNote}
-                                            </Paragraph>
-                                        </div>
-                                    </Col>
-                                </Row>
-                            </Card>
-
                             <div>
                                 <Text style={{ fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
                                     Sponsor Perks

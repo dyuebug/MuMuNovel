@@ -27,7 +27,7 @@ import type {
   BookImportTask,
 } from '../types';
 
-const { Text, Title, Paragraph } = Typography;
+const { Text, Title } = Typography;
 
 const LazyBookImportUploadStep = lazy(() => import('../components/BookImportUploadStep'));
 const LazyBookImportTaskStatusStep = lazy(() => import('../components/BookImportTaskStatusStep'));
@@ -303,45 +303,6 @@ export default function BookImport() {
     { label: '失败步骤', value: failedSteps.length },
     { label: '导入状态', value: isApplyComplete ? '已完成' : retrying ? '重试中' : applying ? '导入中' : '待处理', compact: true },
   ];
-  const importGuideSteps = [
-    '先看当前步骤与统计卡，确认现在是在上传、解析、预览还是正式导入阶段。',
-    '再进入对应步骤面板处理内容，只在预览阶段改章节细节，在导入阶段观察进度和失败项。',
-    '最后再决定是否重试失败步骤或重新开始，避免在任务仍可恢复时过早清空当前流水线。',
-  ];
-  const importFocus = isApplyComplete
-    ? {
-        title: failedSteps.length > 0 ? '检查失败步骤并决定是否补跑' : '导入已完成，可以回看结果',
-        note: failedSteps.length > 0
-          ? `当前导入主流程已经结束，但还有 ${failedSteps.length} 个失败步骤待处理，适合先判断是否重试或跳过。`
-          : '当前导入已经完成，适合回看生成结果并确认项目内容是否已正确落库。',
-      }
-    : retrying
-      ? {
-          title: '等待失败步骤重试回流',
-          note: '当前正在补跑失败步骤，建议先观察进度反馈，避免重复点击或提前重开任务。',
-        }
-      : applying
-        ? {
-            title: '关注导入与生成进度',
-            note: '当前已经进入正式导入阶段，适合优先观察应用进度、错误提示和失败步骤列表。',
-          }
-        : currentStep === 2
-          ? {
-              title: '逐章校对预览内容',
-              note: '当前处在预览修改阶段，适合集中检查章节切分、标题和局部内容，再决定是否正式导入。',
-            }
-          : currentStep === 1
-            ? {
-                title: '等待解析结果生成',
-                note: '当前任务还在解析中，先关注状态刷新与任务可恢复性，等预览数据就绪后再进入内容校对。',
-              }
-            : {
-                title: taskId ? '继续当前导入流水线' : '从上传文件开始建立任务',
-                note: taskId
-                  ? '当前已经有导入任务上下文，适合沿着现有流水线继续推进，而不是重复创建新任务。'
-                  : '当前还在上传入口，先选定源文件并启动解析任务，再进入后续预览与导入步骤。',
-              };
-
   useEffect(() => {
     const sessionId = beginPageSession();
     const cache = loadBookImportCache();
@@ -807,7 +768,7 @@ export default function BookImport() {
                   拆书导入
                 </Title>
                 <Text style={{ fontSize: isMobile ? 12 : 14, color: token.colorTextLightSolid, opacity: 0.85, marginLeft: isMobile ? 40 : 48 }}>
-                  上传 TXT 并自动解析为章节、预览并导入项目。这里像一条导入流水线：上传、解析、预览、应用和失败重试都在同一处完成。
+                  上传 TXT，解析章节，预览校对后导入项目。
                 </Text>
               </Space>
             </Col>
@@ -894,74 +855,6 @@ export default function BookImport() {
             <Steps current={currentStep} size={isMobile ? 'small' : 'default'} items={stepItems} />
           </Card>
         </Card>
-
-        <Card
-          variant="borderless"
-          style={{
-            borderRadius: 22,
-            background: `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimary} 10%, white 90%) 0%, color-mix(in srgb, ${token.colorInfo} 10%, white 90%) 100%)`,
-            border: `1px solid color-mix(in srgb, ${token.colorPrimary} 16%, white 84%)`,
-            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
-            marginBottom: 16,
-          }}
-          styles={{ body: { padding: isMobile ? 16 : 18 } }}
-        >
-          <Row gutter={[16, 16]}>
-            <Col xs={24} lg={15}>
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <Text style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                  Import Guide
-                </Text>
-                <Paragraph style={{ margin: 0, color: token.colorText, lineHeight: 1.75 }}>
-                  这个页面更像拆书导入流水线的控制台。原有缓存恢复、任务轮询、预览修改和失败重试逻辑都保持不变，这里只把每一步应该先看什么、后做什么说明得更清楚。
-                </Paragraph>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {importGuideSteps.map((item, index) => (
-                    <span
-                      key={item}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        padding: '6px 12px',
-                        borderRadius: 999,
-                        background: token.colorBgContainer,
-                        border: `1px solid ${token.colorBorderSecondary}`,
-                        color: token.colorTextBase,
-                        fontSize: 12,
-                      }}
-                    >
-                      <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
-                      {item}
-                    </span>
-                  ))}
-                </div>
-              </Space>
-            </Col>
-            <Col xs={24} lg={9}>
-              <div
-                style={{
-                  height: '100%',
-                  borderRadius: 18,
-                  padding: isMobile ? '14px 14px 12px' : '16px 18px 14px',
-                  background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                }}
-              >
-                <Text style={{ display: 'block', color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                  当前导入焦点
-                </Text>
-                <Title level={5} style={{ margin: '8px 0 6px', color: token.colorTextBase, fontFamily: designDisplayFont }}>
-                  {importFocus.title}
-                </Title>
-                <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
-                  {importFocus.note}
-                </Paragraph>
-              </div>
-            </Col>
-          </Row>
-        </Card>
-
 
 {currentStep === 0 ? (
   <Suspense fallback={renderBookImportLazyFallback(0)}>

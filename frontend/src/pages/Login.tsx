@@ -613,46 +613,6 @@ export default function Login() {
     );
   }
 
-  const loginGuideSteps = [
-    '先确认当前可用的登录方式，再决定是直接进入本地账号登录，还是走 LinuxDO OAuth。',
-    '如果页面出现错误或服务不可用提示，先处理当前阻塞信息，再继续提交凭据或发起授权跳转。',
-    '登录成功后会回到原本要访问的创作流程，所以更适合在这里先快速完成入口确认，不做额外停留。',
-  ];
-  const loginWorkspaceFocus = serviceUnavailableMessage
-    ? {
-        title: '等待登录服务恢复',
-        note: '当前登录入口已经给出服务不可用提示，适合先确认服务状态或稍后重试，不要重复触发授权流程。',
-      }
-    : loginErrorMessage
-      ? {
-          title: '修正当前登录阻塞',
-          note: '页面已经返回明确的登录失败信息，先处理账号、密码或授权状态，再继续下一次登录尝试。',
-        }
-      : loading
-        ? {
-            title: '等待登录校验完成',
-            note: '当前正在提交登录或拉起授权地址，适合先等待结果回流，避免重复点击触发并发登录请求。',
-          }
-        : localAuthEnabled && linuxdoEnabled
-          ? {
-              title: '选择本轮登录入口',
-              note: '本地账号与 LinuxDO OAuth 都可用，适合先判断你这次是要快速进入工作台，还是沿用社区账号授权。',
-            }
-          : linuxdoEnabled
-            ? {
-                title: '通过 LinuxDO OAuth 进入',
-                note: '当前只开放社区授权登录，适合直接走 OAuth 流程，把账号创建和回跳交给现有链路完成。',
-              }
-            : localAuthEnabled
-              ? {
-                  title: '使用本地账号进入工作台',
-                  note: '当前本地登录可用，适合先完成账号密码校验，再继续进入原本的创作项目或工作流页面。',
-                }
-              : {
-                  title: '等待管理员启用登录方式',
-                  note: '页面当前没有可用登录入口，适合先联系管理员确认系统配置，而不是继续反复刷新页面。',
-                };
-
   return (
     <>
       {showAnnouncement ? (
@@ -963,77 +923,6 @@ export default function Login() {
                     </Space>
                   </Card>
                 ) : null}
-
-                <Card
-                  variant="borderless"
-                  style={{
-                    marginBottom: 18,
-                    borderRadius: 24,
-                    border: `1px solid ${alphaColor(designColors.onDark, 0.08)}`,
-                    background: `
-                      radial-gradient(circle at top right, ${alphaColor(designColors.coral, 0.16)} 0%, transparent 36%),
-                      linear-gradient(180deg, ${alphaColor(designColors.darkElevated, 0.96)} 0%, ${alphaColor(designColors.darkSoft, 0.98)} 100%)
-                    `,
-                    boxShadow: `0 24px 56px ${alphaColor('#000000', 0.22)}`,
-                    overflow: 'hidden',
-                  }}
-                  styles={{ body: { padding: isDesktop ? 22 : 18 } }}
-                >
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24} lg={15}>
-                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                        <Text style={{ color: designColors.onDarkSoft, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                          Login Guide
-                        </Text>
-                        <Paragraph style={{ marginBottom: 0, color: designColors.onDark, lineHeight: 1.75 }}>
-                          这个页面更像创作工作台的安全入口。原有的本地登录、LinuxDO OAuth、失败提示和回跳逻辑都保持不变，这里只把登录顺序和当前阻塞点提前说明。
-                        </Paragraph>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                          {loginGuideSteps.map((item, index) => (
-                            <span
-                              key={item}
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 8,
-                                padding: '6px 12px',
-                                borderRadius: 999,
-                                background: alphaColor(designColors.onDark, 0.06),
-                                border: `1px solid ${alphaColor(designColors.onDark, 0.08)}`,
-                                color: designColors.onDark,
-                                fontSize: 12,
-                              }}
-                            >
-                              <span style={{ color: designColors.coral, fontWeight: 700 }}>{index + 1}</span>
-                              {item}
-                            </span>
-                          ))}
-                        </div>
-                      </Space>
-                    </Col>
-                    <Col xs={24} lg={9}>
-                      <div
-                        style={{
-                          height: '100%',
-                          borderRadius: 18,
-                          padding: isDesktop ? '16px 18px 14px' : '14px 14px 12px',
-                          background: alphaColor(designColors.onDark, 0.05),
-                          border: `1px solid ${alphaColor(designColors.onDark, 0.08)}`,
-                        }}
-                      >
-                        <Text style={{ display: 'block', color: designColors.onDarkSoft, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                          当前登录焦点
-                        </Text>
-                        <Title level={5} style={{ margin: '8px 0 6px', color: designColors.onDark, fontFamily: serifFontFamily, fontWeight: 400 }}>
-                          {loginWorkspaceFocus.title}
-                        </Title>
-                        <Paragraph style={{ marginBottom: 0, color: designColors.onDarkSoft, lineHeight: 1.75 }}>
-                          {loginWorkspaceFocus.note}
-                        </Paragraph>
-                      </div>
-                    </Col>
-                  </Row>
-                </Card>
 
                 <Card variant="borderless" style={loginShellStyle} styles={{ body: { padding: isDesktop ? 30 : 20 } }}>
                   <Space direction="vertical" size={18} style={{ width: '100%' }}>

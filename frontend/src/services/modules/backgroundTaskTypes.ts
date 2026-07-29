@@ -1,6 +1,8 @@
-import type { ActiveStoryRepairPayload } from '../../types';
+import type { ActiveStoryRepairPayload, NovelWorkflowPhase } from '../../types';
 
 export type BackgroundTaskType =
+  | 'novel_autopilot'
+  | 'novel_book_autopilot'
   | 'chapters_batch_generate'
   | 'chapter_single_generate'
   | 'chapter_analysis'
@@ -27,6 +29,17 @@ export type BackgroundTaskType =
   | 'unknown';
 
 export type BackgroundTaskRuntimeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface ConfirmedAutopilotWorkflowTransitionRequest {
+  tool_name: 'transition_project_workflow';
+  arguments: {
+    expected_phase: NovelWorkflowPhase;
+    target_phase: NovelWorkflowPhase;
+    reason?: string;
+    related_task_id?: string;
+  };
+  confirmed_by_user: true;
+}
 
 export interface BackgroundTaskStatus {
   task_id: string;

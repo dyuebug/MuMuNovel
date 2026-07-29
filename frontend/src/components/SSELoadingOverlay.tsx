@@ -6,6 +6,7 @@ import { OPEN_BACKGROUND_TASK_CENTER_EVENT } from '../constants/backgroundTaskEv
 import { useBackgroundTaskStore } from '../store/backgroundTasks';
 import { selectActiveBackgroundTaskCount } from '../store/backgroundTaskSelectors';
 import { designDisplayFont } from '../theme/themeConfig';
+import { ModelOutputPanel, type ModelOutputPanelProps } from './ModelOutputPanel';
 
 interface SSELoadingOverlayProps {
   loading: boolean;
@@ -16,6 +17,7 @@ interface SSELoadingOverlayProps {
   cancelButtonText?: string;
   cancelButtonLoading?: boolean;
   cancelButtonDisabled?: boolean;
+  modelOutput?: Omit<ModelOutputPanelProps, 'compact'>;
 }
 
 export const SSELoadingOverlay: React.FC<SSELoadingOverlayProps> = ({
@@ -27,8 +29,9 @@ export const SSELoadingOverlay: React.FC<SSELoadingOverlayProps> = ({
   cancelButtonText = '取消任务',
   cancelButtonLoading = false,
   cancelButtonDisabled = false,
+  modelOutput,
 }) => {
-  const { collapsed, floatingBottom, toggleCollapsed } = useFloatingTaskCard({
+  const { collapse, collapsed, floatingBottom, toggleCollapsed } = useFloatingTaskCard({
     active: loading,
     blocking,
   });
@@ -81,6 +84,7 @@ export const SSELoadingOverlay: React.FC<SSELoadingOverlayProps> = ({
           };
 
   const openTaskCenter = () => {
+    collapse();
     window.dispatchEvent(new Event(OPEN_BACKGROUND_TASK_CENTER_EVENT));
   };
 
@@ -330,8 +334,14 @@ export const SSELoadingOverlay: React.FC<SSELoadingOverlayProps> = ({
           </div>
         ) : null}
 
+        {modelOutput ? (
+          <div style={{ marginTop: 16, textAlign: 'left' }}>
+            <ModelOutputPanel {...modelOutput} compact={!blocking} />
+          </div>
+        ) : null}
+
         {onCancel && (
-          <div style={{ textAlign: 'center' }}>
+          <div style={{ textAlign: 'center', marginTop: modelOutput ? 12 : 0 }}>
             <Button
               danger
               icon={<StopOutlined />}
@@ -347,6 +357,77 @@ export const SSELoadingOverlay: React.FC<SSELoadingOverlayProps> = ({
     </div>
   );
 
+  const compactBackgroundContent = (
+    <div style={{ display: 'grid', gap: 9 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'start', gap: 12 }}>
+        <Space size={8} style={{ minWidth: 0, alignItems: 'flex-start' }}>
+          <Spin indicator={<LoadingOutlined style={{ fontSize: 20, color: 'var(--color-primary)' }} spin />} />
+          <div style={{ minWidth: 0 }}>
+            <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
+              Background Task
+            </Text>
+            <Text strong style={{ display: 'block', fontSize: 15, color: token.colorTextHeading }}>
+              后台处理中
+            </Text>
+          </div>
+        </Space>
+        <Text strong style={{ fontSize: 16, lineHeight: 1.4, color: progress === 100 ? token.colorSuccess : token.colorPrimary }}>
+          {progress}%
+        </Text>
+      </div>
+
+      <div
+        style={{
+          height: 7,
+          background: alphaColor(token.colorFillQuaternary, 0.96),
+          borderRadius: 999,
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            height: '100%',
+            width: `${progress}%`,
+            background: progress === 100
+              ? `linear-gradient(90deg, ${token.colorSuccess} 0%, ${token.colorSuccessActive} 100%)`
+              : `linear-gradient(90deg, ${token.colorPrimary} 0%, ${token.colorPrimaryActive} 100%)`,
+            borderRadius: 999,
+            transition: 'width 0.3s ease',
+          }}
+        />
+      </div>
+
+      <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.5 }}>
+        {message || '后台处理中，可继续其他操作'}
+      </Text>
+
+      {modelOutput ? <ModelOutputPanel {...modelOutput} compact /> : null}
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 10 }}>
+        <Text type="secondary" style={{ fontSize: 11, minWidth: 0 }}>
+          {queueSummary || '可继续当前页面操作'}
+        </Text>
+        <Space size={6}>
+          <Button size="small" icon={<UnorderedListOutlined />} onClick={openTaskCenter}>
+            任务中心
+          </Button>
+          {onCancel ? (
+            <Button
+              danger
+              size="small"
+              icon={<StopOutlined />}
+              onClick={onCancel}
+              loading={cancelButtonLoading}
+              disabled={cancelButtonDisabled}
+            >
+              取消
+            </Button>
+          ) : null}
+        </Space>
+      </div>
+    </div>
+  );
+
   if (!blocking) {
     return (
       <div
@@ -354,17 +435,21 @@ export const SSELoadingOverlay: React.FC<SSELoadingOverlayProps> = ({
           position: 'fixed',
           right: 'max(16px, env(safe-area-inset-right))',
           bottom: floatingBottom,
-          zIndex: 9999,
+          zIndex: 900,
           pointerEvents: 'none',
         }}
       >
         <div
           style={{
-            width: collapsed ? 'min(280px, calc(100vw - 32px))' : 'min(420px, calc(100vw - 32px))',
+            width: collapsed
+              ? 'min(320px, calc(100vw - 32px))'
+              : modelOutput
+                ? 'min(520px, calc(100vw - 32px))'
+                : 'min(360px, calc(100vw - 32px))',
             background: `linear-gradient(135deg, ${alphaColor(token.colorBgElevated, 0.98)} 0%, ${alphaColor(token.colorPrimaryBg, 0.84)} 100%)`,
-            borderRadius: 22,
-            padding: collapsed ? '12px 14px' : '20px 24px',
-            boxShadow: `0 20px 44px ${alphaColor(token.colorText, 0.14)}`,
+            borderRadius: 18,
+            padding: collapsed ? '10px 12px' : '13px 15px',
+            boxShadow: `0 16px 34px ${alphaColor(token.colorText, 0.12)}`,
             boxSizing: 'border-box',
             pointerEvents: 'auto',
             transition: 'width 0.2s ease, padding 0.2s ease',
@@ -373,27 +458,29 @@ export const SSELoadingOverlay: React.FC<SSELoadingOverlayProps> = ({
           }}
         >
           {collapsed ? (
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <Spin indicator={<LoadingOutlined style={{ fontSize: 18, color: 'var(--color-primary)' }} spin />} />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontSize: 10,
-                      letterSpacing: '0.08em',
-                      textTransform: 'uppercase',
-                      color: token.colorTextTertiary,
-                      marginBottom: 4,
-                    }}
-                  >
-                    Background Run
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ display: 'grid', gap: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'start', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <Spin indicator={<LoadingOutlined style={{ fontSize: 16, color: 'var(--color-primary)' }} spin />} />
+                  <div style={{ minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: 10,
+                        letterSpacing: '0.08em',
+                        textTransform: 'uppercase',
+                        color: token.colorTextTertiary,
+                        lineHeight: 1.2,
+                        marginBottom: 2,
+                      }}
+                    >
+                      Background Run
+                    </div>
                     <div
                       style={{
                         fontSize: 14,
                         fontWeight: 600,
                         color: token.colorTextHeading,
+                        lineHeight: 1.35,
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
@@ -401,52 +488,82 @@ export const SSELoadingOverlay: React.FC<SSELoadingOverlayProps> = ({
                     >
                       后台处理中
                     </div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: token.colorPrimary }}>
-                      {progress}%
-                    </div>
-                  </div>
-                  <div
-                    style={{
-                      marginTop: 2,
-                      fontSize: 12,
-                      color: token.colorTextSecondary,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                  >
-                    {queueSummary
-                      ? `${message || '后台处理中，可继续其他操作'} · 共 ${activeTaskCount} 项`
-                      : message || '后台处理中，可继续其他操作'}
                   </div>
                 </div>
-                {onCancel ? (
+                <span
+                  style={{
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    background: alphaColor(token.colorPrimary, 0.1),
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: token.colorPrimary,
+                    lineHeight: 1.5,
+                  }}
+                >
+                    {progress}%
+                </span>
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: token.colorTextSecondary,
+                  lineHeight: 1.4,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {queueSummary
+                  ? `${message || '后台处理中，可继续其他操作'} · 共 ${activeTaskCount} 项`
+                  : message || '后台处理中，可继续其他操作'}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', gap: 8 }}>
+                <div
+                  style={{
+                    height: 5,
+                    background: alphaColor(token.colorFillQuaternary, 0.96),
+                    borderRadius: 999,
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div
+                    style={{
+                      height: '100%',
+                      width: `${progress}%`,
+                      background: `linear-gradient(90deg, ${token.colorPrimary} 0%, ${token.colorPrimaryActive} 100%)`,
+                      transition: 'width 0.3s ease',
+                    }}
+                  />
+                </div>
+                <Space size={2}>
+                  {onCancel ? (
+                    <Button
+                      type="text"
+                      danger
+                      size="small"
+                      icon={<StopOutlined />}
+                      onClick={onCancel}
+                      loading={cancelButtonLoading}
+                      disabled={cancelButtonDisabled}
+                    />
+                  ) : null}
                   <Button
                     type="text"
-                    danger
                     size="small"
-                    icon={<StopOutlined />}
-                    onClick={onCancel}
-                    loading={cancelButtonLoading}
-                    disabled={cancelButtonDisabled}
+                    icon={<UnorderedListOutlined />}
+                    onClick={openTaskCenter}
+                    style={{ color: token.colorTextSecondary }}
                   />
-                ) : null}
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<UnorderedListOutlined />}
-                  onClick={openTaskCenter}
-                  style={{ color: token.colorTextSecondary }}
-                />
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<UpOutlined />}
-                  onClick={toggleCollapsed}
-                  style={{ color: token.colorTextSecondary }}
-                />
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<UpOutlined />}
+                    onClick={toggleCollapsed}
+                    style={{ color: token.colorTextSecondary }}
+                  />
+                </Space>
               </div>
-              <div style={{ marginTop: 10 }}>{progressBar}</div>
             </div>
           ) : (
             <>
@@ -459,7 +576,7 @@ export const SSELoadingOverlay: React.FC<SSELoadingOverlayProps> = ({
                   style={{ color: token.colorTextSecondary }}
                 />
               </div>
-              {content}
+              {compactBackgroundContent}
             </>
           )}
         </div>

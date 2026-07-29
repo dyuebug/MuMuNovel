@@ -14,12 +14,24 @@ import {
 } from '@ant-design/icons';
 import { api, chapterApi } from '../services/modularApi';
 import { isRequestCancelledError } from '../services/core/httpClient';
+import type { AnalysisTask } from '../types';
 import AnnotatedText, { type MemoryAnnotation } from '../components/AnnotatedText';
 import InlineDeferredPanel from '../components/InlineDeferredPanel';
 import MemorySidebar from '../components/MemorySidebar';
 import { designDisplayFont } from '../theme/themeConfig';
 
 const { Title, Paragraph, Text } = Typography;
+const CHAPTER_ANALYSIS_POLL_INTERVAL_MS = 2000;
+const CHAPTER_ANALYSIS_POLL_TIMEOUT_MS = 16 * 60 * 1000;
+
+type ActiveAnalysisTask = Pick<AnalysisTask, 'status' | 'error_code' | 'progress'>;
+type AnalysisTaskActivityState = ActiveAnalysisTask | null | undefined;
+
+const isAnalysisTaskActive = (task: AnalysisTaskActivityState): task is ActiveAnalysisTask => (
+  task?.status === 'pending' ||
+  task?.status === 'running' ||
+  isAnalysisTaskRetrying(task)
+);
 
 interface ChapterData {
   id: string;
@@ -225,15 +237,15 @@ const ChapterReader: React.FC = () => {
       void poll();
       analysisPollIntervalRef.current = window.setInterval(() => {
         void poll();
-      }, 2000);
+      }, CHAPTER_ANALYSIS_POLL_INTERVAL_MS);
 
       analysisPollTimeoutRef.current = window.setTimeout(() => {
         stopAnalysisPolling();
         if (analyzingRef.current) {
           setAnalyzing(false);
-          message.warning({ content: '分析超时，请稍后刷新查看结果', key: 'analyze' });
+          message.warning({ content: '分析耗时较长，请稍后刷新查看结果', key: 'analyze' });
         }
-      }, 30000);
+      }, CHAPTER_ANALYSIS_POLL_TIMEOUT_MS);
     },
     [chapter?.content, chapterId, sanitizeAnnotationsData],
   );
@@ -304,12 +316,7 @@ const ChapterReader: React.FC = () => {
       setNavigation(navigationData);
       setAnnotationsData(sanitizeAnnotationsData(loadedAnnotationsData, chapterData.content));
 
-      if (
-        analysisStatus &&
-        (analysisStatus.status === 'pending' ||
-          analysisStatus.status === 'running' ||
-          isAnalysisTaskRetrying(analysisStatus))
-      ) {
+      if (isAnalysisTaskActive(analysisStatus)) {
         setAnalyzing(true);
         setAnalysisProgress(analysisStatus.progress || 0);
         message.loading({ content: '正在恢复章节分析状态...', key: 'analyze', duration: 0 });
@@ -388,6 +395,19 @@ const ChapterReader: React.FC = () => {
     stopAnalysisPolling();
 
     try {
+      const existingStatus = await chapterApi.getChapterAnalysisStatus(chapterId, chapter?.project_id);
+      if (isAnalysisTaskActive(existingStatus)) {
+        setAnalyzing(true);
+        setAnalysisProgress(existingStatus.progress || 0);
+        message.loading({
+          content: '章节分析仍在进行，已恢复进度同步...',
+          key: 'analyze',
+          duration: 0,
+        });
+        startAnalysisPolling(chapter?.project_id, chapter?.content);
+        return;
+      }
+
       setAnalyzing(true);
       setAnalysisProgress(0);
       message.loading({ content: '开始分析章节...', key: 'analyze', duration: 0 });
@@ -481,19 +501,6 @@ const ChapterReader: React.FC = () => {
     { label: '伏笔', value: 0, accent: token.colorInfo },
     { label: '情节点', value: 0, accent: editorialInk },
   ];
-  const readerGuideSteps = [
-    '先通读正文确认当前章目标',
-    '再查看标注与记忆点分布',
-    '需要时回到分析或切换上下章',
-  ];
-  const readerFocusNote = analyzing
-    ? '当前正在刷新章节分析结果，稍后可以直接回看新的标注与摘要。'
-    : activeAnnotationId
-      ? '当前已选中一条标注，可以结合正文位置与右侧信息一起判断它的作用。'
-      : hasAnnotations
-        ? '当前更适合先浏览正文，再点选关键标注查看记忆和情节线索。'
-        : '当前还没有分析标注，建议先阅读正文或触发一次章节分析。';
-
   return (
     <div style={{ height: '100dvh', minHeight: '100vh', display: 'flex', flexDirection: 'column', gap: 16, overflow: 'hidden', padding: isMobile ? 12 : 16 }}>
       <Card
@@ -562,74 +569,6 @@ const ChapterReader: React.FC = () => {
             </Row>
           </Col>
         </Row>
-
-        <div
-          style={{
-            marginTop: 18,
-            position: 'relative',
-            zIndex: 1,
-            borderRadius: 20,
-            padding: isMobile ? '14px 14px 12px' : '16px 18px',
-            background: 'rgba(255,255,255,0.07)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            backdropFilter: 'blur(10px)',
-          }}
-        >
-          <Row gutter={[16, 16]}>
-            <Col xs={24} lg={15}>
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <Text style={{ color: 'rgba(255,255,255,0.68)', fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                  Reader Guide
-                </Text>
-                <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.86)', lineHeight: 1.75 }}>
-                  这个页面更像阅读与分析之间的桥接层。保持原有正文、标注、翻页和重分析流程不变，只把当前阅读顺序说明得更清楚。
-                </Paragraph>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {readerGuideSteps.map((item, index) => (
-                    <span
-                      key={item}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        padding: '6px 12px',
-                        borderRadius: 999,
-                        background: 'rgba(255,255,255,0.08)',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        color: editorialInk,
-                        fontSize: 12,
-                      }}
-                    >
-                      <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
-                      {item}
-                    </span>
-                  ))}
-                </div>
-              </Space>
-            </Col>
-            <Col xs={24} lg={9}>
-              <div
-                style={{
-                  height: '100%',
-                  borderRadius: 18,
-                  padding: '14px 16px',
-                  background: 'rgba(255,255,255,0.08)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                }}
-              >
-                <Text style={{ display: 'block', color: 'rgba(255,255,255,0.68)', fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                  当前阅读焦点
-                </Text>
-                <Title level={5} style={{ margin: '8px 0 6px', color: editorialInk, fontFamily: designDisplayFont }}>
-                  {analyzing ? '等待分析回流' : hasAnnotations ? '正文与标注联读' : '先读正文或发起分析'}
-                </Title>
-                <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.82)', lineHeight: 1.75 }}>
-                  {readerFocusNote}
-                </Paragraph>
-              </div>
-            </Col>
-          </Row>
-        </div>
 
         <Space wrap size={[10, 10]} style={{ marginTop: 20, position: 'relative', zIndex: 1 }}>
           <Button icon={<ArrowLeftOutlined />} onClick={handleBackClick} style={actionButtonStyle}>

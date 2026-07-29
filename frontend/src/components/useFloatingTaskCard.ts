@@ -106,11 +106,17 @@ export const useFloatingTaskCard = ({
     setCollapsed((prev) => !prev);
   }, []);
 
+  const collapse = useCallback(() => {
+    interactedRef.current = true;
+    setCollapsed(true);
+  }, []);
+
   const floatingBottom = floatButtonOffset > 0
     ? `calc(max(16px, env(safe-area-inset-bottom)) + ${Math.round(floatButtonOffset)}px)`
     : 'max(16px, env(safe-area-inset-bottom))';
 
   return {
+    collapse,
     collapsed,
     floatingBottom,
     toggleCollapsed,

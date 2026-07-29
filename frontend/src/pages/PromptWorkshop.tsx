@@ -638,7 +638,6 @@ export default function PromptWorkshop() {
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 10 }}>
         <Space direction="vertical" size={4}>
           <Text strong>查看您提交的提示词及审核状态</Text>
-          <Text type="secondary">这里更像你的投递台账，适合判断哪些条目需要补充、撤回或归档。</Text>
         </Space>
         <Button icon={<SyncOutlined />} onClick={loadMySubmissions}>
           刷新
@@ -1171,20 +1170,6 @@ export default function PromptWorkshop() {
       accent: token.colorSuccess,
     },
   ];
-  const workspaceGuideItems = activeTab === 'browse'
-    ? [
-      { label: '浏览顺序', value: '先看用途说明，再看预览片段，最后决定导入或收藏。' },
-      { label: '当前任务', value: '把公共提示词当作可比较的创作资产，而不只是可复制的文本。' },
-    ]
-    : activeTab === 'submissions'
-      ? [
-        { label: '提交策略', value: '优先维护还在等待审核的投递，并及时清理已经失效的旧记录。' },
-        { label: '当前任务', value: '把个人提示词沉淀成可审核、可回溯、可再利用的资产。' },
-      ]
-      : [
-        { label: '审核顺序', value: '先看正文质量，再校正分类与标签，最后决定是否发布到工坊。' },
-        { label: '当前任务', value: '维持公共提示词库的可读性、一致性与后续运营便利性。' },
-      ];
   const modalSurfaceStyles = {
     content: {
       borderRadius: 24,
@@ -1387,56 +1372,6 @@ export default function PromptWorkshop() {
           />
 
           {activeTab === 'browse' && renderFilterBar()}
-
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.15fr) minmax(320px, 0.95fr)',
-              gap: 14,
-              marginBottom: 18,
-            }}
-          >
-            <Card
-              bordered={false}
-              style={{
-                borderRadius: 18,
-                border: `1px solid ${alphaColor(token.colorPrimary, 0.08)}`,
-                background: token.colorBgContainer,
-              }}
-              styles={{ body: { padding: isMobile ? 14 : 18 } }}
-            >
-              <Text style={{ fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-                Workspace Guide
-              </Text>
-              <Title level={5} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont }}>
-                当前面板阅读顺序
-              </Title>
-              <Text type="secondary" style={{ display: 'block', lineHeight: 1.7 }}>
-                不同标签页承担的是不同工作流。先理解当前面板在做什么，再进入具体卡片、提交记录或审核条目，效率会更高。
-              </Text>
-            </Card>
-            <div style={{ display: 'grid', gap: 10 }}>
-              {workspaceGuideItems.map((item) => (
-                <Card
-                  key={item.label}
-                  bordered={false}
-                  style={{
-                    borderRadius: 18,
-                    border: `1px solid ${alphaColor(token.colorPrimary, 0.08)}`,
-                    background: token.colorBgContainer,
-                  }}
-                  styles={{ body: { padding: '12px 14px' } }}
-                >
-                  <Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
-                    {item.label}
-                  </Text>
-                  <Text strong style={{ lineHeight: 1.7 }}>
-                    {item.value}
-                  </Text>
-                </Card>
-              ))}
-            </div>
-          </div>
 
           <Card
             bordered={false}

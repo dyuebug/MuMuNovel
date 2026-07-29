@@ -348,22 +348,10 @@ export default function Relationships() {
     color-mix(in srgb, ${token.colorPrimary} 72%, #6f4537 28%) 0%,
     color-mix(in srgb, ${token.colorInfo} 32%, #18242d 68%) 100%)`;
   const editorialInk = '#fff9f0';
-  const actionButtonStyle = {
-    borderRadius: 999,
-    height: 42,
-    paddingInline: 16,
-    borderColor: 'rgba(255,255,255,0.18)',
-    background: 'rgba(255,255,255,0.08)',
-    color: editorialInk,
-    boxShadow: 'none',
-  } as const;
   const panelBackground = `linear-gradient(180deg,
     color-mix(in srgb, ${token.colorBgContainer} 94%, white 6%) 0%,
     color-mix(in srgb, ${token.colorFillAlter} 48%, ${token.colorBgContainer} 52%) 100%)`;
   const panelBorder = `1px solid color-mix(in srgb, ${token.colorBorderSecondary} 88%, white 12%)`;
-  const quietPanelBackground = `linear-gradient(180deg,
-    color-mix(in srgb, ${token.colorBgContainer} 98%, white 2%) 0%,
-    color-mix(in srgb, ${token.colorBgContainer} 93%, ${token.colorFillAlter} 7%) 100%)`;
   const modalSurfaceStyles = {
     header: { padding: '22px 24px 0', borderBottom: 'none' },
     body: { padding: '0 24px 24px' },
@@ -385,45 +373,11 @@ export default function Relationships() {
     { label: '类型词典', value: relationshipTypes.length, accent: token.colorInfo },
     { label: '平均亲密度', value: averageIntimacy, accent: editorialInk },
   ] as const;
-  const workspaceGuideItems = [
-    {
-      label: 'Step 1',
-      title: '先看关系清单',
-      description: '优先确认当前有哪些有效连线，再决定是否需要新增或修订。',
-    },
-    {
-      label: 'Step 2',
-      title: '再对齐命名体系',
-      description: '把关系类型页当作词典，统一关系名称、反向称谓和分类口径。',
-    },
-    {
-      label: 'Step 3',
-      title: '最后回到图谱',
-      description: '当列表稳定后再切到关系图谱，更容易观察整体网络结构。',
-    },
-  ];
-  const focusItems = [
-    {
-      label: '当前面板',
-      value: activeTabKey === 'list' ? '关系列表' : '关系类型',
-      detail: activeTabKey === 'list' ? '适合逐条维护人物连线' : '适合校正关系命名与分类',
-    },
-    {
-      label: 'AI 参与',
-      value: `${aiRelationships} 条`,
-      detail: '可快速区分模型生成与手动建立的关系来源',
-    },
-    {
-      label: '网络密度',
-      value: `${averageIntimacy}`,
-      detail: '当前关系平均亲密度，用来粗看整体关系张力',
-    },
-  ];
 
   return (
     <>
       {contextHolder}
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 16, overflow: 'hidden', paddingBottom: 24 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%', gap: 16, overflow: 'visible', paddingBottom: 24 }}>
         <Card
           variant="borderless"
           style={{
@@ -433,6 +387,7 @@ export default function Relationships() {
             boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
             overflow: 'hidden',
             position: 'relative',
+            flexShrink: 0,
           }}
           styles={{ body: { padding: isMobile ? 20 : 24 } }}
         >
@@ -485,10 +440,26 @@ export default function Relationships() {
               </Row>
             </Col>
           </Row>
-          <Space wrap size={[10, 10]} style={{ marginTop: 20, position: 'relative', zIndex: 1 }}>
+        </Card>
+
+        <Card
+          variant="borderless"
+          style={{
+            borderRadius: 20,
+            background: token.colorBgContainer,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            boxShadow: `0 14px 28px color-mix(in srgb, ${token.colorText} 6%, transparent)`,
+            flexShrink: 0,
+          }}
+          styles={{ body: { padding: 14 } }}
+        >
+          <Space wrap size={[10, 10]}>
             <Button
               onClick={() => projectId && navigate(`/project/${projectId}/relationships-graph`)}
-              style={actionButtonStyle}
+              style={{
+                borderRadius: 999,
+                paddingInline: 16,
+              }}
             >
               关系图谱
             </Button>
@@ -503,103 +474,10 @@ export default function Relationships() {
           </Space>
         </Card>
 
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.15fr) minmax(300px, 0.9fr)',
-            gap: 16,
-          }}
-        >
-          <Card
-            variant="borderless"
-            style={{
-              background: quietPanelBackground,
-              borderRadius: 22,
-              border: panelBorder,
-              boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
-            }}
-            styles={{ body: { padding: isMobile ? 14 : 18 } }}
-          >
-            <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-              Workspace Guide
-            </Text>
-            <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
-              关系页阅读顺序
-            </Title>
-            <Paragraph type="secondary" style={{ marginBottom: 14, lineHeight: 1.8 }}>
-              这页更像人物关系账本。先确认正在发生的连线，再回头统一类型词典，最后才适合跳到关系图谱看整体结构。
-            </Paragraph>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-              {workspaceGuideItems.map((item) => (
-                <div
-                  key={item.label}
-                  style={{
-                    borderRadius: 16,
-                    padding: '12px 14px',
-                    border: `1px solid ${token.colorBorderSecondary}`,
-                    background: token.colorBgContainer,
-                  }}
-                >
-                  <Text style={{ display: 'block', fontSize: 11, color: token.colorTextTertiary, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                    {item.label}
-                  </Text>
-                  <Text strong style={{ display: 'block', margin: '6px 0 4px' }}>
-                    {item.title}
-                  </Text>
-                  <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.7 }}>
-                    {item.description}
-                  </Text>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          <Card
-            variant="borderless"
-            style={{
-              background: quietPanelBackground,
-              borderRadius: 22,
-              border: panelBorder,
-              boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
-            }}
-            styles={{ body: { padding: isMobile ? 14 : 18 } }}
-          >
-            <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-              Current Focus
-            </Text>
-            <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
-              当前网络焦点
-            </Title>
-            <Space direction="vertical" size={10} style={{ width: '100%' }}>
-              {focusItems.map((item) => (
-                <div
-                  key={item.label}
-                  style={{
-                    borderRadius: 16,
-                    padding: '12px 14px',
-                    background: token.colorBgContainer,
-                    border: `1px solid ${token.colorBorderSecondary}`,
-                  }}
-                >
-                  <Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
-                    {item.label}
-                  </Text>
-                  <Text strong style={{ display: 'block', lineHeight: 1.7 }}>
-                    {item.value}
-                  </Text>
-                  <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.7 }}>
-                    {item.detail}
-                  </Text>
-                </div>
-              ))}
-            </Space>
-          </Card>
-        </div>
-
         <Card
           variant="borderless"
           style={{
-            flex: 1,
+            flex: '1 0 auto',
             overflow: 'hidden',
             background: panelBackground,
             borderRadius: 24,

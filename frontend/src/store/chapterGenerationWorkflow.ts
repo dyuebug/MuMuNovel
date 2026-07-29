@@ -14,6 +14,8 @@ export interface GenerateChapterContentStreamOptions {
   projectId?: string;
   refreshChapters: () => Promise<unknown>;
   onProgress?: (content: string) => void;
+  onChunk?: (content: string) => void;
+  onReasoningChunk?: (content: string) => void;
   styleId?: number;
   targetWordCount?: number;
   onProgressUpdate?: (message: string, progress: number) => void;
@@ -136,6 +138,8 @@ export async function startChapterGenerationWorkflow({
   projectId,
   refreshChapters,
   onProgress,
+  onChunk,
+  onReasoningChunk,
   styleId,
   targetWordCount,
   onProgressUpdate,
@@ -227,9 +231,12 @@ export async function startChapterGenerationWorkflow({
             try {
               const message = JSON.parse(dataMatch[1]);
 
-              if (message.type === 'chunk' && message.content) {
+              if (message.type === 'chunk' && typeof message.content === 'string' && message.content) {
+                onChunk?.(message.content);
                 fullContent += message.content;
                 onProgress?.(fullContent);
+              } else if (message.type === 'reasoning_chunk' && typeof message.content === 'string' && message.content) {
+                onReasoningChunk?.(message.content);
               } else if (message.type === 'progress') {
                 onProgressUpdate?.(message.message || 'Generating chapter...', message.progress || 0);
               } else if (message.type === 'chapter_start') {

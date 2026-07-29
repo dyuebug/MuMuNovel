@@ -11,6 +11,8 @@ import { isProjectWizardCompleted } from '../utils/projectWizardState';
 import type { SSEClientOptions } from '../utils/sseClient';
 import type { ApiError, CreativeMode, PlotStage, QualityPreset, ResearchAssetSummary, StoryFocus } from '../types';
 import { designDisplayFont } from '../theme/themeConfig';
+import { ModelOutputPanel } from './ModelOutputPanel';
+import { useModelOutputStream } from '../hooks/useModelOutputStream';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -152,6 +154,15 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
+  const {
+    reasoningContent,
+    generatedContent,
+    reasoningTruncated,
+    contentTruncated,
+    resetModelOutput,
+    onReasoningChunk: appendReasoningChunk,
+    onChunk: appendGeneratedChunk,
+  } = useModelOutputStream();
 
   // 状态管理
   const [loading, setLoading] = useState(false);
@@ -192,6 +203,7 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
 
   const beginGenerationRun = () => {
     generationRunRef.current += 1;
+    resetModelOutput();
     return generationRunRef.current;
   };
 
@@ -359,6 +371,20 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
   ): SSEClientOptions<TResult> => ({
     ...options,
     inactivityTimeoutMs: options.inactivityTimeoutMs ?? WIZARD_STREAM_INACTIVITY_TIMEOUT_MS,
+    onChunk: (content: string) => {
+      if (!isGenerationRunActive(runId)) {
+        return;
+      }
+      appendGeneratedChunk(content);
+      options.onChunk?.(content);
+    },
+    onReasoningChunk: (content: string) => {
+      if (!isGenerationRunActive(runId)) {
+        return;
+      }
+      appendReasoningChunk(content);
+      options.onReasoningChunk?.(content);
+    },
     onHeartbeat: () => {
       if (!isGenerationRunActive(runId)) {
         return;
@@ -1873,6 +1899,17 @@ export const AIProjectGenerator: React.FC<AIProjectGeneratorProps> = ({
                 {progressMessage}
               </Paragraph>
             </Card>
+
+            <div data-testid="project-generator-model-output" style={{ marginBottom: 16 }}>
+              <ModelOutputPanel
+                reasoningContent={reasoningContent}
+                generatedContent={generatedContent}
+                reasoningTruncated={reasoningTruncated}
+                contentTruncated={contentTruncated}
+                taskStatus={isCancelled ? 'cancelled' : (hasError ? 'failed' : (progress === 100 ? 'completed' : 'running'))}
+                compact={isMobile}
+              />
+            </div>
 
             {errorDetails && (
               <Card

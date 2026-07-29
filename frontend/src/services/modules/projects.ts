@@ -1,12 +1,61 @@
-﻿import axios from 'axios';
+import axios from 'axios';
 
 import type {
+  NovelWorkflowPhase,
+  NovelWorkflowStateView,
+  NovelWorkflowTransitionReceipt,
+  NovelWorkflowTransitionRequest,
   Project,
   ProjectCreate,
   ProjectUpdate,
+  RuntimeMetricsResponseV1,
 } from '../../types';
 import { api } from '../core/httpClient';
 import type { RequestConfigWithToastControl } from '../core/httpClient';
+
+export type AutopilotInvocationAuditStatus =
+  | 'queued'
+  | 'running'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled';
+
+export interface AutopilotInvocationAuditInputSummary {
+  expected_phase: NovelWorkflowPhase;
+  target_phase: NovelWorkflowPhase;
+  reason_provided: boolean;
+  related_task_id_provided: boolean;
+}
+
+export interface AutopilotInvocationAuditResultSummary {
+  changed: boolean;
+  previous_phase: NovelWorkflowPhase;
+  current_phase: NovelWorkflowPhase;
+}
+
+/**
+ * 仅供项目工作流中的只读审计历史展示。
+ * 有意不声明 raw arguments、reason、Prompt、provider/model、digest 与 actor 字段，
+ * 防止组件层将敏感审计原始数据接入 UI。
+ */
+export interface AutopilotInvocationAuditHistoryItem {
+  audit_id: string;
+  tool_name: string;
+  tool_schema_version: string;
+  confirmed_by_user: boolean;
+  execution_mode: 'direct_business_tool';
+  input_summary: AutopilotInvocationAuditInputSummary;
+  status: AutopilotInvocationAuditStatus;
+  result_summary: AutopilotInvocationAuditResultSummary | null;
+  error_code: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface AutopilotInvocationAuditHistoryResponse {
+  items: AutopilotInvocationAuditHistoryItem[];
+}
 
 export const projectApi = {
   getProjects: () => api.get<unknown, Project[]>('/projects'),
@@ -18,6 +67,30 @@ export const projectApi = {
 
   updateProject: (id: string, data: ProjectUpdate) =>
     api.put<unknown, Project>(`/projects/${id}`, data),
+
+  getWorkflowState: (id: string, config?: RequestConfigWithToastControl) =>
+    api.get<unknown, NovelWorkflowStateView>(`/projects/${id}/workflow-state`, config),
+
+  getRuntimeMetrics: (id: string, config?: RequestConfigWithToastControl) =>
+    api.get<unknown, RuntimeMetricsResponseV1>(`/projects/${id}/runtime-metrics`, config),
+
+  transitionWorkflowState: (
+    id: string,
+    data: NovelWorkflowTransitionRequest,
+    config?: RequestConfigWithToastControl,
+  ) => api.post<unknown, NovelWorkflowTransitionReceipt>(
+    `/projects/${id}/workflow-state/transition`,
+    data,
+    config,
+  ),
+
+  getAutopilotInvocationHistory: (
+    id: string,
+    config?: RequestConfigWithToastControl,
+  ) => api.get<unknown, AutopilotInvocationAuditHistoryResponse>(
+    `/projects/${id}/autopilot/invocations`,
+    config,
+  ),
 
   deleteProject: (id: string) => api.delete(`/projects/${id}`),
 

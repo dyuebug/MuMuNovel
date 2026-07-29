@@ -40,6 +40,8 @@ const MAX_PERSISTED_TASKS = 30;
 const MAX_TERMINAL_TASKS = 12;
 
 const TASK_TYPE_LABELS: Record<string, string> = {
+  novel_autopilot: '小说自动驾驶',
+  novel_book_autopilot: '整本小说自动创作',
   chapters_batch_generate: '批量章节生成',
   chapter_single_generate: '单章生成',
   chapter_analysis: '章节分析',

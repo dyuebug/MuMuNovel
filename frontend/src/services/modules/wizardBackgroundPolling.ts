@@ -22,14 +22,22 @@ export const runBackgroundTaskWithPolling = async <T>(
   options?.onTaskCreated?.(createdTask.task_id);
   options?.onProgress?.('Background task created', 0, 'processing');
 
+  const stopTaskStream = (options?.onChunk || options?.onReasoningChunk)
+    ? backgroundTaskApi.subscribeTaskStream(createdTask.task_id, {
+        onChunk: options.onChunk,
+        onReasoningChunk: options.onReasoningChunk,
+      })
+    : null;
+
   return new Promise<T>((resolve, reject) => {
     let timer: number | null = null;
 
     const stopPolling = () => {
-      if (timer) {
+      if (timer !== null) {
         window.clearInterval(timer);
         timer = null;
       }
+      stopTaskStream?.();
     };
 
     const poll = async () => {

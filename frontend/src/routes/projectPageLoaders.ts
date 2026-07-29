@@ -1,6 +1,7 @@
 import { withChunkLoadRecovery } from '../utils/chunkLoadRecovery';
 
 export type ProjectNavigationPageKey =
+  | 'autopilot'
   | 'outline'
   | 'characters'
   | 'chapters'
@@ -30,6 +31,7 @@ interface NetworkInformationLike {
   saveData?: boolean;
 }
 
+export const loadNovelAutopilotPage = withChunkLoadRecovery(() => import('../pages/NovelAutopilot'));
 export const loadOutlinePage = withChunkLoadRecovery(() => import('../pages/Outline'));
 export const loadCharactersPage = withChunkLoadRecovery(() => import('../pages/Characters'));
 export const loadChaptersPage = withChunkLoadRecovery(() => import('../pages/Chapters'));
@@ -40,6 +42,7 @@ export const loadChapterAnalysisPage = withChunkLoadRecovery(() => import('../pa
 export const loadForeshadowsPage = withChunkLoadRecovery(() => import('../pages/Foreshadows'));
 
 const projectPageLoaders: Record<ProjectNavigationPageKey, () => Promise<unknown>> = {
+  autopilot: loadNovelAutopilotPage,
   outline: loadOutlinePage,
   characters: loadCharactersPage,
   chapters: loadChaptersPage,

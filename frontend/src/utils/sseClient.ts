@@ -4,7 +4,7 @@ type SSEPromiseResolve<TResult> = (value: SSEResolvedValue<TResult>) => void;
 type SSEPromiseReject = (reason?: unknown) => void;
 
 export interface SSEMessage<TResult = unknown> {
-  type: 'progress' | 'chunk' | 'result' | 'error' | 'done';
+  type: 'progress' | 'chunk' | 'reasoning_chunk' | 'result' | 'error' | 'done';
   message?: string;
   progress?: number;
   word_count?: number;
@@ -18,6 +18,7 @@ export interface SSEMessage<TResult = unknown> {
 export interface SSEClientOptions<TResult = unknown> {
   onProgress?: (message: string, progress: number, status: string, wordCount?: number) => void;
   onChunk?: (content: string) => void;
+  onReasoningChunk?: (content: string) => void;
   onResult?: (data: TResult) => void;
   onError?: (error: string, code?: number) => void;
   onCancelled?: (message: string) => void;
@@ -72,7 +73,7 @@ export class SSEClient<TResult = unknown> {
   connect(): Promise<SSEResolvedValue<TResult>> {
     return new Promise((resolve, reject) => {
       try {
-        this.eventSource = new EventSource(this.url);
+        this.eventSource = new EventSource(this.url, { withCredentials: true });
 
         this.eventSource.onmessage = (event) => {
           try {
@@ -117,6 +118,12 @@ export class SSEClient<TResult = unknown> {
           if (this.options.onChunk) {
             this.options.onChunk(message.content);
           }
+        }
+        break;
+
+      case 'reasoning_chunk':
+        if (message.content) {
+          this.options.onReasoningChunk?.(message.content);
         }
         break;
 
@@ -400,6 +407,12 @@ export class SSEPostClient<TResult = unknown, TPayload = unknown> {
           if (this.options.onChunk) {
             this.options.onChunk(message.content);
           }
+        }
+        break;
+
+      case 'reasoning_chunk':
+        if (message.content) {
+          this.options.onReasoningChunk?.(message.content);
         }
         break;
 

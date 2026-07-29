@@ -36,6 +36,8 @@ export type GenerateChapterContentStream = (
   storyRepairSummary?: string,
   storyRepairTargets?: string[],
   storyPreserveStrengths?: string[],
+  onChunk?: (content: string) => void,
+  onReasoningChunk?: (content: string) => void,
 ) => Promise<GenerateChapterContentStreamResult>;
 
 export interface SingleStoryPresetStateLike {
@@ -144,6 +146,7 @@ export function trackSingleChapterGenerationResult({
   startPollingTask,
   setRunningSingleChapterTasks,
   setChapterQualityRefreshToken,
+  isGenerationRunActive,
 }: {
   chapterId: string;
   progressMessageKey: string;
@@ -159,6 +162,7 @@ export function trackSingleChapterGenerationResult({
   startPollingTask: (chapterId: string) => void;
   setRunningSingleChapterTasks: Dispatch<SetStateAction<Record<string, string>>>;
   setChapterQualityRefreshToken: Dispatch<SetStateAction<number>>;
+  isGenerationRunActive?: () => boolean;
 }) {
   if (result.generation_task_id) {
     setRunningSingleChapterTasks((prev) => ({
@@ -238,6 +242,10 @@ export function trackSingleChapterGenerationResult({
       });
     })
     .finally(() => {
+      if (isGenerationRunActive?.() ?? true) {
+        useChapterGenerationUiStore.getState().resetSingleOverlay();
+      }
+
       if (!isPageActiveRef.current) {
         return;
       }
@@ -281,6 +289,9 @@ export async function startSingleChapterGenerationWorkflow({
   startPollingTask,
   setRunningSingleChapterTasks,
   setChapterQualityRefreshToken,
+  onModelChunk,
+  onModelReasoningChunk,
+  isGenerationRunActive,
 }: {
   editingId: string | null;
   runningSingleChapterTasks: Record<string, string>;
@@ -322,6 +333,9 @@ export async function startSingleChapterGenerationWorkflow({
   startPollingTask: (chapterId: string) => void;
   setRunningSingleChapterTasks: Dispatch<SetStateAction<Record<string, string>>>;
   setChapterQualityRefreshToken: Dispatch<SetStateAction<number>>;
+  onModelChunk?: (content: string) => void;
+  onModelReasoningChunk?: (content: string) => void;
+  isGenerationRunActive?: () => boolean;
 }): Promise<void> {
   if (!editingId) {
     return;
@@ -335,10 +349,15 @@ export async function startSingleChapterGenerationWorkflow({
   }
 
   const progressMessageKey = `chapter-generate-progress-${chapterId}`;
+  let completionTracked = false;
+  const shouldApplyGenerationUi = () => isGenerationRunActive?.() ?? true;
 
   try {
     void saveSingleStoryCreationSnapshot('generate', { silent: true });
     setIsContinuing(true);
+    if (!shouldApplyGenerationUi()) {
+      return;
+    }
     useChapterGenerationUiStore.getState().setSingleOverlay({
       loading: true,
       progress: 0,
@@ -369,6 +388,7 @@ export async function startSingleChapterGenerationWorkflow({
       generationRequest.styleId,
       generationRequest.targetWordCount,
       (progressMsg, progressValue) => {
+        if (!shouldApplyGenerationUi()) return;
         useChapterGenerationUiStore.getState().setSingleOverlay({
           progress: progressValue,
           message: progressMsg,
@@ -385,6 +405,12 @@ export async function startSingleChapterGenerationWorkflow({
       generationRequest.storyRepairSummary,
       generationRequest.storyRepairTargets,
       generationRequest.storyPreserveStrengths,
+      (content) => {
+        if (shouldApplyGenerationUi()) onModelChunk?.(content);
+      },
+      (content) => {
+        if (shouldApplyGenerationUi()) onModelReasoningChunk?.(content);
+      },
     );
 
     trackSingleChapterGenerationResult({
@@ -400,7 +426,9 @@ export async function startSingleChapterGenerationWorkflow({
       startPollingTask,
       setRunningSingleChapterTasks,
       setChapterQualityRefreshToken,
+      isGenerationRunActive,
     });
+    completionTracked = true;
 
     message.success('Chapter generation completed.');
   } catch (error) {
@@ -408,6 +436,8 @@ export async function startSingleChapterGenerationWorkflow({
     message.error('Chapter generation failed: ' + (apiError.response?.data?.detail || apiError.message || 'Unknown error'));
   } finally {
     setIsContinuing(false);
-    useChapterGenerationUiStore.getState().resetSingleOverlay();
+    if (!completionTracked && shouldApplyGenerationUi()) {
+      useChapterGenerationUiStore.getState().resetSingleOverlay();
+    }
   }
 }

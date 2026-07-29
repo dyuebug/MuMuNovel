@@ -114,6 +114,102 @@ export interface AuthUrlResponse {
   state: string;
 }
 
+// 小说级创作阶段。唯一持久化事实来自 projects.status。
+export type NovelWorkflowPhase =
+  | 'inspiration'
+  | 'foundation'
+  | 'world_building'
+  | 'character_design'
+  | 'outline'
+  | 'writing'
+  | 'reviewing'
+  | 'polishing'
+  | 'completed';
+
+export interface NovelWorkflowStateView {
+  schema_version: 1;
+  project_id: string;
+  phase: NovelWorkflowPhase;
+  allowed_transitions: NovelWorkflowPhase[];
+  can_rollback: boolean;
+  suggested_next_phase: NovelWorkflowPhase | null;
+  updated_at: string;
+  source: 'projects.status';
+}
+
+export interface NovelWorkflowTransitionRequest {
+  target_phase: NovelWorkflowPhase;
+  expected_phase: NovelWorkflowPhase;
+  reason?: string;
+  related_task_id?: string;
+}
+
+export interface NovelWorkflowTransitionReceipt {
+  schema_version: 1;
+  changed: boolean;
+  previous_phase: NovelWorkflowPhase;
+  state: NovelWorkflowStateView;
+}
+
+/**
+ * R8 派生只读运行指标的数据可用性，不代表 workflow/task/audit 的业务状态。
+ */
+export type RuntimeMetricsDataState = 'available' | 'empty' | 'unavailable';
+
+export type RuntimeMetricsQualityTrend = 'rising' | 'stable' | 'falling';
+
+export interface RuntimeMetricsWorkflowSummaryV1 {
+  state: RuntimeMetricsDataState;
+  schema_version: number | null;
+  phase: NovelWorkflowPhase | null;
+  updated_at: string | null;
+}
+
+export interface RuntimeMetricsTaskSummaryV1 {
+  state: RuntimeMetricsDataState;
+  observed_limit: number;
+  observed_count: number;
+  pending_count: number;
+  running_count: number;
+  completed_count: number;
+  failed_count: number;
+  cancelled_count: number;
+}
+
+export interface RuntimeMetricsQualitySummaryV1 {
+  state: RuntimeMetricsDataState;
+  observed_limit: number;
+  total_chapters: number | null;
+  analyzed_chapters: number | null;
+  latest_overall_score: number | null;
+  overall_score_delta: number | null;
+  overall_score_trend: RuntimeMetricsQualityTrend | null;
+  last_generated_at: string | null;
+}
+
+export interface RuntimeMetricsAutopilotAuditSummaryV1 {
+  state: RuntimeMetricsDataState;
+  observed_limit: number;
+  observed_count: number;
+  queued_count: number;
+  running_count: number;
+  succeeded_count: number;
+  failed_count: number;
+  cancelled_count: number;
+}
+
+/**
+ * R8 的 owner-scoped 派生只读 read model。它不承担 workflow、task 或 audit 的事实 owner 职责。
+ */
+export interface RuntimeMetricsResponseV1 {
+  schema_version: 'runtime-metrics/v1';
+  read_model: 'derived_readonly';
+  workflow: RuntimeMetricsWorkflowSummaryV1;
+  tasks: RuntimeMetricsTaskSummaryV1;
+  quality: RuntimeMetricsQualitySummaryV1;
+  autopilot_audits: RuntimeMetricsAutopilotAuditSummaryV1;
+}
+
 // 项目类型定义
 export interface Project {
   id: string;  // UUID字符串
@@ -123,7 +219,7 @@ export interface Project {
   genre?: string;
   target_words?: number;
   current_words: number;
-  status: 'planning' | 'writing' | 'revising' | 'completed';
+  status: NovelWorkflowPhase;
   wizard_status?: 'incomplete' | 'completed';
   wizard_step?: number;
   outline_mode: 'one-to-one' | 'one-to-many';  // 大纲章节模式
@@ -171,7 +267,7 @@ export interface ProjectUpdate {
   theme?: string;
   genre?: string;
   target_words?: number;
-  status?: 'planning' | 'writing' | 'revising' | 'completed';
+  status?: NovelWorkflowPhase;
   world_time_period?: string;
   world_location?: string;
   world_atmosphere?: string;

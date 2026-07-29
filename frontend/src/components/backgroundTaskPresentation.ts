@@ -34,6 +34,53 @@ export const isTaskResumable = (task: TrackedBackgroundTask) => {
     : task.status === 'cancelled' || (task.status === 'failed' && !isTaskManualReviewTerminal(task));
 };
 
+export type TaskRecoveryGuidance = {
+  title: string;
+  note: string;
+};
+
+export const getTaskRecoveryGuidance = (task: TrackedBackgroundTask): TaskRecoveryGuidance | null => {
+  if (task.status !== 'failed') return null;
+
+  const terminalReason = String(task.terminalReason ?? '').trim().toLowerCase();
+  switch (terminalReason) {
+    case 'restart_required':
+      return {
+        title: task.terminalLabel || '可从原业务入口重新发起',
+        note: '当前任务不会自动重放。请先确认现有内容，再返回对应页面重新发起。',
+      };
+    case 'resume_available':
+      return {
+        title: task.terminalLabel || '可从检查点恢复',
+        note: isTaskResumable(task)
+          ? '当前任务保留了有效检查点，可使用“继续”从原业务恢复入口处理。'
+          : '当前任务声明存在恢复检查点，但任务中心没有对应恢复 owner，请返回业务页面处理。',
+      };
+    case 'checkpoint_missing':
+      return {
+        title: task.terminalLabel || '恢复检查点不可用',
+        note: '当前记录缺少有效检查点，不能直接继续；请核对已有内容后决定是否重新发起。',
+      };
+    case 'manual_review':
+      return {
+        title: task.terminalLabel || '需要人工确认',
+        note: '任务可能已经写入部分内容。请先进入对应页面检查结果，确认后再决定是否重新执行。',
+      };
+    case 'non_resumable':
+      return {
+        title: task.terminalLabel || '当前任务不可恢复',
+        note: '任务中心不能恢复该记录；请查看失败详情，并从原业务流程重新开始。',
+      };
+    default:
+      return task.terminalLabel
+        ? {
+            title: task.terminalLabel,
+            note: task.message || '请查看失败详情，并返回对应业务页面确认后续处理方式。',
+          }
+        : null;
+  }
+};
+
 
 export type FailureReasonTag = {
   label: string;

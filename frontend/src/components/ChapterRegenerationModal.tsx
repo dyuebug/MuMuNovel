@@ -47,6 +47,7 @@ import {
 } from '../utils/generationPreferenceOptions';
 import { chapterPartialRegenerationApi } from '../services/modules/chapterPartialRegeneration';
 import { useStore } from '../store';
+import { useModelOutputStream } from '../hooks/useModelOutputStream';
 import { SSEProgressModal } from './SSEProgressModal';
 
 const { TextArea } = Input;
@@ -186,6 +187,15 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
   const [errorMessage, setErrorMessage] = useState('');
   const [progressMessage, setProgressMessage] = useState('');
   const [wordCount, setWordCount] = useState(0);
+  const {
+    reasoningContent,
+    generatedContent,
+    reasoningTruncated,
+    contentTruncated,
+    resetModelOutput,
+    onReasoningChunk,
+    onChunk,
+  } = useModelOutputStream();
   const [selectedSuggestions, setSelectedSuggestions] = useState<number[]>([]);
   const [modificationSource, setModificationSource] = useState<ModificationSource>('custom');
   const regenerationEnableWebResearch = Form.useWatch('enable_web_research', form) as boolean | undefined;
@@ -354,6 +364,7 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
       setWordCount(0);
       setErrorMessage('');
       setProgressMessage('正在重新生成...');
+      resetModelOutput();
 
       const requestData: RegenerationRequest = {
         modification_source: values.modification_source,
@@ -401,6 +412,16 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
             setProgressMessage(msg || '正在重新生成...');
             if (nextWordCount !== undefined) {
               setWordCount(nextWordCount);
+            }
+          },
+          onChunk: (chunk: string) => {
+            if (isRequestActive(requestId)) {
+              onChunk(chunk);
+            }
+          },
+          onReasoningChunk: (chunk: string) => {
+            if (isRequestActive(requestId)) {
+              onReasoningChunk(chunk);
             }
           },
           onHeartbeat: () => {
@@ -1133,6 +1154,13 @@ const ChapterRegenerationModal: React.FC<ChapterRegenerationModalProps> = ({
           message={`${progressMessage || '正在重新生成...'} · 已生成 ${wordCount} 字`}
           title="重新生成章节"
           blocking={false}
+          modelOutput={{
+            reasoningContent,
+            generatedContent,
+            reasoningTruncated,
+            contentTruncated,
+            taskStatus: status === 'error' ? 'failed' : status === 'success' ? 'completed' : 'running',
+          }}
         />
       </Modal>
     </>

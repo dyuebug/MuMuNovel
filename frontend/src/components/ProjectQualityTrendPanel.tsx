@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Space, Tag, Typography, theme } from 'antd';
+import { Card, Typography, theme } from 'antd';
 
 import type {
   ProjectChapterQualityTrendItem,
@@ -345,12 +345,6 @@ const ProjectQualityTrendPanel: React.FC<ProjectQualityTrendPanelProps> = ({
       : summary?.overall_score_trend === 'rising'
         ? 'success'
         : 'info';
-  const qualityTrendGuideSteps = [
-    '先看整体趋势、覆盖章节和最近分析时间，确认这次质量画像是不是建立在足够新的样本上。',
-    '再判断卷级目标、伏笔压力和当前修复建议，优先抓真正影响后续章节推进的风险项。',
-    '最后再深入看阶段分层、近期章节与修复成效率，把诊断结果转成下一轮创作动作。',
-  ];
-
   const overviewItems = [
     ...(typeof summary?.avg_overall_score === 'number'
       ? [{ label: '均分', value: `${summary.avg_overall_score.toFixed(1)}`, color: getOverallScoreColor(summary.avg_overall_score) }]
@@ -443,21 +437,6 @@ const ProjectQualityTrendPanel: React.FC<ProjectQualityTrendPanelProps> = ({
     renderTrendSparklineCard('回报兑现', '#52c41a', payoffSeries, (value) => `${formatNumber(value)}%`),
     renderTrendSparklineCard('章尾牵引', '#fa8c16', cliffhangerSeries, (value) => `${formatNumber(value)}%`),
   ].filter((item): item is JSX.Element => Boolean(item));
-  const qualityTrendWorkspaceFocus = summary?.overall_score_trend === 'falling'
-    ? {
-        title: '先处理正在下滑的章节质量信号',
-        note: '当前更适合优先看修复建议、节奏异常和未回收的伏笔压力，避免问题继续扩散到后续章节。',
-      }
-    : repairActions.length > 0
-      ? {
-          title: `把这 ${repairActions.length} 项修复动作转成下一轮创作计划`,
-          note: '当前趋势不一定恶化，但已经有明确修复方向，适合先确认优先级，再决定下一轮章节修订或生成策略。',
-        }
-      : {
-          title: '先确认当前趋势是否已经形成稳定正反馈',
-          note: '当前没有明显下滑压力，更适合先看阶段分层与最近章节，确认修复效果是否已经转化为持续性的质量提升。',
-        };
-
   return (
     <Card
       title="章节质量趋势"
@@ -473,85 +452,6 @@ const ProjectQualityTrendPanel: React.FC<ProjectQualityTrendPanelProps> = ({
         )
       ) : (
         <>
-          <Card
-            size="small"
-            style={{
-              marginBottom: 16,
-              borderRadius: 20,
-              border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
-              background: `linear-gradient(135deg, ${alphaColor(token.colorPrimaryBg, 0.82)} 0%, ${alphaColor(token.colorBgContainer, 0.98)} 100%)`,
-              boxShadow: 'none',
-            }}
-            styles={{ body: { padding: 16 } }}
-          >
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-                gap: 16,
-              }}
-            >
-              <div>
-                <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
-                  Quality Trend Guide
-                </Text>
-                <Text strong style={{ display: 'block', fontSize: 17, marginBottom: 8 }}>
-                  章节质量趋势导览
-                </Text>
-                <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
-                  这里负责把章节分析结果转成项目级诊断视图。当前只调整阅读顺序和焦点说明，不改任何质量计算、趋势判断或修复建议逻辑。
-                </Text>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {qualityTrendGuideSteps.map((item, index) => (
-                    <span
-                      key={item}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        padding: '6px 12px',
-                        borderRadius: 999,
-                        background: token.colorBgContainer,
-                        border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
-                        color: token.colorText,
-                        fontSize: 12,
-                      }}
-                    >
-                      <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
-                      {item}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              <div
-                style={{
-                  borderRadius: 18,
-                  padding: '16px 18px 14px',
-                  background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.5)} 100%)`,
-                  border: `1px solid ${alphaColor(token.colorPrimary, 0.12)}`,
-                }}
-              >
-                <Text style={{ display: 'block', fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary, marginBottom: 6 }}>
-                  当前工作焦点
-                </Text>
-                <Text strong style={{ display: 'block', fontSize: 16, marginBottom: 8 }}>
-                  {qualityTrendWorkspaceFocus.title}
-                </Text>
-                <Text type="secondary" style={{ display: 'block', lineHeight: 1.7, marginBottom: 12 }}>
-                  {qualityTrendWorkspaceFocus.note}
-                </Text>
-                <Space wrap>
-                  <Tag color="blue">覆盖章节: {analyzedCount}/{totalCount}</Tag>
-                  {trendLabel ? <Tag color={summary?.overall_score_trend === 'falling' ? 'red' : summary?.overall_score_trend === 'rising' ? 'green' : 'blue'}>趋势: {trendLabel}</Tag> : null}
-                  {typeof summary?.avg_overall_score === 'number' ? <Tag color={getOverallScoreColor(summary.avg_overall_score)}>均分: {summary.avg_overall_score.toFixed(1)}</Tag> : null}
-                  <Tag color={overallTone === 'warning' ? 'red' : overallTone === 'success' ? 'green' : 'gold'}>
-                    诊断状态: {summary?.quality_gate?.status ?? 'watch'}
-                  </Tag>
-                </Space>
-              </div>
-            </div>
-          </Card>
-
           <div
             style={{
               padding: compact ? 12 : 16,

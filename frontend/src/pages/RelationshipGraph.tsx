@@ -360,25 +360,14 @@ export default function RelationshipGraph() {
     boxShadow: `0 10px 18px color-mix(in srgb, ${token.colorText} 18%, transparent)`,
     backdropFilter: 'blur(8px)',
   } as const;
-  const graphReadingSequence = [
-    '先看节点与关系总量',
-    '再筛选连线类型',
-    '然后点选节点查看侧栏',
-    '最后回到角色或组织页继续补设定',
-  ];
-  const graphFocusNote = selectedNodeId
-    ? '当前已选中节点，可同时利用侧栏与图谱位置判断它在整个网络里的角色。'
-    : '当前还没有选中节点，建议先从关键角色或核心组织开始进入网络。';
-
   return (
     <div
       style={{
-        height: '100%',
-        minHeight: 0,
+        minHeight: '100%',
         display: 'flex',
         flexDirection: 'column',
         backgroundColor: token.colorBgLayout,
-        overflow: 'hidden',
+        overflow: 'visible',
         gap: 16,
         paddingBottom: 24,
       }}
@@ -392,6 +381,7 @@ export default function RelationshipGraph() {
           boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
           overflow: 'hidden',
           position: 'relative',
+          flexShrink: 0,
         }}
         styles={{ body: { padding: 24 } }}
       >
@@ -452,8 +442,8 @@ export default function RelationshipGraph() {
       <Card
         variant="borderless"
         style={{
-          flex: 1,
-          minHeight: 0,
+          flex: '1 1 auto',
+          minHeight: 640,
           display: 'flex',
           flexDirection: 'column',
           background: panelBackground,
@@ -464,89 +454,22 @@ export default function RelationshipGraph() {
         styles={{
           body: {
             flex: 1,
-            minHeight: 0,
+            minHeight: 600,
             display: 'flex',
             flexDirection: 'column',
-            overflow: 'hidden',
+            overflow: 'visible',
             padding: 16,
           }
         }}
       >
-        <Space direction="vertical" size={16} style={{ width: '100%', flex: 1, minHeight: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%', flex: 1, minHeight: 600 }}>
           <Card
             variant="borderless"
             style={{
               borderRadius: 20,
               background: quietPanelBackground,
               border: `1px solid ${token.colorBorderSecondary}`,
-            }}
-            styles={{ body: { padding: 18 } }}
-          >
-            <Row gutter={[16, 16]}>
-              <Col xs={24} xl={15}>
-                <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                  <Text style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.14em', textTransform: 'uppercase' }}>
-                    Graph Guide
-                  </Text>
-                  <Title level={4} style={{ margin: 0, color: token.colorTextBase, fontFamily: designDisplayFont }}>
-                    关系图谱阅读顺序
-                  </Title>
-                  <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.8 }}>
-                    这块图谱更适合做结构复核而不是直接编辑。先看全局规模，再筛选关系类型，最后通过节点侧栏回到具体人物、组织与职业信息。
-                  </Paragraph>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                    {graphReadingSequence.map((item, index) => (
-                      <span
-                        key={item}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 8,
-                          padding: '6px 12px',
-                          borderRadius: 999,
-                          background: token.colorBgContainer,
-                          border: `1px solid ${token.colorBorderSecondary}`,
-                          color: token.colorTextSecondary,
-                          fontSize: 12,
-                        }}
-                      >
-                        <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
-                        {item}
-                      </span>
-                    ))}
-                  </div>
-                </Space>
-              </Col>
-              <Col xs={24} xl={9}>
-                <div
-                  style={{
-                    height: '100%',
-                    borderRadius: 18,
-                    padding: '16px 18px',
-                    background: token.colorBgContainer,
-                    border: `1px solid ${token.colorBorderSecondary}`,
-                  }}
-                >
-                  <Text style={{ display: 'block', color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                    当前图谱焦点
-                  </Text>
-                  <Title level={5} style={{ margin: '8px 0 6px', fontFamily: designDisplayFont, color: token.colorTextBase }}>
-                    {selectedNodeId ? '从已选节点继续追踪结构' : '先挑一个核心节点进入'}
-                  </Title>
-                  <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
-                    {graphFocusNote}
-                  </Paragraph>
-                </div>
-              </Col>
-            </Row>
-          </Card>
-
-          <Card
-            variant="borderless"
-            style={{
-              borderRadius: 20,
-              background: quietPanelBackground,
-              border: `1px solid ${token.colorBorderSecondary}`,
+              flexShrink: 0,
             }}
             styles={{ body: { padding: 16 } }}
           >
@@ -617,8 +540,11 @@ export default function RelationshipGraph() {
           <Card
             variant="borderless"
             style={{
-              flex: 1,
-              minHeight: 0,
+              flex: '1 1 360px',
+              minHeight: 520,
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
               borderRadius: 20,
               background: quietPanelBackground,
               border: `1px solid ${token.colorBorderSecondary}`,
@@ -626,8 +552,9 @@ export default function RelationshipGraph() {
             styles={{
               body: {
                 flex: 1,
-                minHeight: 0,
+                minHeight: 500,
                 display: 'flex',
+                overflow: 'hidden',
                 padding: 12,
               }
             }}
@@ -646,7 +573,7 @@ export default function RelationshipGraph() {
               renderGraphCanvasPlaceholder('暂无可渲染的关系图谱数据')
             )}
           </Card>
-        </Space>
+        </div>
       </Card>
 
       {selectedNodeId ? (

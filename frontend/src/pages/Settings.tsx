@@ -369,74 +369,6 @@ export default function SettingsPage() {
     : 'sk-...';
 
   const providerHint = providerPlaceholders[(providerValue as ProviderValue) || 'openai'];
-  const activePreset = presets.find((preset) => preset.is_active) ?? null;
-  const activeResearchProviders = [
-    webResearchEnabled && exaEnabled ? 'Exa' : null,
-    webResearchEnabled && grokEnabled ? 'Grok' : null,
-  ].filter((item): item is string => Boolean(item));
-  const workspaceGuideItems = [
-    {
-      label: 'Step 1',
-      title: '先校准主模型',
-      description: '先把主模型链路与 API Key 验证到可用，再去扩展联网检索。',
-    },
-    {
-      label: 'Step 2',
-      title: '再接入 Research',
-      description: '把 Exa / Grok 当作补充检索层，避免在主链路未稳定前叠加复杂度。',
-    },
-    {
-      label: 'Step 3',
-      title: '最后沉淀预设',
-      description: '把验证通过的组合封装成预设，便于按阶段切换成本、速度与质量。',
-    },
-  ];
-  const controlDeckItems = [
-    {
-      label: '主模型链路',
-      value: currentModel || '未设置',
-      detail: providerValue === 'openai' ? '兼容 OpenAI / DeepSeek / OpenRouter 网关' : `当前提供商：${providerValue}`,
-    },
-    {
-      label: 'Research 状态',
-      value: webResearchEnabled ? (activeResearchProviders.length ? activeResearchProviders.join(' + ') : '已启用但未选引擎') : '关闭',
-      detail: webResearchEnabled ? '用于生成前补充联网上下文' : '当前只使用本地模型链路',
-    },
-    {
-      label: '活跃预设',
-      value: activePreset?.name || '未激活',
-      detail: activePreset ? `模型：${activePreset.config.llm_model}` : '建议把验证通过的配置沉淀为预设',
-    },
-  ];
-  const researchGuideItems = [
-    {
-      label: '启用顺序',
-      value: '总开关 -> Exa/Grok -> Search',
-    },
-    {
-      label: '当前引擎',
-      value: activeResearchProviders.length ? activeResearchProviders.join(' / ') : '未启用',
-    },
-    {
-      label: '建议目标',
-      value: '补充事实、资料、趋势，而不是替代主模型写作',
-    },
-  ];
-  const presetGuideItems = [
-    {
-      label: '拆分维度',
-      value: '按成本、速度、创作阶段来拆',
-    },
-    {
-      label: '命名建议',
-      value: '用“用途 + 模型 + 档位”命名，后续更易切换',
-    },
-    {
-      label: '维护原则',
-      value: '只保留验证通过且常用的组合，减少陈旧配置',
-    },
-  ];
-
   const modelSelectOptions = useMemo(
     () => modelOptions.map((model) => ({ label: model, value: model })),
     [modelOptions],
@@ -971,7 +903,7 @@ export default function SettingsPage() {
           <Col xs={24} lg={15}>
             <Space direction="vertical" size={8} style={{ width: '100%' }}>
               <Text style={{ color: alphaColor(editorialInk, 0.7), fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase' }}>
-                Configuration Guide
+                Configuration
               </Text>
               <Title
                 level={isMobile ? 3 : 2}
@@ -1038,98 +970,6 @@ export default function SettingsPage() {
           }}
           styles={{ body: { padding: isMobile ? 14 : 18 } }}
         >
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.15fr) minmax(300px, 0.9fr)',
-            gap: 16,
-            marginBottom: isMobile ? 16 : 18,
-          }}
-        >
-          <Card
-            variant="borderless"
-            style={{
-              borderRadius: 20,
-              background: quietPanelBackground,
-              border: `1px solid ${panelBorder}`,
-            }}
-            styles={{ body: { padding: 18 } }}
-          >
-            <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-              Workspace Guide
-            </Text>
-            <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
-              设置页阅读顺序
-            </Title>
-            <Paragraph type="secondary" style={{ marginBottom: 14, lineHeight: 1.8 }}>
-              这个页面更像运行配置说明书。先把主链路校准到稳定，再给联网检索加能力，最后把可复用配置沉淀为预设。
-            </Paragraph>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-              {workspaceGuideItems.map((item) => (
-                <div
-                  key={item.label}
-                  style={{
-                    borderRadius: 16,
-                    padding: '12px 14px',
-                    border: `1px solid ${token.colorBorderSecondary}`,
-                    background: token.colorBgContainer,
-                  }}
-                >
-                  <Text style={{ display: 'block', fontSize: 11, color: token.colorTextTertiary, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                    {item.label}
-                  </Text>
-                  <Text strong style={{ display: 'block', margin: '6px 0 4px' }}>
-                    {item.title}
-                  </Text>
-                  <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.7 }}>
-                    {item.description}
-                  </Text>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          <Card
-            variant="borderless"
-            style={{
-              borderRadius: 20,
-              background: quietPanelBackground,
-              border: `1px solid ${panelBorder}`,
-            }}
-            styles={{ body: { padding: 18 } }}
-          >
-            <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-              Current Focus
-            </Text>
-            <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
-              当前控制面
-            </Title>
-            <Space direction="vertical" size={10} style={{ width: '100%' }}>
-              {controlDeckItems.map((item) => (
-                <div
-                  key={item.label}
-                  style={{
-                    borderRadius: 16,
-                    padding: '12px 14px',
-                    background: token.colorBgContainer,
-                    border: `1px solid ${token.colorBorderSecondary}`,
-                  }}
-                >
-                  <Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
-                    {item.label}
-                  </Text>
-                  <Text strong style={{ display: 'block', lineHeight: 1.7 }}>
-                    {item.value}
-                  </Text>
-                  <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.7 }}>
-                    {item.detail}
-                  </Text>
-                </div>
-              ))}
-            </Space>
-          </Card>
-        </div>
-
         <Tabs
           tabBarStyle={{ marginBottom: isMobile ? 16 : 20 }}
           items={[
@@ -1386,26 +1226,6 @@ export default function SettingsPage() {
                         这一层更像“输入增强器”。目标是把事实资料、外部趋势和检索结论带进生成链路，而不是让联网配置本身变成新的维护负担。
                       </Text>
                     </Space>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 18 }}>
-                      {researchGuideItems.map((item) => (
-                        <div
-                          key={item.label}
-                          style={{
-                            borderRadius: 16,
-                            padding: '12px 14px',
-                            background: token.colorBgContainer,
-                            border: `1px solid ${token.colorBorderSecondary}`,
-                          }}
-                        >
-                          <Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
-                            {item.label}
-                          </Text>
-                          <Text strong style={{ lineHeight: 1.7 }}>
-                            {item.value}
-                          </Text>
-                        </div>
-                      ))}
-                    </div>
                     <Form form={webResearchForm} layout="vertical" initialValues={defaultWebResearchValues}>
                       <Row gutter={[16, 0]}>
                         <Col xs={24} md={8}>
@@ -1493,26 +1313,6 @@ export default function SettingsPage() {
                         预设更像“可切换的工作配置”。适合按模型用途、成本档位、写作阶段来拆分，而不是把所有参数塞进一个默认配置里。
                       </Text>
                     </Space>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 16 }}>
-                      {presetGuideItems.map((item) => (
-                        <div
-                          key={item.label}
-                          style={{
-                            borderRadius: 16,
-                            padding: '12px 14px',
-                            background: token.colorBgContainer,
-                            border: `1px solid ${token.colorBorderSecondary}`,
-                          }}
-                        >
-                          <Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
-                            {item.label}
-                          </Text>
-                          <Text strong style={{ lineHeight: 1.7 }}>
-                            {item.value}
-                          </Text>
-                        </div>
-                      ))}
-                    </div>
                     <Space wrap>
                       <Button type="primary" icon={<PlusOutlined />} onClick={openCreatePreset}>
                         新建预设

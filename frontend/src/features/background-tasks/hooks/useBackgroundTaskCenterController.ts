@@ -9,7 +9,10 @@ import {
   chapterBatchTaskApi,
   chapterSingleTaskApi,
 } from '../../../services/modularApi';
-import { OPEN_BACKGROUND_TASK_CENTER_EVENT } from '../../../constants/backgroundTaskEvents';
+import {
+  consumePendingBackgroundTaskCenterOpen,
+  OPEN_BACKGROUND_TASK_CENTER_EVENT,
+} from '../../../constants/backgroundTaskEvents';
 import { useStore } from '../../../store';
 import { useBackgroundTaskStore, type TrackedBackgroundTask } from '../../../store/backgroundTasks';
 import { isTaskResumable } from '../../../components/backgroundTaskPresentation';
@@ -234,8 +237,15 @@ export const useBackgroundTaskCenterController = (params: {
   );
 
   useEffect(() => {
-    const handleOpenTaskCenter = () => setOpen(true);
+    const handleOpenTaskCenter = () => {
+      consumePendingBackgroundTaskCenterOpen();
+      setOpen(true);
+    };
     window.addEventListener(OPEN_BACKGROUND_TASK_CENTER_EVENT, handleOpenTaskCenter);
+
+    if (consumePendingBackgroundTaskCenterOpen()) {
+      setOpen(true);
+    }
 
     return () => {
       window.removeEventListener(OPEN_BACKGROUND_TASK_CENTER_EVENT, handleOpenTaskCenter);

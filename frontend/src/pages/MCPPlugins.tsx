@@ -974,34 +974,6 @@ export default function MCPPluginsPage() {
     { label: '运行中', value: `${runningPluginCount} 个`, accent: token.colorSuccess },
     { label: '异常状态', value: `${issuePluginCount} 个`, accent: token.colorError },
   ];
-  const pluginFlowItems = [
-    { step: '01', title: '检查模型能力', note: '先确认当前模型支持 Function Calling，再进入插件编排。' },
-    { step: '02', title: '接入标准配置', note: '粘贴 MCP JSON，并用分类把插件挂到合适的创作场景。' },
-    { step: '03', title: '逐个测试连通性', note: '确认连接、端点与回退策略正常，再决定是否启用。' },
-    { step: '04', title: '查看工具暴露面', note: '核对每个插件到底向模型暴露了哪些工具和输入参数。' },
-  ];
-  const pluginFocusItems = [
-    {
-      label: '当前模型能力',
-      value: modelSupportStatus === 'supported'
-        ? '支持 Function Calling'
-        : modelSupportStatus === 'unsupported'
-          ? '暂不支持 Function Calling'
-          : '尚未完成检测',
-    },
-    {
-      label: '推荐操作顺序',
-      value: '检测能力 -> 添加配置 -> 测试连接 -> 查看工具 -> 再启用',
-    },
-    {
-      label: '当前治理重点',
-      value: issuePluginCount > 0
-        ? `有 ${issuePluginCount} 个插件处于异常状态，建议优先处理`
-        : runningPluginCount > 0
-          ? `已有 ${runningPluginCount} 个插件在运行，可继续补齐工具校对`
-          : '优先建立基础插件清单和分类规则',
-    },
-  ];
   const renderPluginWorkspaceFallback = () => (
     <InlineDeferredPanel
       eyebrow="Plugin Workspace"
@@ -1229,102 +1201,6 @@ export default function MCPPluginsPage() {
               </Card>
             </div>
           </Card>
-
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.2fr) minmax(320px, 0.92fr)',
-              gap: isMobile ? 12 : 16,
-              marginBottom: isMobile ? 16 : 20,
-            }}
-          >
-            <Card
-              bordered={false}
-              style={{
-                borderRadius: 22,
-                border: `1px solid ${panelBorder}`,
-                background: quietPanelBackground,
-                boxShadow: `0 24px 48px -42px ${alphaColor(token.colorTextBase, 0.45)}`,
-              }}
-              styles={{ body: { padding: isMobile ? 14 : 18 } }}
-            >
-              <Text style={{ fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-                Connection Flow
-              </Text>
-              <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, color: token.colorTextBase }}>
-                插件接入流程
-              </Title>
-              <Text type="secondary" style={{ display: 'block', marginBottom: 14, lineHeight: 1.7 }}>
-                这个页面更像一块连接器工作台。先确认模型具备工具调用能力，再把配置、测试与工具暴露面逐步核对完整。
-              </Text>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-                {pluginFlowItems.map((item) => (
-                  <div
-                    key={item.step}
-                    style={{
-                      flex: isMobile ? '1 1 calc(50% - 8px)' : '1 1 180px',
-                      minWidth: isMobile ? 0 : 180,
-                      borderRadius: 18,
-                      padding: '12px 14px',
-                      border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.84)}`,
-                      background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.36)} 100%)`,
-                    }}
-                  >
-                    <Text style={{ display: 'block', marginBottom: 6, fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorPrimary }}>
-                      {`Step ${item.step}`}
-                    </Text>
-                    <Text strong style={{ display: 'block', marginBottom: 4 }}>
-                      {item.title}
-                    </Text>
-                    <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.7 }}>
-                      {item.note}
-                    </Text>
-                  </div>
-                ))}
-              </div>
-            </Card>
-
-            <Card
-              bordered={false}
-              style={{
-                borderRadius: 22,
-                border: `1px solid ${panelBorder}`,
-                background: quietPanelBackground,
-                boxShadow: `0 24px 48px -42px ${alphaColor(token.colorTextBase, 0.45)}`,
-              }}
-              styles={{ body: { padding: isMobile ? 14 : 18 } }}
-            >
-              <Text style={{ fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-                Workspace Focus
-              </Text>
-              <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, color: token.colorTextBase }}>
-                当前工作焦点
-              </Title>
-              <Text type="secondary" style={{ display: 'block', marginBottom: 14, lineHeight: 1.7 }}>
-                这一列更偏运维说明：告诉你当前模型条件、推荐动作顺序，以及本轮最值得优先处理的插件状态。
-              </Text>
-              <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                {pluginFocusItems.map((item) => (
-                  <div
-                    key={item.label}
-                    style={{
-                      borderRadius: 16,
-                      padding: '12px 14px',
-                      border: `1px solid ${alphaColor(token.colorBorderSecondary, 0.84)}`,
-                      background: `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.98)} 0%, ${alphaColor(token.colorFillQuaternary, 0.32)} 100%)`,
-                    }}
-                  >
-                    <Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
-                      {item.label}
-                    </Text>
-                    <Text strong style={{ lineHeight: 1.7 }}>
-                      {item.value}
-                    </Text>
-                  </div>
-                ))}
-              </Space>
-            </Card>
-          </div>
 
           {/* 主内容区 */}
           <div style={{ flex: 1 }}>

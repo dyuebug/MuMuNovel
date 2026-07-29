@@ -7,6 +7,7 @@ import {
   StopOutlined,
 } from '@ant-design/icons';
 import type { TrackedBackgroundTask } from '../../../store/backgroundTasks';
+import { getTaskRecoveryGuidance } from '../../../components/backgroundTaskPresentation';
 
 const { Text } = Typography;
 
@@ -39,6 +40,7 @@ export const TaskActionButtons = (props: {
   const { token } = theme.useToken();
   const alphaColor = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${(alpha * 100).toFixed(0)}%, transparent)`;
   const resumable = canResumeTask(task);
+  const recoveryGuidance = getTaskRecoveryGuidance(task);
 
   const actionFocus = active
     ? {
@@ -51,16 +53,23 @@ export const TaskActionButtons = (props: {
         tone: alphaColor(token.colorPrimaryBg, 0.88),
         border: alphaColor(token.colorPrimary, 0.16),
       }
-    : resumable
+    : recoveryGuidance
       ? {
-          title: '失败或中断任务可优先恢复',
-          note: targetRoute
-            ? '建议先看对应工作区，再执行继续操作，这样更容易确认恢复前后的上下文。'
-            : '当前记录支持继续处理，适合先尝试恢复，再决定是否移除历史记录。',
+          title: recoveryGuidance.title,
+          note: recoveryGuidance.note,
           tone: alphaColor(token.colorWarningBg, 0.88),
           border: alphaColor(token.colorWarning, 0.18),
         }
-      : {
+      : resumable
+        ? {
+            title: '失败或中断任务可优先恢复',
+            note: targetRoute
+              ? '建议先看对应工作区，再执行继续操作，这样更容易确认恢复前后的上下文。'
+              : '当前记录支持继续处理，适合先尝试恢复，再决定是否移除历史记录。',
+            tone: alphaColor(token.colorWarningBg, 0.88),
+            border: alphaColor(token.colorWarning, 0.18),
+          }
+        : {
           title: '任务已结束，可选择保留或清理记录',
           note: targetRoute
             ? '如果还需要复盘过程，可以先前往对应页面；确认无须保留后再移除记录。'

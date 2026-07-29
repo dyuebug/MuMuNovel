@@ -236,184 +236,6 @@ export default function WritingStyles() {
     { label: '预设', value: presetCount, accent: token.colorInfo },
     { label: '默认方案', value: defaultStyle?.name ?? '未设置', accent: editorialInk, compact: true },
   ];
-  const styleGuideSteps = [
-    '先确认当前是在项目风格库还是个人风格库，再判断默认风格会落到哪条创作链路上。',
-    '再区分预设与自定义卡片，优先把稳定基线和项目专项语气分开整理。',
-    '最后再创建、编辑或调整默认方案，避免在还没看清现状时直接改动全局入口风格。',
-  ];
-  const createGuideSteps = [
-    '先明确这次要补的是项目专项语气还是个人长期可复用的基线卡，避免命名过泛。',
-    '再用风格描述和提示词正文把语气、节奏和禁忌写清楚，把它当作一张可复用的编辑卡片。',
-    '最后提交创建，原有保存逻辑和风格刷新流程保持不变，这里只增强阅读顺序与焦点提示。',
-  ];
-  const editGuideSteps = [
-    '先确认正在修订的是哪张风格卡，再判断这次是微调描述还是重写整段提示词。',
-    '再按名称、描述、提示词正文的顺序逐项校准，避免只改一处导致卡片语义失衡。',
-    '最后保存修改，原有更新逻辑和默认风格排序保持不变，这里只强化编辑视角。',
-  ];
-  const styleFocus = loading
-    ? {
-        title: '等待风格卡片同步',
-        note: '列表正在刷新，稍后就能继续设置默认风格或编辑当前项目常用语气。',
-      }
-    : totalStyles === 0
-      ? {
-          title: '先建立第一张基线卡片',
-          note: '当前风格库还是空的，优先创建一张稳定可复用的基础语气卡，再逐步细分其他风格。',
-        }
-      : !defaultStyle
-        ? {
-            title: '补齐默认写作方案',
-            note: '当前已有风格卡片但还没有默认方案，适合先指定一张常用基线，保证创作入口调用一致。',
-          }
-        : {
-            title: currentProject ? '校准项目专属语气' : '整理个人风格书架',
-            note: currentProject
-              ? '当前更适合检查默认风格是否真正贴合这个项目的叙事气质，并把专项语气和通用基线区分开。'
-              : '当前可以把个人常用风格按用途整理清楚，保留一张稳定默认卡，再逐步扩展实验型语气。',
-          };
-  const createModalFocus = currentProject
-    ? {
-        title: `当前正在为项目「${currentProject.title}」补充一张新的风格卡`,
-        note: '更适合先明确这张卡要覆盖的叙事气质，再把可复用提示词写完整，避免和默认基线混在一起。',
-        tags: [
-          { label: '项目语气', color: 'processing' },
-          { label: '新增卡片', color: 'gold' },
-        ],
-      }
-    : {
-        title: '当前正在建立个人风格库中的新卡片',
-        note: '建议先补一张长期稳定的个人基线卡，再逐步拆分实验型和题材型语气。',
-        tags: [
-          { label: '个人风格库', color: 'blue' },
-          { label: '待创建', color: 'gold' },
-        ],
-      };
-  const editModalFocus = editingStyle
-    ? {
-        title: `当前正在修订风格「${editingStyle.name}」`,
-        note: editingStyle.is_default
-          ? '这是一张默认风格卡，修改时更适合优先校准整体语气和适用边界，避免影响主要创作入口。'
-          : '这次更适合把它当作一次局部修订：先看名称与描述，再回头校准整段提示词。',
-        tags: [
-          { label: editingStyle.style_type === 'preset' ? '预设风格' : '自定义风格', color: editingStyle.style_type === 'preset' ? 'blue' : 'purple' },
-          editingStyle.is_default ? { label: '当前默认', color: 'gold' } : { label: '非默认', color: 'default' },
-          editingStyle.user_id === null ? { label: '只读来源', color: 'default' } : { label: '可编辑', color: 'green' },
-        ],
-      }
-    : {
-        title: '等待选中的风格卡载入',
-        note: '风格数据载入后，这里会继续显示当前修订焦点，原有编辑表单提交逻辑保持不变。',
-        tags: [{ label: '等待数据', color: 'default' }],
-      };
-  const renderModalHero = (eyebrow: string, title: string, description: string) => (
-    <Card
-      bordered={false}
-      style={{
-        marginBottom: 16,
-        borderRadius: 20,
-        overflow: 'hidden',
-        background: heroBackground,
-      }}
-      styles={{ body: { padding: 20 } }}
-    >
-      <Text style={{ color: 'color-mix(in srgb, #ffffff 68%, transparent)', letterSpacing: '0.14em', textTransform: 'uppercase' }}>
-        {eyebrow}
-      </Text>
-      <Title level={5} style={{ margin: '8px 0 10px', color: '#f7f1e8', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
-        {title}
-      </Title>
-      <Paragraph style={{ margin: 0, color: 'color-mix(in srgb, #ffffff 82%, transparent)', lineHeight: 1.7 }}>
-        {description}
-      </Paragraph>
-    </Card>
-  );
-  const renderGuidePanel = (
-    guideLabel: string,
-    guideTitle: string,
-    guideDescription: string,
-    guideSteps: string[],
-    focusTitle: string,
-    focusNote: string,
-    focusTags: Array<{ label: string; color: string }>,
-  ) => (
-    <Card
-      bordered={false}
-      style={{
-        marginBottom: 16,
-        borderRadius: 18,
-        background: quietPanelBackground,
-        border: panelBorder,
-      }}
-      styles={{ body: { padding: 18 } }}
-    >
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-          gap: 16,
-        }}
-      >
-        <div>
-          <Text style={{ fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-            {guideLabel}
-          </Text>
-          <Title level={5} style={{ margin: '6px 0 8px', fontFamily: designDisplayFont }}>
-            {guideTitle}
-          </Title>
-          <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
-            {guideDescription}
-          </Paragraph>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
-            {guideSteps.map((item, index) => (
-              <span
-                key={item}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '6px 12px',
-                  borderRadius: 999,
-                  background: token.colorBgContainer,
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                  color: token.colorTextSecondary,
-                  fontSize: 12,
-                }}
-              >
-                <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
-                {item}
-              </span>
-            ))}
-          </div>
-        </div>
-        <div
-          style={{
-            borderRadius: 16,
-            padding: '16px 18px',
-            background: token.colorBgContainer,
-            border: `1px solid ${token.colorBorderSecondary}`,
-          }}
-        >
-          <Text style={{ display: 'block', fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-            当前工作焦点
-          </Text>
-          <Title level={5} style={{ margin: '8px 0 6px', fontFamily: designDisplayFont }}>
-            {focusTitle}
-          </Title>
-          <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
-            {focusNote}
-          </Paragraph>
-          <Space wrap size={[8, 8]} style={{ marginTop: 12 }}>
-            {focusTags.map((tag) => (
-              <Tag key={`${tag.color}-${tag.label}`} color={tag.color} style={{ margin: 0, borderRadius: 999, paddingInline: 10 }}>
-                {tag.label}
-              </Tag>
-            ))}
-          </Space>
-        </div>
-      </div>
-    </Card>
-  );
   const renderWorkspacePanel = (label: string, title: string, description: string, children: ReactNode) => (
     <Card
       bordered={false}
@@ -444,9 +266,9 @@ export default function WritingStyles() {
       style={{
         display: 'flex',
         flexDirection: 'column',
-        height: '100%',
+        minHeight: '100%',
         gap: 16,
-        overflow: 'hidden',
+        overflow: 'visible',
         paddingBottom: 24,
       }}
     >
@@ -459,6 +281,7 @@ export default function WritingStyles() {
           boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
           overflow: 'hidden',
           position: 'relative',
+          flexShrink: 0,
         }}
         styles={{ body: { padding: isMobile ? 20 : 24 } }}
       >
@@ -518,7 +341,7 @@ export default function WritingStyles() {
                   lineHeight: 1.8,
                 }}
               >
-                这里像你的写作语气库。把项目默认风格、长期可复用的提示词和一次性实验方案放在同一处，既保留工作区秩序，也保留创作中的编辑手感。
+                管理项目默认风格、自定义提示词和可复用语气方案。
               </Paragraph>
               <Space wrap size={[10, 10]}>
                 <Tag
@@ -601,82 +424,16 @@ export default function WritingStyles() {
       <Card
         variant="borderless"
         style={{
-          borderRadius: 22,
-          background: `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimary} 10%, white 90%) 0%, color-mix(in srgb, ${token.colorWarning} 10%, white 90%) 100%)`,
-          border: `1px solid color-mix(in srgb, ${token.colorPrimary} 16%, white 84%)`,
-          boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
-        }}
-        styles={{ body: { padding: isMobile ? 16 : 18 } }}
-      >
-        <Row gutter={[16, 16]}>
-          <Col xs={24} lg={15}>
-            <Space direction="vertical" size={8} style={{ width: '100%' }}>
-              <Text style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                Style Guide
-              </Text>
-              <Paragraph style={{ margin: 0, color: token.colorText, lineHeight: 1.75 }}>
-                这个页面更像写作语气书架与默认方案控制台。原有卡片排序、默认设置和编辑逻辑都保持不变，这里只把你进入风格库后的阅读顺序和优先级说清楚。
-              </Paragraph>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {styleGuideSteps.map((item, index) => (
-                  <span
-                    key={item}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      padding: '6px 12px',
-                      borderRadius: 999,
-                      background: token.colorBgContainer,
-                      border: `1px solid ${token.colorBorderSecondary}`,
-                      color: token.colorTextBase,
-                      fontSize: 12,
-                    }}
-                  >
-                    <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
-                    {item}
-                  </span>
-                ))}
-              </div>
-            </Space>
-          </Col>
-          <Col xs={24} lg={9}>
-            <div
-              style={{
-                height: '100%',
-                borderRadius: 18,
-                padding: isMobile ? '14px 14px 12px' : '16px 18px 14px',
-                background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
-                border: `1px solid ${token.colorBorderSecondary}`,
-              }}
-            >
-              <Text style={{ display: 'block', color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                当前维护焦点
-              </Text>
-              <Title level={5} style={{ margin: '8px 0 6px', color: token.colorTextBase, fontFamily: designDisplayFont }}>
-                {styleFocus.title}
-              </Title>
-              <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
-                {styleFocus.note}
-              </Paragraph>
-            </div>
-          </Col>
-        </Row>
-      </Card>
-
-      <Card
-        variant="borderless"
-        style={{
-          flex: 1,
+          flex: '1 0 auto',
           overflow: 'hidden',
           background: panelBackground,
           borderRadius: 24,
           border: panelBorder,
           boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
         }}
-        styles={{ body: { height: '100%', padding: isMobile ? 16 : 20 } }}
+        styles={{ body: { padding: isMobile ? 16 : 20 } }}
       >
-        <Space direction="vertical" size={16} style={{ width: '100%', height: '100%' }}>
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <div
             style={{
               display: 'flex',
@@ -925,20 +682,6 @@ export default function WritingStyles() {
         style={isMobile ? { maxWidth: 'calc(100vw - 32px)', margin: '0 16px' } : undefined}
         styles={modalSurfaceStyles}
       >
-        {renderModalHero(
-          'Create Style',
-          '创建一张新的写作风格卡',
-          '这里保留原有创建逻辑，只把进入表单前的阅读顺序说清楚：先界定用途，再补语气说明，最后提交为可复用风格。'
-        )}
-        {renderGuidePanel(
-          'Create Guide',
-          '新增时先定义用途，再写提示词正文',
-          '这个弹窗更像一张风格建卡工作台，不是一次性备注框。原有字段、保存逻辑和列表刷新流程都保持不变。',
-          createGuideSteps,
-          createModalFocus.title,
-          createModalFocus.note,
-          createModalFocus.tags,
-        )}
         {renderWorkspacePanel(
           'Create Workspace',
           '风格卡片编辑区',
@@ -1006,20 +749,6 @@ export default function WritingStyles() {
         style={isMobile ? { maxWidth: 'calc(100vw - 32px)', margin: '0 16px' } : undefined}
         styles={modalSurfaceStyles}
       >
-        {renderModalHero(
-          'Edit Style',
-          '修订现有写作风格卡',
-          '这里仍然沿用原有编辑提交流程，只补一层导览语言，帮助你先看清当前卡片角色，再决定是微调描述还是重写提示词正文。'
-        )}
-        {renderGuidePanel(
-          'Edit Guide',
-          '编辑时先校准定位，再调整字段顺序',
-          '这个弹窗更像一次风格卡审校台。原有表单字段、保存逻辑与默认风格排序保持不变，这里只强化修订焦点。',
-          editGuideSteps,
-          editModalFocus.title,
-          editModalFocus.note,
-          editModalFocus.tags,
-        )}
         {renderWorkspacePanel(
           'Edit Workspace',
           '风格卡片修订区',

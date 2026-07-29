@@ -28,7 +28,7 @@ interface BookshelfPageProps {
   formatWordCount: (count: number) => string;
   getProgress: (current: number, target: number) => number;
   getProgressColor: (progress: number) => string;
-  getDisplayStatus: (status: string, progress: number) => string;
+  getDisplayStatus: (status: string) => string;
   getStatusTag: (status: string) => ReactNode;
   formatDate: (dateString: string) => string;
 }
@@ -64,43 +64,6 @@ export default function BookshelfPage({
     ? 'linear-gradient(135deg, #171411 0%, color-mix(in srgb, #171411 68%, #cc785c 32%) 100%)'
     : 'linear-gradient(135deg, #1a1714 0%, color-mix(in srgb, #1a1714 70%, #cc785c 30%) 100%)';
   const heroMutedInk = alphaColor('#f7f1e8', 0.76);
-  const wizardPendingCount = projects.filter((project) => isProjectWizardIncomplete(project)).length;
-  const latestUpdatedProject = [...projects]
-    .sort((left, right) => new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime())[0];
-  const shelfGuideItems = [
-    {
-      label: 'Step 1',
-      title: '先看入口书架',
-      description: '把这里当成项目总览入口，先判断是继续旧项目、创建新项目，还是导入已有档案。',
-    },
-    {
-      label: 'Step 2',
-      title: '再挑创作路径',
-      description: '核心项目适合直接进入书本，模糊想法则先去灵感模式再回到书架继续推进。',
-    },
-    {
-      label: 'Step 3',
-      title: '最后做归档操作',
-      description: '导入导出更适合在项目结构稳定后再执行，避免创作中途频繁打断。',
-    },
-  ];
-  const shelfFocusItems = [
-    {
-      label: '项目总数',
-      value: `${projects.length} 本`,
-      detail: '当前书架已收纳的项目数量',
-    },
-    {
-      label: '待补向导',
-      value: `${wizardPendingCount} 本`,
-      detail: wizardPendingCount > 0 ? '这些项目可能还需要继续完成创建向导' : '当前没有未完成的创建向导',
-    },
-    {
-      label: '最近更新',
-      value: latestUpdatedProject?.title || '暂无',
-      detail: latestUpdatedProject ? `更新于 ${formatDate(latestUpdatedProject.updated_at)}` : '书架里还没有项目记录',
-    },
-  ];
   const shelfWorkspaceFocus = loading
     ? {
         title: '恢复项目书架与阅读入口',
@@ -314,104 +277,6 @@ export default function BookshelfPage({
         />
       )}
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.15fr) minmax(300px, 0.9fr)',
-          gap: isMobile ? 12 : 16,
-          marginBottom: isMobile ? 14 : 18,
-        }}
-      >
-        <Card
-          variant="borderless"
-          style={{
-            borderRadius: isMobile ? 18 : 22,
-            border: `1px solid ${alphaColor(token.colorText, isDark ? 0.1 : 0.06)}`,
-            background: isDark
-              ? `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.7)} 0%, ${alphaColor(token.colorBgLayout, 0.86)} 100%)`
-              : `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.94)} 0%, ${alphaColor(token.colorBgLayout, 0.98)} 100%)`,
-            boxShadow: `0 18px 36px ${alphaColor(token.colorText, isDark ? 0.1 : 0.05)}`,
-          }}
-          styles={{ body: { padding: isMobile ? 14 : 18 } }}
-        >
-          <div style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-            Shelf Guide
-          </div>
-          <div style={{ margin: '8px 0 10px', fontSize: isMobile ? 22 : 24, fontWeight: 600, fontFamily: designDisplayFont, letterSpacing: '-0.03em', color: token.colorText }}>
-            书架页阅读顺序
-          </div>
-          <Paragraph type="secondary" style={{ marginBottom: 14, lineHeight: 1.8 }}>
-            这里更像创作项目的入口大厅。先确认你要继续哪本书，再决定是新建、导入，还是回到灵感工作流里补前置想法。
-          </Paragraph>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-            {shelfGuideItems.map((item) => (
-              <div
-                key={item.label}
-                style={{
-                  borderRadius: 16,
-                  padding: '12px 14px',
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                  background: token.colorBgContainer,
-                }}
-              >
-                <div style={{ fontSize: 11, color: token.colorTextTertiary, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                  {item.label}
-                </div>
-                <div style={{ margin: '6px 0 4px', fontWeight: 600, color: token.colorText }}>
-                  {item.title}
-                </div>
-                <div style={{ fontSize: 12, color: token.colorTextSecondary, lineHeight: 1.7 }}>
-                  {item.description}
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <Card
-          variant="borderless"
-          style={{
-            borderRadius: isMobile ? 18 : 22,
-            border: `1px solid ${alphaColor(token.colorText, isDark ? 0.1 : 0.06)}`,
-            background: isDark
-              ? `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.7)} 0%, ${alphaColor(token.colorBgLayout, 0.86)} 100%)`
-              : `linear-gradient(180deg, ${alphaColor(token.colorBgContainer, 0.94)} 0%, ${alphaColor(token.colorBgLayout, 0.98)} 100%)`,
-            boxShadow: `0 18px 36px ${alphaColor(token.colorText, isDark ? 0.1 : 0.05)}`,
-          }}
-          styles={{ body: { padding: isMobile ? 14 : 18 } }}
-        >
-          <div style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-            Current Shelf
-          </div>
-          <div style={{ margin: '8px 0 10px', fontSize: isMobile ? 22 : 24, fontWeight: 600, fontFamily: designDisplayFont, letterSpacing: '-0.03em', color: token.colorText }}>
-            当前书架焦点
-          </div>
-          <Space direction="vertical" size={10} style={{ width: '100%' }}>
-            {shelfFocusItems.map((item) => (
-              <div
-                key={item.label}
-                style={{
-                  borderRadius: 16,
-                  padding: '12px 14px',
-                  background: token.colorBgContainer,
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                }}
-              >
-                <div style={{ marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
-                  {item.label}
-                </div>
-                <div style={{ fontWeight: 600, color: token.colorText, lineHeight: 1.7 }}>
-                  {item.value}
-                </div>
-                <div style={{ fontSize: 12, color: token.colorTextSecondary, lineHeight: 1.7 }}>
-                  {item.detail}
-                </div>
-              </div>
-            ))}
-          </Space>
-        </Card>
-      </div>
-
       {loading ? (
         renderBookshelfWorkspaceFallback()
       ) : (
@@ -538,8 +403,8 @@ export default function BookshelfPage({
             const progress = getProgress(project.current_words || 0, project.target_words || 0);
             const progressColor = getProgressColor(progress);
             const isWizardIncomplete = isProjectWizardIncomplete(project);
-            const displayStatus = getDisplayStatus(project.status, progress);
-            const isCompleted = progress >= 100 || displayStatus.includes('完结');
+            const displayStatus = getDisplayStatus(project.status);
+            const isCompleted = displayStatus === 'completed';
             const palette = isCompleted ? completedBookPalette : serialBookPalettes[index % serialBookPalettes.length];
             const tags = project.genre ? project.genre.split(/[,、，]/).map((t: string) => t.trim()).filter((t: string) => t) : [];
 

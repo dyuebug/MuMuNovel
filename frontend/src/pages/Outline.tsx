@@ -20,6 +20,7 @@ import { backgroundTaskApi, projectApi, settingsApi } from '../services/modularA
 import { formatBackgroundTaskError } from '../utils/taskPolling';
 import InlineDeferredPanel from '../components/InlineDeferredPanel';
 import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
+import { useBackgroundTaskOutputStream } from '../hooks/useBackgroundTaskOutputStream';
 import { isRequestCancelledError } from '../services/core/httpClient';
 import { hasUsableApiCredentials } from '../utils/apiKey';
 import InlineErrorBoundary from '../components/InlineErrorBoundary';
@@ -671,6 +672,7 @@ export default function Outline() {
 
 
   const [sseModalVisible, setSSEModalVisible] = useState(false);
+  const [visibleTaskId, setVisibleTaskId] = useState<string | null>(null);
   const hasActiveTrackedOutlineGenerateTask = useBackgroundTaskStore(
     (state) => selectHasActiveOutlineGenerateTask(state.tasks, currentProject?.id)
   );
@@ -708,6 +710,9 @@ export default function Outline() {
   }, []);
 
   const expandTaskIdRef = useRef<string | null>(null);
+  const outlineModelOutput = useBackgroundTaskOutputStream(
+    sseModalVisible ? visibleTaskId : null,
+  );
 
 
   const { currentTaskIdRef: generateTaskIdRef, startTaskPolling: startGenerateTaskPolling, stopTaskPolling: stopGenerateTaskPolling } = useRestorableBackgroundTaskPolling({
@@ -718,7 +723,8 @@ export default function Outline() {
     ),
     canRestore: !isExpanding && !expandTaskIdRef.current,
     isMatchingTask: (task) => task.task_type === 'outline_generate' && (task.status === 'pending' || task.status === 'running'),
-    onRestoreTask: ({ progress, message: taskMessage }) => {
+    onRestoreTask: ({ taskId, progress, message: taskMessage }) => {
+      setVisibleTaskId(taskId);
       setIsGenerating(true);
       setSSEProgress(progress || 0);
       setSSEMessage(taskMessage || '正在恢复大纲任务...');
@@ -733,6 +739,7 @@ export default function Outline() {
       onCompleted: () => {
         stopGenerateTaskPolling();
         generateTaskIdRef.current = null;
+        setVisibleTaskId(null);
         setSSEModalVisible(false);
         setIsGenerating(false);
         message.success('大纲生成成功');
@@ -832,7 +839,8 @@ export default function Outline() {
     ),
     canRestore: !isGenerating && !generateTaskIdRef.current,
     isMatchingTask: (task) => (task.task_type === 'outline_expand' || task.task_type === 'outline_batch_expand') && (task.status === 'pending' || task.status === 'running'),
-    onRestoreTask: ({ progress, message: taskMessage }) => {
+    onRestoreTask: ({ taskId, progress, message: taskMessage }) => {
+      setVisibleTaskId(taskId);
       setIsExpanding(true);
       setSSEProgress(progress || 0);
       setSSEMessage(taskMessage || '正在恢复大纲任务...');
@@ -848,6 +856,7 @@ export default function Outline() {
         stopExpandTaskPolling();
         expandPollingTaskIdRef.current = null;
         expandTaskIdRef.current = null;
+        setVisibleTaskId(null);
         setSSEModalVisible(false);
         setIsExpanding(false);
 
@@ -964,7 +973,8 @@ export default function Outline() {
       generateTaskIdRef.current = null;
 
 
-      setSSEModalVisible(false);
+      setVisibleTaskId(null);
+        setSSEModalVisible(false);
 
 
       setIsGenerating(false);
@@ -2670,6 +2680,7 @@ export default function Outline() {
       message.success('大纲生成任务已转为后台执行，可继续进行其他操作');
 
 
+      setVisibleTaskId(task.task_id);
       startGenerateTaskPolling(task.task_id);
 
 
@@ -3567,6 +3578,7 @@ export default function Outline() {
 
 
             expandTaskIdRef.current = task.task_id;
+            setVisibleTaskId(task.task_id);
             startExpandTaskPolling(task.task_id);
 
 
@@ -3585,7 +3597,8 @@ export default function Outline() {
             expandTaskIdRef.current = null;
 
 
-            setSSEModalVisible(false);
+            setVisibleTaskId(null);
+        setSSEModalVisible(false);
 
 
             setIsExpanding(false);
@@ -4204,6 +4217,7 @@ export default function Outline() {
 
 
           expandTaskIdRef.current = task.task_id;
+          setVisibleTaskId(task.task_id);
           startExpandTaskPolling(task.task_id);
 
 
@@ -4222,7 +4236,8 @@ export default function Outline() {
           expandTaskIdRef.current = null;
 
 
-          setSSEModalVisible(false);
+          setVisibleTaskId(null);
+        setSSEModalVisible(false);
 
 
           setIsExpanding(false);
@@ -6748,15 +6763,6 @@ export default function Outline() {
     color-mix(in srgb, ${token.colorPrimary} 76%, #69453c 24%) 0%,
     color-mix(in srgb, ${token.colorInfo} 26%, #172229 74%) 100%)`;
   const editorialInk = '#fff9f0';
-  const actionButtonStyle = {
-    borderRadius: 999,
-    height: 42,
-    paddingInline: 16,
-    borderColor: 'rgba(255,255,255,0.18)',
-    background: 'rgba(255,255,255,0.08)',
-    color: editorialInk,
-    boxShadow: 'none',
-  } as const;
   const panelBackground = `linear-gradient(180deg,
     color-mix(in srgb, ${token.colorBgContainer} 94%, white 6%) 0%,
     color-mix(in srgb, ${token.colorFillAlter} 46%, ${token.colorBgContainer} 54%) 100%)`;
@@ -6769,37 +6775,6 @@ export default function Outline() {
     { label: '角色素材', value: storeCharacters.length, accent: token.colorInfo },
     { label: '当前模式', value: outlineModeLabel, accent: editorialInk, compact: true },
   ];
-  const outlineGuideSteps = [
-    '先看模式、统计卡和任务状态，确认当前是在搭主线、续写已有结构，还是把大纲展开成章节。',
-    '再进入大纲列表逐条检查标题、结构和展开状态，把修订动作放在同一轮里连续完成。',
-    '最后再决定智能生成、手动创建或批量展开，避免在结构还没理顺前直接推进后续章节生产。',
-  ];
-  const outlineFocus = (isGenerating || hasActiveTrackedOutlineGenerateTask)
-    ? {
-        title: '等待大纲生成或续写回流',
-        note: '当前有一条大纲生成任务正在执行，适合先观察结果回流，再统一整理列表结构和顺序。',
-      }
-    : (isExpanding || hasActiveTrackedOutlineExpandTask)
-      ? {
-          title: '关注展开成章进度',
-          note: '当前有展开任务在进行，优先确认哪些大纲已经转成章节，再决定是否继续批量扩展。',
-        }
-      : sortedOutlines.length === 0
-        ? {
-            title: '先建立第一条故事主线',
-            note: '当前还没有任何大纲，适合先写出一条骨架，再决定交给 AI 续写还是自己继续细化。',
-          }
-        : currentProject.outline_mode === 'one-to-many' && activeOutlineCount === 0
-          ? {
-              title: '检查哪些大纲适合先展开',
-              note: '当前处于细化模式但还没有已展开的大纲，适合先确认哪些卷已经稳定，可以进入成章阶段。',
-            }
-          : {
-              title: '整理大纲台账并校正节奏',
-              note: `当前已加载 ${visibleOutlineCount}/${sortedOutlines.length} 条大纲，更适合先统一检查顺序、结构密度和展开节奏，再决定下一步生成动作。`,
-            };
-
-
   return (
 
 
@@ -6922,13 +6897,14 @@ export default function Outline() {
                 }
               }}
               cancelButtonText="取消任务"
+              modelOutput={outlineModelOutput}
             />
           </Suspense>
         </InlineErrorBoundary>
       ) : null}
 
 
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 16, overflow: 'hidden', paddingBottom: 24 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%', gap: 16, overflow: 'visible', paddingBottom: 24 }}>
         <Card
           variant="borderless"
           style={{
@@ -6938,6 +6914,7 @@ export default function Outline() {
             boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
             overflow: 'hidden',
             position: 'relative',
+            flexShrink: 0,
           }}
           styles={{ body: { padding: isMobile ? 20 : 24 } }}
         >
@@ -7010,11 +6987,24 @@ export default function Outline() {
               </Row>
             </Col>
           </Row>
-          <Space wrap size={[10, 10]} style={{ marginTop: 20, position: 'relative', zIndex: 1 }}>
+        </Card>
+
+        <Card
+          variant="borderless"
+          style={{
+            borderRadius: 20,
+            background: token.colorBgContainer,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            boxShadow: `0 14px 28px color-mix(in srgb, ${token.colorText} 6%, transparent)`,
+            flexShrink: 0,
+          }}
+          styles={{ body: { padding: isMobile ? 12 : 14 } }}
+        >
+          <Space wrap size={[10, 10]}>
             <Button
               icon={<PlusOutlined />}
               onClick={showManualCreateOutlineModal}
-              style={actionButtonStyle}
+              style={{ borderRadius: 999, paddingInline: 16 }}
             >
               手动创建
             </Button>
@@ -7033,7 +7023,7 @@ export default function Outline() {
                 onClick={handleBatchExpandOutlines}
                 loading={Boolean(isExpanding || hasActiveTrackedOutlineExpandTask)}
                 title="将所有大纲展开为多章，实现从大纲到章节的一对多关系"
-                style={actionButtonStyle}
+                style={{ borderRadius: 999, paddingInline: 16 }}
               >
                 {isMobile ? '批量展开' : '批量展开为多章'}
               </Button>
@@ -7044,73 +7034,7 @@ export default function Outline() {
         <Card
           variant="borderless"
           style={{
-            borderRadius: 22,
-            background: `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimary} 10%, white 90%) 0%, color-mix(in srgb, ${token.colorInfo} 10%, white 90%) 100%)`,
-            border: `1px solid color-mix(in srgb, ${token.colorPrimary} 16%, white 84%)`,
-            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
-          }}
-          styles={{ body: { padding: isMobile ? 16 : 18 } }}
-        >
-          <Row gutter={[16, 16]}>
-            <Col xs={24} lg={15}>
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <Text style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                  Outline Guide
-                </Text>
-                <Paragraph style={{ margin: 0, color: token.colorText, lineHeight: 1.75 }}>
-                  这个页面更像故事骨架工作台与后续展开入口。原有生成、续写、编辑、删除和成章展开逻辑都保持不变，这里只把阅读顺序和当前该关注的层级提炼出来。
-                </Paragraph>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                  {outlineGuideSteps.map((item, index) => (
-                    <span
-                      key={item}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        padding: '6px 12px',
-                        borderRadius: 999,
-                        background: token.colorBgContainer,
-                        border: `1px solid ${token.colorBorderSecondary}`,
-                        color: token.colorTextBase,
-                        fontSize: 12,
-                      }}
-                    >
-                      <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
-                      {item}
-                    </span>
-                  ))}
-                </div>
-              </Space>
-            </Col>
-            <Col xs={24} lg={9}>
-              <div
-                style={{
-                  height: '100%',
-                  borderRadius: 18,
-                  padding: isMobile ? '14px 14px 12px' : '16px 18px 14px',
-                  background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                }}
-              >
-                <Text style={{ display: 'block', color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                  当前工作焦点
-                </Text>
-                <Title level={5} style={{ margin: '8px 0 6px', color: token.colorTextBase, fontFamily: designDisplayFont }}>
-                  {outlineFocus.title}
-                </Title>
-                <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
-                  {outlineFocus.note}
-                </Paragraph>
-              </div>
-            </Col>
-          </Row>
-        </Card>
-
-        <Card
-          variant="borderless"
-          style={{
-            flex: 1,
+            flex: '1 0 auto',
             overflow: 'hidden',
             background: panelBackground,
             borderRadius: 24,
@@ -7208,7 +7132,7 @@ export default function Outline() {
                         还有 {sortedOutlines.length - visibleOutlineCount} 个大纲正在继续接管
                       </Text>
                       <Text type="secondary" style={{ display: 'block', marginTop: 6, lineHeight: 1.7 }}>
-                        页面已经先展示首批大纲卡片，系统正在继续补齐剩余条目；原有排序、展开和批量操作逻辑保持不变。
+                        页面已先展示首批大纲卡片，剩余条目会继续渲染。
                       </Text>
                     </Card>
                   ) : null}

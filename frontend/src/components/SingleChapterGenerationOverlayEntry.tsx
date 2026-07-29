@@ -1,13 +1,18 @@
 import { Suspense, lazy, memo } from 'react';
 import { useChapterGenerationUiStore } from '../store/chapterGenerationUi';
 import WorkflowEntryFallback from './WorkflowEntryFallback';
+import type { ModelOutputPanelProps } from './ModelOutputPanel';
 
 const LazySSELoadingOverlay = lazy(async () => {
   const module = await import('./SSELoadingOverlay');
   return { default: module.SSELoadingOverlay };
 });
 
-function SingleChapterGenerationOverlayEntry() {
+interface SingleChapterGenerationOverlayEntryProps {
+  modelOutput?: Omit<ModelOutputPanelProps, 'compact'>;
+}
+
+function SingleChapterGenerationOverlayEntry({ modelOutput }: SingleChapterGenerationOverlayEntryProps) {
   const { loading, progress, message } = useChapterGenerationUiStore((state) => state.singleOverlay);
 
   if (!loading) {
@@ -35,6 +40,7 @@ function SingleChapterGenerationOverlayEntry() {
         progress={progress}
         message={message}
         blocking={false}
+        modelOutput={modelOutput}
       />
     </Suspense>
   );

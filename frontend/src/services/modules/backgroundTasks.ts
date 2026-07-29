@@ -1,17 +1,48 @@
 import { api, getAxiosErrorStatus, silentRequestConfig, type RequestConfigWithToastControl } from '../core/httpClient';
+import { SSEClient, type SSEClientOptions } from '../../utils/sseClient';
 import {
   buildMissingBackgroundTaskStatus,
   removeBackgroundTaskFromStore,
   syncBackgroundTaskListToStore,
   syncBackgroundTaskToStore,
 } from './backgroundTaskStoreSync';
-import type { BackgroundTaskListResponse, BackgroundTaskStatus } from './backgroundTaskTypes';
+import type {
+  BackgroundTaskListResponse,
+  BackgroundTaskStatus,
+  ConfirmedAutopilotWorkflowTransitionRequest,
+} from './backgroundTaskTypes';
 
-export type { BackgroundTaskListResponse, BackgroundTaskStatus } from './backgroundTaskTypes';
+export type {
+  BackgroundTaskListResponse,
+  BackgroundTaskStatus,
+  ConfirmedAutopilotWorkflowTransitionRequest,
+} from './backgroundTaskTypes';
 
 let backgroundTasksEndpointSupported = true;
 
+export type BackgroundTaskStreamOptions = Pick<
+  SSEClientOptions,
+  'onChunk' | 'onReasoningChunk'
+>;
+
 export const backgroundTaskApi = {
+  subscribeTaskStream: (
+    taskId: string,
+    options: BackgroundTaskStreamOptions,
+  ): (() => void) => {
+    const baseUrl = String(api.defaults.baseURL || '/api').replace(/\/+$/, '');
+    const client = new SSEClient(
+      `${baseUrl}/background-tasks/${encodeURIComponent(taskId)}/stream`,
+      options,
+    );
+
+    void client.connect().catch(() => {
+      // 实时输出是 best-effort；断线时仍由状态轮询负责终态与正式结果。
+    });
+
+    return () => client.close();
+  },
+
   createTask: async (data: {
     task_type: BackgroundTaskStatus['task_type'];
     project_id?: string;
@@ -22,6 +53,17 @@ export const backgroundTaskApi = {
     checkpoint?: Record<string, unknown>;
   }) => {
     const created = await api.post<unknown, BackgroundTaskStatus>('/background-tasks', data);
+    return syncBackgroundTaskToStore(created);
+  },
+
+  createConfirmedAutopilotWorkflowTransition: async (
+    projectId: string,
+    data: ConfirmedAutopilotWorkflowTransitionRequest,
+  ) => {
+    const created = await api.post<unknown, BackgroundTaskStatus>(
+      `/projects/${projectId}/autopilot/actions`,
+      data,
+    );
     return syncBackgroundTaskToStore(created);
   },
 

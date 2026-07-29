@@ -9,6 +9,7 @@ import SSEProgressModal from '../components/SSEProgressModal';
 import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgroundTasks';
 import { formatBackgroundTaskError } from '../utils/taskPolling';
 import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
+import { useBackgroundTaskOutputStream } from '../hooks/useBackgroundTaskOutputStream';
 import { isRequestCancelledError } from '../services/core/httpClient';
 import { designDisplayFont } from '../theme/themeConfig';
 
@@ -132,6 +133,8 @@ export default function Careers() {
     const [aiGenerating, setAiGenerating] = useState(false);
     const [aiProgress, setAiProgress] = useState(0);
     const [aiMessage, setAiMessage] = useState('');
+    const [visibleTaskId, setVisibleTaskId] = useState<string | null>(null);
+    const careerModelOutput = useBackgroundTaskOutputStream(aiGenerating ? visibleTaskId : null);
     const activeProjectIdRef = useRef<string | null>(projectId ?? null);
     const careerRequestIdRef = useRef(0);
     const completedCareerRefreshLockRef = useRef(createCareerRefreshTaskLock());
@@ -194,7 +197,8 @@ export default function Careers() {
         isMatchingTask: (task) =>
             (task.task_type === 'careers_generate_system' || task.task_type === 'wizard_career_system')
             && (task.status === 'pending' || task.status === 'running'),
-        onRestoreTask: ({ progress, message: taskMessage }) => {
+        onRestoreTask: ({ taskId, progress, message: taskMessage }) => {
+            setVisibleTaskId(taskId);
             setAiGenerating(true);
             setAiProgress(progress || 0);
             setAiMessage(taskMessage || '正在恢复职业体系生成任务...');
@@ -208,19 +212,22 @@ export default function Careers() {
             onCompleted: () => {
                 stopAiTaskPolling();
                 aiTaskIdRef.current = null;
-                setAiGenerating(false);
+                setVisibleTaskId(null);
+            setAiGenerating(false);
                 message.success('职业体系生成完成');
             },
             onFailed: (task) => {
                 stopAiTaskPolling();
                 aiTaskIdRef.current = null;
-                setAiGenerating(false);
+                setVisibleTaskId(null);
+            setAiGenerating(false);
                 message.error(formatBackgroundTaskError(task.error, task.message, '生成失败'));
             },
             onCancelled: (task) => {
                 stopAiTaskPolling();
                 aiTaskIdRef.current = null;
-                setAiGenerating(false);
+                setVisibleTaskId(null);
+            setAiGenerating(false);
                 message.info(task.message || '任务已取消');
             },
             onPollingError: (error) => {
@@ -230,7 +237,8 @@ export default function Careers() {
                 console.error('轮询职业生成任务失败:', error);
                 stopAiTaskPolling();
                 aiTaskIdRef.current = null;
-                setAiGenerating(false);
+                setVisibleTaskId(null);
+            setAiGenerating(false);
                 setAiMessage('职业生成状态同步失败，请刷新后重试');
                 void fetchCareers();
                 message.error('职业生成状态同步失败，请刷新后重试');
@@ -313,10 +321,12 @@ export default function Careers() {
 
             message.success('后台职业生成任务已创建，可继续进行其他操作');
             aiTaskIdRef.current = task.task_id;
+            setVisibleTaskId(task.task_id);
             startAiTaskPolling(task.task_id);
         } catch (err: unknown) {
             stopAiTaskPolling();
             aiTaskIdRef.current = null;
+            setVisibleTaskId(null);
             setAiGenerating(false);
             const error = err as Error;
             message.error(error.message || '启动生成失败');
@@ -338,6 +348,7 @@ export default function Careers() {
         } finally {
             stopAiTaskPolling();
             aiTaskIdRef.current = null;
+            setVisibleTaskId(null);
             setAiGenerating(false);
         }
     };
@@ -531,39 +542,14 @@ export default function Careers() {
         { label: '副职业', value: subCareers.length, accent: token.colorInfo },
         { label: 'AI 生成', value: aiCareerCount, accent: editorialInk },
     ];
-    const careerGuideSteps = [
-        '先看主职业、副职业和 AI 生成占比，确认这次是在补主干体系还是补充支线分工。',
-        '再切到对应 Tab 审核职业描述、阶段和能力信息，避免主副职业混在一起修改。',
-        '最后再决定新增、编辑或智能生成，把体系扩展放在已经看清现状之后。',
-    ];
-    const careerFocus = aiGenerating || activeTrackedCareerTask
-        ? {
-            title: '等待职业体系补全回流',
-            note: '当前有一条职业生成任务正在执行，适合先观察进度，等结果回流后再统一整理职业卡片。',
-        }
-        : totalCareers === 0
-            ? {
-                title: '先搭主职业骨架',
-                note: '当前还没有职业条目，优先建立主职业基线，再考虑副职业和阶段延展会更稳。',
-            }
-            : subCareers.length === 0
-                ? {
-                    title: '补充副职业分工',
-                    note: '主职业已经存在，下一步更适合补齐副职业，让世界观里的辅助、生产和支线能力更完整。',
-                }
-                : {
-                    title: '做一次职业体系巡检',
-                    note: '当前主副职业都已成型，适合检查分类是否清晰、阶段是否连贯，以及 AI 生成内容是否需要人工收束。',
-                };
-
     return (
         <>
             {contextHolder}
             <div style={{
-            height: '100%',
+            minHeight: '100%',
             display: 'flex',
             flexDirection: 'column',
-            overflow: 'hidden',
+            overflow: 'visible',
             gap: 16,
             paddingBottom: 24,
         }}>
@@ -576,6 +562,7 @@ export default function Careers() {
                     boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
                     overflow: 'hidden',
                     position: 'relative',
+                    flexShrink: 0,
                 }}
                 styles={{ body: { padding: 24 } }}
             >
@@ -594,33 +581,6 @@ export default function Careers() {
                             <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.82)', fontSize: 15, lineHeight: 1.8 }}>
                                 在这里维护世界里的主职业、副职业与阶段体系。它更像职业设定台账：既要能补充新条目，也要能看见整套体系的密度与分工。
                             </Paragraph>
-                            <Space wrap>
-                                <Button
-                                    type="dashed"
-                                    icon={<ThunderboltOutlined />}
-                                    onClick={() => {
-                                        aiForm.resetFields();
-                                        setIsAIModalOpen(true);
-                                    }}
-                                    loading={Boolean(aiGenerating || activeTrackedCareerTask)}
-                                    style={{
-                                        borderRadius: 999,
-                                        borderColor: 'rgba(255,255,255,0.18)',
-                                        background: 'rgba(255,255,255,0.08)',
-                                        color: editorialInk,
-                                    }}
-                                >
-                                    智能生成新职业
-                                </Button>
-                                <Button
-                                    type="primary"
-                                    icon={<PlusOutlined />}
-                                    onClick={() => handleOpenModal()}
-                                    style={{ borderRadius: 999, paddingInline: 16 }}
-                                >
-                                    新增职业
-                                </Button>
-                            </Space>
                         </Space>
                     </Col>
                     <Col xs={24} lg={10}>
@@ -653,73 +613,41 @@ export default function Careers() {
             <Card
                 variant="borderless"
                 style={{
-                    borderRadius: 22,
-                    background: `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimary} 10%, white 90%) 0%, color-mix(in srgb, ${token.colorInfo} 10%, white 90%) 100%)`,
-                    border: `1px solid color-mix(in srgb, ${token.colorPrimary} 16%, white 84%)`,
-                    boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
+                    borderRadius: 20,
+                    background: token.colorBgContainer,
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    boxShadow: `0 14px 28px color-mix(in srgb, ${token.colorText} 6%, transparent)`,
+                    flexShrink: 0,
                 }}
-                styles={{ body: { padding: 18 } }}
+                styles={{ body: { padding: 14 } }}
             >
-                <Row gutter={[16, 16]}>
-                    <Col xs={24} lg={15}>
-                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                            <Text style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                                Career Guide
-                            </Text>
-                            <Paragraph style={{ margin: 0, color: token.colorText, lineHeight: 1.75 }}>
-                                这个页面更像职业台账与体系校对台。原有 Tabs、AI 生成和编辑提交流程都保持不变，这里只把查看顺序和当前维护重点提炼出来，方便长期整理世界职业谱系。
-                            </Paragraph>
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                                {careerGuideSteps.map((item, index) => (
-                                    <span
-                                        key={item}
-                                        style={{
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            gap: 8,
-                                            padding: '6px 12px',
-                                            borderRadius: 999,
-                                            background: token.colorBgContainer,
-                                            border: `1px solid ${token.colorBorderSecondary}`,
-                                            color: token.colorTextBase,
-                                            fontSize: 12,
-                                        }}
-                                    >
-                                        <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
-                                        {item}
-                                    </span>
-                                ))}
-                            </div>
-                        </Space>
-                    </Col>
-                    <Col xs={24} lg={9}>
-                        <div
-                            style={{
-                                height: '100%',
-                                borderRadius: 18,
-                                padding: '16px 18px 14px',
-                                background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
-                                border: `1px solid ${token.colorBorderSecondary}`,
-                            }}
-                        >
-                            <Text style={{ display: 'block', color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                                当前维护焦点
-                            </Text>
-                            <Title level={5} style={{ margin: '8px 0 6px', color: token.colorTextBase, fontFamily: designDisplayFont }}>
-                                {careerFocus.title}
-                            </Title>
-                            <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
-                                {careerFocus.note}
-                            </Paragraph>
-                        </div>
-                    </Col>
-                </Row>
+                <Space wrap size={[10, 10]}>
+                    <Button
+                        type="primary"
+                        icon={<ThunderboltOutlined />}
+                        onClick={() => {
+                            aiForm.resetFields();
+                            setIsAIModalOpen(true);
+                        }}
+                        loading={Boolean(aiGenerating || activeTrackedCareerTask)}
+                        style={{ borderRadius: 999, paddingInline: 16 }}
+                    >
+                        智能生成新职业
+                    </Button>
+                    <Button
+                        icon={<PlusOutlined />}
+                        onClick={() => handleOpenModal()}
+                        style={{ borderRadius: 999, paddingInline: 16 }}
+                    >
+                        新增职业
+                    </Button>
+                </Space>
             </Card>
 
             <Card
                 variant="borderless"
                 style={{
-                    flex: 1,
+                    flex: '1 0 auto',
                     overflow: 'hidden',
                     background: panelBackground,
                     borderRadius: 24,
@@ -864,6 +792,7 @@ export default function Careers() {
                 title="正在生成新职业..."
                 blocking={false}
                 onCancel={handleCancelAIGenerate}
+                modelOutput={careerModelOutput}
             />
             </div>
         </>

@@ -1,4 +1,5 @@
 import { Suspense, lazy, memo } from 'react';
+import type { ModelOutputPanelProps } from './ModelOutputPanel';
 import { useChapterGenerationUiStore } from '../store/chapterGenerationUi';
 import { formatActiveStoryRepairLabel } from '../utils/activeStoryRepair';
 import WorkflowEntryFallback from './WorkflowEntryFallback';
@@ -26,12 +27,14 @@ type ChapterBatchProgressEntryProps = {
     compaction_details?: Record<string, { before?: number | null; after?: number | null }> | null;
   } | null) => string;
   onCancel: () => void;
+  modelOutput?: Omit<ModelOutputPanelProps, 'compact'>;
 };
 
 function ChapterBatchProgressEntry({
   visible,
   buildCheckpointHint,
   onCancel,
+  modelOutput,
 }: ChapterBatchProgressEntryProps) {
   const batchProgress = useChapterGenerationUiStore((state) => state.batchProgress);
 
@@ -84,6 +87,7 @@ function ChapterBatchProgressEntry({
         onCancel={onCancel}
         cancelButtonText={'Close'}
         blocking={false}
+        modelOutput={modelOutput}
       />
     </Suspense>
   );

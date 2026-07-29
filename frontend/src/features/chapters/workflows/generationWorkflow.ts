@@ -32,12 +32,16 @@ export function useChapterGenerationWorkflow({
     storyRepairSummary?: string,
     storyRepairTargets?: string[],
     storyPreserveStrengths?: string[],
+    onChunk?: (content: string) => void,
+    onReasoningChunk?: (content: string) => void,
   ) => {
     return startChapterGenerationWorkflow({
       chapterId,
       projectId: currentProjectId,
       refreshChapters,
       onProgress,
+      onChunk,
+      onReasoningChunk,
       styleId,
       targetWordCount,
       onProgressUpdate,

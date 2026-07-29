@@ -15,6 +15,7 @@ import { backgroundTaskApi, characterApi } from '../services/modularApi';
 import { getCachedProjectCareers, loadProjectCareers } from '../services/projectCareers';
 import { formatBackgroundTaskError } from '../utils/taskPolling';
 import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
+import { useBackgroundTaskOutputStream } from '../hooks/useBackgroundTaskOutputStream';
 import { isRequestCancelledError } from '../services/core/httpClient';
 
 
@@ -272,6 +273,8 @@ export default function Characters() {
     (state) => selectCompletedCharacterRefreshTaskSignature(state.tasks, currentProject?.id)
   );
   const [isGenerating, setIsGenerating] = useState(false);
+  const [outputTaskId, setOutputTaskId] = useState<string | null>(null);
+  const modelOutput = useBackgroundTaskOutputStream(outputTaskId);
   const [isCancellingTask, setIsCancellingTask] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState('');
@@ -395,7 +398,8 @@ export default function Characters() {
     activeTrackedTask: activeTrackedGenerationTask,
     canRestore: !isGenerating && !taskCreationInFlightRef.current,
     isMatchingTask: (task) => isCharacterGenerationTaskType(task.task_type) && (task.status === 'pending' || task.status === 'running'),
-    onRestoreTask: ({ progress: progressValue, message: messageValue }) => {
+    onRestoreTask: ({ taskId, progress: progressValue, message: messageValue }) => {
+      setOutputTaskId(taskId);
       setIsGenerating(true);
       setIsCancellingTask(false);
       setProgress(progressValue || 0);
@@ -410,6 +414,7 @@ export default function Characters() {
       onCompleted: (task) => {
         stopTaskPolling();
         currentTaskIdRef.current = null;
+        setOutputTaskId(null);
         setIsCancellingTask(false);
         setIsGenerating(false);
         message.success(
@@ -421,6 +426,7 @@ export default function Characters() {
       onFailed: (task) => {
         stopTaskPolling();
         currentTaskIdRef.current = null;
+        setOutputTaskId(null);
         setIsCancellingTask(false);
         setIsGenerating(false);
         message.error(formatBackgroundTaskError(task.error, task.message, '生成失败'));
@@ -428,6 +434,7 @@ export default function Characters() {
       onCancelled: (task) => {
         stopTaskPolling();
         currentTaskIdRef.current = null;
+        setOutputTaskId(null);
         setIsCancellingTask(false);
         setIsGenerating(false);
         message.info(task.message || '任务已取消');
@@ -439,6 +446,7 @@ export default function Characters() {
         console.error('轮询角色或组织生成任务失败:', error);
         stopTaskPolling();
         currentTaskIdRef.current = null;
+        setOutputTaskId(null);
         setIsCancellingTask(false);
         setIsGenerating(false);
         setProgressMessage('生成状态同步失败，请刷新后重试');
@@ -447,6 +455,10 @@ export default function Characters() {
       },
     }),
   });
+
+  useEffect(() => {
+    setOutputTaskId(null);
+  }, [currentProject?.id]);
 
   useEffect(() => {
     return () => {
@@ -537,11 +549,13 @@ export default function Characters() {
 
       message.success('后台角色生成任务已启动，可继续进行其他操作');
       currentTaskIdRef.current = task.task_id;
+      setOutputTaskId(task.task_id);
       startTaskPolling(task.task_id);
       taskCreationInFlightRef.current = false;
     } catch (error: unknown) {
       stopTaskPolling();
       currentTaskIdRef.current = null;
+      setOutputTaskId(null);
       taskCreationInFlightRef.current = false;
       setIsCancellingTask(false);
       setIsGenerating(false);
@@ -589,11 +603,13 @@ export default function Characters() {
 
       message.success('后台组织生成任务已启动，可继续进行其他操作');
       currentTaskIdRef.current = task.task_id;
+      setOutputTaskId(task.task_id);
       startTaskPolling(task.task_id);
       taskCreationInFlightRef.current = false;
     } catch (error: unknown) {
       stopTaskPolling();
       currentTaskIdRef.current = null;
+      setOutputTaskId(null);
       taskCreationInFlightRef.current = false;
       setIsCancellingTask(false);
       setIsGenerating(false);
@@ -618,6 +634,7 @@ export default function Characters() {
       message.info('正在取消后台任务...');
       stopTaskPolling();
       currentTaskIdRef.current = null;
+      setOutputTaskId(null);
       setIsGenerating(false);
       setProgress(0);
       setProgressMessage('');
@@ -1270,41 +1287,6 @@ export default function Characters() {
     { label: '角色卡', value: `${characterList.length}` },
     { label: '组织卡', value: `${organizationList.length}` },
   ];
-  const workspaceGuideItems = [
-    {
-      label: 'Step 1',
-      title: '先确定对象类型',
-      description: '把人物与组织分开阅读，能更快判断当前需要补的是角色本体还是势力结构。',
-    },
-    {
-      label: 'Step 2',
-      title: '再做创建或生成',
-      description: '手动创建适合核心设定，智能生成适合快速起草，两个入口保持在同一工作台里。',
-    },
-    {
-      label: 'Step 3',
-      title: '最后批量整理',
-      description: '等卡片成形后再做多选、导入导出与集中筛查，避免边建边乱。',
-    },
-  ];
-  const focusItems = [
-    {
-      label: '当前视图',
-      value: activeTab === 'all' ? '全部条目' : activeTab === 'character' ? '角色卡' : '组织卡',
-      detail: '通过顶部标签切换当前阅读维度',
-    },
-    {
-      label: '已选条目',
-      value: `${selectedCharacters.length} 个`,
-      detail: selectedCharacters.length > 0 ? '可继续做批量导出或取消选择' : '当前还没有批量操作目标',
-    },
-    {
-      label: '加载状态',
-      value: isProgressiveRenderPending ? '渐进加载中' : '已稳定',
-      detail: isProgressiveRenderPending ? '其余卡片会逐步进入视图' : '当前卡片已经完成首轮渲染',
-    },
-  ];
-
   const renderSelectableGrid = (items: Character[]) => (
     <Row gutter={isMobile ? [8, 8] : [8, 8]}>
       {items.map((item) => (
@@ -1336,6 +1318,7 @@ export default function Characters() {
           boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
           overflow: 'hidden',
           position: 'relative',
+          flexShrink: 0,
         }}
         styles={{ body: { padding: isMobile ? 18 : 24 } }}
       >
@@ -1352,7 +1335,7 @@ export default function Characters() {
                 角色与组织管理
               </Title>
               <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.82)', fontSize: isMobile ? 13 : 15, lineHeight: 1.8 }}>
-                用工作区视图管理项目中的人物与势力结构。这里保留原有创建、智能生成、导入导出与批量操作逻辑，但把内容重新组织成更适合长时间浏览、筛选和比对的页面结构。
+                管理项目人物、组织、导入导出与生成入口。
               </Paragraph>
             </Space>
           </Col>
@@ -1446,99 +1429,6 @@ export default function Characters() {
           )}
         </Space>
       </Card>
-
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.15fr) minmax(300px, 0.9fr)',
-          gap: 16,
-        }}
-      >
-        <Card
-          variant="borderless"
-          style={{
-            background: quietPanelBackground,
-            borderRadius: isMobile ? 18 : 22,
-            border: panelBorder,
-            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
-          }}
-          styles={{ body: { padding: isMobile ? 14 : 18 } }}
-        >
-          <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-            Workspace Guide
-          </Text>
-          <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
-            角色页维护顺序
-          </Title>
-          <Paragraph type="secondary" style={{ marginBottom: 14, lineHeight: 1.8 }}>
-            这一页更像人物与势力档案库。先决定要处理的是“角色”还是“组织”，再进入创建、生成或批量整理，信息会更稳定。
-          </Paragraph>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
-            {workspaceGuideItems.map((item) => (
-              <div
-                key={item.label}
-                style={{
-                  borderRadius: 16,
-                  padding: '12px 14px',
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                  background: token.colorBgContainer,
-                }}
-              >
-                <Text style={{ display: 'block', fontSize: 11, color: token.colorTextTertiary, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                  {item.label}
-                </Text>
-                <Text strong style={{ display: 'block', margin: '6px 0 4px' }}>
-                  {item.title}
-                </Text>
-                <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.7 }}>
-                  {item.description}
-                </Text>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <Card
-          variant="borderless"
-          style={{
-            background: quietPanelBackground,
-            borderRadius: isMobile ? 18 : 22,
-            border: panelBorder,
-            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
-          }}
-          styles={{ body: { padding: isMobile ? 14 : 18 } }}
-        >
-          <Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-            Current Focus
-          </Text>
-          <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
-            当前工作焦点
-          </Title>
-          <Space direction="vertical" size={10} style={{ width: '100%' }}>
-            {focusItems.map((item) => (
-              <div
-                key={item.label}
-                style={{
-                  borderRadius: 16,
-                  padding: '12px 14px',
-                  background: token.colorBgContainer,
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                }}
-              >
-                <Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
-                  {item.label}
-                </Text>
-                <Text strong style={{ display: 'block', lineHeight: 1.7 }}>
-                  {item.value}
-                </Text>
-                <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.7 }}>
-                  {item.detail}
-                </Text>
-              </div>
-            ))}
-          </Space>
-        </Card>
-      </div>
 
       {characters.length > 0 && (
         <Card
@@ -1758,7 +1648,7 @@ export default function Characters() {
                   正在继续补齐剩余角色与组织卡片
                 </Text>
                 <Text type="secondary" style={{ display: 'block', marginTop: 6, lineHeight: 1.7 }}>
-                  当前页面已经先展示首批内容，系统正在继续接管后续卡片；原有筛选、选择与批量生成逻辑保持不变。
+                  当前页面已先展示首批内容，后续卡片会继续渲染。
                 </Text>
               </Card>
             )}
@@ -1945,6 +1835,7 @@ export default function Characters() {
             onCancel={handleCancelGeneratingTask}
             cancelButtonLoading={isCancellingTask}
             cancelButtonDisabled={isCancellingTask || !currentTaskIdRef.current}
+            modelOutput={modelOutput}
           />
         </Suspense>
       ) : null}

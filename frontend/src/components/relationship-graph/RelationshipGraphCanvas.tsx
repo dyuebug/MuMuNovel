@@ -34,7 +34,7 @@ function RelationshipGraphCanvas({ nodes, edges, onNodeClick }: RelationshipGrap
     <div
       style={{
         flex: 1,
-        minHeight: 0,
+        minHeight: 500,
         position: 'relative',
         overflow: 'hidden',
         borderRadius: 18,
@@ -171,7 +171,7 @@ function RelationshipGraphCanvas({ nodes, edges, onNodeClick }: RelationshipGrap
           size={1.2}
           color="color-mix(in srgb, var(--ant-color-border-secondary) 72%, transparent)"
         />
-        <Controls position="top-left" />
+        <Controls position="bottom-right" />
       </ReactFlow>
     </div>
   );

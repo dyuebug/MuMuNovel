@@ -6,6 +6,7 @@ import { isActiveBackgroundTask, useBackgroundTaskStore } from '../store/backgro
 import { backgroundTaskApi, projectApi } from '../services/modularApi';
 import { formatBackgroundTaskError } from '../utils/taskPolling';
 import { useRestorableBackgroundTaskPolling } from '../hooks/useRestorableBackgroundTaskPolling';
+import { useBackgroundTaskOutputStream } from '../hooks/useBackgroundTaskOutputStream';
 import { isRequestCancelledError } from '../services/core/httpClient';
 import { SSELoadingOverlay } from '../components/SSELoadingOverlay';
 import { designDisplayFont } from '../theme/themeConfig';
@@ -105,7 +106,6 @@ export default function WorldSetting() {
   const { token } = theme.useToken();
   const { currentProject, setCurrentProject } = useStore();
   const activeProjectIdRef = useRef<string | null>(currentProject?.id ?? null);
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [editForm] = Form.useForm();
   const [isSaving, setIsSaving] = useState(false);
@@ -117,6 +117,8 @@ export default function WorldSetting() {
     (item) => item.value === selectedDefaultQualityPreset,
   );
   const [isRegenerating, setIsRegenerating] = useState(false);
+  const [outputTaskId, setOutputTaskId] = useState<string | null>(null);
+  const modelOutput = useBackgroundTaskOutputStream(outputTaskId);
   const [isCancellingTask, setIsCancellingTask] = useState(false);
   const [regenerateProgress, setRegenerateProgress] = useState(0);
   const [regenerateMessage, setRegenerateMessage] = useState('');
@@ -138,27 +140,18 @@ export default function WorldSetting() {
 
   useEffect(() => {
     activeProjectIdRef.current = currentProject?.id ?? null;
+    setOutputTaskId(null);
   }, [currentProject?.id]);
-
-  useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth <= 768);
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => {
-      window.removeEventListener('resize', handleResize);
-    };
-  }, []);
 
   const { currentTaskIdRef, startTaskPolling, stopTaskPolling } = useRestorableBackgroundTaskPolling({
     projectId: currentProject?.id,
     activeTrackedTask: activeTrackedWorldTask,
     isMatchingTask: (task) => task.task_type === 'world_regenerate' && (task.status === 'pending' || task.status === 'running'),
-    onRestoreTask: ({ progress, message: taskMessage }) => {
+    onRestoreTask: ({ taskId, progress, message: taskMessage }) => {
       if (!activeProjectIdRef.current) {
         return;
       }
+      setOutputTaskId(taskId);
       setIsRegenerating(true);
       setIsCancellingTask(false);
       setRegenerateProgress(progress || 0);
@@ -177,10 +170,12 @@ export default function WorldSetting() {
         if (!activeProjectIdRef.current || task.project_id !== activeProjectIdRef.current) {
           stopTaskPolling();
           currentTaskIdRef.current = null;
+          setOutputTaskId(null);
           return;
         }
         stopTaskPolling();
         currentTaskIdRef.current = null;
+        setOutputTaskId(null);
         setIsCancellingTask(false);
         setIsRegenerating(false);
         setRegenerateProgress(0);
@@ -202,10 +197,12 @@ export default function WorldSetting() {
         if (!activeProjectIdRef.current || task.project_id !== activeProjectIdRef.current) {
           stopTaskPolling();
           currentTaskIdRef.current = null;
+          setOutputTaskId(null);
           return;
         }
         stopTaskPolling();
         currentTaskIdRef.current = null;
+        setOutputTaskId(null);
         setIsCancellingTask(false);
         setIsRegenerating(false);
         setRegenerateProgress(0);
@@ -216,10 +213,12 @@ export default function WorldSetting() {
         if (!activeProjectIdRef.current || task.project_id !== activeProjectIdRef.current) {
           stopTaskPolling();
           currentTaskIdRef.current = null;
+          setOutputTaskId(null);
           return;
         }
         stopTaskPolling();
         currentTaskIdRef.current = null;
+        setOutputTaskId(null);
         setIsCancellingTask(false);
         setIsRegenerating(false);
         setRegenerateProgress(0);
@@ -233,6 +232,7 @@ export default function WorldSetting() {
         console.error('世界设定轮询失败:', error);
         stopTaskPolling();
         currentTaskIdRef.current = null;
+        setOutputTaskId(null);
         setIsCancellingTask(false);
         setIsRegenerating(false);
         setRegenerateProgress(0);
@@ -317,10 +317,12 @@ export default function WorldSetting() {
           });
           message.success('后台世界观生成任务已创建，可继续进行其他操作');
           currentTaskIdRef.current = task.task_id;
+          setOutputTaskId(task.task_id);
           startTaskPolling(task.task_id);
         } catch (error) {
           console.error('创建后台任务失败:', error);
           currentTaskIdRef.current = null;
+          setOutputTaskId(null);
           setIsCancellingTask(false);
           setIsRegenerating(false);
           setRegenerateProgress(0);
@@ -343,6 +345,7 @@ export default function WorldSetting() {
       message.info('正在取消后台任务...');
       stopTaskPolling();
       currentTaskIdRef.current = null;
+      setOutputTaskId(null);
       setIsRegenerating(false);
       setRegenerateProgress(0);
       setRegenerateMessage('');
@@ -463,26 +466,6 @@ export default function WorldSetting() {
     {
       label: '质量预设',
       value: resolveOptionLabel(QUALITY_PRESET_OPTIONS, currentProject.default_quality_preset),
-    },
-  ];
-  const worldGuideItems = [
-    {
-      label: '阅读顺序',
-      value: '先看项目基础信息，再确认创作偏好，最后回到世界四大维度统一校对。',
-    },
-    {
-      label: '当前用途',
-      value: '这里维护的是角色、组织、章节与生成链路共享的世界观母本。',
-    },
-  ];
-  const worldCoverageItems = [
-    {
-      title: '世界框架',
-      description: '时间、地点、氛围、规则四块一起看，才更容易发现设定冲突与信息缺口。',
-    },
-    {
-      title: '生成入口',
-      description: '智能重建适合快速出第一稿，手动编辑更适合后续做精修和一致性治理。',
     },
   ];
   const modalSurfaceStyles = {
@@ -607,93 +590,6 @@ export default function WorldSetting() {
           </Button>
         </Flex>
       </Card>
-
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.15fr) minmax(320px, 0.95fr)',
-          gap: 16,
-        }}
-      >
-        <Card
-          variant="borderless"
-          style={{
-            borderRadius: 22,
-            background: quietPanelBackground,
-            border: panelBorder,
-            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
-          }}
-          styles={{ body: { padding: 18 } }}
-        >
-          <Typography.Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-            World Manual
-          </Typography.Text>
-          <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
-            世界观阅读导引
-          </Title>
-          <Paragraph type="secondary" style={{ marginBottom: 14, lineHeight: 1.8 }}>
-            这页更像项目的世界设定手册。先把基础资料和默认偏好看成“创作前提”，再用四大世界维度去校正设定本身是否完整、统一、可落地。
-          </Paragraph>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
-            {worldGuideItems.map((item) => (
-              <div
-                key={item.label}
-                style={{
-                  borderRadius: 16,
-                  padding: '12px 14px',
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                  background: token.colorBgContainer,
-                }}
-              >
-                <Typography.Text style={{ display: 'block', marginBottom: 4, fontSize: 12, color: token.colorTextTertiary }}>
-                  {item.label}
-                </Typography.Text>
-                <Typography.Text strong style={{ lineHeight: 1.7 }}>
-                  {item.value}
-                </Typography.Text>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <Card
-          variant="borderless"
-          style={{
-            borderRadius: 22,
-            background: quietPanelBackground,
-            border: panelBorder,
-            boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
-          }}
-          styles={{ body: { padding: 18 } }}
-        >
-          <Typography.Text style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-            Coverage Map
-          </Typography.Text>
-          <Title level={4} style={{ margin: '8px 0 10px', fontFamily: designDisplayFont, letterSpacing: '-0.03em' }}>
-            当前维护重点
-          </Title>
-          <Flex vertical gap={10}>
-            {worldCoverageItems.map((item) => (
-              <div
-                key={item.title}
-                style={{
-                  borderRadius: 16,
-                  padding: '12px 14px',
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                  background: token.colorBgContainer,
-                }}
-              >
-                <Typography.Text strong style={{ display: 'block', marginBottom: 4 }}>
-                  {item.title}
-                </Typography.Text>
-                <Typography.Text type="secondary" style={{ lineHeight: 1.7 }}>
-                  {item.description}
-                </Typography.Text>
-              </div>
-            ))}
-          </Flex>
-        </Card>
-      </div>
 
       <Row gutter={[18, 18]}>
         <Col xs={24} xl={9}>
@@ -1328,6 +1224,7 @@ export default function WorldSetting() {
         onCancel={handleCancelRegenerateTask}
         cancelButtonLoading={isCancellingTask}
         cancelButtonDisabled={isCancellingTask || !currentTaskIdRef.current}
+        modelOutput={modelOutput}
       />
 
       {/* 预览重新生成的内容模态框 */}

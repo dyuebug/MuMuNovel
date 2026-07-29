@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Card,
   Tabs,
@@ -461,11 +461,6 @@ export default function PromptTemplates() {
     { label: '自定义副本', value: `${customizedTemplateCount}` },
     { label: '同步状态正常', value: syncStatusEnabled ? `${syncHealthyCount}` : '基础模式' },
   ];
-  const promptGuideSteps = [
-    '先确认当前分类视角，再判断这轮是在巡检系统默认模板，还是整理自己的自定义副本。',
-    '再读模板用途、预览片段与同步标签，把“阅读判断”放在真正进入正文编辑之前。',
-    '最后再决定是同步默认、重置差异，还是继续打磨当前模板内容，避免过早改动正文。',
-  ];
   const promptWorkspaceFocus = loading
     ? {
         title: '等待模板工作台刷新',
@@ -636,79 +631,9 @@ export default function PromptTemplates() {
           />
         </Card>
 
-        <Card
-          variant="borderless"
-          style={{
-            marginBottom: isMobile ? 16 : 20,
-            borderRadius: isMobile ? 18 : 24,
-            background: `linear-gradient(135deg, ${alphaColor(token.colorPrimary, 0.1)} 0%, ${alphaColor(token.colorInfo, 0.08)} 100%)`,
-            border: `1px solid ${alphaColor(token.colorPrimary, 0.16)}`,
-            boxShadow: `0 18px 36px ${alphaColor(token.colorText, 0.08)}`,
-          }}
-          styles={{ body: { padding: isMobile ? 16 : 20 } }}
-        >
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.7fr) minmax(280px, 0.92fr)',
-              gap: 16,
-            }}
-          >
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <Text style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                Template Guide
-              </Text>
-              <Text style={{ color: token.colorText, lineHeight: 1.75 }}>
-                这个页面更像提示词资产的阅读式工作台。现有的模板分类、同步状态、导入导出、编辑弹窗和保存行为都保持不变，这里只把阅读顺序与本轮维护焦点提前说明。
-              </Text>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {promptGuideSteps.map((item, index) => (
-                  <span
-                    key={item}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      padding: '6px 12px',
-                      borderRadius: 999,
-                      background: token.colorBgContainer,
-                      border: `1px solid ${token.colorBorderSecondary}`,
-                      color: token.colorTextBase,
-                      fontSize: 12,
-                    }}
-                  >
-                    <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
-                    {item}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <div
-              style={{
-                borderRadius: 18,
-                padding: isMobile ? '14px 14px 12px' : '16px 18px 14px',
-                background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
-                border: `1px solid ${token.colorBorderSecondary}`,
-              }}
-            >
-              <Text style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                当前工作焦点
-              </Text>
-              <Title level={5} style={{ margin: '8px 0 6px', color: token.colorTextBase, fontFamily: designDisplayFont, letterSpacing: '-0.02em' }}>
-                {promptWorkspaceFocus.title}
-              </Title>
-              <Text style={{ color: token.colorTextSecondary, lineHeight: 1.75 }}>
-                {promptWorkspaceFocus.note}
-              </Text>
-            </div>
-          </div>
-        </Card>
-
         <div
           style={{
-            display: 'grid',
-            gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.25fr) minmax(320px, 0.9fr)',
-            gap: isMobile ? 12 : 16,
+            display: 'block',
             marginBottom: isMobile ? 16 : 20,
           }}
         >
@@ -727,9 +652,6 @@ export default function PromptTemplates() {
             </Text>
             <Text strong style={{ display: 'block', marginBottom: 8, fontSize: 16 }}>
               模板总览
-            </Text>
-            <Text type="secondary" style={{ display: 'block', marginBottom: 14, lineHeight: 1.7 }}>
-              先确认你是在维护系统默认模板、同步旧默认，还是沉淀自己的写作工作流。这里汇总的是整个提示词工坊当前的配置状态。
             </Text>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
               {workshopSummaryItems.map((item) => (
@@ -753,47 +675,6 @@ export default function PromptTemplates() {
                 </div>
               ))}
             </div>
-          </Card>
-
-          <Card
-            variant="borderless"
-            style={{
-              background: quietPanelBackground,
-              borderRadius: isMobile ? 16 : 22,
-              border: `1px solid ${panelBorder}`,
-              boxShadow: `0 18px 36px ${alphaColor(token.colorText, 0.06)}`,
-            }}
-            styles={{ body: { padding: isMobile ? 14 : 18 } }}
-          >
-            <Text style={{ display: 'block', marginBottom: 6, fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: token.colorTextTertiary }}>
-              Reading Guide
-            </Text>
-            <Text strong style={{ display: 'block', marginBottom: 8, fontSize: 16 }}>
-              当前筛选说明
-            </Text>
-            <Text type="secondary" style={{ display: 'block', marginBottom: 14, lineHeight: 1.7 }}>
-              现在看到的是“{currentCategoryLabel}”。先读描述与预览，再决定是直接编辑、保留系统默认，还是同步回官方版本。
-            </Text>
-            <Space direction="vertical" size={10} style={{ width: '100%' }}>
-              <div style={{ borderRadius: 16, padding: '12px 14px', border: `1px solid ${alphaColor(token.colorInfo, 0.14)}`, background: alphaColor(token.colorInfoBg, 0.86) }}>
-                <Text strong style={{ display: 'block', marginBottom: 4 }}>
-                  推荐阅读顺序
-                </Text>
-                <Text type="secondary" style={{ display: 'block', lineHeight: 1.7 }}>
-                  先看模板用途，再看预览片段，最后再进入正文编辑；这样更容易判断是微调语气，还是需要建立一份新的工作副本。
-                </Text>
-              </div>
-              <div style={{ borderRadius: 16, padding: '12px 14px', border: `1px solid ${alphaColor(token.colorSuccess, 0.14)}`, background: alphaColor(token.colorSuccessBg, 0.86) }}>
-                <Text strong style={{ display: 'block', marginBottom: 4 }}>
-                  同步状态提示
-                </Text>
-                <Text type="secondary" style={{ display: 'block', lineHeight: 1.7 }}>
-                  {syncStatusEnabled
-                    ? '带有同步标签的模板，说明它与系统默认存在明确关系，适合统一治理和批量校对。'
-                    : '当前处于基础模式，只显示模板本身，不额外展示同步诊断信息。'}
-                </Text>
-              </div>
-            </Space>
           </Card>
         </div>
 

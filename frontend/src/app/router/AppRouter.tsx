@@ -8,6 +8,7 @@ import {
   loadChapterAnalysisPage,
   loadChaptersPage,
   loadForeshadowsPage,
+  loadNovelAutopilotPage,
   loadOutlinePage,
 } from '../../routes/projectPageLoaders';
 import AppFooterSlot from '../layout/AppFooterSlot';
@@ -19,6 +20,7 @@ const ProjectWizardNew = lazy(withChunkLoadRecovery(() => import('../../pages/Pr
 const Inspiration = lazy(withChunkLoadRecovery(() => import('../../pages/Inspiration')));
 const ProjectDetail = lazy(withChunkLoadRecovery(() => import('../../pages/ProjectDetail')));
 const WorldSetting = lazy(withChunkLoadRecovery(() => import('../../pages/WorldSetting')));
+const NovelAutopilot = lazy(loadNovelAutopilotPage);
 const Outline = lazy(loadOutlinePage);
 const Characters = lazy(loadCharactersPage);
 const Careers = lazy(withChunkLoadRecovery(() => import('../../pages/Careers')));
@@ -108,6 +110,7 @@ export default function AppRouter() {
       <Route path="/project/:projectId" element={<ProtectedRoute>{withSuspense(<ProjectDetail />)}</ProtectedRoute>}>
         <Route index element={<Navigate to="world-setting" replace />} />
         <Route path="world-setting" element={withSuspense(<WorldSetting />)} />
+        <Route path="autopilot" element={withSuspense(<NovelAutopilot />)} />
         <Route path="careers" element={withSuspense(<Careers />)} />
         <Route path="outline" element={withSuspense(<Outline />)} />
         <Route path="characters" element={withSuspense(<Characters />)} />

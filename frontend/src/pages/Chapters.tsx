@@ -17,6 +17,8 @@ import ChapterAnalysisEntry from '../components/ChapterAnalysisEntry';
 import ChapterBasicModalEntry from '../components/ChapterBasicModalEntry';
 import ChapterBatchGenerateModalEntry from '../components/ChapterBatchGenerateModalEntry';
 import ChapterBatchProgressEntry from '../components/ChapterBatchProgressEntry';
+import { useBackgroundTaskOutputStream } from '../hooks/useBackgroundTaskOutputStream';
+import { useModelOutputStream } from '../hooks/useModelOutputStream';
 import ChapterListSection from '../components/ChapterListSection';
 import ChapterPlanEditorEntry from '../components/ChapterPlanEditorEntry';
 import ChapterReaderEntry from '../components/ChapterReaderEntry';
@@ -864,6 +866,9 @@ export default function Chapters() {
   const [batchGenerateVisible, setBatchGenerateVisible] = useState(false);
   const [batchGenerating, setBatchGenerating] = useState(false);
   const [batchTaskId, setBatchTaskId] = useState<string | null>(null);
+  const batchModelOutput = useBackgroundTaskOutputStream(batchGenerating ? batchTaskId : null);
+  const singleModelOutput = useModelOutputStream();
+  const singleGenerationRunRef = useRef(0);
   const batchTaskIdRef = useRef<string | null>(null);
   const [batchForm] = Form.useForm();
   const [manualCreateForm] = Form.useForm();
@@ -2486,6 +2491,10 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
 
 
   const handleGenerate = async () => {
+    const generationRunId = singleGenerationRunRef.current + 1;
+    singleGenerationRunRef.current = generationRunId;
+    singleModelOutput.resetModelOutput();
+
     await startSingleChapterGenerationWorkflow({
       editingId,
       runningSingleChapterTasks,
@@ -2516,6 +2525,9 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
       startPollingTask,
       setRunningSingleChapterTasks,
       setChapterQualityRefreshToken,
+      onModelChunk: singleModelOutput.onChunk,
+      onModelReasoningChunk: singleModelOutput.onReasoningChunk,
+      isGenerationRunActive: () => singleGenerationRunRef.current === generationRunId,
     });
   };
   const showGenerateModal = async (chapter: Chapter) => {
@@ -3098,15 +3110,6 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
     color-mix(in srgb, ${token.colorPrimary} 74%, #6f4638 26%) 0%,
     color-mix(in srgb, ${token.colorInfo} 26%, #18242d 74%) 100%)`;
   const editorialInk = '#fff9f0';
-  const actionButtonStyle = {
-    borderRadius: 999,
-    height: 42,
-    paddingInline: 16,
-    borderColor: 'rgba(255,255,255,0.18)',
-    background: 'rgba(255,255,255,0.08)',
-    color: editorialInk,
-    boxShadow: 'none',
-  } as const;
   const panelBackground = `linear-gradient(180deg,
     color-mix(in srgb, ${token.colorBgContainer} 95%, white 5%) 0%,
     color-mix(in srgb, ${token.colorFillAlter} 44%, ${token.colorBgContainer} 56%) 100%)`;
@@ -3120,65 +3123,9 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
     { label: '当前模式', value: currentProjectOutlineMode === 'one-to-one' ? '一纲一章' : '一纲多章', accent: editorialInk, compact: true },
   ];
 
-  const chapterGuideSteps = [
-    '先看概览卡与当前模式，确认现在是在逐章推进还是按大纲分组管理。',
-    '再从章节台账进入阅读、编辑、分析或计划入口，先判断当前章节链路卡在哪一步。',
-    '最后再发起新建、批量生成或导出，把高影响操作放在看清上下文之后。',
-  ];
-  const activeSingleGenerationCount = Object.keys(runningSingleChapterTasks).length;
-  const chapterWorkspaceFocus = batchGenerating || batchTaskId
-    ? {
-        title: '等待批量生成结果回流',
-        note: '当前有一条批量生成任务在执行，适合先观察进度与失败提示，等新章节回流后再统一巡检内容。',
-      }
-    : batchGenerateVisible
-      ? {
-          title: '确认本轮批量生成范围',
-          note: '批量生成面板已经打开，先核对起始章节、模型和创作设定，再决定是否正式启动整批任务。',
-        }
-      : isEditorOpen && currentEditingChapter
-        ? {
-            title: `正在编辑第 ${currentEditingChapter.chapter_number} 章`,
-            note: '当前更适合先完成正文修订，再回到台账决定是否继续分析、规划或生成后续章节。',
-          }
-        : analysisVisible
-          ? {
-              title: '核对章节分析结果',
-              note: '分析面板已打开，先看问题标签与建议，再回到章节台账决定下一步修订或生成动作。',
-            }
-          : readerVisible && readingChapter
-            ? {
-                title: `回看第 ${readingChapter.chapter_number} 章正文`,
-                note: '阅读面板正在承接正文与标注复盘，适合先确认这一章是否稳定，再继续切换其他工作流。',
-              }
-            : planEditorVisible && editingPlanChapter
-              ? {
-                  title: `整理第 ${editingPlanChapter.chapter_number} 章计划`,
-                  note: '当前正在补章节计划，先把结构与目标对齐，再返回列表推进生成或内容修订。',
-                }
-              : activeSingleGenerationCount > 0
-                ? {
-                    title: '等待单章生成完成',
-                    note: `当前有 ${activeSingleGenerationCount} 条单章生成任务在运行，适合先保持章节顺序稳定，等待结果回流后再统一处理。`,
-                  }
-                : firstIncompleteChapter
-                  ? {
-                      title: `优先补齐第 ${firstIncompleteChapter.chapter_number} 章`,
-                      note: '当前最顺手的路径是从第一条未完成章节继续推进，避免越过前序章节后再回头补内容。',
-                    }
-                  : sortedChapters.length > 0
-                    ? {
-                        title: '巡检当前章节台账',
-                        note: '章节内容已经具备基础规模，适合结合列表状态、阅读入口和分析入口做一次整体排布检查。',
-                      }
-                    : {
-                        title: '建立第一章骨架',
-                        note: '当前还没有章节内容，建议先创建首章或从批量生成入口起步，再逐步补齐后续工作流。',
-                      };
-
   return (
     <>
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 16, overflow: 'hidden', paddingBottom: 24 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%', gap: 16, overflow: 'visible', paddingBottom: 24 }}>
 
       {contextHolder}
 
@@ -3191,6 +3138,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
           boxShadow: `0 26px 52px color-mix(in srgb, ${token.colorText} 20%, transparent)`,
           overflow: 'hidden',
           position: 'relative',
+          flexShrink: 0,
         }}
         styles={{ body: { padding: isMobile ? 20 : 24 } }}
       >
@@ -3206,7 +3154,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
                 章节管理
               </Title>
               <Paragraph style={{ margin: 0, color: 'rgba(255,255,255,0.82)', fontSize: 15, lineHeight: 1.8 }}>
-                在这里统一管理章节列表、章节生成、导出与章节分析入口。它应该像创作中的章节台账，而不是单纯的列表页。
+                管理章节列表、批量生成、阅读、分析与导出入口。
               </Paragraph>
               <Space wrap size={[10, 10]}>
                 <Tag style={{ borderRadius: 999, paddingInline: 12, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.08)', color: editorialInk }}>
@@ -3246,128 +3194,55 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
           </Col>
         </Row>
 
-        <Space wrap size={[10, 10]} style={{ marginTop: 20, position: 'relative', zIndex: 1, width: isMobile ? '100%' : 'auto' }}>
+      </Card>
 
+      <Card
+        variant="borderless"
+        style={{
+          borderRadius: 20,
+          background: token.colorBgContainer,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          boxShadow: `0 14px 28px color-mix(in srgb, ${token.colorText} 6%, transparent)`,
+          flexShrink: 0,
+        }}
+        styles={{ body: { padding: isMobile ? 12 : 14 } }}
+      >
+        <Space wrap size={[10, 10]} style={{ width: isMobile ? '100%' : 'auto' }}>
           {currentProjectOutlineMode === 'one-to-many' && (
-
             <Button
               icon={<PlusOutlined />}
               onClick={showManualCreateChapterModal}
-              style={actionButtonStyle}
+              style={{ borderRadius: 999, paddingInline: 16 }}
             >
               新建章节
             </Button>
-
           )}
 
           <Button
-
             type="primary"
-
             icon={<RocketOutlined />}
-
             onClick={handleOpenBatchGenerate}
-
             disabled={chapters.length === 0}
-
-            style={{ background: '#722ed1', borderColor: '#722ed1' }}
-
+            style={{ borderRadius: 999, paddingInline: 16 }}
           >
-
             批量生成
-
           </Button>
 
           <Button
-
-            type="default"
-
             icon={<DownloadOutlined />}
-
             onClick={handleExport}
-
             disabled={chapters.length === 0}
-
-            style={actionButtonStyle}
+            style={{ borderRadius: 999, paddingInline: 16 }}
           >
-
             导出
-
           </Button>
-
         </Space>
       </Card>
 
       <Card
         variant="borderless"
         style={{
-          borderRadius: 22,
-          background: `linear-gradient(135deg, color-mix(in srgb, ${token.colorPrimary} 10%, white 90%) 0%, color-mix(in srgb, ${token.colorInfo} 10%, white 90%) 100%)`,
-          border: `1px solid color-mix(in srgb, ${token.colorPrimary} 16%, white 84%)`,
-          boxShadow: `0 18px 36px color-mix(in srgb, ${token.colorText} 8%, transparent)`,
-        }}
-        styles={{ body: { padding: isMobile ? 16 : 18 } }}
-      >
-        <Row gutter={[16, 16]}>
-          <Col xs={24} lg={15}>
-            <Space direction="vertical" size={8} style={{ width: '100%' }}>
-              <Text style={{ color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                Chapter Guide
-              </Text>
-              <Paragraph style={{ margin: 0, color: token.colorText, lineHeight: 1.75 }}>
-                这个页面更像章节调度与创作巡检的总控台。原有的新建、批量生成、阅读、分析、计划与导出流程都保持不变，这里只把先看什么、再做什么的顺序说明得更清楚。
-              </Paragraph>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {chapterGuideSteps.map((item, index) => (
-                  <span
-                    key={item}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      padding: '6px 12px',
-                      borderRadius: 999,
-                      background: token.colorBgContainer,
-                      border: `1px solid ${token.colorBorderSecondary}`,
-                      color: token.colorTextBase,
-                      fontSize: 12,
-                    }}
-                  >
-                    <span style={{ color: token.colorPrimary, fontWeight: 700 }}>{index + 1}</span>
-                    {item}
-                  </span>
-                ))}
-              </div>
-            </Space>
-          </Col>
-          <Col xs={24} lg={9}>
-            <div
-              style={{
-                height: '100%',
-                borderRadius: 18,
-                padding: isMobile ? '14px 14px 12px' : '16px 18px 14px',
-                background: `linear-gradient(180deg, ${token.colorBgContainer} 0%, ${token.colorFillAlter} 100%)`,
-                border: `1px solid ${token.colorBorderSecondary}`,
-              }}
-            >
-              <Text style={{ display: 'block', color: token.colorTextTertiary, fontSize: 12, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-                当前工作焦点
-              </Text>
-              <Title level={5} style={{ margin: '8px 0 6px', color: token.colorTextBase, fontFamily: designDisplayFont }}>
-                {chapterWorkspaceFocus.title}
-              </Title>
-              <Paragraph style={{ margin: 0, color: token.colorTextSecondary, lineHeight: 1.75 }}>
-                {chapterWorkspaceFocus.note}
-              </Paragraph>
-            </div>
-          </Col>
-        </Row>
-      </Card>
-
-      <Card
-        variant="borderless"
-        style={{
-          flex: 1,
+          flex: '1 0 auto',
           overflow: 'hidden',
           background: panelBackground,
           borderRadius: 24,
@@ -3394,7 +3269,7 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
                 章节列表工作区
               </Title>
               <Paragraph style={{ margin: 0, color: token.colorTextSecondary }}>
-                保留原有批量生成、分析、阅读与计划编辑流程，只升级外层布局和信息层级，让章节工作台更像可持续维护的编辑面板。
+                集中处理章节阅读、编辑、分析和计划设置。
               </Paragraph>
             </Space>
             <Tag color="blue" style={{ borderRadius: 999, paddingInline: 12 }}>
@@ -3518,10 +3393,19 @@ const deleteBatchStoryCreationSnapshot = useCallback(async (snapshotId: string) 
           modalProps={batchGenerateModalProps}
         />
       ) : null}
-      <SingleChapterGenerationOverlayEntry />
+      <SingleChapterGenerationOverlayEntry
+        modelOutput={{
+          reasoningContent: singleModelOutput.reasoningContent,
+          generatedContent: singleModelOutput.generatedContent,
+          reasoningTruncated: singleModelOutput.reasoningTruncated,
+          contentTruncated: singleModelOutput.contentTruncated,
+          taskStatus: 'running',
+        }}
+      />
       <ChapterBatchProgressEntry
         visible={batchGenerating}
         buildCheckpointHint={buildBatchGenerationCheckpointHint}
+        modelOutput={batchModelOutput}
         onCancel={() => {
           modal.confirm({
             title: '取消批量生成',

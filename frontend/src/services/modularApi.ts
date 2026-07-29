@@ -40,3 +40,4 @@ export {
   type ChapterBatchResumeResponse,
   type ChapterSingleGenerateResponse,
 } from './modules/chapterTaskTypes';
+export { novelAutopilotApi } from './modules/novelAutopilot';

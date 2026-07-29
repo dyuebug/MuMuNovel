@@ -14,10 +14,12 @@ import {
   BankOutlined,
   EditOutlined,
   FundOutlined,
+  BarChartOutlined,
   TrophyOutlined,
   BulbOutlined,
   CloudOutlined,
   MoonOutlined,
+  RobotOutlined,
 } from '@ant-design/icons';
 import { useStore } from '../store';
 import type { Project } from '../types';
@@ -28,6 +30,8 @@ import type { ProjectNavigationPageKey } from '../routes/projectPageLoaders';
 import { projectApi } from '../services/modularApi';
 import { isRequestCancelledError } from '../services/core/httpClient';
 import InlineDeferredPanel from '../components/InlineDeferredPanel';
+import { ProjectWorkflowStatePanel } from '../features/projects/workflow';
+import { ProjectRuntimeMetricsPanel } from '../features/projects/metrics';
 import ThemeSwitch from '../components/ThemeSwitch';
 import { useThemeMode } from '../theme/useThemeMode';
 import { designDisplayFont } from '../theme/themeConfig';
@@ -63,6 +67,9 @@ const OUTLET_CONTAINER_STYLE = {
 } as const;
 
 const WORKSPACE_FOCUS: Record<string, WorkspaceFocusItem> = {
+  autopilot: {
+    title: '自动创作',
+  },
   'world-setting': {
     title: '世界设定',
   },
@@ -184,6 +191,7 @@ export default function ProjectDetail() {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState<boolean>(() => getStoredSidebarCollapsed());
   const [drawerVisible, setDrawerVisible] = useState(false);
+  const [runtimeMetricsVisible, setRuntimeMetricsVisible] = useState(false);
   const [mobile, setMobile] = useState(isMobile());
   const [projectLoadError, setProjectLoadError] = useState<string | null>(null);
   const prefetchedNavigationTargetsRef = useRef<Set<string>>(new Set());
@@ -218,6 +226,7 @@ export default function ProjectDetail() {
   // 监听窗口大小变化
   useEffect(() => {
     activeProjectIdRef.current = projectId ?? null;
+    setRuntimeMetricsVisible(false);
   }, [projectId]);
 
   useEffect(() => {
@@ -442,6 +451,7 @@ export default function ProjectDetail() {
     outlineCount,
   ]);
 
+  const autopilotPath = `/project/${projectId}/autopilot`;
   const worldSettingPath = `/project/${projectId}/world-setting`;
   const charactersPath = `/project/${projectId}/characters`;
   const organizationsPath = `/project/${projectId}/organizations`;
@@ -454,6 +464,7 @@ export default function ProjectDetail() {
   const writingStylesPath = `/project/${projectId}/writing-styles`;
   const promptWorkshopPath = `/project/${projectId}/prompt-workshop`;
 
+  const autopilotLink = useMemo(() => createMenuLink(autopilotPath, '自动创作', 'autopilot'), [autopilotPath, createMenuLink]);
   const worldSettingLink = useMemo(() => <Link to={worldSettingPath}>世界设定</Link>, [worldSettingPath]);
   const writingStylesLink = useMemo(() => <Link to={writingStylesPath}>写作风格</Link>, [writingStylesPath]);
   const promptWorkshopLink = useMemo(() => <Link to={promptWorkshopPath}>提示词工坊</Link>, [promptWorkshopPath]);
@@ -471,6 +482,11 @@ export default function ProjectDetail() {
       type: 'group' as const,
       label: '创作管理',
       children: [
+        {
+          key: 'autopilot',
+          icon: <RobotOutlined />,
+          label: autopilotLink,
+        },
         {
           key: 'world-setting',
           icon: <GlobalOutlined />,
@@ -535,6 +551,7 @@ export default function ProjectDetail() {
       ],
     },
   ], [
+    autopilotLink,
     careersLink,
     chapterAnalysisLink,
     chaptersLink,
@@ -549,6 +566,11 @@ export default function ProjectDetail() {
   ]);
 
   const menuItemsCollapsed = useMemo(() => [
+    {
+      key: 'autopilot',
+      icon: <RobotOutlined />,
+      label: autopilotLink,
+    },
     {
       key: 'world-setting',
       icon: <GlobalOutlined />,
@@ -605,6 +627,7 @@ export default function ProjectDetail() {
       label: promptWorkshopLink,
     },
   ], [
+    autopilotLink,
     careersLink,
     chapterAnalysisLink,
     chaptersLink,
@@ -621,6 +644,7 @@ export default function ProjectDetail() {
   // 根据当前路径动态确定选中的菜单项
   const selectedKey = useMemo(() => {
     const path = location.pathname;
+    if (path.includes('/autopilot')) return 'autopilot';
     if (path.includes('/world-setting')) return 'world-setting';
     if (path.includes('/careers')) return 'careers';
     if (path.includes('/relationships')) return 'relationships';
@@ -742,6 +766,17 @@ export default function ProjectDetail() {
               }}
             />
           )}
+          {projectId ? (
+            <Button
+              type="text"
+              icon={<BarChartOutlined />}
+              onClick={() => setRuntimeMetricsVisible(true)}
+              aria-label="打开运行指标"
+              style={{ color: editorialInk, height: 36 }}
+            >
+              {mobile ? null : '运行指标'}
+            </Button>
+          ) : null}
         </div>
 
         <h2 style={{
@@ -1060,29 +1095,60 @@ export default function ProjectDetail() {
                     {currentProjectTitle}
                   </Title>
                 </div>
-                <Text style={{ color: alphaColor(editorialInk, 0.82), fontWeight: 600 }}>
-                  {currentWorkspaceFocus.title}
-                </Text>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: mobile ? 'flex-start' : 'center',
+                    flexDirection: mobile ? 'column' : 'row',
+                    justifyContent: mobile ? 'flex-start' : 'flex-end',
+                    gap: 10,
+                    minWidth: 0,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <Text style={{ color: alphaColor(editorialInk, 0.82), fontWeight: 600 }}>
+                    {currentWorkspaceFocus.title}
+                  </Text>
+                  {projectId ? (
+                    <ProjectWorkflowStatePanel projectId={projectId} compact={mobile} />
+                  ) : null}
+                </div>
               </div>
 
-              <div style={{
-                background: editorialPanelBackground,
-                padding: mobile ? 12 : 16,
-                borderRadius: mobile ? '16px' : '24px',
-                border: `1px solid ${editorialPanelBorder}`,
-                boxShadow: `0 22px 48px ${alphaColor(token.colorText, resolvedMode === 'dark' ? 0.18 : 0.08)}`,
-                flex: 1,
-                minHeight: 0,
-                overflow: 'hidden',
-                display: 'flex',
-                flexDirection: 'column'
-              }}>
+              <div
+                data-testid="project-page-content"
+                style={{
+                  background: editorialPanelBackground,
+                  padding: mobile ? 12 : 16,
+                  borderRadius: mobile ? '16px' : '24px',
+                  border: `1px solid ${editorialPanelBorder}`,
+                  boxShadow: `0 22px 48px ${alphaColor(token.colorText, resolvedMode === 'dark' ? 0.18 : 0.08)}`,
+                  flex: 1,
+                  minHeight: 0,
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column'
+                }}
+              >
                 <ProjectPageOutletContainer />
               </div>
             </div>
           </Content>
         </Layout>
       </Layout>
+
+      <Drawer
+        title="运行指标"
+        placement="right"
+        open={runtimeMetricsVisible}
+        onClose={() => setRuntimeMetricsVisible(false)}
+        width={mobile ? 'calc(100vw - 24px)' : 560}
+        destroyOnHidden
+      >
+        {runtimeMetricsVisible && projectId ? (
+          <ProjectRuntimeMetricsPanel projectId={projectId} />
+        ) : null}
+      </Drawer>
     </Layout>
   );
 }
