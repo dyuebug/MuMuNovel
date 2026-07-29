@@ -14,6 +14,7 @@ use crate::services::chapter_candidate_targeted_final_repair_service::{
 use crate::services::chapter_candidate_word_budget_repair_service::{
     ChapterCandidateWordBudgetRepairRequest, ChapterCandidateWordBudgetRepairResult,
 };
+use crate::services::generation_contract_service::GenerationContractHistorySummaryV1;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ChapterCandidateExecutorRequest {
@@ -23,6 +24,7 @@ pub(crate) struct ChapterCandidateExecutorRequest {
     pub(crate) generation_label: String,
     pub(crate) max_candidates: i64,
     pub(crate) runtime_state: Option<Value>,
+    pub(crate) repair_generation_contract: Option<GenerationContractHistorySummaryV1>,
 }
 
 #[cfg(test)]
@@ -522,6 +524,7 @@ where
         repair_seed_candidate,
         current_winner_candidate: selected_candidate.clone(),
         runtime_state: request.runtime_state.take(),
+        repair_generation_contract: request.repair_generation_contract.clone(),
         allow_followup_seed_defer,
     };
     let result = (dependencies.execute_targeted_final_repair_pass_fn)(
@@ -604,6 +607,7 @@ async fn run_targeted_repair_stage_boxed(
         repair_seed_candidate,
         current_winner_candidate: selected_candidate.clone(),
         runtime_state: request.runtime_state.take(),
+        repair_generation_contract: request.repair_generation_contract.clone(),
         allow_followup_seed_defer,
     };
     let result = (dependencies.execute_targeted_final_repair_pass_fn)(

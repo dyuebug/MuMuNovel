@@ -235,6 +235,7 @@ mod tests {
             generation_label: "candidate".to_string(),
             max_candidates,
             runtime_state: Some(json!({})),
+            repair_generation_contract: None,
         }
     }
 

@@ -3,11 +3,12 @@
 // runtime code so Python-style provider, record, and quality closures stay
 // behind an explicit fallback contract.
 
-use std::{future::Future, pin::Pin, sync::Arc, sync::Mutex};
+use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc, sync::Mutex};
 
 use serde_json::{Map, Value};
 
 use crate::ai::config::AIConfig;
+use crate::ai::execution_trace::AIExecutionTraceV1;
 use crate::ai::service::AIService;
 use crate::ai::types::ToolDef;
 use crate::services::chapter_candidate_executor_default_dependency_service::{
@@ -17,7 +18,8 @@ use crate::services::chapter_candidate_executor_default_dependency_service::{
 };
 use crate::services::chapter_candidate_executor_service::ChapterCandidateExecutorRequest;
 use crate::services::chapter_candidate_output_service::{
-    collect_generation_candidate_output, ChapterCandidateOutput, ChapterCandidateOutputRequest,
+    collect_generation_candidate_output, collect_generation_candidate_output_tracked,
+    ChapterCandidateOutput, ChapterCandidateOutputRequest,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -305,6 +307,24 @@ pub(crate) struct ChapterCandidateProviderStreamRequest {
     pub(crate) max_output_chars: Option<usize>,
 }
 
+pub(crate) type ChapterCandidateExecutionTraceRegistry =
+    Arc<Mutex<BTreeMap<i64, AIExecutionTraceV1>>>;
+
+pub(crate) fn build_chapter_candidate_execution_trace_registry(
+) -> ChapterCandidateExecutionTraceRegistry {
+    Arc::new(Mutex::new(BTreeMap::new()))
+}
+
+pub(crate) fn take_chapter_candidate_execution_trace(
+    registry: &ChapterCandidateExecutionTraceRegistry,
+    candidate_index: i64,
+) -> Result<Option<AIExecutionTraceV1>, String> {
+    registry
+        .lock()
+        .map_err(|_| "chapter candidate execution trace registry lock poisoned".to_string())
+        .map(|mut traces| traces.remove(&candidate_index))
+}
+
 pub(crate) fn resolve_chapter_candidate_production_adapter_decision(
     config: &ChapterCandidateProductionAdapterConfig,
 ) -> ChapterCandidateProductionAdapterDecision {
@@ -341,6 +361,30 @@ pub(crate) async fn collect_default_generation_candidate_output(
             max_output_chars: provider_request.max_output_chars,
             runtime_state: input.runtime_state.as_mut(),
         },
+        |_chunk, _progress| async { Ok(()) },
+    )
+    .await
+}
+
+pub(crate) async fn collect_default_generation_candidate_output_tracked(
+    base_ai_config: AIConfig,
+    mut input: ChapterCandidateDefaultOutputCollectInput,
+    allow_model_fallback: bool,
+) -> Result<crate::services::chapter_candidate_output_service::TrackedChapterCandidateOutput, String>
+{
+    let provider_request =
+        resolve_default_candidate_provider_stream_request(base_ai_config, input.clone())?;
+    collect_generation_candidate_output_tracked(
+        ChapterCandidateOutputRequest {
+            ai_service: AIService::new(provider_request.ai_config),
+            prompt: provider_request.prompt,
+            system_prompt: provider_request.system_prompt,
+            tools: provider_request.tools,
+            candidate_index: provider_request.candidate_index,
+            max_output_chars: provider_request.max_output_chars,
+            runtime_state: input.runtime_state.as_mut(),
+        },
+        allow_model_fallback,
         |_chunk, _progress| async { Ok(()) },
     )
     .await
@@ -626,6 +670,113 @@ where
     QualityEvaluator: FnMut(&str) -> Value + Send + 'static,
     QualityGatePlanBuilder: FnMut(Value, i64) -> Value + Send + 'static,
 {
+    generate_best_ranked_candidate_with_runtime_adapters_and_collector(
+        request,
+        quality_evaluator,
+        quality_gate_plan_builder,
+        move |input| {
+            let ai_config = ai_config.clone();
+            async move { collect_default_generation_candidate_output(ai_config, input).await }
+        },
+    )
+    .await
+}
+
+pub(crate) async fn generate_best_ranked_candidate_with_runtime_quality_adapters_tracked<
+    BuildQualityRuntimeContext,
+    ComputeStoryQualityMetrics,
+    ResolveQualityGatePlan,
+>(
+    request: &mut ChapterCandidateExecutorRequest,
+    ai_config: AIConfig,
+    quality_adapter: ChapterCandidateQualityAdapter<
+        BuildQualityRuntimeContext,
+        ComputeStoryQualityMetrics,
+        ResolveQualityGatePlan,
+    >,
+    allow_model_fallback: bool,
+    execution_traces: ChapterCandidateExecutionTraceRegistry,
+) -> Result<Value, String>
+where
+    BuildQualityRuntimeContext:
+        FnMut(CandidateQualityRuntimeContextBuildInput) -> Value + Send + 'static,
+    ComputeStoryQualityMetrics: FnMut(CandidateStoryQualityMetricsInput) -> Value + Send + 'static,
+    ResolveQualityGatePlan: FnMut(CandidateQualityGatePlanInput) -> Value + Send + 'static,
+{
+    let (quality_evaluator, quality_gate_plan_builder) =
+        build_runtime_quality_adapter_callbacks(quality_adapter);
+    generate_best_ranked_candidate_with_runtime_adapters_tracked(
+        request,
+        ai_config,
+        quality_evaluator,
+        quality_gate_plan_builder,
+        allow_model_fallback,
+        execution_traces,
+    )
+    .await
+}
+
+pub(crate) async fn generate_best_ranked_candidate_with_runtime_adapters_tracked<
+    QualityEvaluator,
+    QualityGatePlanBuilder,
+>(
+    request: &mut ChapterCandidateExecutorRequest,
+    ai_config: AIConfig,
+    quality_evaluator: QualityEvaluator,
+    quality_gate_plan_builder: QualityGatePlanBuilder,
+    allow_model_fallback: bool,
+    execution_traces: ChapterCandidateExecutionTraceRegistry,
+) -> Result<Value, String>
+where
+    QualityEvaluator: FnMut(&str) -> Value + Send + 'static,
+    QualityGatePlanBuilder: FnMut(Value, i64) -> Value + Send + 'static,
+{
+    generate_best_ranked_candidate_with_runtime_adapters_and_collector(
+        request,
+        quality_evaluator,
+        quality_gate_plan_builder,
+        move |input| {
+            let ai_config = ai_config.clone();
+            let execution_traces = Arc::clone(&execution_traces);
+            async move {
+                let candidate_index = input.candidate_index;
+                let tracked = collect_default_generation_candidate_output_tracked(
+                    ai_config,
+                    input,
+                    allow_model_fallback,
+                )
+                .await?;
+                execution_traces
+                    .lock()
+                    .map_err(|_| {
+                        "chapter candidate execution trace registry lock poisoned".to_string()
+                    })?
+                    .insert(candidate_index, tracked.execution);
+                Ok(tracked.output)
+            }
+        },
+    )
+    .await
+}
+
+async fn generate_best_ranked_candidate_with_runtime_adapters_and_collector<
+    QualityEvaluator,
+    QualityGatePlanBuilder,
+    CollectOutput,
+    CollectFuture,
+>(
+    request: &mut ChapterCandidateExecutorRequest,
+    quality_evaluator: QualityEvaluator,
+    quality_gate_plan_builder: QualityGatePlanBuilder,
+    collect_output: CollectOutput,
+) -> Result<Value, String>
+where
+    QualityEvaluator: FnMut(&str) -> Value + Send + 'static,
+    QualityGatePlanBuilder: FnMut(Value, i64) -> Value + Send + 'static,
+    CollectOutput:
+        FnMut(ChapterCandidateDefaultOutputCollectInput) -> CollectFuture + Send + 'static,
+    CollectFuture: Future<Output = Result<ChapterCandidateOutput, String>> + Send + 'static,
+{
     let quality_evaluator = Arc::new(Mutex::new(quality_evaluator));
     let quality_gate_plan_builder = Arc::new(Mutex::new(quality_gate_plan_builder));
     let record_quality_evaluator = Arc::clone(&quality_evaluator);
@@ -634,10 +785,7 @@ where
 
     generate_best_ranked_candidate_with_default_dependency_wiring(
         request,
-        move |input| {
-            let ai_config = ai_config.clone();
-            async move { collect_default_generation_candidate_output(ai_config, input).await }
-        },
+        collect_output,
         move |input| {
             with_locked_callback(&record_quality_evaluator, |quality_evaluator| {
                 with_locked_callback(
@@ -681,8 +829,13 @@ pub(crate) fn build_chapter_candidate_production_adapter_owner_contract() -> Val
                 "execute_chapter_candidate_production_adapter",
                 "execute_chapter_candidate_production_adapter_with_executor",
                 "generate_best_ranked_candidate_with_runtime_quality_adapters",
+                "generate_best_ranked_candidate_with_runtime_quality_adapters_tracked",
                 "generate_best_ranked_candidate_with_runtime_adapters",
+                "generate_best_ranked_candidate_with_runtime_adapters_tracked",
                 "collect_default_generation_candidate_output",
+                "collect_default_generation_candidate_output_tracked",
+                "build_chapter_candidate_execution_trace_registry",
+                "take_chapter_candidate_execution_trace",
                 "resolve_default_candidate_provider_stream_request"
             ],
             "config_fields": [
@@ -707,7 +860,8 @@ pub(crate) fn build_chapter_candidate_production_adapter_owner_contract() -> Val
                 "quality adapter callbacks are converted to locked runtime callbacks",
                 "provider request resolution and collection stay inside chapter_candidate_executor_production_adapter_service",
                 "record building flows through default dependency record owner",
-                "finalize quality gate plan callback is shared with default dependency wiring"
+                "finalize quality gate plan callback is shared with default dependency wiring",
+                "tracked runtime adapters register execution traces by candidate_index so consumers can select the final winner trace"
             ],
             "rollback_policy": [
                 "default rollback boundary is python_candidate_executor_fallback",
@@ -766,21 +920,38 @@ mod tests {
     use serde_json::{json, Map, Value};
 
     use super::{
+        build_chapter_candidate_execution_trace_registry,
         build_chapter_candidate_production_adapter_owner_contract,
         collect_default_generation_candidate_output,
         execute_chapter_candidate_production_adapter_with_executor,
         generate_best_ranked_candidate_with_runtime_adapters,
         generate_best_ranked_candidate_with_runtime_quality_adapters,
         resolve_chapter_candidate_production_adapter_decision,
-        resolve_default_candidate_provider_stream_request, ChapterCandidateProductionAdapterConfig,
-        ChapterCandidateProductionExecutionPath,
+        resolve_default_candidate_provider_stream_request, take_chapter_candidate_execution_trace,
+        ChapterCandidateProductionAdapterConfig, ChapterCandidateProductionExecutionPath,
     };
     use crate::ai::config::AIConfig;
+    use crate::ai::execution_trace::{
+        AIExecutionOutcome, AIExecutionTraceV1, AI_EXECUTION_TRACE_SCHEMA_VERSION,
+    };
     use crate::services::chapter_candidate_executor_default_dependency_service::ChapterCandidateDefaultOutputCollectInput;
     use crate::services::chapter_candidate_executor_production_adapter_service::{
         build_chapter_candidate_quality_adapter, ChapterCandidateQualityAdapterContext,
     };
     use crate::services::chapter_candidate_executor_service::ChapterCandidateExecutorRequest;
+
+    fn execution_trace(actual_model: &str) -> AIExecutionTraceV1 {
+        AIExecutionTraceV1 {
+            schema_version: AI_EXECUTION_TRACE_SCHEMA_VERSION.to_string(),
+            requested_provider: "openai".to_string(),
+            requested_model: "gpt-primary".to_string(),
+            actual_provider: "openai".to_string(),
+            actual_model: actual_model.to_string(),
+            outcome: AIExecutionOutcome::Succeeded,
+            fallbacks: Vec::new(),
+            endpoint_summary: None,
+        }
+    }
 
     fn assert_no_deleted_python_service_source_map(contract: &serde_json::Value) {
         for key in ["python_source_map", "source_map_files", "rollback_files"] {
@@ -1187,6 +1358,7 @@ mod tests {
             generation_label: "candidate".to_string(),
             max_candidates: 1,
             runtime_state: None,
+            repair_generation_contract: None,
         }
     }
 
@@ -1262,10 +1434,15 @@ mod tests {
             contract["behavior_contract"]["decision_paths"][3],
             "rust error with fallback_on_rust_error=false propagates Rust error"
         );
-        assert_eq!(
-            contract["behavior_contract"]["entrypoints"][5],
-            "collect_default_generation_candidate_output"
-        );
+        let entrypoints = contract["behavior_contract"]["entrypoints"]
+            .as_array()
+            .expect("entrypoints");
+        assert!(entrypoints
+            .iter()
+            .any(|entrypoint| entrypoint == "collect_default_generation_candidate_output"));
+        assert!(entrypoints.iter().any(|entrypoint| {
+            entrypoint == "collect_default_generation_candidate_output_tracked"
+        }));
         assert_eq!(
             contract["behavior_contract"]["runtime_adapter_policy"][1],
             "provider request resolution and collection stay inside chapter_candidate_executor_production_adapter_service"
@@ -1315,5 +1492,24 @@ mod tests {
             contract["service_runtime_closeout_status"]["status"],
             "rust_chapter_candidate_executor_production_adapter_owner_executor_source_map_deleted"
         );
+    }
+    #[test]
+    fn should_take_only_winner_candidate_execution_trace_from_registry() {
+        let registry = build_chapter_candidate_execution_trace_registry();
+        {
+            let mut traces = registry.lock().expect("trace registry");
+            traces.insert(1, execution_trace("gpt-candidate-1"));
+            traces.insert(3, execution_trace("gpt-repair-winner"));
+        }
+
+        let winner = take_chapter_candidate_execution_trace(&registry, 3)
+            .expect("take winner trace")
+            .expect("winner trace");
+
+        assert_eq!(winner.actual_model, "gpt-repair-winner");
+        assert!(registry.lock().expect("trace registry").contains_key(&1));
+        assert!(take_chapter_candidate_execution_trace(&registry, 3)
+            .expect("take removed winner")
+            .is_none());
     }
 }

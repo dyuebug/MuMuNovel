@@ -34,7 +34,8 @@ pub(crate) fn build_single_generation_result_lifecycle_owner_contract() -> Value
                 "build_single_generation_followup_draft_result",
                 "build_single_generation_candidate_draft_attempt",
                 "single_generation_candidate_draft_lifecycle_view",
-                "persisted_history_payload_view"
+                "persisted_history_payload_view",
+                "merge_generated_chapter_history_quality_metrics"
             ],
             "quality_gate_actions": [
                 "continue",
@@ -467,6 +468,44 @@ pub(crate) fn persisted_history_payload_view(
     }
 }
 
+fn merge_generated_chapter_history_quality_metrics(
+    generated_content: Option<&str>,
+    content: &str,
+    quality_metrics: &Value,
+    created_at: chrono::NaiveDateTime,
+) -> Value {
+    let persisted_history_view = persisted_history_payload_view(generated_content);
+    let updated_payload = build_generated_chapter_history_payload_with_quality_metrics(
+        content,
+        Some(quality_metrics),
+        persisted_history_view.candidate_gateway_metadata.as_ref(),
+        persisted_history_view.content_applied,
+        persisted_history_view.attempt_state.as_deref(),
+        created_at,
+    );
+
+    let Some(Value::Object(mut existing_payload)) =
+        generated_content.and_then(|value| serde_json::from_str::<Value>(value).ok())
+    else {
+        return updated_payload;
+    };
+    let Value::Object(updated_fields) = updated_payload else {
+        return Value::Object(existing_payload);
+    };
+
+    for optional_key in [
+        "story_runtime_snapshot",
+        "story_runtime_contract",
+        "candidate_gateway",
+    ] {
+        if !updated_fields.contains_key(optional_key) {
+            existing_payload.remove(optional_key);
+        }
+    }
+    existing_payload.extend(updated_fields);
+    Value::Object(existing_payload)
+}
+
 pub(crate) async fn update_latest_generated_chapter_history_quality_metrics(
     db: &DatabaseConnection,
     chapter_id: &str,
@@ -487,26 +526,17 @@ pub(crate) async fn update_latest_generated_chapter_history_quality_metrics(
         return Ok(());
     };
 
-    let persisted_history_view =
-        persisted_history_payload_view(history_model.generated_content.as_deref());
-    let mut active: generation_history::ActiveModel = history_model.into();
-    let created_at = active
+    let created_at = history_model
         .created_at
-        .clone()
-        .take()
-        .flatten()
         .unwrap_or_else(|| Utc::now().naive_utc());
-    active.generated_content = Set(Some(
-        build_generated_chapter_history_payload_with_quality_metrics(
-            content,
-            Some(quality_metrics),
-            persisted_history_view.candidate_gateway_metadata.as_ref(),
-            persisted_history_view.content_applied,
-            persisted_history_view.attempt_state.as_deref(),
-            created_at,
-        )
-        .to_string(),
-    ));
+    let updated_payload = merge_generated_chapter_history_quality_metrics(
+        history_model.generated_content.as_deref(),
+        content,
+        quality_metrics,
+        created_at,
+    );
+    let mut active: generation_history::ActiveModel = history_model.into();
+    active.generated_content = Set(Some(updated_payload.to_string()));
     active.update(db).await.map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -518,8 +548,8 @@ mod tests {
     use super::{
         build_single_generation_followup_draft_result,
         build_single_generation_result_lifecycle_owner_contract, generated_result_lifecycle_view,
-        generated_result_quality_view, persisted_history_payload_view,
-        single_generation_candidate_draft_attempt_view,
+        generated_result_quality_view, merge_generated_chapter_history_quality_metrics,
+        persisted_history_payload_view, single_generation_candidate_draft_attempt_view,
         single_generation_candidate_draft_lifecycle_view,
     };
     use crate::models::chapter;
@@ -761,6 +791,65 @@ mod tests {
             12
         );
         assert_eq!(view.candidate_draft_payload["quality_gate_action"], "retry");
+    }
+
+    #[test]
+    fn should_preserve_generation_contract_and_audit_when_updating_history_quality_metrics() {
+        let created_at = chrono::NaiveDate::from_ymd_opt(2026, 7, 15)
+            .expect("valid date")
+            .and_hms_opt(12, 30, 45)
+            .expect("valid time");
+        let existing_payload = json!({
+            "log_type": "chapter_generation_quality_v1",
+            "content": "旧正文",
+            "preview": "旧正文",
+            "quality_metrics": null,
+            "generated_at": "2026-07-15T12:30:45",
+            "content_applied": false,
+            "attempt_state": "manual_review",
+            "candidate_gateway": {
+                "execution_path": "rust_candidate_executor"
+            },
+            "generation_contract": {
+                "schema_version": "generation-contract-snapshot/v1",
+                "input_digest": "digest-1"
+            },
+            "generation_execution_audit": {
+                "schema_version": "generation-execution-audit/v1",
+                "actual": {
+                    "provider": "openai",
+                    "model": "gpt-test"
+                }
+            },
+            "future_additive_metadata": {
+                "preserved": true
+            }
+        });
+
+        let updated = merge_generated_chapter_history_quality_metrics(
+            Some(&existing_payload.to_string()),
+            "新正文",
+            &json!({
+                "quality_gate": {
+                    "decision": "pass"
+                }
+            }),
+            created_at,
+        );
+
+        assert_eq!(updated["content"], "新正文");
+        assert_eq!(
+            updated["quality_metrics"]["quality_gate"]["decision"],
+            "pass"
+        );
+        assert_eq!(updated["content_applied"], false);
+        assert_eq!(updated["attempt_state"], "manual_review");
+        assert_eq!(updated["generation_contract"]["input_digest"], "digest-1");
+        assert_eq!(
+            updated["generation_execution_audit"]["actual"]["model"],
+            "gpt-test"
+        );
+        assert_eq!(updated["future_additive_metadata"]["preserved"], true);
     }
 
     #[test]

@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
 use chrono::NaiveDateTime;
-use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    Set,
+};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -84,7 +87,7 @@ pub(crate) fn build_chapter_generation_snapshot_owner_contract() -> Value {
 }
 
 pub(crate) async fn load_chapter_generation_snapshot(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     task_id: &str,
 ) -> Result<Option<batch_generation_snapshot::Model>, String> {
     batch_generation_snapshot::Entity::find()
@@ -238,7 +241,7 @@ impl ChapterGenerationSnapshotWriteMode {
 }
 
 pub(crate) async fn persist_chapter_generation_runtime_snapshot(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     task_id: &str,
     workflow_runtime_state: Value,
     write_mode: ChapterGenerationSnapshotWriteMode,
@@ -273,7 +276,7 @@ pub(crate) async fn persist_chapter_generation_runtime_snapshot(
 }
 
 pub(crate) async fn upsert_chapter_generation_runtime_snapshot(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     task_id: &str,
     workflow_runtime_state: Value,
     now: NaiveDateTime,
@@ -574,18 +577,31 @@ mod tests {
             Some(json!({
                 "phase": "pending",
                 "progress": 15,
+                "quality": {"status": "passed"},
+                "candidate_gateway": {"selected": "candidate-1"},
                 "checkpoint": {"chapter_id": "chapter-1"}
             })),
             json!({
                 "progress": 65,
-                "last_event": "progress"
+                "last_event": "progress",
+                "story_packet": {
+                    "schema_version": "generation-contract/v1",
+                    "input_digest": "sha256:contract"
+                }
             }),
         );
 
         assert_eq!(merged["phase"], "pending");
         assert_eq!(merged["progress"], 65);
+        assert_eq!(merged["quality"]["status"], "passed");
+        assert_eq!(merged["candidate_gateway"]["selected"], "candidate-1");
         assert_eq!(merged["checkpoint"]["chapter_id"], "chapter-1");
         assert_eq!(merged["last_event"], "progress");
+        assert_eq!(
+            merged["story_packet"]["schema_version"],
+            "generation-contract/v1"
+        );
+        assert_eq!(merged["story_packet"]["input_digest"], "sha256:contract");
     }
 
     #[test]

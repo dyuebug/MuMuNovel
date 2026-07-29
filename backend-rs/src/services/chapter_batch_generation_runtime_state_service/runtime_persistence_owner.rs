@@ -1,12 +1,22 @@
-use chrono::Utc;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
+use chrono::{DateTime, Utc};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set, TransactionTrait};
 use serde_json::{json, Value};
 
 use crate::models::{batch_generation_task, chapter};
+use crate::services::business_checkpoint_service::{
+    build_business_checkpoint, merge_business_checkpoint_runtime_state,
+    read_business_checkpoint_runtime_state, BusinessCheckpointBoundary,
+    BusinessCheckpointOutputReferenceV1, BusinessCheckpointRead, BusinessCheckpointV1,
+};
 use crate::services::chapter_batch_generation_task_payload_base_service::{
     BatchGenerationFailedTerminalKind, BatchGenerationFailedTerminalSemantics,
 };
-use crate::services::chapter_generation_runtime_service::snapshot_persistence_owner::build_chapter_generation_snapshot_owner_contract;
+use crate::services::chapter_generation_runtime_service::snapshot_persistence_owner::{
+    build_chapter_generation_snapshot_owner_contract, load_chapter_generation_snapshot,
+};
+use crate::services::generation_contract_service::{
+    read_generation_contract_runtime_snapshot, GenerationContractSnapshotRead,
+};
 
 use super::{
     apply_manual_review_terminal_fields, build_batch_generation_runtime_checkpoint_for_stage,
@@ -460,6 +470,56 @@ impl BatchGenerationTaskStage {
     }
 }
 
+fn build_chapter_succeeded_business_checkpoint(
+    task_id: &str,
+    current_chapter_id: Option<&str>,
+    completed_chapters: i32,
+    workflow_runtime_state: &Value,
+    recorded_at: DateTime<Utc>,
+) -> Result<Option<BusinessCheckpointV1>, String> {
+    let Some(chapter_id) = current_chapter_id.filter(|value| !value.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let GenerationContractSnapshotRead::Valid(contract) =
+        read_generation_contract_runtime_snapshot(workflow_runtime_state)
+    else {
+        return Ok(None);
+    };
+    let target = &contract.generation_intent.target;
+    let chapter_is_in_contract = target.chapter_id.as_deref() == Some(chapter_id)
+        || target
+            .chapter_ids
+            .iter()
+            .any(|candidate| candidate == chapter_id);
+    if !chapter_is_in_contract {
+        return Ok(None);
+    }
+
+    let previous_revision = match read_business_checkpoint_runtime_state(workflow_runtime_state) {
+        BusinessCheckpointRead::Valid(checkpoint)
+            if checkpoint.input_digest == contract.input_digest =>
+        {
+            checkpoint.revision
+        }
+        _ => 0,
+    };
+    let revision = u64::try_from(completed_chapters.max(1))
+        .unwrap_or(1)
+        .max(previous_revision);
+    build_business_checkpoint(
+        task_id,
+        BusinessCheckpointBoundary::ChapterDraftSaved,
+        revision,
+        &contract.input_digest,
+        BusinessCheckpointOutputReferenceV1::Chapter {
+            id: chapter_id.to_owned(),
+        },
+        recorded_at,
+    )
+    .map(Some)
+    .map_err(|error| error.to_string())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BatchGenerationRuntimePersistencePlan {
     pub(crate) task_stage: BatchGenerationTaskStage,
@@ -611,46 +671,201 @@ impl BatchGenerationRuntimePersistencePlan {
         db: &DatabaseConnection,
         task_id: &str,
     ) -> Result<(), String> {
-        let now = Utc::now().naive_utc();
-        if let Some(task_model) = batch_generation_task::Entity::find_by_id(task_id)
-            .one(db)
-            .await
-            .map_err(|error| error.to_string())?
-        {
-            let existing_failed_chapters = task_model.failed_chapters.clone();
-            let mut active: batch_generation_task::ActiveModel = task_model.into();
-            self.task_stage.apply_to_active_model(
-                &mut active,
-                self.current_chapter_id.as_deref(),
-                self.current_chapter_number,
-                self.completed_chapters,
-                self.total_chapters,
-                self.error_message.clone(),
-                now,
-            );
-            if let Some(retry_count) = self.current_retry_count {
-                active.current_retry_count = Set(retry_count.max(0));
+        let transaction = db.begin().await.map_err(|error| error.to_string())?;
+        let recorded_at = Utc::now();
+        let now = recorded_at.naive_utc();
+        let existing_snapshot = load_chapter_generation_snapshot(&transaction, task_id).await?;
+        let mut runtime_checkpoint = build_batch_generation_runtime_checkpoint_for_stage(
+            self.checkpoint_stage,
+            self.current_chapter_id.as_deref(),
+            self.current_chapter_number,
+            self.completed_chapters,
+            self.total_chapters,
+        );
+        if matches!(self.task_stage, BatchGenerationTaskStage::ChapterSucceeded) {
+            if let Some(workflow_runtime_state) = existing_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.workflow_runtime_state.as_ref())
+            {
+                if let Some(checkpoint) = build_chapter_succeeded_business_checkpoint(
+                    task_id,
+                    self.current_chapter_id.as_deref(),
+                    self.completed_chapters,
+                    workflow_runtime_state,
+                    recorded_at,
+                )? {
+                    merge_business_checkpoint_runtime_state(&mut runtime_checkpoint, &checkpoint)
+                        .map_err(|error| error.to_string())?;
+                }
             }
-            if matches!(self.task_stage, BatchGenerationTaskStage::Failed) {
-                active.failed_chapters = Set(append_failed_chapter_entry(
-                    &existing_failed_chapters,
-                    self.failed_chapter_entry.as_ref(),
-                ));
-            }
-            active.update(db).await.map_err(|error| error.to_string())?;
         }
 
-        upsert_batch_generation_runtime_snapshot(
-            db,
-            task_id,
-            build_batch_generation_runtime_checkpoint_for_stage(
-                self.checkpoint_stage,
-                self.current_chapter_id.as_deref(),
-                self.current_chapter_number,
-                self.completed_chapters,
-                self.total_chapters,
-            ),
+        let task_model = batch_generation_task::Entity::find_by_id(task_id)
+            .one(&transaction)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| {
+                "Batch generation task not found during runtime persistence".to_string()
+            })?;
+        let existing_failed_chapters = task_model.failed_chapters.clone();
+        let mut active: batch_generation_task::ActiveModel = task_model.into();
+        self.task_stage.apply_to_active_model(
+            &mut active,
+            self.current_chapter_id.as_deref(),
+            self.current_chapter_number,
+            self.completed_chapters,
+            self.total_chapters,
+            self.error_message.clone(),
+            now,
+        );
+        if let Some(retry_count) = self.current_retry_count {
+            active.current_retry_count = Set(retry_count.max(0));
+        }
+        if matches!(self.task_stage, BatchGenerationTaskStage::Failed) {
+            active.failed_chapters = Set(append_failed_chapter_entry(
+                &existing_failed_chapters,
+                self.failed_chapter_entry.as_ref(),
+            ));
+        }
+
+        let update_result = batch_generation_task::Entity::update_many()
+            .set(active)
+            .filter(batch_generation_task::Column::Id.eq(task_id))
+            .filter(batch_generation_task::Column::Status.is_not_in([
+                "completed",
+                "failed",
+                "cancelled",
+            ]))
+            .exec(&transaction)
+            .await
+            .map_err(|error| error.to_string())?;
+        if update_result.rows_affected == 0 {
+            return Err(
+                "Batch generation runtime persistence rejected by terminal task status".to_string(),
+            );
+        }
+
+        upsert_batch_generation_runtime_snapshot(&transaction, task_id, runtime_checkpoint).await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod business_checkpoint_tests {
+    use chrono::{TimeZone, Utc};
+    use serde_json::json;
+
+    use crate::services::business_checkpoint_service::{
+        merge_business_checkpoint_runtime_state, BusinessCheckpointRead,
+    };
+    use crate::services::generation_contract_service::{
+        build_generation_contract_snapshot, merge_generation_contract_runtime_snapshot,
+        GenerationIntentKind, GenerationIntentV1, GenerationTarget, StoryPacketV1,
+    };
+
+    use super::build_chapter_succeeded_business_checkpoint;
+
+    fn contract_runtime_state() -> (serde_json::Value, String) {
+        let target = GenerationTarget::chapter_batch(
+            "project-1",
+            vec!["chapter-1".to_owned(), "chapter-2".to_owned()],
+        );
+        let snapshot = build_generation_contract_snapshot(
+            StoryPacketV1::new("project-1", target.clone()),
+            GenerationIntentV1::new(GenerationIntentKind::BatchChapterGenerate, target),
         )
-        .await
+        .expect("build contract");
+        let input_digest = snapshot.input_digest.clone();
+        let mut runtime_state = json!({"phase": "generating"});
+        merge_generation_contract_runtime_snapshot(&mut runtime_state, &snapshot)
+            .expect("merge contract");
+        (runtime_state, input_digest)
+    }
+
+    #[test]
+    fn chapter_succeeded_checkpoint_should_use_contract_digest_and_monotonic_revision() {
+        let (mut runtime_state, input_digest) = contract_runtime_state();
+        let recorded_at = Utc
+            .with_ymd_and_hms(2026, 7, 16, 2, 0, 0)
+            .single()
+            .expect("timestamp");
+        let first = build_chapter_succeeded_business_checkpoint(
+            "task-1",
+            Some("chapter-1"),
+            1,
+            &runtime_state,
+            recorded_at,
+        )
+        .expect("build first")
+        .expect("first checkpoint");
+        assert_eq!(first.revision, 1);
+        assert_eq!(first.input_digest, input_digest);
+        merge_business_checkpoint_runtime_state(&mut runtime_state, &first)
+            .expect("merge first checkpoint");
+
+        let repeated = build_chapter_succeeded_business_checkpoint(
+            "task-1",
+            Some("chapter-1"),
+            0,
+            &runtime_state,
+            recorded_at,
+        )
+        .expect("build repeated")
+        .expect("repeated checkpoint");
+        assert_eq!(repeated.revision, 1);
+        assert_eq!(repeated.idempotency_key, first.idempotency_key);
+
+        let next = build_chapter_succeeded_business_checkpoint(
+            "task-1",
+            Some("chapter-2"),
+            2,
+            &runtime_state,
+            recorded_at,
+        )
+        .expect("build next")
+        .expect("next checkpoint");
+        assert_eq!(next.revision, 2);
+        assert_ne!(next.idempotency_key, first.idempotency_key);
+    }
+
+    #[test]
+    fn chapter_succeeded_checkpoint_should_skip_legacy_or_out_of_contract_runtime_state() {
+        let recorded_at = Utc
+            .with_ymd_and_hms(2026, 7, 16, 2, 0, 0)
+            .single()
+            .expect("timestamp");
+        assert_eq!(
+            build_chapter_succeeded_business_checkpoint(
+                "task-1",
+                Some("chapter-1"),
+                1,
+                &json!({"checkpoint": {"stage": "chapter_succeeded"}}),
+                recorded_at,
+            )
+            .expect("legacy result"),
+            None
+        );
+
+        let (runtime_state, _) = contract_runtime_state();
+        assert_eq!(
+            build_chapter_succeeded_business_checkpoint(
+                "task-1",
+                Some("chapter-outside"),
+                1,
+                &runtime_state,
+                recorded_at,
+            )
+            .expect("out of contract result"),
+            None
+        );
+        assert!(matches!(
+            crate::services::business_checkpoint_service::read_business_checkpoint_runtime_state(
+                &runtime_state
+            ),
+            BusinessCheckpointRead::Missing
+        ));
     }
 }

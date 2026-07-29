@@ -1,4 +1,5 @@
 pub mod analysis_task;
+pub mod autopilot_invocation_audit;
 pub mod batch_generation_snapshot;
 pub mod batch_generation_task;
 pub mod career;
@@ -9,6 +10,8 @@ pub mod character_career;
 pub mod foreshadow;
 pub mod generation_history;
 pub mod mcp_plugin;
+pub mod novel_autopilot_run;
+pub mod novel_autopilot_step_run;
 pub mod organization;
 pub mod organization_member;
 pub mod outline;

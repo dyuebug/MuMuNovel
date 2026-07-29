@@ -14,10 +14,18 @@ use crate::models::{career, character, project};
 use crate::services::career_service::CareerService;
 use crate::services::chapter_service::ChapterService;
 use crate::services::character_service::CharacterService;
+use crate::services::generation_contract_service::GenerationIntentKind;
+use crate::services::generation_execution_audit_service::{
+    build_generation_execution_audit, GenerationExecutionAuditV1,
+};
 use crate::services::outline_service::OutlineService;
 use crate::services::project_service::{CreateProjectParams, ProjectService};
 use crate::services::prompt_template_service::PromptTemplateService;
 use crate::services::settings_service::SettingsService;
+use crate::services::wizard_world_generation_service::{
+    generate_world_building_for_project, GenerateWorldBuildingForProject,
+    WizardWorldGenerationError, WorldGenerationFailurePolicy,
+};
 use crate::utils::sse::SseChannel;
 
 pub(crate) use outline_quality_owner::build_outline_quality_guidance_bundle;
@@ -202,6 +210,38 @@ fn parse_character_batch_items(cleaned: &str) -> Result<Vec<Value>, String> {
     Ok(vec![data])
 }
 
+#[cfg(test)]
+fn build_wizard_outline_generation_owner_contract() -> Value {
+    serde_json::json!({
+        "intent": "outline_generate",
+        "role": "planner",
+        "role_aware_config_owner": "SettingsService::build_role_aware_ai_config",
+        "tracked_ai_owner": "AIService::generate_text_stream_tracked",
+        "execution_audit_owner": "build_generation_execution_audit",
+        "audit_result_boundary": "additive_generation_execution_audit_array",
+        "preserves_retry_order": true,
+        "writes_outline_structure": false,
+        "writes_generation_history": false,
+        "adds_sse_event_kind": false
+    })
+}
+
+fn attach_wizard_outline_generation_execution_audits(
+    result: &mut Value,
+    audits: &[GenerationExecutionAuditV1],
+) -> Result<(), String> {
+    let object = result
+        .as_object_mut()
+        .ok_or_else(|| "wizard outline result must be a JSON object".to_string())?;
+    object.insert(
+        "generation_execution_audit".to_string(),
+        serde_json::to_value(audits).map_err(|error| {
+            format!("serialize wizard outline execution audits failed: {error}")
+        })?,
+    );
+    Ok(())
+}
+
 fn default_world_data() -> Value {
     serde_json::json!({
         "time_period": "AI多次返回为空，请稍后重试",
@@ -214,10 +254,13 @@ fn default_world_data() -> Value {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_outline_create_system_prompt, build_outline_runtime_system_prompt,
+        attach_wizard_outline_generation_execution_audits, build_outline_create_system_prompt,
+        build_outline_runtime_system_prompt, build_wizard_outline_generation_owner_contract,
         clean_json_response, parse_character_batch_items, OutlineRuntimeStage,
     };
     use crate::models::project;
+    use crate::services::generation_execution_audit_service::GenerationExecutionAuditV1;
+    use crate::services::role_model_policy_service::{GenerationRole, ModelSelectionSource};
     use chrono::NaiveDateTime;
     use serde_json::json;
 
@@ -251,6 +294,74 @@ mod tests {
             created_at: NaiveDateTime::parse_from_str("1970-01-01 00:00:00", "%Y-%m-%d %H:%M:%S")
                 .unwrap(),
             updated_at: None,
+        }
+    }
+
+    fn sample_execution_audit(actual_model: &str) -> GenerationExecutionAuditV1 {
+        GenerationExecutionAuditV1 {
+            schema_version: "generation-execution-audit/v1".to_string(),
+            role: GenerationRole::Planner,
+            policy_schema_version: "role-model-policy/v1".to_string(),
+            policy_digest: "policy-digest".to_string(),
+            requested_provider: Some("openai".to_string()),
+            requested_model: Some("requested-model".to_string()),
+            resolved_provider: "openai".to_string(),
+            resolved_model: "resolved-model".to_string(),
+            actual_provider: "openai".to_string(),
+            actual_model: actual_model.to_string(),
+            provider_source: ModelSelectionSource::GlobalSettings,
+            model_source: ModelSelectionSource::RoleOverride,
+            fallbacks: Vec::new(),
+            endpoint_summary: None,
+        }
+    }
+
+    #[test]
+    fn wizard_outline_generation_owner_contract_is_planner_tracked_and_additive() {
+        let contract = build_wizard_outline_generation_owner_contract();
+        assert_eq!(contract["intent"], "outline_generate");
+        assert_eq!(contract["role"], "planner");
+        assert_eq!(
+            contract["role_aware_config_owner"],
+            "SettingsService::build_role_aware_ai_config"
+        );
+        assert_eq!(
+            contract["tracked_ai_owner"],
+            "AIService::generate_text_stream_tracked"
+        );
+        assert_eq!(contract["preserves_retry_order"], true);
+        assert_eq!(contract["writes_outline_structure"], false);
+        assert_eq!(contract["writes_generation_history"], false);
+        assert_eq!(contract["adds_sse_event_kind"], false);
+    }
+
+    #[test]
+    fn wizard_outline_execution_audits_preserve_legacy_result_and_call_order() {
+        let mut result = json!({
+            "message": "legacy message", "outline_count": 2, "chapter_count": 0,
+            "outline_mode": "detail", "outlines": [{"id": "outline-1"}], "chapters": []
+        });
+        let audits = vec![
+            sample_execution_audit("primary-model"),
+            sample_execution_audit("retry-model"),
+        ];
+        attach_wizard_outline_generation_execution_audits(&mut result, &audits).unwrap();
+        assert_eq!(result["message"], "legacy message");
+        assert_eq!(result["outline_count"], 2);
+        assert_eq!(result["outlines"][0]["id"], "outline-1");
+        assert_eq!(
+            result["generation_execution_audit"][0]["actual_model"],
+            "primary-model"
+        );
+        assert_eq!(
+            result["generation_execution_audit"][1]["actual_model"],
+            "retry-model"
+        );
+        let serialized = serde_json::to_string(&result["generation_execution_audit"])
+            .unwrap()
+            .to_lowercase();
+        for forbidden in ["prompt", "content", "api_key", "authorization", "https://"] {
+            assert!(!serialized.contains(forbidden));
         }
     }
 
@@ -445,6 +556,9 @@ pub async fn generate_world_building(
         while let Some(chunk_result) = rx.next().await {
             match chunk_result {
                 Ok(chunk) => {
+                    if let Some(reasoning) = chunk.reasoning_content {
+                        channel.reasoning_chunk(&reasoning).await;
+                    }
                     if let Some(text) = chunk.content {
                         accumulated_text.push_str(&text);
                         channel.chunk(&text).await;
@@ -619,218 +733,58 @@ pub async fn regenerate_world_building(
     provider_override: Option<&str>,
     model_override: Option<&str>,
 ) {
-    let progress = Mutex::new(0u32);
-
-    // --- Load project ---
-    channel.progress("加载项目信息...", 5, "processing").await;
-    *progress.lock().await = 5;
-
-    let project = match project::Entity::find_by_id(project_id).one(db).await {
-        Ok(Some(p)) => p,
-        Ok(None) => {
-            channel.error("项目不存在", 404).await;
-            return;
-        }
-        Err(e) => {
-            channel.error(&format!("加载项目失败: {}", e), 500).await;
-            return;
-        }
-    };
-    if project.user_id != user_id {
-        channel.error("无权访问该项目", 403).await;
-        return;
-    }
-
-    // --- Build AI config ---
-    let ai_config = match SettingsService::build_ai_config(
+    let result = generate_world_building_for_project(
         db,
-        user_id,
-        provider_override,
-        model_override,
+        GenerateWorldBuildingForProject {
+            user_id,
+            project_id,
+            provider_override,
+            model_override,
+            failure_policy: WorldGenerationFailurePolicy::UseCompatibilityPlaceholder,
+        },
         None,
+        |event| async move {
+            channel
+                .progress(&event.message, event.progress, event.status)
+                .await;
+            Ok(())
+        },
+        |content| async move {
+            channel.chunk(&content).await;
+            Ok(())
+        },
+        |reasoning| async move {
+            channel.reasoning_chunk(&reasoning).await;
+            Ok(())
+        },
     )
-    .await
-    {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            channel.error(&format!("AI配置失败: {}", e), 500).await;
+    .await;
+
+    let world = match result {
+        Ok(world) => world,
+        Err(error) => {
+            let status = match error {
+                WizardWorldGenerationError::ProjectNotFoundOrAccessDenied => 404,
+                WizardWorldGenerationError::Cancelled => 409,
+                _ => 500,
+            };
+            channel.error(error.user_message(), status).await;
             return;
         }
     };
 
-    // --- Load WORLD_BUILDING template ---
-    channel.progress("准备AI提示词...", 15, "processing").await;
-    *progress.lock().await = 15;
-
-    let template = match PromptTemplateService::system_template_info("WORLD_BUILDING") {
-        Some(t) => t,
-        None => {
-            channel.error("WORLD_BUILDING模板未找到", 500).await;
-            return;
-        }
-    };
-
-    let mut params: HashMap<String, String> = HashMap::new();
-    params.insert("title".into(), project.title.clone());
-    params.insert(
-        "theme".into(),
-        project.theme.as_deref().unwrap_or("未设定").to_string(),
-    );
-    params.insert(
-        "genre".into(),
-        project.genre.as_deref().unwrap_or("通用").to_string(),
-    );
-    params.insert(
-        "description".into(),
-        project.description.unwrap_or_default(),
-    );
-
-    let prompt = match PromptTemplateService::format_prompt(&template.content, &params) {
-        Ok(p) => p,
-        Err(e) => {
-            channel
-                .error(&format!("提示词格式化失败: {}", e), 500)
-                .await;
-            return;
-        }
-    };
-
-    let system_prompt: Option<String> = ai_config.system_prompt.clone();
-    let ai_service = AIService::new(ai_config);
-    let mut world_generation_success = false;
-    let mut world_retry_count = 0u32;
-    let mut world_data: Value = serde_json::json!({});
-
-    // --- Retry loop ---
-    while world_retry_count < MAX_WORLD_RETRIES && !world_generation_success {
-        if world_retry_count > 0 {
-            channel
-                .progress(
-                    &format!("⚠ 重试中... ({}/{})", world_retry_count, MAX_WORLD_RETRIES),
-                    *progress.lock().await,
-                    "processing",
-                )
-                .await;
-        }
-
-        let mut accumulated_text = String::new();
-        let estimated_total = 3000usize;
-        let mut chunk_count = 0u64;
-
-        channel
-            .progress("重新生成世界观...", 20, "processing")
-            .await;
-        *progress.lock().await = 20;
-
-        let mut rx = ai_service.generate_text_stream(prompt.clone(), system_prompt.clone(), None);
-
-        while let Some(chunk_result) = rx.next().await {
-            match chunk_result {
-                Ok(chunk) => {
-                    if let Some(text) = chunk.content {
-                        accumulated_text.push_str(&text);
-                        channel.chunk(&text).await;
-                        chunk_count += 1;
-
-                        if chunk_count % 10 == 0 {
-                            let current_len = accumulated_text.len();
-                            let char_bonus =
-                                (current_len as f64 / estimated_total as f64 * 60.0) as u32;
-                            let pct = (20 + char_bonus).clamp(20, 80);
-                            channel
-                                .progress(
-                                    &format!("重新生成世界观... ({}字符)", current_len),
-                                    pct,
-                                    "processing",
-                                )
-                                .await;
-                            *progress.lock().await = pct;
-                        }
-                    }
-                    if chunk.done {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    channel
-                        .progress(
-                            &format!("⚠ 生成警告: {}", e),
-                            *progress.lock().await,
-                            "processing",
-                        )
-                        .await;
-                }
-            }
-        }
-
-        // Check for empty response
-        if accumulated_text.trim().is_empty() {
-            world_retry_count += 1;
-            if world_retry_count < MAX_WORLD_RETRIES {
-                channel
-                    .progress(
-                        &format!(
-                            "⚠ AI返回为空，重试 ({}/{})",
-                            world_retry_count, MAX_WORLD_RETRIES
-                        ),
-                        *progress.lock().await,
-                        "processing",
-                    )
-                    .await;
-                continue;
-            } else {
-                world_data = default_world_data();
-                break;
-            }
-        }
-
-        // Parse JSON
-        channel
-            .progress("解析世界观数据...", 85, "processing")
-            .await;
-        *progress.lock().await = 85;
-
-        let cleaned = clean_json_response(&accumulated_text);
-        match serde_json::from_str::<Value>(&cleaned) {
-            Ok(data) => {
-                world_data = data;
-                world_generation_success = true;
-            }
-            Err(_e) => {
-                world_retry_count += 1;
-                if world_retry_count < MAX_WORLD_RETRIES {
-                    channel
-                        .progress(
-                            &format!(
-                                "⚠ JSON解析失败，重试 ({}/{})",
-                                world_retry_count, MAX_WORLD_RETRIES
-                            ),
-                            *progress.lock().await,
-                            "processing",
-                        )
-                        .await;
-                } else {
-                    world_data = default_world_data();
-                    break;
-                }
-            }
-        }
-    }
-
-    // --- Return result without saving to DB (preview only) ---
     channel
         .progress("生成完成，等待用户确认...", 95, "processing")
         .await;
-
     channel
         .progress("世界观重新生成完成!", 100, "success")
         .await;
     channel
         .result(&serde_json::json!({
-            "time_period": world_data.get("time_period"),
-            "location": world_data.get("location"),
-            "atmosphere": world_data.get("atmosphere"),
-            "rules": world_data.get("rules"),
+            "time_period": world.time_period,
+            "location": world.location,
+            "atmosphere": world.atmosphere,
+            "rules": world.rules,
         }))
         .await;
     channel.done().await;
@@ -975,6 +929,9 @@ pub async fn generate_career_system(
         while let Some(chunk_result) = rx.next().await {
             match chunk_result {
                 Ok(chunk) => {
+                    if let Some(reasoning) = chunk.reasoning_content {
+                        channel.reasoning_chunk(&reasoning).await;
+                    }
                     if let Some(text) = chunk.content {
                         accumulated.push_str(&text);
                         channel.chunk(&text).await;
@@ -1481,6 +1438,9 @@ pub async fn generate_characters(
             while let Some(chunk_result) = rx.next().await {
                 match chunk_result {
                     Ok(chunk) => {
+                        if let Some(reasoning) = chunk.reasoning_content {
+                            channel.reasoning_chunk(&reasoning).await;
+                        }
                         if let Some(text) = chunk.content {
                             accumulated.push_str(&text);
                             channel.chunk(&text).await;
@@ -2079,16 +2039,27 @@ pub async fn generate_outline(
             .join("\n")
     };
 
-    // --- Build AI config ---
-    let ai_config = match SettingsService::build_ai_config(db, user_id, provider, model, None).await
+    // --- Build role-aware AI config ---
+    let role_aware_config = match SettingsService::build_role_aware_ai_config(
+        db,
+        user_id,
+        GenerationIntentKind::OutlineGenerate,
+        provider,
+        model,
+        None,
+    )
+    .await
     {
-        Ok(cfg) => cfg,
+        Ok(config) => config,
         Err(e) => {
             channel.error(&format!("AI配置失败: {}", e), 500).await;
             return;
         }
     };
-    let ai_service = AIService::new(ai_config);
+    let resolved_role_policy = role_aware_config.resolved_policy;
+    let allow_model_fallback = role_aware_config.allow_model_fallback;
+    let ai_service = AIService::new(role_aware_config.ai_config);
+    let mut generation_execution_audits = Vec::new();
 
     // --- Load template ---
     channel
@@ -2237,11 +2208,20 @@ pub async fn generate_outline(
     let mut chunk_count = 0u64;
 
     {
-        let mut rx =
-            ai_service.generate_text_stream(prompt.clone(), Some(sys_prompt.clone()), None);
+        let tracked_stream = ai_service.generate_text_stream_tracked(
+            prompt.clone(),
+            Some(sys_prompt.clone()),
+            None,
+            allow_model_fallback,
+        );
+        let mut rx = tracked_stream.stream;
+        let completion = tracked_stream.completion;
         while let Some(chunk_result) = rx.next().await {
             match chunk_result {
                 Ok(chunk) => {
+                    if let Some(reasoning) = chunk.reasoning_content {
+                        channel.reasoning_chunk(&reasoning).await;
+                    }
                     if let Some(text) = chunk.content {
                         accumulated.push_str(&text);
                         channel.chunk(&text).await;
@@ -2274,46 +2254,173 @@ pub async fn generate_outline(
                 }
             }
         }
+        let execution = match completion.await {
+            Ok(execution) => execution,
+            Err(_) => {
+                channel.error("大纲生成失败：执行审计通道已关闭", 500).await;
+                return;
+            }
+        };
+        let audit = match build_generation_execution_audit(&resolved_role_policy, &execution) {
+            Ok(audit) => audit,
+            Err(error) => {
+                channel
+                    .error(&format!("大纲生成执行审计失败: {}", error), 500)
+                    .await;
+                return;
+            }
+        };
+        generation_execution_audits.push(audit);
     }
 
     // --- Parse JSON (with auto-retry) ---
     channel.progress("解析大纲数据...", 55, "processing").await;
     let cleaned = clean_json_response(&accumulated);
-    let outline_data = match serde_json::from_str::<Value>(&cleaned) {
-        Ok(data) => normalize_outline_items(&data),
-        Err(_parse_error) => {
-            channel
-                .progress("JSON解析失败，自动重试...", 56, "processing")
-                .await;
-            let mut retry_acc = String::new();
-            let mut retry_rx = ai_service.generate_text_stream(prompt, Some(sys_prompt), None);
-            while let Some(chunk_result) = retry_rx.next().await {
-                match chunk_result {
-                    Ok(chunk) => {
-                        if let Some(text) = chunk.content {
-                            retry_acc.push_str(&text);
-                            channel.chunk(&text).await;
-                        }
-                        if chunk.done {
-                            break;
-                        }
+    let outline_data = if cleaned.trim().is_empty() {
+        channel
+            .progress("AI返回为空，自动重试...", 56, "processing")
+            .await;
+        let mut retry_acc = String::new();
+        let tracked_retry = ai_service.generate_text_stream_tracked(
+            prompt,
+            Some(sys_prompt),
+            None,
+            allow_model_fallback,
+        );
+        let mut retry_rx = tracked_retry.stream;
+        let retry_completion = tracked_retry.completion;
+        while let Some(chunk_result) = retry_rx.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    if let Some(reasoning) = chunk.reasoning_content {
+                        channel.reasoning_chunk(&reasoning).await;
                     }
-                    Err(_) => {}
+                    if let Some(text) = chunk.content {
+                        retry_acc.push_str(&text);
+                        channel.chunk(&text).await;
+                    }
+                    if chunk.done {
+                        break;
+                    }
                 }
+                Err(_) => {}
             }
-            let retry_cleaned = clean_json_response(&retry_acc);
-            match serde_json::from_str::<Value>(&retry_cleaned) {
-                Ok(data) => {
+        }
+        let retry_execution = match retry_completion.await {
+            Ok(execution) => execution,
+            Err(_) => {
+                channel
+                    .error("大纲生成失败：重试执行审计通道已关闭", 500)
+                    .await;
+                return;
+            }
+        };
+        let retry_audit =
+            match build_generation_execution_audit(&resolved_role_policy, &retry_execution) {
+                Ok(audit) => audit,
+                Err(error) => {
                     channel
-                        .progress("已自动修复返回格式，继续保存...", 58, "processing")
-                        .await;
-                    normalize_outline_items(&data)
-                }
-                Err(e) => {
-                    channel
-                        .error(&format!("大纲JSON解析失败（已重试）: {}", e), 500)
+                        .error(&format!("大纲生成重试执行审计失败: {}", error), 500)
                         .await;
                     return;
+                }
+            };
+        generation_execution_audits.push(retry_audit);
+        let retry_cleaned = clean_json_response(&retry_acc);
+        if retry_cleaned.trim().is_empty() {
+            channel
+                .error("大纲生成失败（AI重试后仍返回为空）", 500)
+                .await;
+            return;
+        }
+        match serde_json::from_str::<Value>(&retry_cleaned) {
+            Ok(data) => {
+                channel
+                    .progress("已自动修复返回格式，继续保存...", 58, "processing")
+                    .await;
+                normalize_outline_items(&data)
+            }
+            Err(e) => {
+                channel
+                    .error(&format!("大纲JSON解析失败（已重试）: {}", e), 500)
+                    .await;
+                return;
+            }
+        }
+    } else {
+        match serde_json::from_str::<Value>(&cleaned) {
+            Ok(data) => normalize_outline_items(&data),
+            Err(_parse_error) => {
+                channel
+                    .progress("JSON解析失败，自动重试...", 56, "processing")
+                    .await;
+                let mut retry_acc = String::new();
+                let tracked_retry = ai_service.generate_text_stream_tracked(
+                    prompt,
+                    Some(sys_prompt),
+                    None,
+                    allow_model_fallback,
+                );
+                let mut retry_rx = tracked_retry.stream;
+                let retry_completion = tracked_retry.completion;
+                while let Some(chunk_result) = retry_rx.next().await {
+                    match chunk_result {
+                        Ok(chunk) => {
+                            if let Some(reasoning) = chunk.reasoning_content {
+                                channel.reasoning_chunk(&reasoning).await;
+                            }
+                            if let Some(text) = chunk.content {
+                                retry_acc.push_str(&text);
+                                channel.chunk(&text).await;
+                            }
+                            if chunk.done {
+                                break;
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                }
+                let retry_execution = match retry_completion.await {
+                    Ok(execution) => execution,
+                    Err(_) => {
+                        channel
+                            .error("大纲生成失败：重试执行审计通道已关闭", 500)
+                            .await;
+                        return;
+                    }
+                };
+                let retry_audit =
+                    match build_generation_execution_audit(&resolved_role_policy, &retry_execution)
+                    {
+                        Ok(audit) => audit,
+                        Err(error) => {
+                            channel
+                                .error(&format!("大纲生成重试执行审计失败: {}", error), 500)
+                                .await;
+                            return;
+                        }
+                    };
+                generation_execution_audits.push(retry_audit);
+                let retry_cleaned = clean_json_response(&retry_acc);
+                if retry_cleaned.trim().is_empty() {
+                    channel
+                        .error("大纲生成失败（AI重试后仍返回为空）", 500)
+                        .await;
+                    return;
+                }
+                match serde_json::from_str::<Value>(&retry_cleaned) {
+                    Ok(data) => {
+                        channel
+                            .progress("已自动修复返回格式，继续保存...", 58, "processing")
+                            .await;
+                        normalize_outline_items(&data)
+                    }
+                    Err(e) => {
+                        channel
+                            .error(&format!("大纲JSON解析失败（已重试）: {}", e), 500)
+                            .await;
+                        return;
+                    }
                 }
             }
         }
@@ -2499,16 +2606,21 @@ pub async fn generate_outline(
         )
     };
 
+    let mut result = serde_json::json!({
+        "message": result_message,
+        "outline_count": created_outlines.len(),
+        "chapter_count": created_chapters.len(),
+        "outline_mode": outline_mode,
+        "outlines": outline_items,
+        "chapters": chapter_items,
+    });
+    if let Err(error) =
+        attach_wizard_outline_generation_execution_audits(&mut result, &generation_execution_audits)
+    {
+        channel.error(&error, 500).await;
+        return;
+    }
     channel.progress("大纲生成完成!", 100, "success").await;
-    channel
-        .result(&serde_json::json!({
-            "message": result_message,
-            "outline_count": created_outlines.len(),
-            "chapter_count": created_chapters.len(),
-            "outline_mode": outline_mode,
-            "outlines": outline_items,
-            "chapters": chapter_items,
-        }))
-        .await;
+    channel.result(&result).await;
     channel.done().await;
 }

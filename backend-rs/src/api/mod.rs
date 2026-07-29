@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod ai_test;
 pub mod auth;
+pub mod autopilot;
 pub mod background_tasks;
 pub mod book_import;
 pub mod careers;
@@ -19,6 +20,7 @@ pub mod health;
 pub mod inspiration;
 pub mod mcp_plugins;
 pub mod memories;
+pub mod novel_autopilot_runs;
 pub mod organizations;
 pub mod outlines;
 pub mod polish;

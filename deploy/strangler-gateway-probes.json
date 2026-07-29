@@ -1093,32 +1093,32 @@
             "execution_path": "rust_regeneration_stream_workflow_owner",
             "fallback_applied": false,
             "rollback_boundary": "chapter_regeneration_python_source_map",
-              "result": {
-                "full_stream_owner_consumed": true,
-                "partial_stream_owner_consumed": true,
-                "apply_route_smoke_boundary": "logged_in_fixture_business_smoke",
-                "deterministic_business_sse_smoke": true,
-                "source_map_freeze_candidate_ready": true,
-                "source_map_freeze_ready": true
-              },
-              "runtime_state": {
+            "result": {
+              "full_stream_owner_consumed": true,
+              "partial_stream_owner_consumed": true,
+              "apply_route_smoke_boundary": "logged_in_fixture_business_smoke",
+              "deterministic_business_sse_smoke": true,
+              "source_map_freeze_candidate_ready": true,
+              "source_map_freeze_ready": true
+            },
+            "runtime_state": {
+              "auth_guard_manifest_coverage": "all_regeneration_routes",
+              "deterministic_business_sse_smoke": true,
+              "source_map_freeze_candidate_ready": true,
+              "full_module_freeze_ready": true
+            },
+            "readiness_evidence": {
+              "python_source_map": [],
+              "source_map_policy": {
+                "status": "source_map_only",
+                "active_manifest_fallback_owner": false,
                 "auth_guard_manifest_coverage": "all_regeneration_routes",
                 "deterministic_business_sse_smoke": true,
                 "source_map_freeze_candidate_ready": true,
-                "full_module_freeze_ready": true
-              },
-              "readiness_evidence": {
-                "python_source_map": [],
-              "source_map_policy": {
-                  "status": "source_map_only",
-                  "active_manifest_fallback_owner": false,
-                  "auth_guard_manifest_coverage": "all_regeneration_routes",
-                  "deterministic_business_sse_smoke": true,
-                  "source_map_freeze_candidate_ready": true,
-                  "full_module_freeze_ready": true,
-                  "freeze_scope": "chapter_regeneration_route_package_source_map_surface",
-                  "freeze_reason": "Rust regeneration route group has dedicated owner-profile business probes for full stream, partial stream, apply partial, task list, and cleanup; the production chapter_regeneration route shell is now physically deleted, and the surviving Python follow-up work sits outside this direct route/workflow source-map package.",
-                  "stream_orchestration_source_maps": [],
+                "full_module_freeze_ready": true,
+                "freeze_scope": "chapter_regeneration_route_package_source_map_surface",
+                "freeze_reason": "Rust regeneration route group has dedicated owner-profile business probes for full stream, partial stream, apply partial, task list, and cleanup; the production chapter_regeneration route shell is now physically deleted, and the surviving Python follow-up work sits outside this direct route/workflow source-map package.",
+                "stream_orchestration_source_maps": [],
                 "prepare_owner_source_maps": [],
                 "shared_prepare_dependency_source_maps": [],
                 "shared_context_compaction_source_maps": [],
@@ -1131,14 +1131,14 @@
                   "chapter-regeneration-partial-stream-business-rust",
                   "chapter-regeneration-apply-partial-business-rust",
                   "chapter-regeneration-tasks-business-rust",
-                    "chapter-regeneration-fixture-delete-project-business-rust"
-                  ]
-                },
+                  "chapter-regeneration-fixture-delete-project-business-rust"
+                ]
+              },
               "next_cutover_gate": "chapter-regeneration route/workflow source-map package is physically closed out; any surviving Python work is outside this direct regeneration package"
-              }
             }
-          ]
-        }
+          }
+        ]
+      }
     },
     {
       "name": "chapter-regeneration-full-stream-logged-in-not-found-rust",
@@ -10485,6 +10485,156 @@
       "expected_json": {
         "success": true,
         "message": "Project deleted successfully"
+      }
+    },
+    {
+      "name": "novel-autopilot-runs-list-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "novel_autopilot",
+      "profiles": [
+        "deploy",
+        "route-groups"
+      ],
+      "method": "GET",
+      "path": "/api/projects/test-project-id/novel-autopilot-runs",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "novel-autopilot-runs-create-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "novel_autopilot",
+      "profiles": [
+        "route-groups"
+      ],
+      "method": "POST",
+      "path": "/api/projects/test-project-id/novel-autopilot-runs",
+      "json_body": {
+        "config": {
+          "execution_scope": "complete_book"
+        },
+        "total_chapters": 3
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "novel-autopilot-run-detail-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "novel_autopilot",
+      "profiles": [
+        "route-groups"
+      ],
+      "method": "GET",
+      "path": "/api/projects/test-project-id/novel-autopilot-runs/test-run-id",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "novel-autopilot-run-steps-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "novel_autopilot",
+      "profiles": [
+        "route-groups"
+      ],
+      "method": "GET",
+      "path": "/api/projects/test-project-id/novel-autopilot-runs/test-run-id/steps",
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "novel-autopilot-run-pause-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "novel_autopilot",
+      "profiles": [
+        "route-groups"
+      ],
+      "method": "POST",
+      "path": "/api/projects/test-project-id/novel-autopilot-runs/test-run-id/pause",
+      "json_body": {
+        "expected_version": 1
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "novel-autopilot-run-resume-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "novel_autopilot",
+      "profiles": [
+        "route-groups"
+      ],
+      "method": "POST",
+      "path": "/api/projects/test-project-id/novel-autopilot-runs/test-run-id/resume",
+      "json_body": {
+        "expected_version": 1
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "novel-autopilot-run-cancel-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "novel_autopilot",
+      "profiles": [
+        "route-groups"
+      ],
+      "method": "POST",
+      "path": "/api/projects/test-project-id/novel-autopilot-runs/test-run-id/cancel",
+      "json_body": {
+        "expected_version": 1
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "novel-autopilot-run-guidance-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "novel_autopilot",
+      "profiles": [
+        "route-groups"
+      ],
+      "method": "POST",
+      "path": "/api/projects/test-project-id/novel-autopilot-runs/test-run-id/guidance",
+      "json_body": {
+        "expected_version": 1,
+        "guidance": "后续章节保持节奏紧凑"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
+      }
+    },
+    {
+      "name": "novel-autopilot-run-decision-auth-guard-rust",
+      "owner": "rust",
+      "route_group": "novel_autopilot",
+      "profiles": [
+        "route-groups"
+      ],
+      "method": "POST",
+      "path": "/api/projects/test-project-id/novel-autopilot-runs/test-run-id/decision",
+      "json_body": {
+        "expected_version": 1,
+        "decision": "accept"
+      },
+      "expected_status": 401,
+      "expected_json": {
+        "detail": "未登录，请先登录"
       }
     }
   ]

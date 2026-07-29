@@ -253,6 +253,7 @@ mod tests {
             id: "analysis-1".to_string(),
             project_id: "project-1".to_string(),
             chapter_id: "chapter-1".to_string(),
+            source_content_digest: None,
             plot_stage: None,
             conflict_level: None,
             conflict_types: None,

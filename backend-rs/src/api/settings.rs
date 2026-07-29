@@ -2160,6 +2160,7 @@ mod tests {
     };
     use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Schema};
     use serde_json::{json, Value};
+    use std::time::Duration;
     use tokio::net::TcpListener;
 
     use super::{
@@ -2210,26 +2211,59 @@ mod tests {
         }
     }
 
-    async fn spawn_models_server(app: Router) -> (String, tokio::task::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind test listener");
-        let address = listener.local_addr().expect("listener address");
-        let handle = tokio::spawn(async move {
-            axum::serve(listener, app).await.expect("serve test app");
-        });
-        (format!("http://{}", address), handle)
+    struct TestHttpServerHandle {
+        handle: tokio::task::JoinHandle<()>,
     }
 
-    async fn spawn_chat_completion_server(app: Router) -> (String, tokio::task::JoinHandle<()>) {
+    impl TestHttpServerHandle {
+        fn abort(&self) {
+            self.handle.abort();
+        }
+    }
+
+    impl Drop for TestHttpServerHandle {
+        fn drop(&mut self) {
+            self.handle.abort();
+        }
+    }
+
+    async fn spawn_test_http_server(
+        app: Router,
+        base_path: &str,
+    ) -> (String, TestHttpServerHandle) {
+        const READY_ROUTE: &str = "/__test_ready";
+
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind test listener");
         let address = listener.local_addr().expect("listener address");
+        let app = app.route(READY_ROUTE, get(|| async { StatusCode::NO_CONTENT }));
         let handle = tokio::spawn(async move {
             axum::serve(listener, app).await.expect("serve test app");
         });
-        (format!("http://{}/v1", address), handle)
+        let handle = TestHttpServerHandle { handle };
+        let origin = format!("http://{address}");
+        let readiness_client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .expect("build test readiness client");
+        let readiness_response = readiness_client
+            .get(format!("{origin}{READY_ROUTE}"))
+            .send()
+            .await
+            .expect("test server should become ready");
+        assert_eq!(readiness_response.status(), StatusCode::NO_CONTENT);
+
+        (format!("{origin}{base_path}"), handle)
+    }
+
+    async fn spawn_models_server(app: Router) -> (String, TestHttpServerHandle) {
+        spawn_test_http_server(app, "").await
+    }
+
+    async fn spawn_chat_completion_server(app: Router) -> (String, TestHttpServerHandle) {
+        spawn_test_http_server(app, "/v1").await
     }
 
     #[test]
@@ -2983,7 +3017,12 @@ mod tests {
 
         handle.abort();
 
-        assert_eq!(response.0["success"], json!(true));
+        assert_eq!(
+            response.0["success"],
+            json!(true),
+            "unexpected Gemini function-calling probe response: {}",
+            response.0
+        );
         assert_eq!(response.0["supported"], json!(true));
         assert_eq!(response.0["details"]["has_tool_calls"], json!(true));
         assert_eq!(response.0["details"]["tool_call_count"], json!(1));
@@ -3550,7 +3589,12 @@ mod tests {
 
         assert_eq!(response.0["success"], json!(false));
         assert_eq!(response.0["supported"], Value::Null);
-        assert_eq!(response.0["error_type"], json!("EndpointNotFound"));
+        assert_eq!(
+            response.0["error_type"],
+            json!("EndpointNotFound"),
+            "unexpected Sub2API function-calling probe response: {}",
+            response.0
+        );
         assert_eq!(
             response.0["details"]["transport_diagnostics"]["summary"]["total_attempts"],
             json!(1)
@@ -3875,7 +3919,7 @@ mod tests {
             post(|| async {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "primary failed"})),
+                    Json(json!({"error": "settings-auto-fallback-primary-500"})),
                 )
             }),
         );
@@ -3884,7 +3928,7 @@ mod tests {
             post(|| async {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": "backup failed"})),
+                    Json(json!({"error": "settings-auto-fallback-backup-500"})),
                 )
             }),
         );
@@ -3897,12 +3941,12 @@ mod tests {
             Extension(db),
             Json(TestConnectionRequest {
                 api_key: Some("sk-test".to_string()),
-                api_base_url: Some(primary_base_url),
+                api_base_url: Some(primary_base_url.clone()),
                 provider: Some("openai".to_string()),
                 llm_model: Some("gpt-4.1-mini".to_string()),
                 temperature: Some(0.4),
                 max_tokens: Some(128),
-                api_backup_urls: Some(vec![backup_base_url]),
+                api_backup_urls: Some(vec![backup_base_url.clone()]),
                 fallback_strategy: Some("auto".to_string()),
             }),
         )
@@ -3927,7 +3971,15 @@ mod tests {
         );
         assert_eq!(
             response.0["details"]["transport_diagnostics"]["attempts"][0]["status_code"],
-            json!(500)
+            json!(500),
+            "unexpected auto-fallback diagnostics: {}",
+            response.0
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][0]["base_url"],
+            json!(primary_base_url),
+            "primary attempt should stay on its dedicated mock server: {}",
+            response.0
         );
         assert_eq!(
             response.0["details"]["transport_diagnostics"]["attempts"][0]["will_failover"],
@@ -3939,7 +3991,15 @@ mod tests {
         );
         assert_eq!(
             response.0["details"]["transport_diagnostics"]["attempts"][1]["status_code"],
-            json!(500)
+            json!(500),
+            "unexpected auto-fallback diagnostics: {}",
+            response.0
+        );
+        assert_eq!(
+            response.0["details"]["transport_diagnostics"]["attempts"][1]["base_url"],
+            json!(backup_base_url),
+            "backup attempt should stay on its dedicated mock server: {}",
+            response.0
         );
     }
 

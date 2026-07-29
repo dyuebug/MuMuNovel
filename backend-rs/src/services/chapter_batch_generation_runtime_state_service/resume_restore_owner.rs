@@ -2,6 +2,9 @@ use sea_orm::DatabaseConnection;
 use serde_json::{json, Value};
 
 use crate::models::batch_generation_snapshot;
+use crate::services::business_checkpoint_service::{
+    read_business_checkpoint_runtime_state, BusinessCheckpointRead,
+};
 use crate::services::chapter_batch_generation_task_payload_base_service::BatchGenerationTaskKind;
 use crate::services::chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig;
 use crate::services::chapter_generation_execution_contract_service::{
@@ -20,6 +23,10 @@ use crate::services::chapter_generation_runtime_service::story_repair_quality_co
     restore_story_repair_compat_options_from_active_snapshot,
 };
 use crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationTarget;
+use crate::services::generation_contract_service::{
+    read_generation_contract_runtime_snapshot, GenerationContractSnapshotRead,
+    GenerationContractSnapshotV1,
+};
 
 use super::{
     build_batch_generation_runtime_state_payload_from_current_quality,
@@ -112,9 +119,11 @@ pub(crate) enum PrepareBatchGenerationResumeRuntimeStateError {
     InvalidStatus,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BatchGenerationPersistedRuntimeContext {
     workflow_runtime_state: Option<Value>,
+    business_checkpoint_read: BusinessCheckpointRead,
+    generation_contract_snapshot: Option<GenerationContractSnapshotV1>,
     request_runtime_state: BatchGenerationRequestRuntimeState,
     explicit_story_repair_payload: Option<Value>,
     quality_metrics_history: Option<Value>,
@@ -301,6 +310,12 @@ impl RestoredResumeRuntimeStateProjection {
     }
 }
 
+impl Default for BatchGenerationPersistedRuntimeContext {
+    fn default() -> Self {
+        Self::from_sources(None, None, None, None)
+    }
+}
+
 impl BatchGenerationPersistedRuntimeContext {
     pub(crate) fn from_snapshot(snapshot: Option<batch_generation_snapshot::Model>) -> Self {
         let workflow_runtime_state = snapshot
@@ -330,6 +345,19 @@ impl BatchGenerationPersistedRuntimeContext {
         snapshot_quality_metrics_summary: Option<Value>,
         snapshot_latest_quality_metrics: Option<Value>,
     ) -> Self {
+        let business_checkpoint_read = workflow_runtime_state
+            .as_ref()
+            .map(read_business_checkpoint_runtime_state)
+            .unwrap_or(BusinessCheckpointRead::Missing);
+        let generation_contract_snapshot = workflow_runtime_state.as_ref().and_then(|state| {
+            match read_generation_contract_runtime_snapshot(state) {
+                GenerationContractSnapshotRead::Valid(snapshot) => Some(snapshot),
+                GenerationContractSnapshotRead::Missing
+                | GenerationContractSnapshotRead::Legacy
+                | GenerationContractSnapshotRead::UnsupportedVersion(_)
+                | GenerationContractSnapshotRead::Malformed(_) => None,
+            }
+        });
         let request_runtime_state =
             parse_batch_generation_request_runtime_state(workflow_runtime_state.as_ref());
         let explicit_story_repair_payload =
@@ -359,6 +387,8 @@ impl BatchGenerationPersistedRuntimeContext {
 
         Self {
             workflow_runtime_state,
+            business_checkpoint_read,
+            generation_contract_snapshot,
             request_runtime_state,
             explicit_story_repair_payload,
             quality_metrics_history,
@@ -374,6 +404,14 @@ impl BatchGenerationPersistedRuntimeContext {
 
     pub(crate) fn request_runtime_state(&self) -> &BatchGenerationRequestRuntimeState {
         &self.request_runtime_state
+    }
+
+    pub(crate) fn business_checkpoint_read(&self) -> &BusinessCheckpointRead {
+        &self.business_checkpoint_read
+    }
+
+    pub(crate) fn generation_contract_snapshot(&self) -> Option<&GenerationContractSnapshotV1> {
+        self.generation_contract_snapshot.as_ref()
     }
 
     pub(crate) fn explicit_story_repair_payload(&self) -> Option<&Value> {

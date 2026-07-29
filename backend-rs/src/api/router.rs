@@ -21,14 +21,15 @@ use crate::config::{AppConfig, AppRuntimeMode};
 use crate::mcp::McpClientManager;
 use crate::middleware::auth::AuthLayer;
 use crate::services::book_import_service::BookImportService;
+use crate::services::chapter_candidate_route_gateway_service::build_chapter_candidate_route_gateway_config_from_app_config;
 use crate::tasks::registry::TaskRegistry;
 use crate::tasks::stream::TaskStreamHub;
 
 use super::{
-    admin, ai_test, auth, background_tasks, book_import, careers, changelog, chapters, characters,
-    foreshadows, health, inspiration, mcp_plugins, memories, organizations, outlines, polish,
-    projects, prompt_templates, prompt_workshop, relationships, settings, users, wizard,
-    writing_styles,
+    admin, ai_test, auth, autopilot, background_tasks, book_import, careers, changelog, chapters,
+    characters, foreshadows, health, inspiration, mcp_plugins, memories, novel_autopilot_runs,
+    organizations, outlines, polish, projects, prompt_templates, prompt_workshop, relationships,
+    settings, users, wizard, writing_styles,
 };
 
 #[derive(Debug)]
@@ -192,6 +193,12 @@ fn build_cors_layer(cfg: &AppConfig) -> Result<CorsLayer, RouterBuildError> {
     }
 }
 
+async fn read_static_index(index_path: &Path) -> String {
+    tokio::fs::read_to_string(index_path)
+        .await
+        .unwrap_or_default()
+}
+
 pub fn build(
     db: Option<DatabaseConnection>,
     cfg: &AppConfig,
@@ -228,9 +235,22 @@ pub fn build(
 
     let task_stream_hub = TaskStreamHub::new();
     let book_import_service = Arc::new(BookImportService::new());
+    let chapter_candidate_route_gateway_config =
+        build_chapter_candidate_route_gateway_config_from_app_config(cfg);
+    if let Some(startup_db) = db.clone() {
+        novel_autopilot_runs::spawn_startup_reconciliation(
+            startup_db,
+            task_registry.clone(),
+            task_stream_hub.clone(),
+            book_import_service.clone(),
+            chapter_candidate_route_gateway_config.clone(),
+        );
+    }
 
     let api_routes = Router::new()
         .merge(auth::routes())
+        .merge(autopilot::routes())
+        .merge(novel_autopilot_runs::routes())
         .merge(users::routes())
         .merge(projects::routes())
         .merge(outlines::routes())
@@ -257,6 +277,7 @@ pub fn build(
         .layer(Extension(task_registry))
         .layer(Extension(task_stream_hub))
         .layer(Extension(book_import_service))
+        .layer(Extension(chapter_candidate_route_gateway_config))
         .layer(Extension(Arc::new(McpClientManager::new())));
 
     let mut router = Router::new()
@@ -276,13 +297,12 @@ pub fn build(
         }
 
         if index_path.exists() {
-            let index_html = std::fs::read_to_string(&index_path).unwrap_or_default();
             let static_dir_clone = static_dir.to_path_buf();
             router = router.fallback_service(tower::service_fn(
                 move |req: axum::http::Request<axum::body::Body>| {
                     let path = req.uri().path().trim_start_matches('/').to_string();
                     let static_dir = static_dir_clone.clone();
-                    let index_html = index_html.clone();
+                    let index_path = index_path.clone();
                     async move {
                         // API paths that don't match a route should return 404, not SPA HTML
                         if path.starts_with("api/") {
@@ -314,7 +334,9 @@ pub fn build(
                                 Err(_) => {}
                             }
                         }
-                        // SPA fallback: serve index.html
+                        // SPA fallback: reload index.html so bind-mounted frontend builds
+                        // cannot leave the runtime serving a stale hashed asset entrypoint.
+                        let index_html = read_static_index(&index_path).await;
                         Ok::<_, std::convert::Infallible>(
                             axum::response::Response::builder()
                                 .status(200)
@@ -341,7 +363,7 @@ pub fn build(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_cors_policy, CorsPolicy, RouterBuildError};
+    use super::{read_static_index, resolve_cors_policy, CorsPolicy, RouterBuildError};
     use crate::config::{AppConfig, AppRuntimeMode};
 
     fn test_config(mode: AppRuntimeMode, cors_origins: &str) -> AppConfig {
@@ -376,6 +398,31 @@ mod tests {
                 .to_string(),
             rust_migration_noop_executor_smoke_enabled: false,
         }
+    }
+
+    #[tokio::test]
+    async fn static_index_reload_observes_frontend_rebuilds() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("mumu-novel-router-index-{}", uuid::Uuid::new_v4()));
+        let index_path = temp_dir.join("index.html");
+        tokio::fs::create_dir_all(&temp_dir)
+            .await
+            .expect("temporary static directory should be created");
+        tokio::fs::write(&index_path, "old-entrypoint")
+            .await
+            .expect("initial index should be written");
+
+        assert_eq!(read_static_index(&index_path).await, "old-entrypoint");
+
+        tokio::fs::write(&index_path, "new-entrypoint")
+            .await
+            .expect("rebuilt index should be written");
+
+        assert_eq!(read_static_index(&index_path).await, "new-entrypoint");
+
+        tokio::fs::remove_dir_all(&temp_dir)
+            .await
+            .expect("temporary static directory should be removed");
     }
 
     #[test]

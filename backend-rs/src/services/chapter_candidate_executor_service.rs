@@ -60,7 +60,8 @@ fn build_chapter_candidate_executor_owner_contract() -> Value {
                 "source",
                 "generation_label",
                 "max_candidates",
-                "runtime_state"
+                "runtime_state",
+                "repair_generation_contract"
             ],
             "runtime_state_policy": [
                 "runtime_state is moved through each stage request and restored to the executor request",
@@ -167,6 +168,7 @@ mod tests {
             generation_label: "candidate".to_string(),
             max_candidates: 2,
             runtime_state: Some(json!({"seed": true})),
+            repair_generation_contract: None,
         }
     }
 

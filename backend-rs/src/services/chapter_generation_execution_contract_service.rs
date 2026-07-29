@@ -4,7 +4,10 @@ pub(crate) mod single_generation_contract_owner;
 
 pub(crate) use self::execution_config_owner::{
     build_generation_execution_config_owner_contract, prepare_generation_execution_config,
-    prepare_generation_execution_config_with_provider_payload, PreparedGenerationExecutionConfig,
+    prepare_generation_execution_config_with_provider_payload,
+    prepare_role_aware_generation_execution_config,
+    prepare_role_aware_generation_execution_config_with_provider_payload,
+    PreparedGenerationExecutionConfig, PreparedRoleModelPolicyContext,
 };
 pub(crate) use self::request_runtime_state_owner::{
     active_story_repair_payload_from_runtime_state,
@@ -310,7 +313,12 @@ mod tests {
         assert_eq!(
             contract["behavior_contract"]["generation_execution_config_owner_contract"]
                 ["behavior_contract"]["prepared_fields"],
-            json!(["ai_config", "provider_payload"])
+            json!(["ai_config", "provider_payload", "role_policy_context"])
+        );
+        assert_eq!(
+            contract["behavior_contract"]["generation_execution_config_owner_contract"]
+                ["behavior_contract"]["role_policy_context_forwarded"],
+            true
         );
         assert_eq!(
             contract["behavior_contract"]["request_runtime_state_owner_contract"]["owner"],

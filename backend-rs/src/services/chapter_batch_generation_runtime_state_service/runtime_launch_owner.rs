@@ -4,10 +4,15 @@ use serde_json::{json, Value};
 use crate::ai::AIConfig;
 use crate::services::chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig;
 use crate::services::chapter_generation_execution_contract_service::{
-    build_batch_request_runtime_state_owner_contract, prepare_generation_execution_config,
-    BatchGenerationRequestRuntimeState, PreparedGenerationExecutionConfig,
+    build_batch_request_runtime_state_owner_contract,
+    prepare_role_aware_generation_execution_config, BatchGenerationRequestRuntimeState,
+    PreparedGenerationExecutionConfig, PreparedRoleModelPolicyContext,
     SingleChapterGenerationCompatOptions,
 };
+use crate::services::cooperative_cancellation_service::{
+    global_cooperative_cancellation_registry, CooperativeCancellationScope,
+};
+use crate::services::generation_contract_service::GenerationIntentKind;
 
 use super::{
     restore_batch_generation_runtime_compat_options_from_persisted_runtime_context,
@@ -44,7 +49,7 @@ pub(crate) fn build_batch_generation_runtime_launch_owner_contract() -> Value {
             ],
             "state_contract": {
                 "compat_restore_owner": "runtime-state seed restores persisted compat options before batch launch input is materialized",
-                "launch_prepare_owner": "batch runtime launch input still resolves AIConfig through prepare_generation_execution_config before dispatch",
+                "launch_prepare_owner": "batch runtime launch input resolves AIConfig and role policy context through prepare_role_aware_generation_execution_config before dispatch",
                 "dispatch_owner": "runtime dispatch remains async tokio spawn of the runtime lifecycle plan without changing route-visible behavior"
             }
         },
@@ -84,6 +89,7 @@ pub(crate) struct BatchGenerationExecutionInput {
     pub(crate) target_word_count: i32,
     pub(crate) compat_options: SingleChapterGenerationCompatOptions,
     pub(crate) ai_config: AIConfig,
+    pub(crate) role_policy_context: Option<PreparedRoleModelPolicyContext>,
     pub(crate) candidate_gateway_config: ChapterCandidateRouteGatewayConfig,
 }
 
@@ -101,6 +107,7 @@ pub(crate) fn build_batch_generation_execution_input(
         target_word_count,
         compat_options,
         ai_config: execution_config.ai_config,
+        role_policy_context: execution_config.role_policy_context,
         candidate_gateway_config,
     }
 }
@@ -161,8 +168,13 @@ pub(crate) async fn prepare_batch_generation_runtime_launch_input_from_request_r
     candidate_gateway_config: ChapterCandidateRouteGatewayConfig,
 ) -> Result<BatchGenerationExecutionInput, String> {
     let model_override = request_runtime_state.model_override.clone();
-    let execution_config =
-        prepare_generation_execution_config(db, user_id, model_override.as_deref()).await?;
+    let execution_config = prepare_role_aware_generation_execution_config(
+        db,
+        user_id,
+        GenerationIntentKind::BatchChapterGenerate,
+        model_override.as_deref(),
+    )
+    .await?;
 
     Ok(
         build_batch_generation_runtime_launch_input_from_runtime_state_seed(
@@ -182,8 +194,18 @@ pub(crate) fn dispatch_batch_generation_runtime(
     task_id: String,
     execution_input: BatchGenerationExecutionInput,
 ) {
+    let cancellation_registration = global_cooperative_cancellation_registry().register(
+        CooperativeCancellationScope::BatchGeneration,
+        task_id.clone(),
+    );
     tokio::spawn(async move {
-        BatchGenerationRuntimeLifecyclePlan::start(&db, &task_id, execution_input).await;
+        let cancellation_token = cancellation_registration.token();
+        tokio::select! {
+            biased;
+            _ = cancellation_token.cancelled() => {}
+            _ = BatchGenerationRuntimeLifecyclePlan::start(&db, &task_id, execution_input) => {}
+        }
+        cancellation_registration.cleanup();
     });
 }
 
@@ -193,6 +215,7 @@ pub(crate) struct BatchGenerationRuntimeSession {
     pub(crate) compat_options: SingleChapterGenerationCompatOptions,
     pub(crate) total_chapters: i32,
     pub(crate) ai_config: AIConfig,
+    pub(crate) role_policy_context: Option<PreparedRoleModelPolicyContext>,
     pub(crate) candidate_gateway_config: ChapterCandidateRouteGatewayConfig,
 }
 
@@ -206,6 +229,7 @@ impl BatchGenerationRuntimeSession {
             target_word_count,
             compat_options,
             ai_config,
+            role_policy_context,
             candidate_gateway_config,
         } = execution_input;
 
@@ -216,6 +240,7 @@ impl BatchGenerationRuntimeSession {
                 compat_options,
                 total_chapters: chapter_ids.len() as i32,
                 ai_config,
+                role_policy_context,
                 candidate_gateway_config,
             },
             chapter_ids,

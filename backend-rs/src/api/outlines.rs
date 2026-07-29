@@ -15,21 +15,29 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio_stream::StreamExt;
-use tracing::warn;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 mod continue_context_owner;
+mod contract_prepare_owner;
 mod plot_expansion_owner;
 
 use self::continue_context_owner::{
     build_outline_continue_prompt_context, outline_continue_stage_instruction,
     OUTLINE_CONTINUE_RECENT_LIMIT,
 };
+use self::contract_prepare_owner::{
+    prepare_outline_generate_contract, OutlineGenerateContractInput, OutlineGenerateContractMode,
+};
 use crate::ai::service::AIService;
 use crate::api::wizard::OutlineRequest;
 use crate::models::{chapter, outline, project};
 use crate::services::auth::Claims;
 use crate::services::chapter_service::ChapterService;
+use crate::services::generation_contract_service::GenerationIntentKind;
+use crate::services::generation_execution_audit_service::{
+    build_generation_execution_audit, GenerationExecutionAuditV1,
+};
 use crate::services::outline_service::OutlineService;
 use crate::services::prompt_template_service::PromptTemplateService;
 use crate::services::settings_service::SettingsService;
@@ -41,7 +49,10 @@ use crate::services::wizard_service::{
     OutlineRuntimeStage,
 };
 use crate::utils::sse::SseChannel;
-use plot_expansion_owner::create_plot_expansion_service;
+use plot_expansion_owner::{
+    create_tracked_plot_expansion_service, outline_expand_execution_intent_kind,
+    OutlineExecutionAuditContext,
+};
 
 const OUTLINES_PROJECT_LIST_ROUTE: &str = "/outlines/project/{project_id}";
 const OUTLINES_GENERATE_ROUTE: &str = "/outlines/generate";
@@ -529,22 +540,73 @@ pub(crate) async fn execute_outline_request(
     user_id: &str,
     body: OutlineRequest,
 ) {
+    let project_model = match project::Entity::find_by_id(&body.project_id).one(db).await {
+        Ok(Some(model)) => model,
+        Ok(None) => {
+            channel.error("项目不存在", 404).await;
+            return;
+        }
+        Err(error) => {
+            channel
+                .error(&format!("加载项目失败: {}", error), 500)
+                .await;
+            return;
+        }
+    };
+    if project_model.user_id != user_id {
+        channel.error("无权访问该项目", 403).await;
+        return;
+    }
+
+    let prepared = match prepare_outline_generate_contract(
+        &project_model,
+        OutlineGenerateContractMode::New,
+        OutlineGenerateContractInput {
+            chapter_count: body.chapter_count,
+            target_words: Some(body.target_words),
+            narrative_perspective: body.narrative_perspective.as_deref(),
+            requirements: body.requirements.as_deref(),
+            creative_mode: body.creative_mode.as_deref(),
+            story_focus: body.story_focus.as_deref(),
+            plot_stage: body.plot_stage.as_deref(),
+            story_creation_brief: body.story_creation_brief.as_deref(),
+            quality_preset: body.quality_preset.as_deref(),
+            quality_notes: body.quality_notes.as_deref(),
+            compact_mode: body.compact_mode,
+            story_direction: None,
+        },
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            channel
+                .error(&format!("准备大纲生成契约失败: {}", error), 500)
+                .await;
+            return;
+        }
+    };
+    debug!(
+        project_id = %body.project_id,
+        input_digest = %prepared.snapshot.input_digest,
+        "Prepared new outline generation contract"
+    );
+    let resolved = prepared.resolved;
+
     wizard_service::generate_outline(
         db,
         channel,
         user_id,
         &body.project_id,
-        body.chapter_count,
-        body.narrative_perspective.as_deref(),
-        body.target_words,
-        body.requirements.as_deref(),
-        body.creative_mode.as_deref(),
-        body.story_focus.as_deref(),
-        body.plot_stage.as_deref(),
-        body.story_creation_brief.as_deref(),
-        body.quality_preset.as_deref(),
-        body.quality_notes.as_deref(),
-        body.compact_mode.unwrap_or(true),
+        resolved.chapter_count,
+        resolved.narrative_perspective.as_deref(),
+        resolved.target_words,
+        resolved.requirements.as_deref(),
+        resolved.creative_mode.as_deref(),
+        resolved.story_focus.as_deref(),
+        resolved.plot_stage.as_deref(),
+        resolved.story_creation_brief.as_deref(),
+        resolved.quality_preset.as_deref(),
+        resolved.quality_notes.as_deref(),
+        resolved.compact_mode,
         body.provider.as_deref(),
         body.model.as_deref(),
     )
@@ -654,21 +716,53 @@ pub(crate) async fn execute_outline_generate_route_request(
             execute_outline_request(db, channel, user_id, wizard_request).await;
         }
         OutlineGenerateMode::Continue => {
+            let prepared = match prepare_outline_generate_contract(
+                &project_model,
+                OutlineGenerateContractMode::Continue,
+                OutlineGenerateContractInput {
+                    chapter_count: request.chapter_count,
+                    target_words: None,
+                    narrative_perspective: request.narrative_perspective.as_deref(),
+                    requirements: request.requirements.as_deref(),
+                    creative_mode: request.creative_mode.as_deref(),
+                    story_focus: request.story_focus.as_deref(),
+                    plot_stage: request.plot_stage.as_deref(),
+                    story_creation_brief: request.story_creation_brief.as_deref(),
+                    quality_preset: request.quality_preset.as_deref(),
+                    quality_notes: request.quality_notes.as_deref(),
+                    compact_mode: request.compact_mode,
+                    story_direction: request.story_direction.as_deref(),
+                },
+            ) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    channel
+                        .error(&format!("准备续写大纲契约失败: {}", error), 500)
+                        .await;
+                    return;
+                }
+            };
+            debug!(
+                project_id = %request.project_id,
+                input_digest = %prepared.snapshot.input_digest,
+                "Prepared continue outline generation contract"
+            );
+            let resolved = prepared.resolved;
             let continue_request = ContinueOutlineExecutionRequest {
                 project_id: request.project_id.clone(),
-                chapter_count: request.chapter_count,
-                narrative_perspective: request.narrative_perspective.clone(),
-                requirements: request.requirements.clone(),
-                creative_mode: request.creative_mode.clone(),
-                story_focus: request.story_focus.clone(),
-                plot_stage: request.plot_stage.clone(),
-                story_creation_brief: request.story_creation_brief.clone(),
-                quality_preset: request.quality_preset.clone(),
-                quality_notes: request.quality_notes.clone(),
-                compact_mode: request.compact_mode,
+                chapter_count: resolved.chapter_count,
+                narrative_perspective: resolved.narrative_perspective,
+                requirements: resolved.requirements,
+                creative_mode: resolved.creative_mode,
+                story_focus: resolved.story_focus,
+                plot_stage: resolved.plot_stage,
+                story_creation_brief: resolved.story_creation_brief,
+                quality_preset: resolved.quality_preset,
+                quality_notes: resolved.quality_notes,
+                compact_mode: Some(resolved.compact_mode),
                 provider: request.provider.clone(),
                 model: request.model.clone(),
-                story_direction: request.story_direction.clone(),
+                story_direction: resolved.story_direction,
             };
 
             execute_continue_outline_request(
@@ -738,9 +832,10 @@ async fn execute_continue_outline_request(
         return;
     }
 
-    let ai_config = match SettingsService::build_ai_config(
+    let prepared_ai = match SettingsService::build_role_aware_ai_config(
         db,
         user_id,
+        GenerationIntentKind::OutlineGenerate,
         request.provider.as_deref(),
         request.model.as_deref(),
         None,
@@ -753,7 +848,10 @@ async fn execute_continue_outline_request(
             return;
         }
     };
-    let ai_service = AIService::new(ai_config);
+    let resolved_policy = prepared_ai.resolved_policy;
+    let allow_model_fallback = prepared_ai.allow_model_fallback;
+    let ai_service = AIService::new(prepared_ai.ai_config);
+    let mut generation_execution_audit: Vec<GenerationExecutionAuditV1> = Vec::new();
 
     channel
         .progress("准备续写大纲提示词...", 5, "processing")
@@ -788,17 +886,11 @@ async fn execute_continue_outline_request(
         .unwrap_or(existing_outlines.len() as i32);
     let start_chapter = last_chapter_number + 1;
     let end_chapter = start_chapter + request.chapter_count as i32 - 1;
-    let effective_plot_stage = trimmed_non_empty(request.plot_stage.as_deref())
-        .or(trimmed_non_empty(
-            project_model.default_plot_stage.as_deref(),
-        ))
-        .unwrap_or("development");
+    let effective_plot_stage =
+        trimmed_non_empty(request.plot_stage.as_deref()).unwrap_or("development");
     let stage_instruction = outline_continue_stage_instruction(effective_plot_stage);
-    let narrative_perspective = trimmed_non_empty(request.narrative_perspective.as_deref())
-        .or(trimmed_non_empty(
-            project_model.narrative_perspective.as_deref(),
-        ))
-        .unwrap_or("第三人称");
+    let narrative_perspective =
+        trimmed_non_empty(request.narrative_perspective.as_deref()).unwrap_or("第三人称");
     let story_direction =
         trimmed_non_empty(request.story_direction.as_deref()).unwrap_or("自然延续");
     let prompt_context = match build_outline_continue_prompt_context(
@@ -880,10 +972,7 @@ async fn execute_continue_outline_request(
     let project_long_term_goal = build_project_long_term_goal(
         project_model.theme.as_deref(),
         project_model.description.as_deref(),
-        request
-            .story_creation_brief
-            .as_deref()
-            .or(project_model.default_story_creation_brief.as_deref()),
+        request.story_creation_brief.as_deref(),
         project_model
             .chapter_count
             .and_then(|value| usize::try_from(value).ok()),
@@ -898,27 +987,12 @@ async fn execute_continue_outline_request(
         build_continue_outline_requirements(
             request.requirements.as_deref(),
             request.chapter_count,
-            request
-                .creative_mode
-                .as_deref()
-                .or(project_model.default_creative_mode.as_deref()),
-            request
-                .story_focus
-                .as_deref()
-                .or(project_model.default_story_focus.as_deref()),
+            request.creative_mode.as_deref(),
+            request.story_focus.as_deref(),
             Some(effective_plot_stage),
-            request
-                .story_creation_brief
-                .as_deref()
-                .or(project_model.default_story_creation_brief.as_deref()),
-            request
-                .quality_preset
-                .as_deref()
-                .or(project_model.default_quality_preset.as_deref()),
-            request
-                .quality_notes
-                .as_deref()
-                .or(project_model.default_quality_notes.as_deref()),
+            request.story_creation_brief.as_deref(),
+            request.quality_preset.as_deref(),
+            request.quality_notes.as_deref(),
             project_long_term_goal.as_deref(),
             Some(prompt_context.focus_names.as_slice()),
             Some(prompt_context.foreshadow_payoff_plan.as_slice()),
@@ -953,10 +1027,20 @@ async fn execute_continue_outline_request(
     let mut accumulated = String::new();
     let mut chunk_count = 0u64;
 
-    let mut rx = ai_service.generate_text_stream(prompt.clone(), Some(sys_prompt.clone()), None);
+    let tracked_stream = ai_service.generate_text_stream_tracked(
+        prompt.clone(),
+        Some(sys_prompt.clone()),
+        None,
+        allow_model_fallback,
+    );
+    let mut rx = tracked_stream.stream;
+    let execution_completion = tracked_stream.completion;
     while let Some(chunk_result) = rx.next().await {
         match chunk_result {
             Ok(chunk) => {
+                if let Some(reasoning) = chunk.reasoning_content {
+                    channel.reasoning_chunk(&reasoning).await;
+                }
                 if let Some(text) = chunk.content {
                     accumulated.push_str(&text);
                     channel.chunk(&text).await;
@@ -990,46 +1074,163 @@ async fn execute_continue_outline_request(
             }
         }
     }
+    let primary_execution = match execution_completion.await {
+        Ok(execution) => execution,
+        Err(_) => {
+            channel.error("续写大纲执行审计通道已关闭", 500).await;
+            return;
+        }
+    };
+    match build_generation_execution_audit(&resolved_policy, &primary_execution) {
+        Ok(audit) => generation_execution_audit.push(audit),
+        Err(error) => {
+            channel
+                .error(&format!("构建续写大纲执行审计失败: {}", error), 500)
+                .await;
+            return;
+        }
+    }
 
     channel
         .progress("解析续写大纲数据...", 55, "processing")
         .await;
     let cleaned = clean_json_response(&accumulated);
-    let outline_data = match serde_json::from_str::<Value>(&cleaned) {
-        Ok(data) => normalize_outline_items(&data),
-        Err(_error) => {
-            channel
-                .progress("JSON解析失败，自动重试...", 56, "processing")
-                .await;
-            let mut retry_acc = String::new();
-            let mut retry_rx = ai_service.generate_text_stream(prompt, Some(sys_prompt), None);
-            while let Some(chunk_result) = retry_rx.next().await {
-                match chunk_result {
-                    Ok(chunk) => {
-                        if let Some(text) = chunk.content {
-                            retry_acc.push_str(&text);
-                            channel.chunk(&text).await;
-                        }
-                        if chunk.done {
-                            break;
-                        }
+    let outline_data = if cleaned.trim().is_empty() {
+        channel
+            .progress("AI返回为空，自动重试...", 56, "processing")
+            .await;
+        let mut retry_acc = String::new();
+        let tracked_retry = ai_service.generate_text_stream_tracked(
+            prompt,
+            Some(sys_prompt),
+            None,
+            allow_model_fallback,
+        );
+        let mut retry_rx = tracked_retry.stream;
+        let retry_completion = tracked_retry.completion;
+        while let Some(chunk_result) = retry_rx.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    if let Some(reasoning) = chunk.reasoning_content {
+                        channel.reasoning_chunk(&reasoning).await;
                     }
-                    Err(_) => {}
+                    if let Some(text) = chunk.content {
+                        retry_acc.push_str(&text);
+                        channel.chunk(&text).await;
+                    }
+                    if chunk.done {
+                        break;
+                    }
                 }
+                Err(_) => {}
             }
-            let retry_cleaned = clean_json_response(&retry_acc);
-            match serde_json::from_str::<Value>(&retry_cleaned) {
-                Ok(data) => {
-                    channel
-                        .progress("已自动修复返回格式，继续保存...", 58, "processing")
-                        .await;
-                    normalize_outline_items(&data)
+        }
+        let retry_execution = match retry_completion.await {
+            Ok(execution) => execution,
+            Err(_) => {
+                channel.error("续写大纲重试执行审计通道已关闭", 500).await;
+                return;
+            }
+        };
+        match build_generation_execution_audit(&resolved_policy, &retry_execution) {
+            Ok(audit) => generation_execution_audit.push(audit),
+            Err(error) => {
+                channel
+                    .error(&format!("构建续写大纲重试执行审计失败: {}", error), 500)
+                    .await;
+                return;
+            }
+        }
+        let retry_cleaned = clean_json_response(&retry_acc);
+        if retry_cleaned.trim().is_empty() {
+            channel
+                .error("续写大纲生成失败（AI重试后仍返回为空）", 500)
+                .await;
+            return;
+        }
+        match serde_json::from_str::<Value>(&retry_cleaned) {
+            Ok(data) => {
+                channel
+                    .progress("已自动修复返回格式，继续保存...", 58, "processing")
+                    .await;
+                normalize_outline_items(&data)
+            }
+            Err(error) => {
+                channel
+                    .error(&format!("续写大纲JSON解析失败（已重试）: {}", error), 500)
+                    .await;
+                return;
+            }
+        }
+    } else {
+        match serde_json::from_str::<Value>(&cleaned) {
+            Ok(data) => normalize_outline_items(&data),
+            Err(_error) => {
+                channel
+                    .progress("JSON解析失败，自动重试...", 56, "processing")
+                    .await;
+                let mut retry_acc = String::new();
+                let tracked_retry = ai_service.generate_text_stream_tracked(
+                    prompt,
+                    Some(sys_prompt),
+                    None,
+                    allow_model_fallback,
+                );
+                let mut retry_rx = tracked_retry.stream;
+                let retry_completion = tracked_retry.completion;
+                while let Some(chunk_result) = retry_rx.next().await {
+                    match chunk_result {
+                        Ok(chunk) => {
+                            if let Some(reasoning) = chunk.reasoning_content {
+                                channel.reasoning_chunk(&reasoning).await;
+                            }
+                            if let Some(text) = chunk.content {
+                                retry_acc.push_str(&text);
+                                channel.chunk(&text).await;
+                            }
+                            if chunk.done {
+                                break;
+                            }
+                        }
+                        Err(_) => {}
+                    }
                 }
-                Err(error) => {
+                let retry_execution = match retry_completion.await {
+                    Ok(execution) => execution,
+                    Err(_) => {
+                        channel.error("续写大纲重试执行审计通道已关闭", 500).await;
+                        return;
+                    }
+                };
+                match build_generation_execution_audit(&resolved_policy, &retry_execution) {
+                    Ok(audit) => generation_execution_audit.push(audit),
+                    Err(error) => {
+                        channel
+                            .error(&format!("构建续写大纲重试执行审计失败: {}", error), 500)
+                            .await;
+                        return;
+                    }
+                }
+                let retry_cleaned = clean_json_response(&retry_acc);
+                if retry_cleaned.trim().is_empty() {
                     channel
-                        .error(&format!("续写大纲JSON解析失败（已重试）: {}", error), 500)
+                        .error("续写大纲生成失败（AI重试后仍返回为空）", 500)
                         .await;
                     return;
+                }
+                match serde_json::from_str::<Value>(&retry_cleaned) {
+                    Ok(data) => {
+                        channel
+                            .progress("已自动修复返回格式，继续保存...", 58, "processing")
+                            .await;
+                        normalize_outline_items(&data)
+                    }
+                    Err(error) => {
+                        channel
+                            .error(&format!("续写大纲JSON解析失败（已重试）: {}", error), 500)
+                            .await;
+                        return;
+                    }
                 }
             }
         }
@@ -1169,6 +1370,7 @@ async fn execute_continue_outline_request(
             "chapter_count": created_chapters.len(),
             "outlines": all_outlines.iter().map(outline_model_to_result).collect::<Vec<_>>(),
             "chapters": created_chapters.iter().map(chapter_model_to_result).collect::<Vec<_>>(),
+            "generation_execution_audit": generation_execution_audit,
         }))
         .await;
     channel.done().await;
@@ -1179,16 +1381,21 @@ pub(crate) async fn execute_outline_expand_request(
     user_id: &str,
     request: &OutlineExpandExecutionRequest,
 ) -> Result<Value, String> {
-    let ai_config = SettingsService::build_ai_config(
+    let prepared = SettingsService::build_role_aware_ai_config(
         db,
         user_id,
+        outline_expand_execution_intent_kind(),
         request.provider.as_deref(),
         request.model.as_deref(),
         None,
     )
     .await?;
-    let ai_service = AIService::new(ai_config);
-    let service = create_plot_expansion_service(&ai_service);
+    let audit_context = OutlineExecutionAuditContext {
+        resolved_policy: prepared.resolved_policy,
+        allow_model_fallback: prepared.allow_model_fallback,
+    };
+    let ai_service = AIService::new(prepared.ai_config);
+    let service = create_tracked_plot_expansion_service(&ai_service, &audit_context);
 
     service
         .expand_outline(
@@ -1211,16 +1418,21 @@ pub(crate) async fn execute_outline_batch_expand_request(
     user_id: &str,
     request: &OutlineBatchExpandExecutionRequest,
 ) -> Result<Value, String> {
-    let ai_config = SettingsService::build_ai_config(
+    let prepared = SettingsService::build_role_aware_ai_config(
         db,
         user_id,
+        outline_expand_execution_intent_kind(),
         request.provider.as_deref(),
         request.model.as_deref(),
         None,
     )
     .await?;
-    let ai_service = AIService::new(ai_config);
-    let service = create_plot_expansion_service(&ai_service);
+    let audit_context = OutlineExecutionAuditContext {
+        resolved_policy: prepared.resolved_policy,
+        allow_model_fallback: prepared.allow_model_fallback,
+    };
+    let ai_service = AIService::new(prepared.ai_config);
+    let service = create_tracked_plot_expansion_service(&ai_service, &audit_context);
 
     service
         .batch_expand_outlines(

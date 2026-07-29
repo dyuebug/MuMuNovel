@@ -1,5 +1,6 @@
 use serde_json::Value;
 
+pub(crate) mod contract_prepare_owner;
 pub(crate) mod prompt_prepare_owner;
 pub(crate) mod request_prepare_owner;
 #[cfg(test)]
@@ -71,6 +72,7 @@ pub(crate) fn build_chapter_regeneration_prepare_owner_contract() -> Value {
         },
         "rust_owner_map": [
             "backend-rs/src/services/chapter_regeneration_prepare_service.rs",
+            "backend-rs/src/services/chapter_regeneration_prepare_service/contract_prepare_owner.rs",
             "backend-rs/src/services/chapter_regeneration_prepare_service/prompt_prepare_owner.rs",
             "backend-rs/src/services/chapter_regeneration_prepare_service/request_prepare_owner.rs",
             "backend-rs/src/services/chapter_regeneration_stream_workflow_service.rs",
@@ -86,13 +88,27 @@ pub(crate) fn build_chapter_regeneration_prepare_owner_contract() -> Value {
                 "validate_full_chapter_regeneration_stream_request_bounds",
                 "build_partial_regeneration_stream_workflow_request_from_route_payload",
                 "validate_partial_regeneration_stream_request_bounds",
+                "build_full_chapter_regeneration_contract_snapshot",
+                "build_partial_chapter_regeneration_contract_snapshot",
                 "build_regeneration_prompt",
                 "prepare_partial_regeneration_input",
                 "prepare_chapter_regeneration_stream",
                 "prepare_partial_regeneration_stream",
                 "build_regeneration_ai_service",
+                "build_role_aware_regeneration_execution_config",
                 "load_partial_style_content"
             ],
+            "generation_execution_policy": {
+                "role": "writer",
+                "intent_kinds": [
+                    "chapter_regenerate",
+                    "chapter_partial_regenerate"
+                ],
+                "config_owner": "prepare_role_aware_generation_execution_config_with_provider_payload",
+                "provider_payload_precedence_preserved": true,
+                "partial_max_tokens_override_preserved": true,
+                "legacy_builder_preserved": "build_regeneration_ai_service"
+            },
             "full_request_fields": [
                 "target_word_count",
                 "custom_instructions",
@@ -317,6 +333,19 @@ mod tests {
         assert!(prompt.contains("原章节内容：\n原始正文"));
         assert!(prompt.contains("保留结构：false"));
         assert!(prompt.contains("保留人物特征：true"));
+    }
+
+    #[test]
+    fn should_keep_full_request_default_equivalent_to_route_default() {
+        let route_default = build_full_chapter_regeneration_stream_request_from_route_payload(
+            FullChapterRegenerationStreamRouteRequest::default(),
+        );
+        let request_default = FullChapterRegenerationStreamRequest::default();
+
+        assert_eq!(request_default, route_default);
+        assert!(request_default.preserve_character_traits());
+        assert!(!request_default.preserve_structure());
+        assert!(!request_default.auto_apply());
     }
 
     #[test]
@@ -835,6 +864,7 @@ mod tests {
 
         assert_eq!(prepared.original_word_count, 4);
         assert_eq!(prepared.target_words, 120);
+        assert_eq!(prepared.selected_text, "替换文本");
         assert!(prepared.prompt.contains("原文选中片段：\n替换文本"));
         assert!(prepared.prompt.contains("前文上下文：\n一二"));
         assert!(prepared.prompt.contains("后文上下文：\n六七"));
@@ -868,6 +898,7 @@ mod tests {
         let prepared = valid_prepared_partial_input(result);
 
         assert_eq!(prepared.original_word_count, 2);
+        assert_eq!(prepared.selected_text, "一二");
         assert!(prepared.prompt.contains("原文选中片段：\n一二"));
         assert!(prepared.prompt.contains("（无前文上下文）"));
         assert!(prepared.prompt.contains("后文上下文：\n三四五"));
@@ -1007,8 +1038,29 @@ mod tests {
             "backend-rs/src/services/chapter_regeneration_prepare_service.rs"
         );
         assert_eq!(
-            contract["behavior_contract"]["entrypoints"][7],
+            contract["behavior_contract"]["entrypoints"][4],
+            "build_full_chapter_regeneration_contract_snapshot"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][5],
+            "build_partial_chapter_regeneration_contract_snapshot"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["entrypoints"][9],
             "prepare_partial_regeneration_stream"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["generation_execution_policy"]["role"],
+            "writer"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["generation_execution_policy"]["intent_kinds"],
+            serde_json::json!(["chapter_regenerate", "chapter_partial_regenerate"])
+        );
+        assert_eq!(
+            contract["behavior_contract"]["generation_execution_policy"]
+                ["legacy_builder_preserved"],
+            "build_regeneration_ai_service"
         );
         assert_eq!(
             contract["behavior_contract"]["full_bounds"]["target_word_count_min"],

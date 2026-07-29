@@ -145,7 +145,7 @@ impl SingleGenerationStreamLifecyclePlan {
 
         match self
             .runtime_input
-            .execute_generation_with_gateway_config(&db, self.candidate_gateway_config)
+            .execute_generation_with_gateway_config(&db, None, self.candidate_gateway_config)
             .await
         {
             Ok(result) => {

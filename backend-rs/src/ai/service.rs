@@ -1,3 +1,4 @@
+use tokio::sync::oneshot;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 
@@ -5,6 +6,10 @@ use crate::ai::clients::anthropic::AnthropicClient;
 use crate::ai::clients::gemini::GeminiClient;
 use crate::ai::clients::openai::OpenAIClient;
 use crate::ai::config::AIConfig;
+use crate::ai::execution_trace::{
+    build_ai_execution_trace, AIExecutionOutcome, AIExecutionTraceV1, TrackedAIRequestError,
+    TrackedAIResponse, TrackedAIStream,
+};
 use crate::ai::types::{
     AIRequestError, AIResponse, AIStreamChunk, ChatMessage, ToolChoice, ToolDef,
 };
@@ -15,15 +20,35 @@ pub struct AIService {
 }
 
 impl AIService {
-    fn should_retry_with_fallback_model(error: &str) -> bool {
+    fn model_fallback_reason(error: &str) -> Option<&'static str> {
         let normalized = error.to_lowercase();
-        (normalized.contains("model not found")
+        if normalized.contains("base url") {
+            return None;
+        }
+        if normalized.contains("model not found")
             || normalized.contains("\"code\":\"not_found\"")
             || normalized.contains("\"code\": \"not_found\"")
             || normalized.contains("模型不存在")
-            || normalized.contains("inaccessible")
-            || normalized.contains("not deployed"))
-            && !normalized.contains("base url")
+        {
+            return Some("model_not_found");
+        }
+        if normalized.contains("inaccessible") || normalized.contains("not deployed") {
+            return Some("model_unavailable");
+        }
+        None
+    }
+
+    fn should_retry_with_fallback_model(error: &str) -> bool {
+        Self::model_fallback_reason(error).is_some()
+    }
+
+    fn complete_stream_trace(
+        completion: &mut Option<oneshot::Sender<AIExecutionTraceV1>>,
+        trace: AIExecutionTraceV1,
+    ) {
+        if let Some(sender) = completion.take() {
+            let _ = sender.send(trace);
+        }
     }
 
     fn static_fallback_model(provider: &str, current_model: &str) -> Option<String> {
@@ -200,6 +225,31 @@ impl AIService {
         self.call_client_detailed(&messages, tools, None).await
     }
 
+    pub async fn generate_text_tracked(
+        &self,
+        prompt: &str,
+        system_prompt: Option<&str>,
+        tools: Option<&[ToolDef]>,
+        allow_model_fallback: bool,
+    ) -> Result<TrackedAIResponse, TrackedAIRequestError> {
+        let messages = Self::build_messages(system_prompt, prompt);
+        self.call_client_tracked_detailed(&messages, tools, None, allow_model_fallback)
+            .await
+    }
+
+    pub async fn generate_text_with_tool_choice_tracked_detailed(
+        &self,
+        prompt: &str,
+        system_prompt: Option<&str>,
+        tools: Option<&[ToolDef]>,
+        tool_choice: Option<&ToolChoice>,
+        allow_model_fallback: bool,
+    ) -> Result<TrackedAIResponse, TrackedAIRequestError> {
+        let messages = Self::build_messages(system_prompt, prompt);
+        self.call_client_tracked_detailed(&messages, tools, tool_choice, allow_model_fallback)
+            .await
+    }
+
     pub async fn generate_text_with_tool_choice_detailed(
         &self,
         prompt: &str,
@@ -220,6 +270,17 @@ impl AIService {
     ) -> ReceiverStream<Result<AIStreamChunk, String>> {
         let messages = Self::build_messages_vec(system_prompt, prompt);
         self.call_client_stream(messages, tools)
+    }
+
+    pub fn generate_text_stream_tracked(
+        &self,
+        prompt: String,
+        system_prompt: Option<String>,
+        tools: Option<Vec<ToolDef>>,
+        allow_model_fallback: bool,
+    ) -> TrackedAIStream {
+        let messages = Self::build_messages_vec(system_prompt, prompt);
+        self.call_client_stream_tracked(messages, tools, allow_model_fallback)
     }
 
     async fn call_client(
@@ -265,42 +326,115 @@ impl AIService {
         tools: Option<&[ToolDef]>,
         tool_choice: Option<&ToolChoice>,
     ) -> Result<AIResponse, AIRequestError> {
+        self.call_client_tracked_detailed(messages, tools, tool_choice, true)
+            .await
+            .map(|tracked| tracked.response)
+            .map_err(|tracked| tracked.error)
+    }
+
+    async fn call_client_tracked_detailed(
+        &self,
+        messages: &[ChatMessage],
+        tools: Option<&[ToolDef]>,
+        tool_choice: Option<&ToolChoice>,
+        allow_model_fallback: bool,
+    ) -> Result<TrackedAIResponse, TrackedAIRequestError> {
+        let requested_model = self.config.model.clone();
         match self
-            .call_client_with_model_detailed(messages, tools, tool_choice, &self.config.model)
+            .call_client_with_model_detailed(messages, tools, tool_choice, &requested_model)
             .await
         {
-            Ok(response) => Ok(response),
-            Err(error) => {
-                if Self::should_retry_with_fallback_model(&error.message) {
-                    if let Some(fallback_model) = Self::resolve_fallback_model(
-                        &self.config.provider,
-                        &self.config.api_key,
-                        &self.config.base_url,
-                        &self.config.model,
-                    )
-                    .await
-                    {
-                        return self
-                            .call_client_with_model_detailed(
-                                messages,
-                                tools,
-                                tool_choice,
-                                &fallback_model,
-                            )
-                            .await
-                            .map_err(|fallback_error| AIRequestError {
-                                message: format!(
-                                    "{}; fallback model {} also failed: {}",
-                                    error.message, fallback_model, fallback_error.message
-                                ),
-                                transport_diagnostics: fallback_error
-                                    .transport_diagnostics
-                                    .or(error.transport_diagnostics),
-                                status_code: fallback_error.status_code.or(error.status_code),
-                            });
+            Ok(response) => {
+                let execution = build_ai_execution_trace(
+                    &self.config.provider,
+                    &requested_model,
+                    &requested_model,
+                    AIExecutionOutcome::Succeeded,
+                    None,
+                    response.transport_diagnostics.as_ref(),
+                );
+                Ok(TrackedAIResponse {
+                    response,
+                    execution,
+                })
+            }
+            Err(primary_error) => {
+                let fallback_reason = Self::model_fallback_reason(&primary_error.message);
+                if allow_model_fallback {
+                    if let Some(reason) = fallback_reason {
+                        if let Some(fallback_model) = Self::resolve_fallback_model(
+                            &self.config.provider,
+                            &self.config.api_key,
+                            &self.config.base_url,
+                            &requested_model,
+                        )
+                        .await
+                        {
+                            return match self
+                                .call_client_with_model_detailed(
+                                    messages,
+                                    tools,
+                                    tool_choice,
+                                    &fallback_model,
+                                )
+                                .await
+                            {
+                                Ok(response) => {
+                                    let execution = build_ai_execution_trace(
+                                        &self.config.provider,
+                                        &requested_model,
+                                        &fallback_model,
+                                        AIExecutionOutcome::Succeeded,
+                                        Some(reason),
+                                        response.transport_diagnostics.as_ref(),
+                                    );
+                                    Ok(TrackedAIResponse {
+                                        response,
+                                        execution,
+                                    })
+                                }
+                                Err(fallback_error) => {
+                                    let error = AIRequestError {
+                                        message: format!(
+                                            "{}; fallback model {} also failed: {}",
+                                            primary_error.message,
+                                            fallback_model,
+                                            fallback_error.message
+                                        ),
+                                        transport_diagnostics: fallback_error
+                                            .transport_diagnostics
+                                            .or(primary_error.transport_diagnostics),
+                                        status_code: fallback_error
+                                            .status_code
+                                            .or(primary_error.status_code),
+                                    };
+                                    let execution = build_ai_execution_trace(
+                                        &self.config.provider,
+                                        &requested_model,
+                                        &fallback_model,
+                                        AIExecutionOutcome::Failed,
+                                        Some(reason),
+                                        error.transport_diagnostics.as_ref(),
+                                    );
+                                    Err(TrackedAIRequestError { error, execution })
+                                }
+                            };
+                        }
                     }
                 }
-                Err(error)
+
+                let execution = build_ai_execution_trace(
+                    &self.config.provider,
+                    &requested_model,
+                    &requested_model,
+                    AIExecutionOutcome::Failed,
+                    None,
+                    primary_error.transport_diagnostics.as_ref(),
+                );
+                Err(TrackedAIRequestError {
+                    error: primary_error,
+                    execution,
+                })
             }
         }
     }
@@ -310,6 +444,16 @@ impl AIService {
         messages: Vec<ChatMessage>,
         tools: Option<Vec<ToolDef>>,
     ) -> ReceiverStream<Result<AIStreamChunk, String>> {
+        self.call_client_stream_tracked(messages, tools, true)
+            .stream
+    }
+
+    fn call_client_stream_tracked(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Option<Vec<ToolDef>>,
+        allow_model_fallback: bool,
+    ) -> TrackedAIStream {
         let primary_stream = match self.config.provider.as_str() {
             "anthropic" => {
                 let client = AnthropicClient::new(&self.config.api_key, &self.config.base_url);
@@ -357,44 +501,97 @@ impl AIService {
         let provider = self.config.provider.clone();
         let api_key = self.config.api_key.clone();
         let base_url = self.config.base_url.clone();
-        let current_model = self.config.model.clone();
+        let requested_model = self.config.model.clone();
         let max_tokens = self.config.max_tokens;
         let temperature = self.config.temperature;
         let system_prompt = self.config.system_prompt.clone();
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<AIStreamChunk, String>>(32);
+        let (completion_tx, completion_rx) = oneshot::channel::<AIExecutionTraceV1>();
 
         tokio::spawn(async move {
+            let mut completion = Some(completion_tx);
             let mut primary_stream = primary_stream;
             let Some(first_item) = primary_stream.next().await else {
+                Self::complete_stream_trace(
+                    &mut completion,
+                    build_ai_execution_trace(
+                        &provider,
+                        &requested_model,
+                        &requested_model,
+                        AIExecutionOutcome::Succeeded,
+                        None,
+                        None,
+                    ),
+                );
                 return;
             };
 
             match first_item {
                 Ok(chunk) => {
+                    let mut outcome = AIExecutionOutcome::Succeeded;
                     if tx.send(Ok(chunk)).await.is_err() {
-                        return;
-                    }
-                    while let Some(item) = primary_stream.next().await {
-                        if tx.send(item).await.is_err() {
-                            return;
+                        outcome = AIExecutionOutcome::Failed;
+                    } else {
+                        while let Some(item) = primary_stream.next().await {
+                            if item.is_err() {
+                                outcome = AIExecutionOutcome::Failed;
+                            }
+                            if tx.send(item).await.is_err() {
+                                outcome = AIExecutionOutcome::Failed;
+                                break;
+                            }
                         }
                     }
+                    Self::complete_stream_trace(
+                        &mut completion,
+                        build_ai_execution_trace(
+                            &provider,
+                            &requested_model,
+                            &requested_model,
+                            outcome,
+                            None,
+                            None,
+                        ),
+                    );
                 }
                 Err(error) => {
-                    if !AIService::should_retry_with_fallback_model(&error) {
+                    let fallback_reason = Self::model_fallback_reason(&error);
+                    if !allow_model_fallback || fallback_reason.is_none() {
                         let _ = tx.send(Err(error)).await;
+                        Self::complete_stream_trace(
+                            &mut completion,
+                            build_ai_execution_trace(
+                                &provider,
+                                &requested_model,
+                                &requested_model,
+                                AIExecutionOutcome::Failed,
+                                None,
+                                None,
+                            ),
+                        );
                         return;
                     }
 
-                    let Some(fallback_model) = AIService::resolve_fallback_model(
+                    let Some(fallback_model) = Self::resolve_fallback_model(
                         &provider,
                         &api_key,
                         &base_url,
-                        &current_model,
+                        &requested_model,
                     )
                     .await
                     else {
                         let _ = tx.send(Err(error)).await;
+                        Self::complete_stream_trace(
+                            &mut completion,
+                            build_ai_execution_trace(
+                                &provider,
+                                &requested_model,
+                                &requested_model,
+                                AIExecutionOutcome::Failed,
+                                None,
+                                None,
+                            ),
+                        );
                         return;
                     };
 
@@ -442,30 +639,47 @@ impl AIService {
                         }
                     };
 
+                    let mut outcome = AIExecutionOutcome::Succeeded;
                     tokio::pin!(fallback_stream);
                     while let Some(fallback_item) = fallback_stream.next().await {
                         match fallback_item {
                             Ok(chunk) => {
                                 if tx.send(Ok(chunk)).await.is_err() {
-                                    return;
+                                    outcome = AIExecutionOutcome::Failed;
+                                    break;
                                 }
                             }
                             Err(fallback_error) => {
+                                outcome = AIExecutionOutcome::Failed;
                                 let _ = tx
                                     .send(Err(format!(
                                         "{}; fallback model {} also failed: {}",
                                         error, fallback_model, fallback_error
                                     )))
                                     .await;
-                                return;
+                                break;
                             }
                         }
                     }
+                    Self::complete_stream_trace(
+                        &mut completion,
+                        build_ai_execution_trace(
+                            &provider,
+                            &requested_model,
+                            &fallback_model,
+                            outcome,
+                            fallback_reason,
+                            None,
+                        ),
+                    );
                 }
             }
         });
 
-        ReceiverStream::new(rx)
+        TrackedAIStream {
+            stream: ReceiverStream::new(rx),
+            completion: completion_rx,
+        }
     }
 
     fn build_messages(system_prompt: Option<&str>, prompt: &str) -> Vec<ChatMessage> {
@@ -496,5 +710,279 @@ impl AIService {
             content: prompt,
         });
         msgs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use axum::extract::State;
+    use axum::http::StatusCode;
+    use axum::routing::{get, post};
+    use axum::{Json, Router};
+    use serde_json::{json, Value};
+    use tokio::net::TcpListener;
+    use tokio_stream::StreamExt;
+
+    use super::AIService;
+    use crate::ai::config::AIConfig;
+    use crate::ai::execution_trace::{AIExecutionFallbackKind, AIExecutionOutcome};
+
+    #[derive(Clone, Copy)]
+    enum TestMode {
+        PrimarySuccess,
+        FallbackSuccess,
+        FallbackFailure,
+    }
+
+    #[derive(Clone)]
+    struct TestServerState {
+        mode: TestMode,
+        model_list_calls: Arc<AtomicUsize>,
+    }
+
+    struct TestServerHandle {
+        handle: tokio::task::JoinHandle<()>,
+    }
+
+    impl Drop for TestServerHandle {
+        fn drop(&mut self) {
+            self.handle.abort();
+        }
+    }
+
+    async fn models_handler(State(state): State<TestServerState>) -> Json<Value> {
+        state.model_list_calls.fetch_add(1, Ordering::SeqCst);
+        Json(json!({"data": [{"id": "fallback-model"}]}))
+    }
+
+    async fn chat_handler(
+        State(state): State<TestServerState>,
+        Json(body): Json<Value>,
+    ) -> (StatusCode, Json<Value>) {
+        let model = body
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if model == "primary-model" && matches!(state.mode, TestMode::PrimarySuccess) {
+            return successful_chat_response("primary response");
+        }
+        if model == "primary-model" {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "error": {"message": "model not found", "code": "not_found"}
+                })),
+            );
+        }
+        if model == "fallback-model" && matches!(state.mode, TestMode::FallbackSuccess) {
+            return successful_chat_response("fallback response");
+        }
+
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": {"message": "fallback upstream unavailable"}
+            })),
+        )
+    }
+
+    fn successful_chat_response(content: &str) -> (StatusCode, Json<Value>) {
+        (
+            StatusCode::OK,
+            Json(json!({
+                "choices": [{
+                    "message": {"content": content},
+                    "finish_reason": "stop"
+                }]
+            })),
+        )
+    }
+
+    async fn spawn_openai_server(mode: TestMode) -> (String, Arc<AtomicUsize>, TestServerHandle) {
+        let model_list_calls = Arc::new(AtomicUsize::new(0));
+        let state = TestServerState {
+            mode,
+            model_list_calls: Arc::clone(&model_list_calls),
+        };
+        let app = Router::new()
+            .route("/v1/models", get(models_handler))
+            .route("/v1/chat/completions", post(chat_handler))
+            .with_state(state);
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve test app");
+        });
+
+        (
+            format!("http://{address}/v1"),
+            model_list_calls,
+            TestServerHandle { handle },
+        )
+    }
+
+    fn test_ai_config(base_url: String) -> AIConfig {
+        AIConfig {
+            provider: "openai".to_string(),
+            api_key: "test-secret-key".to_string(),
+            base_url,
+            model: "primary-model".to_string(),
+            temperature: 0.2,
+            max_tokens: 128,
+            ..AIConfig::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn tracked_non_stream_primary_success_records_actual_execution() {
+        let (base_url, model_list_calls, _server) =
+            spawn_openai_server(TestMode::PrimarySuccess).await;
+        let service = AIService::new(test_ai_config(base_url));
+
+        let tracked = service
+            .generate_text_tracked("secret prompt", None, None, true)
+            .await
+            .expect("primary request should succeed");
+
+        assert_eq!(tracked.response.content, "primary response");
+        assert_eq!(tracked.execution.requested_model, "primary-model");
+        assert_eq!(tracked.execution.actual_model, "primary-model");
+        assert_eq!(tracked.execution.outcome, AIExecutionOutcome::Succeeded);
+        assert!(tracked.execution.fallbacks.is_empty());
+        assert_eq!(
+            tracked
+                .execution
+                .endpoint_summary
+                .as_ref()
+                .expect("endpoint summary")
+                .endpoint_role,
+            "primary"
+        );
+        assert_eq!(model_list_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn tracked_non_stream_disables_model_fallback_when_policy_closes_it() {
+        let (base_url, model_list_calls, _server) =
+            spawn_openai_server(TestMode::FallbackSuccess).await;
+        let service = AIService::new(test_ai_config(base_url));
+
+        let tracked_error = service
+            .generate_text_tracked("secret prompt", None, None, false)
+            .await
+            .expect_err("primary model should fail without fallback");
+
+        assert_eq!(tracked_error.execution.actual_model, "primary-model");
+        assert_eq!(tracked_error.execution.outcome, AIExecutionOutcome::Failed);
+        assert!(tracked_error.execution.fallbacks.is_empty());
+        assert_eq!(model_list_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn tracked_non_stream_records_model_fallback_success() {
+        let (base_url, model_list_calls, _server) =
+            spawn_openai_server(TestMode::FallbackSuccess).await;
+        let service = AIService::new(test_ai_config(base_url));
+
+        let tracked = service
+            .generate_text_tracked("secret prompt", None, None, true)
+            .await
+            .expect("fallback request should succeed");
+
+        assert_eq!(tracked.response.content, "fallback response");
+        assert_eq!(tracked.execution.requested_model, "primary-model");
+        assert_eq!(tracked.execution.actual_model, "fallback-model");
+        assert_eq!(tracked.execution.outcome, AIExecutionOutcome::Succeeded);
+        assert_eq!(tracked.execution.fallbacks.len(), 1);
+        assert_eq!(
+            tracked.execution.fallbacks[0].kind,
+            AIExecutionFallbackKind::ModelFallback
+        );
+        assert_eq!(tracked.execution.fallbacks[0].reason, "model_not_found");
+        assert_eq!(model_list_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn tracked_non_stream_records_model_fallback_failure_without_raw_error_in_trace() {
+        let (base_url, model_list_calls, _server) =
+            spawn_openai_server(TestMode::FallbackFailure).await;
+        let service = AIService::new(test_ai_config(base_url));
+
+        let tracked_error = service
+            .generate_text_tracked("secret prompt", None, None, true)
+            .await
+            .expect_err("fallback request should fail");
+
+        assert_eq!(tracked_error.execution.actual_model, "fallback-model");
+        assert_eq!(tracked_error.execution.outcome, AIExecutionOutcome::Failed);
+        assert_eq!(
+            tracked_error.execution.fallbacks[0].kind,
+            AIExecutionFallbackKind::ModelFallback
+        );
+        let serialized = serde_json::to_string(&tracked_error.execution).expect("serialize trace");
+        assert!(!serialized.contains("fallback upstream unavailable"));
+        assert!(!serialized.contains("secret prompt"));
+        assert!(!serialized.contains("test-secret-key"));
+        assert_eq!(model_list_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn tracked_stream_completes_trace_after_model_fallback_success() {
+        let (base_url, model_list_calls, _server) =
+            spawn_openai_server(TestMode::FallbackSuccess).await;
+        let service = AIService::new(test_ai_config(base_url));
+        let tracked = service.generate_text_stream_tracked(
+            "secret stream prompt".to_string(),
+            None,
+            None,
+            true,
+        );
+        let mut stream = tracked.stream;
+        let completion = tracked.completion;
+        let mut content = String::new();
+        while let Some(item) = stream.next().await {
+            let chunk = item.expect("fallback stream chunk");
+            if let Some(value) = chunk.content {
+                content.push_str(&value);
+            }
+        }
+        let execution = completion.await.expect("completion trace");
+
+        assert_eq!(content, "fallback response");
+        assert_eq!(execution.actual_model, "fallback-model");
+        assert_eq!(execution.outcome, AIExecutionOutcome::Succeeded);
+        assert_eq!(
+            execution.fallbacks[0].kind,
+            AIExecutionFallbackKind::ModelFallback
+        );
+        assert_eq!(model_list_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn legacy_non_stream_and_stream_methods_keep_existing_return_shapes() {
+        let (base_url, _model_list_calls, _server) =
+            spawn_openai_server(TestMode::PrimarySuccess).await;
+        let service = AIService::new(test_ai_config(base_url));
+
+        let response = service
+            .generate_text("legacy prompt", None, None)
+            .await
+            .expect("legacy response");
+        assert_eq!(response.content, "primary response");
+
+        let mut stream = service.generate_text_stream("legacy prompt".to_string(), None, None);
+        let mut stream_content = String::new();
+        while let Some(item) = stream.next().await {
+            let chunk = item.expect("legacy stream chunk");
+            if let Some(value) = chunk.content {
+                stream_content.push_str(&value);
+            }
+        }
+        assert_eq!(stream_content, "primary response");
     }
 }

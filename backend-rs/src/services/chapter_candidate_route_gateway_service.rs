@@ -545,6 +545,7 @@ fn smoke_executor_request(probe_name: &str) -> ChapterCandidateExecutorRequest {
         generation_label: "candidate".to_string(),
         max_candidates: 1,
         runtime_state: None,
+        repair_generation_contract: None,
     }
 }
 
@@ -1150,6 +1151,7 @@ mod tests {
             generation_label: "candidate".to_string(),
             max_candidates: 1,
             runtime_state: None,
+            repair_generation_contract: None,
         }
     }
 

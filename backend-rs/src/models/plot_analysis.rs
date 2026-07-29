@@ -9,6 +9,7 @@ pub struct Model {
     pub id: String,
     pub project_id: String,
     pub chapter_id: String,
+    pub source_content_digest: Option<String>,
     pub plot_stage: Option<String>,
     pub conflict_level: Option<i32>,
     pub conflict_types: Option<serde_json::Value>,

@@ -14,11 +14,12 @@ use uuid::Uuid;
 use crate::api::user_admin_shared_owner::{
     api_error, build_admin_reset_password_payload,
     build_admin_reset_password_request_from_route_payload, check_admin, delete_admin_user_payload,
-    find_user, hash_password, reset_user_password_workflow, user_to_value,
-    AdminResetPasswordRouteRequest, PasswordResetMode, UserAdminApiError,
+    find_user, reset_user_password_workflow, user_to_value, AdminResetPasswordRouteRequest,
+    PasswordResetMode, UserAdminApiError,
 };
 use crate::models::{user, user_password};
 use crate::services::auth::Claims;
+use crate::services::password_hash_service::hash_password;
 
 const ADMIN_USERS_ROUTE: &str = "/admin/users";
 const ADMIN_USER_DETAIL_ROUTE: &str = "/admin/users/{userId}";
@@ -333,7 +334,7 @@ async fn create_user_payload(
     let default_password = default_password_for_username(&request.username);
     let actual_password = request.password.as_deref().unwrap_or(&default_password);
     let password_hash = hash_password(actual_password)
-        .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+        .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
 
     let password_model = user_password::ActiveModel {
         user_id: Set(user_id.clone()),

@@ -21,6 +21,22 @@ mod tests {
     use serde_json::json;
     use tokio::net::TcpListener;
 
+    #[test]
+    fn keeps_reasoning_empty_when_provider_has_no_explicit_reasoning_channel() {
+        let response = GeminiClient::parse_response(&json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "最终正文"}]
+                },
+                "finishReason": "STOP"
+            }]
+        }))
+        .expect("parse response");
+
+        assert_eq!(response.content, "最终正文");
+        assert_eq!(response.reasoning_content, None);
+    }
+
     use super::GeminiClient;
     use crate::ai::types::{ChatMessage, ToolDef, ToolFunction};
 
@@ -108,15 +124,18 @@ impl GeminiClient {
     const DEFAULT_BASE_URL: &'static str = "https://generativelanguage.googleapis.com/v1beta";
 
     pub fn new(api_key: &str, base_url: &str) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(300))
-            .build()
-            .expect("failed to create HTTP client");
         let normalized_base_url = if base_url.trim().is_empty() {
             Self::DEFAULT_BASE_URL.to_string()
         } else {
             base_url.trim().trim_end_matches('/').to_string()
         };
+        let mut client_builder = Client::builder().timeout(Duration::from_secs(300));
+        if super::should_bypass_system_proxy(&normalized_base_url) {
+            client_builder = client_builder.no_proxy();
+        }
+        let client = client_builder
+            .build()
+            .expect("failed to create HTTP client");
         Self {
             client,
             api_key: api_key.to_string(),
@@ -241,6 +260,7 @@ impl GeminiClient {
         if candidates.is_empty() {
             return Ok(AIResponse {
                 content: String::new(),
+                reasoning_content: None,
                 tool_calls: None,
                 finish_reason: Some("stop".to_string()),
                 transport_diagnostics: None,
@@ -290,6 +310,7 @@ impl GeminiClient {
 
         Ok(AIResponse {
             content,
+            reasoning_content: None,
             tool_calls: if tool_calls.is_empty() {
                 None
             } else {
@@ -463,6 +484,7 @@ impl GeminiClient {
                     let _ = tx
                         .send(Ok(AIStreamChunk {
                             content: Some(response.content),
+                            reasoning_content: None,
                             tool_calls: None,
                             done: false,
                             finish_reason: None,
@@ -473,6 +495,7 @@ impl GeminiClient {
                     let _ = tx
                         .send(Ok(AIStreamChunk {
                             content: None,
+                            reasoning_content: None,
                             tool_calls: Some(tool_calls),
                             done: false,
                             finish_reason: None,
@@ -485,6 +508,7 @@ impl GeminiClient {
         let _ = tx
             .send(Ok(AIStreamChunk {
                 content: None,
+                reasoning_content: None,
                 tool_calls: None,
                 done: true,
                 finish_reason: None,

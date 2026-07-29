@@ -76,24 +76,34 @@ pub(crate) fn build_single_generation_quality_runtime_context(
     let story_packet = input.story_packet;
     let mut context = Map::new();
     if let Some(packet) = story_packet.as_object() {
-        copy_story_packet_runtime_value(&mut context, packet, "story_long_term_goal");
-        copy_story_packet_runtime_value(&mut context, packet, "character_focus");
-        copy_story_packet_runtime_value(&mut context, packet, "foreshadow_payoff_plan");
-        copy_story_packet_runtime_value(&mut context, packet, "character_state_ledger");
-        copy_story_packet_runtime_value(&mut context, packet, "relationship_state_ledger");
-        copy_story_packet_runtime_value(&mut context, packet, "foreshadow_state_ledger");
-        copy_story_packet_runtime_value(&mut context, packet, "organization_state_ledger");
-        copy_story_packet_runtime_value(&mut context, packet, "career_state_ledger");
-        copy_story_packet_runtime_value(&mut context, packet, "target_word_count");
-        copy_story_packet_runtime_value(&mut context, packet, "chapter_count");
-        copy_story_packet_runtime_value(&mut context, packet, "current_chapter_number");
+        for field_name in [
+            "project",
+            "chapter",
+            "chapter_context",
+            "characters",
+            "unresolved_foreshadows",
+            "story_long_term_goal",
+            "character_focus",
+            "foreshadow_payoff_plan",
+            "character_state_ledger",
+            "relationship_state_ledger",
+            "foreshadow_state_ledger",
+            "organization_state_ledger",
+            "career_state_ledger",
+            "target_word_count",
+            "chapter_count",
+            "current_chapter_number",
+        ] {
+            copy_story_packet_runtime_value(&mut context, packet, field_name);
+        }
     }
     context.insert("story_packet".to_string(), story_packet);
-    context.insert("project".to_string(), input.project.clone());
-    context.insert("chapter".to_string(), input.chapter.clone());
-    context.insert("chapter_context".to_string(), input.chapter_context.clone());
-    context.insert(
-        "target_word_count".to_string(),
+    merge_object_fallback_fields(&mut context, "project", &input.project);
+    merge_object_fallback_fields(&mut context, "chapter", &input.chapter);
+    merge_object_fallback_fields(&mut context, "chapter_context", &input.chapter_context);
+    insert_fallback_value(
+        &mut context,
+        "target_word_count",
         json!(input.target_word_count),
     );
     context.insert("generation_intent".to_string(), input.generation_intent);
@@ -113,11 +123,12 @@ pub(crate) fn build_single_generation_quality_runtime_context(
         input.story_repair_summary.trim(),
     );
     if let Some(chapter_count) = input.chapter_count {
-        context.insert("chapter_count".to_string(), json!(chapter_count));
+        insert_fallback_value(&mut context, "chapter_count", json!(chapter_count));
     }
     if let Some(current_chapter_number) = input.current_chapter_number {
-        context.insert(
-            "current_chapter_number".to_string(),
+        insert_fallback_value(
+            &mut context,
+            "current_chapter_number",
             json!(current_chapter_number),
         );
     }
@@ -137,19 +148,15 @@ pub(crate) fn build_single_generation_quality_runtime_context(
         context.insert("current_story_repair_payload".to_string(), payload);
     }
 
-    copy_object_field(&mut context, &input.project, "world_rules");
-    copy_object_field(&mut context, &input.chapter, "chapter_number");
-    copy_object_field(&mut context, &input.chapter, "title");
-    copy_object_field(
+    copy_object_field_if_missing(&mut context, "project", "world_rules");
+    copy_object_field_if_missing(&mut context, "chapter", "chapter_number");
+    copy_object_field_if_missing(&mut context, "chapter", "title");
+    copy_object_field_if_missing(
         &mut context,
-        &input.chapter_context,
+        "chapter_context",
         "previous_chapter_continuation_point",
     );
-    copy_object_field(
-        &mut context,
-        &input.chapter_context,
-        "previous_chapter_content",
-    );
+    copy_object_field_if_missing(&mut context, "chapter_context", "previous_chapter_content");
 
     Value::Object(context)
 }
@@ -162,9 +169,83 @@ fn copy_story_packet_runtime_value(
     if let Some(value) = packet
         .get(field_name)
         .cloned()
-        .filter(|value| !value.is_null())
+        .filter(is_meaningful_runtime_value)
     {
         context.insert(field_name.to_string(), value);
+    }
+}
+
+fn merge_object_fallback_fields(
+    context: &mut Map<String, Value>,
+    field_name: &str,
+    fallback: &Value,
+) {
+    let Some(fallback_object) = fallback.as_object() else {
+        insert_fallback_value(context, field_name, fallback.clone());
+        return;
+    };
+    if fallback_object.is_empty() {
+        return;
+    }
+
+    match context.get_mut(field_name) {
+        Some(Value::Object(primary_object)) => {
+            for (key, value) in fallback_object {
+                if !primary_object
+                    .get(key)
+                    .is_some_and(is_meaningful_runtime_value)
+                    && is_meaningful_runtime_value(value)
+                {
+                    primary_object.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        Some(primary_value) if is_meaningful_runtime_value(primary_value) => {}
+        _ => {
+            context.insert(field_name.to_owned(), fallback.clone());
+        }
+    }
+}
+
+fn insert_fallback_value(context: &mut Map<String, Value>, field_name: &str, value: Value) {
+    if !context
+        .get(field_name)
+        .is_some_and(is_meaningful_runtime_value)
+        && is_meaningful_runtime_value(&value)
+    {
+        context.insert(field_name.to_owned(), value);
+    }
+}
+
+fn copy_object_field_if_missing(
+    context: &mut Map<String, Value>,
+    object_field_name: &str,
+    field_name: &str,
+) {
+    if context
+        .get(field_name)
+        .is_some_and(is_meaningful_runtime_value)
+    {
+        return;
+    }
+    let value = context
+        .get(object_field_name)
+        .and_then(Value::as_object)
+        .and_then(|object| object.get(field_name))
+        .cloned()
+        .filter(is_meaningful_runtime_value);
+    if let Some(value) = value {
+        context.insert(field_name.to_owned(), value);
+    }
+}
+
+fn is_meaningful_runtime_value(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::String(value) => !value.trim().is_empty(),
+        Value::Array(values) => !values.is_empty(),
+        Value::Object(values) => !values.is_empty(),
+        Value::Bool(_) | Value::Number(_) => true,
     }
 }
 
@@ -310,16 +391,6 @@ pub(crate) fn resolve_single_generation_quality_gate_plan(
         "scope": input.scope,
         "current_story_repair_payload": input.current_story_repair_payload,
     })
-}
-
-fn copy_object_field(target: &mut Map<String, Value>, source: &Value, key: &str) {
-    if let Some(value) = source
-        .as_object()
-        .and_then(|object| object.get(key))
-        .cloned()
-    {
-        target.insert(key.to_string(), value);
-    }
 }
 
 fn insert_non_empty_string(target: &mut Map<String, Value>, key: &str, value: &str) {
@@ -1941,6 +2012,137 @@ mod tests {
             context["previous_chapter_continuation_point"],
             "door opened"
         );
+    }
+
+    #[test]
+    fn should_prefer_story_packet_facts_over_outer_quality_context_fields() {
+        let context = build_single_generation_quality_runtime_context(
+            CandidateQualityRuntimeContextBuildInput {
+                story_packet: json!({
+                    "project": {
+                        "id": "packet-project",
+                        "world_rules": "packet rules"
+                    },
+                    "chapter": {
+                        "id": "packet-chapter",
+                        "chapter_number": 8,
+                        "title": "Packet Chapter"
+                    },
+                    "chapter_context": {
+                        "previous_chapter_continuation_point": "packet continuation"
+                    },
+                    "target_word_count": 2400,
+                    "chapter_count": 18,
+                    "current_chapter_number": 8
+                }),
+                project: json!({
+                    "id": "outer-project",
+                    "world_rules": "outer rules"
+                }),
+                chapter: json!({
+                    "id": "outer-chapter",
+                    "chapter_number": 3,
+                    "title": "Outer Chapter"
+                }),
+                chapter_context: json!({
+                    "previous_chapter_continuation_point": "outer continuation"
+                }),
+                target_word_count: 1200,
+                generation_intent: json!({"kind": "chapter_generate"}),
+                creative_mode: String::new(),
+                story_focus: String::new(),
+                plot_stage: String::new(),
+                story_creation_brief: String::new(),
+                quality_preset: String::new(),
+                quality_notes: String::new(),
+                chapter_count: Some(6),
+                current_chapter_number: Some(3),
+                story_repair_summary: String::new(),
+                story_repair_targets: Vec::new(),
+                story_preserve_strengths: Vec::new(),
+                current_story_repair_payload: None,
+            },
+        );
+
+        assert_eq!(context["project"]["id"], "packet-project");
+        assert_eq!(context["project"]["world_rules"], "packet rules");
+        assert_eq!(context["chapter"]["id"], "packet-chapter");
+        assert_eq!(context["chapter"]["chapter_number"], 8);
+        assert_eq!(context["chapter"]["title"], "Packet Chapter");
+        assert_eq!(context["world_rules"], "packet rules");
+        assert_eq!(context["chapter_number"], 8);
+        assert_eq!(context["title"], "Packet Chapter");
+        assert_eq!(context["target_word_count"], 2400);
+        assert_eq!(context["chapter_count"], 18);
+        assert_eq!(context["current_chapter_number"], 8);
+        assert_eq!(
+            context["previous_chapter_continuation_point"],
+            "packet continuation"
+        );
+    }
+
+    #[test]
+    fn should_fallback_to_outer_quality_context_fields_when_packet_facts_are_missing() {
+        let context = build_single_generation_quality_runtime_context(
+            CandidateQualityRuntimeContextBuildInput {
+                story_packet: json!({
+                    "project": {
+                        "id": "packet-project",
+                        "world_rules": ""
+                    },
+                    "chapter": {
+                        "id": "packet-chapter",
+                        "title": null
+                    },
+                    "chapter_context": {},
+                    "target_word_count": null
+                }),
+                project: json!({
+                    "id": "outer-project",
+                    "world_rules": "fallback rules"
+                }),
+                chapter: json!({
+                    "id": "outer-chapter",
+                    "chapter_number": 5,
+                    "title": "Fallback Chapter"
+                }),
+                chapter_context: json!({
+                    "previous_chapter_continuation_point": "fallback continuation",
+                    "previous_chapter_content": "fallback content"
+                }),
+                target_word_count: 1600,
+                generation_intent: json!({"kind": "chapter_generate"}),
+                creative_mode: String::new(),
+                story_focus: String::new(),
+                plot_stage: String::new(),
+                story_creation_brief: String::new(),
+                quality_preset: String::new(),
+                quality_notes: String::new(),
+                chapter_count: Some(10),
+                current_chapter_number: Some(5),
+                story_repair_summary: String::new(),
+                story_repair_targets: Vec::new(),
+                story_preserve_strengths: Vec::new(),
+                current_story_repair_payload: None,
+            },
+        );
+
+        assert_eq!(context["project"]["id"], "packet-project");
+        assert_eq!(context["project"]["world_rules"], "fallback rules");
+        assert_eq!(context["chapter"]["id"], "packet-chapter");
+        assert_eq!(context["chapter"]["chapter_number"], 5);
+        assert_eq!(context["chapter"]["title"], "Fallback Chapter");
+        assert_eq!(context["world_rules"], "fallback rules");
+        assert_eq!(context["chapter_number"], 5);
+        assert_eq!(context["title"], "Fallback Chapter");
+        assert_eq!(context["target_word_count"], 1600);
+        assert_eq!(context["chapter_count"], 10);
+        assert_eq!(context["current_chapter_number"], 5);
+        assert_eq!(
+            context["previous_chapter_continuation_point"],
+            "fallback continuation"
+        );
+        assert_eq!(context["previous_chapter_content"], "fallback content");
     }
 
     #[test]

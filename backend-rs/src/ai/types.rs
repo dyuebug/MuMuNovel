@@ -52,6 +52,8 @@ pub struct ToolCallFunction {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AIResponse {
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
     pub finish_reason: Option<String>,
     pub transport_diagnostics: Option<Value>,
@@ -60,6 +62,8 @@ pub struct AIResponse {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AIStreamChunk {
     pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
     pub done: bool,
     pub finish_reason: Option<String>,

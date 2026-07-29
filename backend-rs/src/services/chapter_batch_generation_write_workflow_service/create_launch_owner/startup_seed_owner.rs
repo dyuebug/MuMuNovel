@@ -23,6 +23,10 @@ use crate::services::chapter_generation_runtime_service::story_repair_quality_co
     load_recent_batch_story_repair_quality_summary,
     resolve_active_story_repair_payload_with_quality_fallback,
 };
+use crate::services::generation_contract_service::{
+    merge_generation_contract_runtime_snapshot, GenerationContractError,
+    GenerationContractSnapshotV1,
+};
 
 pub(crate) fn build_batch_generation_create_startup_seed_owner_contract() -> Value {
     json!({
@@ -223,6 +227,13 @@ impl BatchGenerationCreateRuntimeSeed {
         Self {
             runtime_state_payload,
         }
+    }
+
+    pub(crate) fn merge_generation_contract_snapshot(
+        &mut self,
+        snapshot: &GenerationContractSnapshotV1,
+    ) -> Result<(), GenerationContractError> {
+        merge_generation_contract_runtime_snapshot(&mut self.runtime_state_payload, snapshot)
     }
 
     #[cfg(test)]

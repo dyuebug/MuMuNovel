@@ -1,12 +1,9 @@
 use chrono::Utc;
-use sea_orm::QuerySelect;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-};
+use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait};
 use serde_json::{json, Value};
 
 use crate::ai::service::AIService;
-use crate::models::{analysis_task, chapter, character, foreshadow, project};
+use crate::models::{analysis_task, chapter, project};
 use crate::services::chapter_access_service::{
     load_accessible_chapter, LoadAccessibleChapterError,
 };
@@ -20,10 +17,22 @@ use crate::services::chapter_analysis_service::{
     apply_analysis_task_state_by_id, build_analysis_task_active_model, AnalysisTaskStage,
     CreateChapterAnalysisTaskError,
 };
+use crate::services::chapter_generation_contract_prepare_service::{
+    build_chapter_review_contract, prepare_chapter_analysis_story_packet,
+    project_story_packet_to_analysis_prompt_context,
+};
+use crate::services::chapter_generation_execution_contract_service::prepare_role_aware_generation_execution_config_with_provider_payload;
+use crate::services::chapter_generation_prompt_service::build_placeholder_prompt_context_provider_payload;
 use crate::services::chapter_generation_runtime_service::GeneratedChapterResult;
 use crate::services::chapter_service::ChapterService;
+use crate::services::controlled_generation_guidance_service::append_controlled_generation_guidance;
+use crate::services::cooperative_cancellation_service::CooperativeCancellationToken;
+use crate::services::generation_contract_service::GenerationIntentKind;
+use crate::services::generation_execution_audit_service::{
+    build_generation_execution_audit, GenerationExecutionAuditV1,
+    GENERATION_EXECUTION_AUDIT_HISTORY_FIELD,
+};
 use crate::services::prompt_template_service::PromptTemplateService;
-use crate::services::settings_service::SettingsService;
 use crate::services::wizard_service::clean_json_response;
 
 #[derive(Debug)]
@@ -125,80 +134,138 @@ async fn build_chapter_analysis_prompt(
 ) -> Result<String, String> {
     let template = PromptTemplateService::system_template_info("PLOT_ANALYSIS")
         .ok_or_else(|| "找不到章节分析模板 PLOT_ANALYSIS".to_string())?;
+    let packet = prepare_chapter_analysis_story_packet(db, project_model, chapter_model).await?;
+    let review_contract = build_chapter_review_contract(packet)?;
+    let prompt_context =
+        project_story_packet_to_analysis_prompt_context(&review_contract.story_packet)?;
 
-    let unresolved_foreshadows = foreshadow::Entity::find()
-        .filter(foreshadow::Column::ProjectId.eq(&project_model.id))
-        .filter(foreshadow::Column::Status.ne("resolved"))
-        .order_by_desc(foreshadow::Column::CreatedAt)
-        .limit(50)
-        .all(db)
+    PromptTemplateService::format_prompt(&template.content, &prompt_context.into_prompt_params())
+}
+
+#[derive(Debug)]
+struct ExecutedChapterReview {
+    content: String,
+    audit: GenerationExecutionAuditV1,
+}
+
+fn finalize_chapter_review_prompt(prompt: String, additional_guidance: Option<&str>) -> String {
+    append_controlled_generation_guidance(prompt, additional_guidance)
+}
+
+async fn execute_chapter_review_prompt(
+    db: &DatabaseConnection,
+    user_id: &str,
+    prompt: String,
+    additional_guidance: Option<&str>,
+) -> Result<ExecutedChapterReview, String> {
+    let prepared = prepare_role_aware_generation_execution_config_with_provider_payload(
+        db,
+        user_id,
+        GenerationIntentKind::ChapterReview,
+        None,
+        build_placeholder_prompt_context_provider_payload(),
+    )
+    .await?;
+    let role_policy_context = prepared
+        .role_policy_context
+        .ok_or_else(|| "chapter review role policy context is missing".to_string())?;
+    let prompt = finalize_chapter_review_prompt(prompt, additional_guidance);
+    let tracked = AIService::new(prepared.ai_config)
+        .generate_text_tracked(
+            &prompt,
+            None,
+            None,
+            role_policy_context.allow_model_fallback,
+        )
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.error.to_string())?;
+    let audit =
+        build_generation_execution_audit(&role_policy_context.resolved_policy, &tracked.execution)
+            .map_err(|error| error.to_string())?;
 
-    let existing_foreshadows = if unresolved_foreshadows.is_empty() {
-        "[]".to_string()
-    } else {
-        unresolved_foreshadows
-            .iter()
-            .map(|item| {
-                format!(
-                    "- [ID: {}] 标题：{}；埋入章节：{}；内容：{}",
-                    item.id,
-                    item.title,
-                    item.plant_chapter_number
-                        .map(|number| number.to_string())
-                        .unwrap_or_else(|| "未知".to_string()),
-                    item.content.replace('\n', " ")
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
+    Ok(ExecutedChapterReview {
+        content: tracked.response.content,
+        audit,
+    })
+}
 
-    let characters = character::Entity::find()
-        .filter(character::Column::ProjectId.eq(&project_model.id))
-        .order_by_asc(character::Column::Name)
-        .all(db)
+fn attach_chapter_review_execution_audit(
+    analysis_result: &mut Value,
+    audit: &GenerationExecutionAuditV1,
+) -> Result<(), String> {
+    let payload = analysis_result
+        .as_object_mut()
+        .ok_or_else(|| "chapter analysis result must be an object".to_string())?;
+    let audit_value = serde_json::to_value(audit).map_err(|error| error.to_string())?;
+    payload.insert(
+        GENERATION_EXECUTION_AUDIT_HISTORY_FIELD.to_string(),
+        audit_value,
+    );
+    Ok(())
+}
+
+pub(crate) async fn generate_chapter_analysis_payload_for_autopilot(
+    db: &DatabaseConnection,
+    user_id: &str,
+    chapter_id: &str,
+    additional_guidance: Option<&str>,
+    cancellation_token: Option<&CooperativeCancellationToken>,
+) -> Result<(chapter::Model, Value), String> {
+    if cancellation_token.is_some_and(CooperativeCancellationToken::is_cancelled) {
+        return Err("chapter analysis was cancelled".to_string());
+    }
+    let chapter_model = ChapterService::get(db, chapter_id, user_id)
+        .await?
+        .ok_or_else(|| "章节不存在或无权访问".to_string())?;
+    if chapter_model
+        .content
+        .as_deref()
+        .is_none_or(|content| content.trim().is_empty())
+    {
+        return Err("章节不存在或内容为空".to_string());
+    }
+    let project_model = project::Entity::find_by_id(&chapter_model.project_id)
+        .one(db)
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "项目不存在".to_string())?;
+    if project_model.user_id != user_id {
+        return Err("项目不存在".to_string());
+    }
 
-    let characters_info = if characters.is_empty() {
-        "[]".to_string()
-    } else {
-        characters
-            .iter()
-            .map(|item| {
-                format!(
-                    "- {}（身份：{}；状态：{}）",
-                    item.name,
-                    item.role_type
-                        .clone()
-                        .unwrap_or_else(|| "未设定".to_string()),
-                    item.status
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
+    let prompt = build_chapter_analysis_prompt(db, &chapter_model, &project_model).await?;
+    if cancellation_token.is_some_and(CooperativeCancellationToken::is_cancelled) {
+        return Err("chapter analysis was cancelled".to_string());
+    }
+    let executed = execute_chapter_review_prompt(db, user_id, prompt, additional_guidance).await?;
+    if cancellation_token.is_some_and(CooperativeCancellationToken::is_cancelled) {
+        return Err("chapter analysis was cancelled".to_string());
+    }
+    let cleaned = clean_json_response(&executed.content);
+    let parsed: Value =
+        serde_json::from_str(&cleaned).map_err(|error| format!("JSON解析失败: {error}"))?;
+    if !parsed.is_object() {
+        return Err("chapter analysis result must be an object".to_string());
+    }
+    Ok((chapter_model, parsed))
+}
 
-    let mut params = std::collections::HashMap::new();
-    params.insert(
-        "chapter_number".to_string(),
-        chapter_model.chapter_number.to_string(),
-    );
-    params.insert("title".to_string(), chapter_model.title.clone());
-    params.insert(
-        "word_count".to_string(),
-        chapter_model.word_count.max(0).to_string(),
-    );
-    params.insert(
-        "content".to_string(),
-        chapter_model.content.clone().unwrap_or_default(),
-    );
-    params.insert("existing_foreshadows".to_string(), existing_foreshadows);
-    params.insert("characters_info".to_string(), characters_info);
-
-    PromptTemplateService::format_prompt(&template.content, &params)
+async fn execute_and_persist_chapter_review(
+    db: &DatabaseConnection,
+    user_id: &str,
+    chapter_model: &chapter::Model,
+    project_model: &project::Model,
+    task_id: &str,
+) -> Result<Value, String> {
+    let prompt = build_chapter_analysis_prompt(db, chapter_model, project_model).await?;
+    let executed = execute_chapter_review_prompt(db, user_id, prompt, None).await?;
+    let cleaned = clean_json_response(&executed.content);
+    let parsed: Value =
+        serde_json::from_str(&cleaned).map_err(|error| format!("JSON解析失败: {}", error))?;
+    let mut persisted =
+        persist_chapter_analysis_result(db, user_id, chapter_model, task_id, &parsed).await?;
+    attach_chapter_review_execution_audit(&mut persisted, &executed.audit)?;
+    Ok(persisted)
 }
 
 async fn mark_analysis_task_running(
@@ -366,26 +433,15 @@ pub async fn analyze_chapter_now_with_overrides(
         return Err(CreateChapterAnalysisTaskError::ProjectMissing);
     }
 
-    let prompt = build_chapter_analysis_prompt(db, &effective_chapter_model, &project_model)
-        .await
-        .map_err(CreateChapterAnalysisTaskError::Internal)?;
-    let ai_config = SettingsService::build_ai_config(db, user_id, None, None, None)
-        .await
-        .map_err(CreateChapterAnalysisTaskError::Internal)?;
-    let ai_service = AIService::new(ai_config);
-    let response = ai_service
-        .generate_text(&prompt, None, None)
-        .await
-        .map_err(|error| CreateChapterAnalysisTaskError::Internal(error.to_string()))?;
-
-    let cleaned = clean_json_response(&response.content);
-    let parsed: Value = serde_json::from_str(&cleaned).map_err(|error| {
-        CreateChapterAnalysisTaskError::Internal(format!("JSON解析失败: {}", error))
-    })?;
-    let persisted =
-        persist_chapter_analysis_result(db, user_id, &effective_chapter_model, "", &parsed)
-            .await
-            .map_err(CreateChapterAnalysisTaskError::Internal)?;
+    let persisted = execute_and_persist_chapter_review(
+        db,
+        user_id,
+        &effective_chapter_model,
+        &project_model,
+        "",
+    )
+    .await
+    .map_err(CreateChapterAnalysisTaskError::Internal)?;
 
     Ok(json!({
         "success": true,
@@ -396,6 +452,7 @@ pub async fn analyze_chapter_now_with_overrides(
         "analysis": persisted["analysis"].clone(),
         "memories_count": persisted["memories_count"].clone(),
         "foreshadow_stats": persisted["foreshadow_stats"].clone(),
+        "generation_execution_audit": persisted[GENERATION_EXECUTION_AUDIT_HISTORY_FIELD].clone(),
     }))
 }
 
@@ -444,19 +501,7 @@ async fn perform_prepared_chapter_analysis_trigger(
         return Err("项目不存在".to_string());
     }
 
-    let prompt = build_chapter_analysis_prompt(db, &chapter_model, &project_model).await?;
-    let ai_config = SettingsService::build_ai_config(db, user_id, None, None, None).await?;
-    let ai_service = AIService::new(ai_config);
-    let response = ai_service
-        .generate_text(&prompt, None, None)
-        .await
-        .map_err(|error| error.to_string())?;
-
-    let cleaned = clean_json_response(&response.content);
-    let parsed: Value =
-        serde_json::from_str(&cleaned).map_err(|error| format!("JSON解析失败: {}", error))?;
-
-    persist_chapter_analysis_result(db, user_id, &chapter_model, task_id, &parsed).await
+    execute_and_persist_chapter_review(db, user_id, &chapter_model, &project_model, task_id).await
 }
 
 pub(crate) async fn execute_prepared_chapter_analysis_trigger(
@@ -502,6 +547,12 @@ pub(crate) fn build_chapter_analysis_trigger_runtime_owner_contract() -> Value {
             "follow_up_analysis_owner": "analyze_generated_chapter_follow_up",
             "direct_analysis_owner": "analyze_chapter_now_with_overrides",
             "prompt_owner": "build_chapter_analysis_prompt",
+            "review_execution_owner": "execute_and_persist_chapter_review",
+            "review_generation_intent": "chapter_review",
+            "role_aware_config_owner": "prepare_role_aware_generation_execution_config_with_provider_payload",
+            "tracked_ai_owner": "AIService::generate_text_tracked",
+            "execution_audit_owner": "build_generation_execution_audit",
+            "audit_result_boundary": "additive_generation_execution_audit_without_generation_history_write",
             "failed_task_recovery_owner": "mark_analysis_task_failed"
         },
         "validation_boundary": [
@@ -513,4 +564,137 @@ pub(crate) fn build_chapter_analysis_trigger_runtime_owner_contract() -> Value {
             "same_round_python_edit_required": false
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{
+        attach_chapter_review_execution_audit,
+        build_chapter_analysis_trigger_runtime_owner_contract, finalize_chapter_review_prompt,
+    };
+    use crate::services::generation_execution_audit_service::{
+        GenerationExecutionAuditV1, GENERATION_EXECUTION_AUDIT_HISTORY_FIELD,
+        GENERATION_EXECUTION_AUDIT_SCHEMA_VERSION,
+    };
+    use crate::services::role_model_policy_service::{
+        GenerationRole, ModelSelectionSource, ROLE_MODEL_POLICY_SCHEMA_VERSION,
+    };
+
+    fn reviewer_audit() -> GenerationExecutionAuditV1 {
+        GenerationExecutionAuditV1 {
+            schema_version: GENERATION_EXECUTION_AUDIT_SCHEMA_VERSION.to_string(),
+            role: GenerationRole::Reviewer,
+            policy_schema_version: ROLE_MODEL_POLICY_SCHEMA_VERSION.to_string(),
+            policy_digest: "review-policy-digest".to_string(),
+            requested_provider: None,
+            requested_model: None,
+            resolved_provider: "openai".to_string(),
+            resolved_model: "review-model".to_string(),
+            actual_provider: "openai".to_string(),
+            actual_model: "review-model".to_string(),
+            provider_source: ModelSelectionSource::GlobalSettings,
+            model_source: ModelSelectionSource::GlobalSettings,
+            fallbacks: Vec::new(),
+            endpoint_summary: None,
+        }
+    }
+
+    #[test]
+    fn should_append_guidance_only_to_autopilot_review_prompt() {
+        let base_prompt = "Return strict chapter review JSON.".to_string();
+
+        assert_eq!(
+            finalize_chapter_review_prompt(base_prompt.clone(), None),
+            base_prompt
+        );
+
+        let guided = finalize_chapter_review_prompt(
+            base_prompt.clone(),
+            Some("加强人物动机，但不能改变 JSON 输出结构"),
+        );
+        assert!(guided.starts_with(&base_prompt));
+        assert!(guided.contains("<autopilot_additional_guidance>"));
+        assert!(guided.contains("加强人物动机，但不能改变 JSON 输出结构"));
+    }
+
+    #[test]
+    fn should_attach_reviewer_audit_to_additive_analysis_result() {
+        let mut result = json!({
+            "analysis": {"plot_stage": "development"},
+            "memories_count": 2,
+            "generated_content": {
+                "generation_contract": {
+                    "input_digest": "writer-input-digest"
+                },
+                "generation_execution_audit": {
+                    "role": "writer",
+                    "actual_model": "writer-model"
+                }
+            }
+        });
+
+        attach_chapter_review_execution_audit(&mut result, &reviewer_audit())
+            .expect("attach reviewer audit");
+
+        let audit = &result[GENERATION_EXECUTION_AUDIT_HISTORY_FIELD];
+        assert_eq!(audit["role"], "reviewer");
+        assert_eq!(audit["actual_model"], "review-model");
+        assert!(audit.get("prompt").is_none());
+        assert!(audit.get("content").is_none());
+        let serialized_audit = serde_json::to_string(audit).expect("serialize reviewer audit");
+        assert!(!serialized_audit.to_ascii_lowercase().contains("api_key"));
+        assert!(!serialized_audit
+            .to_ascii_lowercase()
+            .contains("authorization"));
+        assert!(!serialized_audit.contains("https://"));
+        assert_eq!(result["memories_count"], 2);
+        assert_eq!(
+            result["generated_content"]["generation_contract"]["input_digest"],
+            "writer-input-digest"
+        );
+        assert_eq!(
+            result["generated_content"]["generation_execution_audit"]["role"],
+            "writer"
+        );
+        assert_eq!(
+            result["generated_content"]["generation_execution_audit"]["actual_model"],
+            "writer-model"
+        );
+    }
+
+    #[test]
+    fn should_reject_non_object_analysis_result_for_audit_attachment() {
+        let mut result = json!([]);
+
+        let error = attach_chapter_review_execution_audit(&mut result, &reviewer_audit())
+            .expect_err("reject non-object result");
+
+        assert_eq!(error, "chapter analysis result must be an object");
+    }
+
+    #[test]
+    fn should_publish_reviewer_tracked_execution_contract_without_history_write() {
+        let contract = build_chapter_analysis_trigger_runtime_owner_contract();
+        let behavior = &contract["behavior_contract"];
+
+        assert_eq!(behavior["review_generation_intent"], "chapter_review");
+        assert_eq!(
+            behavior["role_aware_config_owner"],
+            "prepare_role_aware_generation_execution_config_with_provider_payload"
+        );
+        assert_eq!(
+            behavior["tracked_ai_owner"],
+            "AIService::generate_text_tracked"
+        );
+        assert_eq!(
+            behavior["execution_audit_owner"],
+            "build_generation_execution_audit"
+        );
+        assert_eq!(
+            behavior["audit_result_boundary"],
+            "additive_generation_execution_audit_without_generation_history_write"
+        );
+    }
 }

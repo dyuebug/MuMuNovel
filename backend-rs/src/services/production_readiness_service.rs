@@ -104,14 +104,14 @@ mod tests {
 
     use super::{build_evaluation, evaluate_production_readiness};
     use crate::services::schema_migration_metadata_service::{
-        LiveAlembicHeadCheck, PasswordHashStorageCompatibilityCheck,
+        LiveAlembicHeadCheck, PasswordHashStorageCompatibilityCheck, POSTGRES_ALEMBIC_HEAD,
     };
 
     fn matching_head() -> LiveAlembicHeadCheck {
         LiveAlembicHeadCheck {
             status: "head_matches",
-            expected_head: "20260712_password_hash_phc_text",
-            actual_head: Some("20260712_password_hash_phc_text".to_string()),
+            expected_head: POSTGRES_ALEMBIC_HEAD,
+            actual_head: Some(POSTGRES_ALEMBIC_HEAD.to_string()),
             matches_catalog_head: true,
             error: None,
         }
@@ -178,7 +178,7 @@ mod tests {
     fn migration_head_mismatch_fails_closed() {
         let live_head = LiveAlembicHeadCheck {
             status: "head_mismatch",
-            expected_head: "20260712_password_hash_phc_text",
+            expected_head: POSTGRES_ALEMBIC_HEAD,
             actual_head: Some("old_revision".to_string()),
             matches_catalog_head: false,
             error: None,
@@ -217,8 +217,7 @@ mod tests {
         .expect("create alembic version table");
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
-            "INSERT INTO alembic_version (version_num) VALUES ('20260712_password_hash_phc_text')"
-                .to_string(),
+            format!("INSERT INTO alembic_version (version_num) VALUES ('{POSTGRES_ALEMBIC_HEAD}')"),
         ))
         .await
         .expect("insert migration head");

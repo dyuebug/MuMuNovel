@@ -10,10 +10,11 @@ use crate::services::chapter_generation_runtime_service::snapshot_persistence_ow
     build_chapter_generation_snapshot_owner_contract, load_chapter_generation_snapshot,
 };
 use crate::services::chapter_generation_runtime_service::{
-    generate_and_persist_chapter_content_with_candidate_route_gateway, GeneratedChapterResult,
+    generate_and_persist_batch_chapter_content_with_candidate_route_gateway, GeneratedChapterResult,
 };
 use crate::services::chapter_single_generation_prepare_service::research_payload_owner::build_single_chapter_research_provider_payload;
 use crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationTarget;
+use crate::services::generation_contract_service::GenerationContractSnapshotV1;
 
 use super::{
     restore_batch_generation_runtime_compat_options_from_persisted_runtime_context,
@@ -89,20 +90,27 @@ pub(crate) struct BatchGenerationAttemptInputPlan {
         crate::services::chapter_generation_prompt_service::PromptContextProviderPayload,
     pub(crate) prompt_overrides:
         crate::services::chapter_generation_prompt_service::ChapterGenerationPromptOverrides,
+    pub(crate) generation_contract_snapshot: Option<GenerationContractSnapshotV1>,
 }
 
 impl BatchGenerationAttemptInputPlan {
+    async fn load_persisted_runtime_context(
+        db: &DatabaseConnection,
+        task_id: &str,
+    ) -> BatchGenerationPersistedRuntimeContext {
+        load_chapter_generation_snapshot(db, task_id)
+            .await
+            .ok()
+            .map(BatchGenerationPersistedRuntimeContext::from_snapshot)
+            .unwrap_or_default()
+    }
+
     pub(crate) async fn resolve_compat_options(
         db: &DatabaseConnection,
         task_id: &str,
         base_compat_options: &SingleChapterGenerationCompatOptions,
     ) -> SingleChapterGenerationCompatOptions {
-        let persisted_runtime_context = load_chapter_generation_snapshot(db, task_id)
-            .await
-            .ok()
-            .map(BatchGenerationPersistedRuntimeContext::from_snapshot)
-            .unwrap_or_default();
-
+        let persisted_runtime_context = Self::load_persisted_runtime_context(db, task_id).await;
         restore_batch_generation_runtime_compat_options_from_persisted_runtime_context(
             base_compat_options,
             &persisted_runtime_context,
@@ -115,8 +123,15 @@ impl BatchGenerationAttemptInputPlan {
         session: &BatchGenerationRuntimeSession,
         chapter_model: &chapter::Model,
     ) -> Result<Self, String> {
+        let persisted_runtime_context = Self::load_persisted_runtime_context(db, task_id).await;
         let resolved_compat_options =
-            Self::resolve_compat_options(db, task_id, &session.compat_options).await;
+            restore_batch_generation_runtime_compat_options_from_persisted_runtime_context(
+                &session.compat_options,
+                &persisted_runtime_context,
+            );
+        let generation_contract_snapshot = persisted_runtime_context
+            .generation_contract_snapshot()
+            .cloned();
         let prompt_overrides = build_prompt_overrides_from_compat_options(&resolved_compat_options);
         let provider_payload = build_single_chapter_research_provider_payload(
             db,
@@ -134,6 +149,7 @@ impl BatchGenerationAttemptInputPlan {
         Ok(Self {
             provider_payload,
             prompt_overrides,
+            generation_contract_snapshot,
         })
     }
 
@@ -147,9 +163,10 @@ impl BatchGenerationAttemptInputPlan {
         let Self {
             provider_payload,
             prompt_overrides,
+            generation_contract_snapshot,
         } = attempt_input;
 
-        generate_and_persist_chapter_content_with_candidate_route_gateway(
+        generate_and_persist_batch_chapter_content_with_candidate_route_gateway(
             db,
             &session.user_id,
             &chapter_model.id,
@@ -158,6 +175,8 @@ impl BatchGenerationAttemptInputPlan {
             &prompt_overrides,
             session.ai_config.clone(),
             session.candidate_gateway_config.clone(),
+            generation_contract_snapshot.as_ref(),
+            session.role_policy_context.clone(),
         )
         .await
     }
@@ -170,6 +189,20 @@ impl BatchGenerationAttemptInputPlan {
         Self {
             provider_payload,
             prompt_overrides,
+            generation_contract_snapshot: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_sources_with_generation_contract(
+        provider_payload: crate::services::chapter_generation_prompt_service::PromptContextProviderPayload,
+        prompt_overrides: crate::services::chapter_generation_prompt_service::ChapterGenerationPromptOverrides,
+        generation_contract_snapshot: GenerationContractSnapshotV1,
+    ) -> Self {
+        Self {
+            provider_payload,
+            prompt_overrides,
+            generation_contract_snapshot: Some(generation_contract_snapshot),
         }
     }
 }

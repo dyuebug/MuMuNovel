@@ -6,7 +6,8 @@ use crate::services::chapter_access_service::{
     load_accessible_chapter_for_generation, LoadAccessibleChapterForGenerationError,
 };
 use crate::services::chapter_generation_execution_contract_service::{
-    deserialize_optional_non_null, prepare_generation_execution_config_with_provider_payload,
+    deserialize_optional_non_null,
+    prepare_role_aware_generation_execution_config_with_provider_payload,
     BatchGenerationRequestRuntimeState, PreparedGenerationExecutionConfig,
 };
 
@@ -297,9 +298,10 @@ pub(crate) async fn prepare_single_chapter_generation_execution_config_from_runt
     .await
     .map_err(PrepareSingleChapterGenerationRequestError::Config)?;
 
-    prepare_generation_execution_config_with_provider_payload(
+    prepare_role_aware_generation_execution_config_with_provider_payload(
         db,
         user_id,
+        crate::services::generation_contract_service::GenerationIntentKind::ChapterGenerate,
         request_runtime_state.model_override.as_deref(),
         provider_payload,
     )

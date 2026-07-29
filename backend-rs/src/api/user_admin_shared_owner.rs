@@ -1,7 +1,3 @@
-use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
-    Argon2,
-};
 use axum::{http::StatusCode, response::Json};
 use chrono::Utc;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
@@ -10,6 +6,7 @@ use serde_json::{json, Value};
 
 use crate::models::{user, user_password};
 use crate::services::auth::Claims;
+use crate::services::password_hash_service::hash_password;
 
 pub type UserAdminApiError = (StatusCode, Json<Value>);
 
@@ -80,14 +77,6 @@ pub fn user_to_value(model: &user::Model) -> Value {
         "created_at": model.created_at.to_rfc3339(),
         "last_login": model.last_login.to_rfc3339(),
     })
-}
-
-pub fn hash_password(password: &str) -> Result<String, String> {
-    let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map(|hash| hash.to_string())
-        .map_err(|err| format!("password hash failed: {err}"))
 }
 
 pub fn default_password_for_username(username: &str) -> String {
@@ -226,7 +215,7 @@ pub async fn reset_user_password_workflow(
     let (actual_password, has_custom_password, used_default_password) =
         resolve_password_reset_value(&target.username, requested_password, mode);
     let password_hash = hash_password(&actual_password)
-        .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error))?;
+        .map_err(|error| api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     let now = Utc::now();
 
     match user_password::Entity::find_by_id(user_id)

@@ -8,6 +8,11 @@ use uuid::Uuid;
 
 use crate::ai::config::AIConfig;
 use crate::models::settings;
+use crate::services::generation_contract_service::GenerationIntentKind;
+use crate::services::role_model_policy_service::{
+    read_role_model_policy, resolve_role_model_policy, ResolvedRoleModelPolicyV1,
+    RoleModelPolicyV1, RoleModelResolutionInput,
+};
 
 const PLACEHOLDER_MASK: &str = "********";
 const WEB_RESEARCH_KEYS: [&str; 9] = [
@@ -71,6 +76,13 @@ pub(crate) struct ResolvedEffectiveSettings {
     pub model: String,
     pub temperature: f64,
     pub max_tokens: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoleAwareAIConfig {
+    pub ai_config: AIConfig,
+    pub resolved_policy: ResolvedRoleModelPolicyV1,
+    pub allow_model_fallback: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -590,6 +602,48 @@ fn resolve_base_url(provider: &str, stored_base_url: &str) -> String {
     }
 }
 
+fn build_ai_config_from_settings(
+    stored: &settings::Model,
+    provider: String,
+    model: String,
+    temperature_override: Option<f64>,
+    backup_urls: Vec<String>,
+) -> Result<AIConfig, String> {
+    let api_key = normalize_api_key(Some(stored.api_key.clone()))
+        .or_else(|| env_api_key_for_provider(&provider))
+        .unwrap_or_default();
+    if api_key.is_empty() {
+        return Err(format!(
+            "current AI settings are missing a usable API key for provider {}",
+            provider
+        ));
+    }
+
+    let max_tokens = if stored.max_tokens > 0 {
+        stored.max_tokens as u32
+    } else {
+        default_max_tokens()
+    };
+
+    Ok(AIConfig {
+        base_url: resolve_base_url(&provider, &stored.api_base_url),
+        provider,
+        api_key,
+        backup_urls,
+        model,
+        temperature: temperature_override.unwrap_or(stored.temperature),
+        max_tokens,
+        system_prompt: stored.system_prompt.clone(),
+        prefer_normalized_v1_candidate: false,
+        read_timeout_secs: None,
+        transport_max_retries: None,
+    })
+}
+
+fn allows_automatic_model_fallback(fallback_strategy: &str) -> bool {
+    fallback_strategy.trim().eq_ignore_ascii_case("auto")
+}
+
 async fn load_or_create_settings_model(
     db: &DatabaseConnection,
     user_id: &str,
@@ -1010,6 +1064,21 @@ impl SettingsService {
         }
     }
 
+    pub async fn load_role_model_policy(
+        db: &DatabaseConnection,
+        user_id: &str,
+    ) -> Result<RoleModelPolicyV1, String> {
+        let stored = settings::Entity::find()
+            .filter(settings::Column::UserId.eq(user_id))
+            .one(db)
+            .await
+            .map_err(|error| format!("failed to load settings: {error}"))?
+            .ok_or_else(|| "settings not found".to_owned())?;
+
+        read_role_model_policy(stored.preferences.as_deref())
+            .map_err(|error| format!("failed to load role model policy: {error}"))
+    }
+
     pub async fn build_ai_config(
         db: &DatabaseConnection,
         user_id: &str,
@@ -1017,53 +1086,71 @@ impl SettingsService {
         model_override: Option<&str>,
         temperature_override: Option<f64>,
     ) -> Result<AIConfig, String> {
-        let s = settings::Entity::find()
+        let stored = settings::Entity::find()
             .filter(settings::Column::UserId.eq(user_id))
             .one(db)
             .await
-            .map_err(|e| format!("failed to load settings: {}", e))?
-            .ok_or("settings not found")?;
+            .map_err(|error| format!("failed to load settings: {error}"))?
+            .ok_or_else(|| "settings not found".to_owned())?;
 
-        let provider = resolve_provider(provider_override, &s.provider_type, &s.api_provider);
-        let api_key = normalize_api_key(Some(s.api_key))
-            .or_else(|| env_api_key_for_provider(&provider))
-            .unwrap_or_default();
-        if api_key.is_empty() {
-            return Err(format!(
-                "current AI settings are missing a usable API key for provider {}",
-                provider
-            ));
-        }
-        let base_url = resolve_base_url(&provider, &s.api_base_url);
+        let provider = resolve_provider(
+            provider_override,
+            &stored.provider_type,
+            &stored.api_provider,
+        );
         let model = model_override
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| {
-                let stored = s.llm_model.trim().to_string();
-                if stored.is_empty() {
-                    default_model_for_provider(&provider)
-                } else {
-                    stored
-                }
-            });
-        let max_tokens = if s.max_tokens > 0 {
-            s.max_tokens as u32
-        } else {
-            default_max_tokens()
-        };
+            .unwrap_or_else(|| resolve_stored_model(&stored.llm_model, &provider));
 
-        Ok(AIConfig {
-            provider,
-            api_key,
-            base_url,
-            backup_urls: Vec::new(),
-            model,
-            temperature: temperature_override.unwrap_or(s.temperature),
-            max_tokens,
-            system_prompt: s.system_prompt,
-            prefer_normalized_v1_candidate: false,
-            read_timeout_secs: None,
-            transport_max_retries: None,
+        build_ai_config_from_settings(&stored, provider, model, temperature_override, Vec::new())
+    }
+
+    pub async fn build_role_aware_ai_config(
+        db: &DatabaseConnection,
+        user_id: &str,
+        intent_kind: GenerationIntentKind,
+        provider_override: Option<&str>,
+        model_override: Option<&str>,
+        temperature_override: Option<f64>,
+    ) -> Result<RoleAwareAIConfig, String> {
+        let stored = settings::Entity::find()
+            .filter(settings::Column::UserId.eq(user_id))
+            .one(db)
+            .await
+            .map_err(|error| format!("failed to load settings: {error}"))?
+            .ok_or_else(|| "settings not found".to_owned())?;
+        let policy = read_role_model_policy(stored.preferences.as_deref())
+            .map_err(|error| format!("failed to load role model policy: {error}"))?;
+        let global_provider = resolve_provider(None, &stored.provider_type, &stored.api_provider);
+        let runtime_default_provider = default_ai_provider();
+        let resolved_policy = resolve_role_model_policy(
+            RoleModelResolutionInput {
+                intent_kind,
+                policy: &policy,
+                route_provider: provider_override,
+                route_model: model_override,
+                global_provider: Some(&global_provider),
+                global_model: Some(&stored.llm_model),
+                runtime_default_provider: &runtime_default_provider,
+            },
+            default_runtime_model_for_provider,
+        )
+        .map_err(|error| format!("failed to resolve role model policy: {error}"))?;
+        let backup_urls = parse_api_backup_urls(stored.api_backup_urls.as_deref());
+        let allow_model_fallback = allows_automatic_model_fallback(&stored.fallback_strategy);
+        let ai_config = build_ai_config_from_settings(
+            &stored,
+            resolved_policy.resolved_provider.clone(),
+            resolved_policy.resolved_model.clone(),
+            temperature_override,
+            backup_urls,
+        )?;
+
+        Ok(RoleAwareAIConfig {
+            ai_config,
+            resolved_policy,
+            allow_model_fallback,
         })
     }
 
@@ -1094,6 +1181,7 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
+    use crate::services::role_model_policy_service::{GenerationRole, ModelSelectionSource};
 
     async fn setup_settings_db() -> DatabaseConnection {
         let db = Database::connect("sqlite::memory:")
@@ -1116,6 +1204,264 @@ mod tests {
             .one(db)
             .await
             .expect("load settings")
+    }
+
+    async fn insert_runtime_settings(
+        db: &DatabaseConnection,
+        user_id: &str,
+        provider: &str,
+        model: &str,
+        preferences: Option<Value>,
+        backup_urls: &[&str],
+        fallback_strategy: &str,
+    ) {
+        let now = Utc::now().naive_utc();
+        settings::ActiveModel {
+            id: Set(Uuid::new_v4().to_string()),
+            user_id: Set(user_id.to_owned()),
+            api_provider: Set(provider.to_owned()),
+            api_key: Set("sk-settings-test-key".to_owned()),
+            api_base_url: Set("https://settings.example.test/v1".to_owned()),
+            api_backup_urls: Set(serialize_api_backup_urls(
+                &backup_urls
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect::<Vec<_>>(),
+            )),
+            provider_type: Set(provider.to_owned()),
+            fallback_strategy: Set(fallback_strategy.to_owned()),
+            azure_api_version: Set(None),
+            llm_model: Set(model.to_owned()),
+            temperature: Set(0.55),
+            max_tokens: Set(8192),
+            system_prompt: Set(Some("stored system prompt".to_owned())),
+            preferences: Set(preferences.map(|value| value.to_string())),
+            created_at: Set(now),
+            updated_at: Set(now),
+        }
+        .insert(db)
+        .await
+        .expect("insert runtime settings");
+    }
+
+    #[tokio::test]
+    async fn build_ai_config_preserves_legacy_backup_url_behavior() {
+        let db = setup_settings_db().await;
+        insert_runtime_settings(
+            &db,
+            "legacy-user",
+            "openai",
+            "stored-model",
+            None,
+            &["https://backup.example.test/v1"],
+            "manual",
+        )
+        .await;
+
+        let config = SettingsService::build_ai_config(&db, "legacy-user", None, None, Some(0.25))
+            .await
+            .expect("build legacy ai config");
+
+        assert_eq!(config.provider, "openai");
+        assert_eq!(config.model, "stored-model");
+        assert_eq!(config.temperature, 0.25);
+        assert_eq!(config.max_tokens, 8192);
+        assert!(config.backup_urls.is_empty());
+    }
+
+    #[tokio::test]
+    async fn role_aware_ai_config_empty_policy_inherits_global_settings() {
+        let db = setup_settings_db().await;
+        insert_runtime_settings(
+            &db,
+            "default-policy-user",
+            "openai",
+            "global-model",
+            None,
+            &["https://backup.example.test/v1"],
+            "auto",
+        )
+        .await;
+
+        let prepared = SettingsService::build_role_aware_ai_config(
+            &db,
+            "default-policy-user",
+            GenerationIntentKind::ChapterGenerate,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("build role-aware config");
+
+        assert_eq!(prepared.resolved_policy.role, GenerationRole::Writer);
+        assert_eq!(prepared.resolved_policy.resolved_provider, "openai");
+        assert_eq!(prepared.resolved_policy.resolved_model, "global-model");
+        assert_eq!(
+            prepared.resolved_policy.provider_source,
+            ModelSelectionSource::GlobalSettings
+        );
+        assert_eq!(
+            prepared.resolved_policy.model_source,
+            ModelSelectionSource::GlobalSettings
+        );
+        assert_eq!(prepared.ai_config.provider, "openai");
+        assert_eq!(prepared.ai_config.model, "global-model");
+        assert_eq!(
+            prepared.ai_config.backup_urls,
+            vec!["https://backup.example.test/v1".to_owned()]
+        );
+        assert!(prepared.allow_model_fallback);
+    }
+
+    #[tokio::test]
+    async fn role_aware_ai_config_applies_role_override_and_manual_fallback() {
+        let db = setup_settings_db().await;
+        let preferences = json!({
+            "role_model_policy": {
+                "schema_version": "role-model-policy/v1",
+                "roles": {
+                    "writer": {
+                        "provider": "gemini",
+                        "model": "gemini-writer-model"
+                    }
+                }
+            },
+            "unknown_top_level": {"preserved": true}
+        });
+        insert_runtime_settings(
+            &db,
+            "role-override-user",
+            "openai",
+            "global-openai-model",
+            Some(preferences),
+            &["https://backup.example.test/v1"],
+            "manual",
+        )
+        .await;
+
+        let prepared = SettingsService::build_role_aware_ai_config(
+            &db,
+            "role-override-user",
+            GenerationIntentKind::BatchChapterGenerate,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("build role override config");
+
+        assert_eq!(prepared.ai_config.provider, "gemini");
+        assert_eq!(prepared.ai_config.model, "gemini-writer-model");
+        assert_eq!(
+            prepared.resolved_policy.provider_source,
+            ModelSelectionSource::RoleOverride
+        );
+        assert_eq!(
+            prepared.resolved_policy.model_source,
+            ModelSelectionSource::RoleOverride
+        );
+        assert!(!prepared.allow_model_fallback);
+    }
+
+    #[tokio::test]
+    async fn role_aware_ai_config_route_override_wins_over_role_policy() {
+        let db = setup_settings_db().await;
+        let preferences = json!({
+            "role_model_policy": {
+                "schema_version": "role-model-policy/v1",
+                "roles": {
+                    "writer": {
+                        "provider": "anthropic",
+                        "model": "role-model"
+                    }
+                }
+            }
+        });
+        insert_runtime_settings(
+            &db,
+            "route-override-user",
+            "openai",
+            "global-model",
+            Some(preferences),
+            &[],
+            "auto",
+        )
+        .await;
+
+        let prepared = SettingsService::build_role_aware_ai_config(
+            &db,
+            "route-override-user",
+            GenerationIntentKind::ChapterRegenerate,
+            Some(" Gemini "),
+            Some(" route-model "),
+            Some(0.4),
+        )
+        .await
+        .expect("build route override config");
+
+        assert_eq!(prepared.ai_config.provider, "gemini");
+        assert_eq!(prepared.ai_config.model, "route-model");
+        assert_eq!(prepared.ai_config.temperature, 0.4);
+        assert_eq!(
+            prepared.resolved_policy.provider_source,
+            ModelSelectionSource::RouteOverride
+        );
+        assert_eq!(
+            prepared.resolved_policy.model_source,
+            ModelSelectionSource::RouteOverride
+        );
+        assert_eq!(
+            prepared.resolved_policy.requested_provider.as_deref(),
+            Some("gemini")
+        );
+        assert_eq!(
+            prepared.resolved_policy.requested_model.as_deref(),
+            Some("route-model")
+        );
+    }
+
+    #[tokio::test]
+    async fn role_aware_ai_config_uses_target_provider_runtime_default_model() {
+        let db = setup_settings_db().await;
+        let preferences = json!({
+            "role_model_policy": {
+                "schema_version": "role-model-policy/v1",
+                "roles": {
+                    "writer": {
+                        "provider": "gemini"
+                    }
+                }
+            }
+        });
+        insert_runtime_settings(
+            &db,
+            "provider-default-user",
+            "openai",
+            "global-openai-model",
+            Some(preferences),
+            &[],
+            "auto",
+        )
+        .await;
+
+        let prepared = SettingsService::build_role_aware_ai_config(
+            &db,
+            "provider-default-user",
+            GenerationIntentKind::ChapterRepair,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("build provider default config");
+
+        assert_eq!(prepared.ai_config.provider, "gemini");
+        assert_eq!(prepared.ai_config.model, "gemini-2.5-flash");
+        assert_eq!(
+            prepared.resolved_policy.model_source,
+            ModelSelectionSource::ProviderDefault
+        );
     }
 
     #[tokio::test]

@@ -151,6 +151,7 @@ mod tests {
                     reference_assets: "[]".to_string(),
                     mcp_references: String::new(),
                 },
+                role_policy_context: None,
             },
         );
 
@@ -203,6 +204,7 @@ mod tests {
                     reference_assets: "[]".to_string(),
                     mcp_references: String::new(),
                 },
+                role_policy_context: None,
             },
         };
         let restored_runtime_state = RestoredSingleGenerationRuntimeState::from_quality_fragments(

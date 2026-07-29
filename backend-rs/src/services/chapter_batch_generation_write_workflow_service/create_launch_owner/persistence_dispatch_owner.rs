@@ -1,9 +1,9 @@
 use chrono::NaiveDateTime;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
+use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::models::batch_generation_task;
+use crate::models::{batch_generation_task, project};
 use crate::services::chapter_batch_generation_runtime_state_service::{
     dispatch_batch_generation_runtime, BatchGenerationExecutionInput,
     BatchGenerationQueuedCreateResponseChapter, BatchGenerationQueuedSnapshotPlan,
@@ -13,8 +13,12 @@ use crate::services::chapter_batch_generation_write_workflow_service::{
 };
 use crate::services::chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig;
 use crate::services::chapter_generation_execution_contract_service::{
-    prepare_generation_execution_config, PreparedGenerationExecutionConfig,
+    build_prompt_overrides_from_compat_options, prepare_role_aware_generation_execution_config,
+    PreparedGenerationExecutionConfig,
 };
+use crate::services::chapter_generation_runtime_service::build_batch_generation_contract_snapshot;
+use crate::services::chapter_generation_runtime_service::story_continuity_ledger_owner::load_project_continuity_ledger;
+use crate::services::generation_contract_service::GenerationIntentKind;
 use crate::services::settings_service::SettingsService;
 
 use super::startup_seed_owner::{
@@ -181,6 +185,7 @@ impl PreparedBatchGenerationCreateWorkflowLaunch {
         request: BatchGenerationCreateWorkflowRequest,
         candidate_gateway_config: ChapterCandidateRouteGatewayConfig,
     ) -> Result<Self, CreateBatchGenerationWriteWorkflowError> {
+        let target_word_count_overridden = request.target_word_count.is_some();
         let (normalized_target_word_count, chapter_targets) = request
             .prepare(db, project_id)
             .await
@@ -196,7 +201,8 @@ impl PreparedBatchGenerationCreateWorkflowLaunch {
             .map_err(|error| CreateBatchGenerationWriteWorkflowError::Config(error.to_string()))?;
         let request_runtime_state = request.into_request_runtime_state(web_research_default);
         let model_override = request_runtime_state.model_override.clone();
-        let runtime_seed = BatchGenerationCreateRuntimeSeed::prepare(
+        let compat_options = request_runtime_state.compat_options.clone();
+        let mut runtime_seed = BatchGenerationCreateRuntimeSeed::prepare(
             db,
             project_id,
             task_spec.start_chapter_number,
@@ -204,10 +210,44 @@ impl PreparedBatchGenerationCreateWorkflowLaunch {
         )
         .await
         .map_err(CreateBatchGenerationWriteWorkflowError::Internal)?;
-        let execution_config =
-            prepare_generation_execution_config(db, user_id, model_override.as_deref())
-                .await
-                .map_err(CreateBatchGenerationWriteWorkflowError::Config)?;
+        let project_model = project::Entity::find_by_id(project_id)
+            .one(db)
+            .await
+            .map_err(|error| CreateBatchGenerationWriteWorkflowError::Internal(error.to_string()))?
+            .ok_or_else(|| {
+                CreateBatchGenerationWriteWorkflowError::Internal("Project not found".to_owned())
+            })?;
+        let continuity_ledger = load_project_continuity_ledger(db, Some(project_id), 4)
+            .await
+            .map_err(CreateBatchGenerationWriteWorkflowError::Internal)?;
+        let chapter_ids = chapter_targets
+            .iter()
+            .map(|target| target.id.clone())
+            .collect::<Vec<_>>();
+        let prompt_overrides = build_prompt_overrides_from_compat_options(&compat_options);
+        let generation_contract_snapshot = build_batch_generation_contract_snapshot(
+            &project_model,
+            chapter_ids,
+            task_spec.start_chapter_number,
+            normalized_target_word_count,
+            target_word_count_overridden,
+            &prompt_overrides,
+            Some(&continuity_ledger),
+        )
+        .map_err(CreateBatchGenerationWriteWorkflowError::Internal)?;
+        runtime_seed
+            .merge_generation_contract_snapshot(&generation_contract_snapshot)
+            .map_err(|error| {
+                CreateBatchGenerationWriteWorkflowError::Internal(error.to_string())
+            })?;
+        let execution_config = prepare_role_aware_generation_execution_config(
+            db,
+            user_id,
+            GenerationIntentKind::BatchChapterGenerate,
+            model_override.as_deref(),
+        )
+        .await
+        .map_err(CreateBatchGenerationWriteWorkflowError::Config)?;
         Ok(Self::from_runtime_seed(
             task_spec,
             normalized_target_word_count,

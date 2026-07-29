@@ -3,6 +3,7 @@ use std::future::Future;
 use futures::{Stream, StreamExt};
 use serde_json::Value;
 
+use crate::ai::execution_trace::{AIExecutionOutcome, AIExecutionTraceV1, TrackedAIStream};
 use crate::ai::service::AIService;
 use crate::ai::types::{AIStreamChunk, ToolDef};
 use crate::services::chapter_candidate_runtime_state_service::{
@@ -16,6 +17,17 @@ pub(crate) struct ChapterCandidateOutput {
     pub(crate) full_content: String,
     pub(crate) chunks: Vec<String>,
     pub(crate) runtime_state: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TrackedChapterCandidateOutput {
+    pub(crate) output: ChapterCandidateOutput,
+    pub(crate) execution: AIExecutionTraceV1,
+}
+
+struct CollectedChapterCandidateOutput {
+    output: ChapterCandidateOutput,
+    stopped_by_max_output_chars: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,38 +54,228 @@ where
     F: FnMut(String, ChapterCandidateOutputProgress) -> Fut,
     Fut: Future<Output = Result<(), String>>,
 {
+    collect_generation_candidate_output_with_reasoning(request, on_chunk, |_reasoning| async {
+        Ok(())
+    })
+    .await
+}
+
+pub(crate) async fn collect_generation_candidate_output_with_reasoning<F, Fut, R, RFut>(
+    request: ChapterCandidateOutputRequest<'_>,
+    on_chunk: F,
+    on_reasoning: R,
+) -> Result<ChapterCandidateOutput, String>
+where
+    F: FnMut(String, ChapterCandidateOutputProgress) -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+    R: FnMut(String) -> RFut,
+    RFut: Future<Output = Result<(), String>>,
+{
     let stream = request.ai_service.generate_text_stream(
         request.prompt,
         request.system_prompt,
         request.tools,
     );
-    collect_generation_candidate_output_from_stream(
+    collect_generation_candidate_output_from_stream_with_reasoning(
         stream,
         request.candidate_index,
         request.max_output_chars,
         request.runtime_state,
         on_chunk,
+        on_reasoning,
+    )
+    .await
+}
+
+pub(crate) async fn collect_generation_candidate_output_tracked<F, Fut>(
+    request: ChapterCandidateOutputRequest<'_>,
+    allow_model_fallback: bool,
+    on_chunk: F,
+) -> Result<TrackedChapterCandidateOutput, String>
+where
+    F: FnMut(String, ChapterCandidateOutputProgress) -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+{
+    collect_generation_candidate_output_tracked_with_reasoning(
+        request,
+        allow_model_fallback,
+        on_chunk,
+        |_reasoning| async { Ok(()) },
+    )
+    .await
+}
+
+pub(crate) async fn collect_generation_candidate_output_tracked_with_reasoning<F, Fut, R, RFut>(
+    request: ChapterCandidateOutputRequest<'_>,
+    allow_model_fallback: bool,
+    on_chunk: F,
+    on_reasoning: R,
+) -> Result<TrackedChapterCandidateOutput, String>
+where
+    F: FnMut(String, ChapterCandidateOutputProgress) -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+    R: FnMut(String) -> RFut,
+    RFut: Future<Output = Result<(), String>>,
+{
+    let tracked_stream = request.ai_service.generate_text_stream_tracked(
+        request.prompt,
+        request.system_prompt,
+        request.tools,
+        allow_model_fallback,
+    );
+    collect_generation_candidate_output_from_tracked_stream_with_reasoning(
+        tracked_stream,
+        request.candidate_index,
+        request.max_output_chars,
+        request.runtime_state,
+        on_chunk,
+        on_reasoning,
     )
     .await
 }
 
 pub(crate) async fn collect_generation_candidate_output_from_stream<S, F, Fut>(
-    mut stream: S,
+    stream: S,
     candidate_index: i64,
     max_output_chars: Option<usize>,
     runtime_state: Option<&mut Value>,
-    mut on_chunk: F,
+    on_chunk: F,
 ) -> Result<ChapterCandidateOutput, String>
 where
     S: Stream<Item = Result<AIStreamChunk, String>> + Unpin,
     F: FnMut(String, ChapterCandidateOutputProgress) -> Fut,
     Fut: Future<Output = Result<(), String>>,
 {
+    collect_generation_candidate_output_from_stream_with_reasoning(
+        stream,
+        candidate_index,
+        max_output_chars,
+        runtime_state,
+        on_chunk,
+        |_reasoning| async { Ok(()) },
+    )
+    .await
+}
+
+pub(crate) async fn collect_generation_candidate_output_from_stream_with_reasoning<
+    S,
+    F,
+    Fut,
+    R,
+    RFut,
+>(
+    stream: S,
+    candidate_index: i64,
+    max_output_chars: Option<usize>,
+    runtime_state: Option<&mut Value>,
+    on_chunk: F,
+    on_reasoning: R,
+) -> Result<ChapterCandidateOutput, String>
+where
+    S: Stream<Item = Result<AIStreamChunk, String>> + Unpin,
+    F: FnMut(String, ChapterCandidateOutputProgress) -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+    R: FnMut(String) -> RFut,
+    RFut: Future<Output = Result<(), String>>,
+{
+    collect_generation_candidate_output_from_stream_internal(
+        stream,
+        candidate_index,
+        max_output_chars,
+        runtime_state,
+        on_chunk,
+        on_reasoning,
+    )
+    .await
+    .map(|collected| collected.output)
+}
+
+pub(crate) async fn collect_generation_candidate_output_from_tracked_stream<F, Fut>(
+    tracked_stream: TrackedAIStream,
+    candidate_index: i64,
+    max_output_chars: Option<usize>,
+    runtime_state: Option<&mut Value>,
+    on_chunk: F,
+) -> Result<TrackedChapterCandidateOutput, String>
+where
+    F: FnMut(String, ChapterCandidateOutputProgress) -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+{
+    collect_generation_candidate_output_from_tracked_stream_with_reasoning(
+        tracked_stream,
+        candidate_index,
+        max_output_chars,
+        runtime_state,
+        on_chunk,
+        |_reasoning| async { Ok(()) },
+    )
+    .await
+}
+
+pub(crate) async fn collect_generation_candidate_output_from_tracked_stream_with_reasoning<
+    F,
+    Fut,
+    R,
+    RFut,
+>(
+    tracked_stream: TrackedAIStream,
+    candidate_index: i64,
+    max_output_chars: Option<usize>,
+    runtime_state: Option<&mut Value>,
+    on_chunk: F,
+    on_reasoning: R,
+) -> Result<TrackedChapterCandidateOutput, String>
+where
+    F: FnMut(String, ChapterCandidateOutputProgress) -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+    R: FnMut(String) -> RFut,
+    RFut: Future<Output = Result<(), String>>,
+{
+    let collected = collect_generation_candidate_output_from_stream_internal(
+        tracked_stream.stream,
+        candidate_index,
+        max_output_chars,
+        runtime_state,
+        on_chunk,
+        on_reasoning,
+    )
+    .await?;
+    let mut execution = tracked_stream
+        .completion
+        .await
+        .map_err(|_| "candidate execution trace completion channel closed".to_string())?;
+
+    if collected.stopped_by_max_output_chars && execution.outcome == AIExecutionOutcome::Failed {
+        execution.outcome = AIExecutionOutcome::Succeeded;
+    }
+
+    Ok(TrackedChapterCandidateOutput {
+        output: collected.output,
+        execution,
+    })
+}
+
+async fn collect_generation_candidate_output_from_stream_internal<S, F, Fut, R, RFut>(
+    mut stream: S,
+    candidate_index: i64,
+    max_output_chars: Option<usize>,
+    runtime_state: Option<&mut Value>,
+    mut on_chunk: F,
+    mut on_reasoning: R,
+) -> Result<CollectedChapterCandidateOutput, String>
+where
+    S: Stream<Item = Result<AIStreamChunk, String>> + Unpin,
+    F: FnMut(String, ChapterCandidateOutputProgress) -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+    R: FnMut(String) -> RFut,
+    RFut: Future<Output = Result<(), String>>,
+{
     let mut full_content = String::new();
     let mut chunks = Vec::new();
     let normalized_candidate_index = candidate_index.max(1);
     let mut runtime_state = runtime_state;
     let mut candidate_total = normalized_candidate_index;
+    let mut stopped_by_max_output_chars = false;
 
     if let Some(state) = runtime_state.as_deref() {
         candidate_total =
@@ -90,7 +292,12 @@ where
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result?;
-        let chunk_content = chunk.content.unwrap_or_default();
+        if let Some(reasoning_content) = chunk.reasoning_content.filter(|value| !value.is_empty()) {
+            on_reasoning(reasoning_content).await?;
+        }
+        let Some(chunk_content) = chunk.content.filter(|value| !value.is_empty()) else {
+            continue;
+        };
         full_content.push_str(&chunk_content);
         chunks.push(chunk_content.clone());
 
@@ -109,6 +316,7 @@ where
 
         if max_output_chars.is_some_and(|limit| limit > 0 && full_content.chars().count() >= limit)
         {
+            stopped_by_max_output_chars = true;
             break;
         }
     }
@@ -124,10 +332,13 @@ where
         }
     }
 
-    Ok(ChapterCandidateOutput {
-        full_content,
-        chunks,
-        runtime_state: runtime_state.as_deref().cloned(),
+    Ok(CollectedChapterCandidateOutput {
+        output: ChapterCandidateOutput {
+            full_content,
+            chunks,
+            runtime_state: runtime_state.as_deref().cloned(),
+        },
+        stopped_by_max_output_chars,
     })
 }
 
@@ -259,22 +470,71 @@ pub(crate) fn build_chapter_candidate_output_owner_contract() -> Value {
 #[cfg(test)]
 mod tests {
     use serde_json::{json, Value};
-    use tokio_stream::iter;
+    use tokio::sync::{mpsc, oneshot};
+    use tokio_stream::{iter, wrappers::ReceiverStream};
 
+    use crate::ai::execution_trace::{
+        AIExecutionOutcome, AIExecutionTraceV1, TrackedAIStream, AI_EXECUTION_TRACE_SCHEMA_VERSION,
+    };
     use crate::ai::types::AIStreamChunk;
 
     use super::{
         build_chapter_candidate_output_owner_contract,
-        collect_generation_candidate_output_from_stream, ChapterCandidateOutputProgress,
+        collect_generation_candidate_output_from_stream,
+        collect_generation_candidate_output_from_stream_with_reasoning,
+        collect_generation_candidate_output_from_tracked_stream, ChapterCandidateOutputProgress,
     };
 
     fn text_chunk(content: &str) -> Result<AIStreamChunk, String> {
         Ok(AIStreamChunk {
             content: Some(content.to_string()),
+            reasoning_content: None,
             tool_calls: None,
             done: false,
             finish_reason: None,
         })
+    }
+
+    fn reasoning_chunk(content: &str) -> Result<AIStreamChunk, String> {
+        Ok(AIStreamChunk {
+            content: None,
+            reasoning_content: Some(content.to_string()),
+            tool_calls: None,
+            done: false,
+            finish_reason: None,
+        })
+    }
+
+    fn execution_trace(outcome: AIExecutionOutcome) -> AIExecutionTraceV1 {
+        AIExecutionTraceV1 {
+            schema_version: AI_EXECUTION_TRACE_SCHEMA_VERSION.to_string(),
+            requested_provider: "openai".to_string(),
+            requested_model: "gpt-primary".to_string(),
+            actual_provider: "openai".to_string(),
+            actual_model: "gpt-primary".to_string(),
+            outcome,
+            fallbacks: Vec::new(),
+            endpoint_summary: None,
+        }
+    }
+
+    async fn tracked_stream(
+        items: Vec<Result<AIStreamChunk, String>>,
+        outcome: AIExecutionOutcome,
+    ) -> TrackedAIStream {
+        let (tx, rx) = mpsc::channel(items.len().max(1));
+        for item in items {
+            tx.send(item).await.expect("seed tracked stream");
+        }
+        drop(tx);
+        let (completion_tx, completion_rx) = oneshot::channel();
+        completion_tx
+            .send(execution_trace(outcome))
+            .expect("seed execution trace");
+        TrackedAIStream {
+            stream: ReceiverStream::new(rx),
+            completion: completion_rx,
+        }
     }
 
     #[tokio::test]
@@ -292,6 +552,38 @@ mod tests {
         assert_eq!(output.full_content, "第一段第二段");
         assert_eq!(output.chunks, vec!["第一段", "第二段"]);
         assert!(output.runtime_state.is_none());
+    }
+
+    #[tokio::test]
+    async fn should_emit_reasoning_without_mixing_it_into_candidate_output() {
+        let mut content_events = Vec::<String>::new();
+        let mut reasoning_events = Vec::<String>::new();
+
+        let output = collect_generation_candidate_output_from_stream_with_reasoning(
+            iter(vec![
+                reasoning_chunk("分析一"),
+                text_chunk("正文"),
+                reasoning_chunk("分析二"),
+            ]),
+            1,
+            None,
+            None,
+            |chunk, _progress| {
+                content_events.push(chunk);
+                async { Ok(()) }
+            },
+            |reasoning| {
+                reasoning_events.push(reasoning);
+                async { Ok(()) }
+            },
+        )
+        .await
+        .expect("candidate output");
+
+        assert_eq!(output.full_content, "正文");
+        assert_eq!(output.chunks, vec!["正文"]);
+        assert_eq!(content_events, vec!["正文"]);
+        assert_eq!(reasoning_events, vec!["分析一", "分析二"]);
     }
 
     #[tokio::test]
@@ -387,6 +679,64 @@ mod tests {
         )
         .await
         .expect_err("stream error");
+
+        assert_eq!(error, "provider stream failed");
+    }
+
+    #[tokio::test]
+    async fn should_normalize_tracked_channel_close_failure_after_controlled_char_limit() {
+        let output = collect_generation_candidate_output_from_tracked_stream(
+            tracked_stream(
+                vec![text_chunk("甲乙丙"), text_chunk("不应继续消费")],
+                AIExecutionOutcome::Failed,
+            )
+            .await,
+            1,
+            Some(2),
+            None,
+            |_chunk, _progress| async { Ok(()) },
+        )
+        .await
+        .expect("tracked candidate output");
+
+        assert_eq!(output.output.full_content, "甲乙。");
+        assert_eq!(output.execution.outcome, AIExecutionOutcome::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn should_preserve_tracked_failed_outcome_without_controlled_char_limit() {
+        let output = collect_generation_candidate_output_from_tracked_stream(
+            tracked_stream(vec![text_chunk("正文")], AIExecutionOutcome::Failed).await,
+            1,
+            None,
+            None,
+            |_chunk, _progress| async { Ok(()) },
+        )
+        .await
+        .expect("tracked candidate output");
+
+        assert_eq!(output.output.full_content, "正文");
+        assert_eq!(output.execution.outcome, AIExecutionOutcome::Failed);
+    }
+
+    #[tokio::test]
+    async fn should_propagate_tracked_stream_error_before_reading_completion() {
+        let error = collect_generation_candidate_output_from_tracked_stream(
+            tracked_stream(
+                vec![
+                    text_chunk("正文"),
+                    Err("provider stream failed".to_string()),
+                ],
+                AIExecutionOutcome::Failed,
+            )
+            .await,
+            1,
+            None,
+            None,
+            |_chunk, _progress| async { Ok(()) },
+        )
+        .await
+        .expect_err("tracked stream error");
 
         assert_eq!(error, "provider stream failed");
     }

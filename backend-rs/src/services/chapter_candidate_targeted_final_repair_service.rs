@@ -16,6 +16,7 @@ use crate::services::chapter_candidate_rerank_service::{
 use crate::services::chapter_candidate_runtime_state_service::{
     sync_chapter_candidate_runtime_state, ChapterCandidateRuntimeStatePatch,
 };
+use crate::services::generation_contract_service::GenerationContractHistorySummaryV1;
 
 const TARGETED_QUALITY_REPAIR: &str = "targeted_quality_repair";
 
@@ -31,6 +32,7 @@ pub(crate) struct ChapterCandidateTargetedFinalRepairRequest {
     pub(crate) repair_seed_candidate: Value,
     pub(crate) current_winner_candidate: Value,
     pub(crate) runtime_state: Option<Value>,
+    pub(crate) repair_generation_contract: Option<GenerationContractHistorySummaryV1>,
     pub(crate) allow_followup_seed_defer: bool,
 }
 
@@ -370,7 +372,7 @@ where
         .clone()
         .or_else(|| request.runtime_state.take());
 
-    (dependencies.build_generation_candidate_record_fn)(
+    let mut repair_candidate = (dependencies.build_generation_candidate_record_fn)(
         ChapterCandidateTargetedFinalRepairRecordBuildInput {
             full_content: output.full_content,
             candidate_chunks: output.chunks,
@@ -385,7 +387,12 @@ where
             generation_path: TARGETED_QUALITY_REPAIR.to_string(),
             attempt_kind: TARGETED_QUALITY_REPAIR.to_string(),
         },
-    )
+    )?;
+    attach_repair_generation_contract_metadata(
+        &mut repair_candidate,
+        request.repair_generation_contract.as_ref(),
+    )?;
+    Ok(repair_candidate)
 }
 
 fn build_repair_prompt(
@@ -405,6 +412,20 @@ fn build_repair_prompt(
     .filter(|section| !section.is_empty())
     .collect::<Vec<_>>()
     .join("\n\n")
+}
+
+fn attach_repair_generation_contract_metadata(
+    repair_candidate: &mut Value,
+    repair_generation_contract: Option<&GenerationContractHistorySummaryV1>,
+) -> Result<(), String> {
+    let (Some(repair_candidate_map), Some(summary)) =
+        (repair_candidate.as_object_mut(), repair_generation_contract)
+    else {
+        return Ok(());
+    };
+    let summary_value = serde_json::to_value(summary).map_err(|error| error.to_string())?;
+    repair_candidate_map.insert("repair_generation_contract".to_string(), summary_value);
+    Ok(())
 }
 
 fn attach_repair_seed_candidate_metadata(
@@ -528,6 +549,7 @@ pub(crate) fn build_chapter_candidate_targeted_final_repair_owner_contract() -> 
                 "repair_seed_candidate",
                 "current_winner_candidate",
                 "runtime_state",
+                "repair_generation_contract",
                 "allow_followup_seed_defer"
             ],
             "repair_policy": [
@@ -548,7 +570,8 @@ pub(crate) fn build_chapter_candidate_targeted_final_repair_owner_contract() -> 
             ],
             "record_policy": [
                 "record builder receives repaired full content, chunks, target_word_count, source, generation label suffix, candidate index, offset, generation_path, and attempt_kind",
-                "repair seed metadata records candidate index, generation_path, and attempt_kind when available"
+                "repair seed metadata records candidate index, generation_path, and attempt_kind when available",
+                "optional repair generation contract stores only schema, digest, target, intent kind, and sources without copying the Story Packet"
             ]
         },
         "validation_boundary": [
@@ -603,6 +626,7 @@ mod tests {
     use serde_json::{json, Map, Value};
 
     use super::{
+        attach_repair_generation_contract_metadata,
         build_chapter_candidate_targeted_final_repair_owner_contract,
         build_default_targeted_final_repair_dependencies,
         execute_targeted_final_repair_pass_workflow, targeted_final_repair_seed_candidate_view,
@@ -612,6 +636,20 @@ mod tests {
         ChapterCandidateTargetedFinalRepairRequest, ChapterCandidateTargetedFinalRepairSuffixInput,
     };
     use crate::services::chapter_candidate_output_service::ChapterCandidateOutput;
+    use crate::services::generation_contract_service::{
+        GenerationContractHistorySummaryV1, GenerationIntentKind, GenerationTarget,
+        GENERATION_CONTRACT_SCHEMA_VERSION,
+    };
+
+    fn repair_generation_contract_summary() -> GenerationContractHistorySummaryV1 {
+        GenerationContractHistorySummaryV1 {
+            schema_version: GENERATION_CONTRACT_SCHEMA_VERSION.to_string(),
+            input_digest: "repair-contract-digest".to_string(),
+            target: GenerationTarget::chapter("project-1", "chapter-1"),
+            intent_kind: GenerationIntentKind::ChapterRepair,
+            sources: Vec::new(),
+        }
+    }
 
     fn base_request() -> ChapterCandidateTargetedFinalRepairRequest {
         let mut base_generate_kwargs = Map::new();
@@ -646,6 +684,7 @@ mod tests {
             }),
             current_winner_candidate: json!({"candidate_index": 1, "overall_score": 88}),
             runtime_state: Some(json!({})),
+            repair_generation_contract: None,
             allow_followup_seed_defer: false,
         }
     }
@@ -792,9 +831,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn should_keep_legacy_candidate_shape_without_repair_contract_metadata() {
+        let mut candidate = json!({"candidate_index": 1});
+        attach_repair_generation_contract_metadata(&mut candidate, None)
+            .expect("missing summary should be a no-op");
+        assert_eq!(candidate, json!({"candidate_index": 1}));
+
+        let mut legacy_scalar_candidate = json!("legacy-candidate");
+        attach_repair_generation_contract_metadata(
+            &mut legacy_scalar_candidate,
+            Some(&repair_generation_contract_summary()),
+        )
+        .expect("non-object legacy candidates should remain compatible");
+        assert_eq!(legacy_scalar_candidate, json!("legacy-candidate"));
+    }
+
     #[tokio::test]
     async fn should_adopt_preferred_targeted_final_repair_candidate() {
         let mut request = base_request();
+        request.repair_generation_contract = Some(repair_generation_contract_summary());
         let selected_candidate = request.current_winner_candidate.clone();
         let candidates = vec![
             selected_candidate.clone(),
@@ -833,6 +889,14 @@ mod tests {
             result.selected_candidate["quality_metrics"]["candidate_selection"]
                 ["repair_seed_candidate_index"],
             2
+        );
+        assert_eq!(
+            result.selected_candidate["repair_generation_contract"]["intent_kind"],
+            "chapter_repair"
+        );
+        assert_eq!(
+            result.selected_candidate["repair_generation_contract"]["input_digest"],
+            "repair-contract-digest"
         );
         assert_eq!(
             request.runtime_state.as_ref().unwrap()["attempt_kind"],

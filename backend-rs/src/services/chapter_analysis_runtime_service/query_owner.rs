@@ -705,6 +705,7 @@ mod view_payload_tests {
             id: "analysis-1".to_string(),
             project_id: "project-1".to_string(),
             chapter_id: "chapter-1".to_string(),
+            source_content_digest: None,
             plot_stage: Some("climax".to_string()),
             conflict_level: Some(4),
             conflict_types: Some(json!(["inner"])),

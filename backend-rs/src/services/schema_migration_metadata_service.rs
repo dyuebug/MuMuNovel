@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
-const POSTGRES_ALEMBIC_HEAD: &str = "20260712_password_hash_phc_text";
+pub(crate) const POSTGRES_ALEMBIC_HEAD: &str = "20260720_audit_actor_id_capacity";
 const MIGRATION_RUNTIME_OWNER: &str = "rust_db_migrator_migration_executor";
 const RUST_METADATA_OWNER: &str = "schema_migration_metadata_service";
 const MIGRATION_LOCK_NAME: &str = "mumuainovel:alembic";
@@ -21,7 +21,7 @@ const DEFAULT_MIGRATION_LOCK_POLL_INTERVAL_SECONDS: f64 = 1.0;
 const RUST_MIGRATION_TAIL_HARDENING_REPLAY_ENABLED_ENV: &str =
     "RUST_MIGRATION_TAIL_HARDENING_REPLAY_ENABLED";
 const RUST_EXECUTABLE_MIGRATION_COVERAGE: &str =
-    "initial_schema_seed_data_settings_system_prompt_foreshadows_prompt_workshop_character_state_settings_api_compat_writing_style_project_defaults_batch_runtime_tail_hardening_and_password_hash_phc_text";
+    "initial_schema_seed_data_settings_system_prompt_foreshadows_prompt_workshop_character_state_settings_api_compat_writing_style_project_defaults_batch_runtime_tail_hardening_password_hash_phc_text_autopilot_invocation_audit_durable_novel_autopilot_plot_analysis_content_digest_and_autopilot_user_id_capacity";
 const INITIAL_SCHEMA_SQL: &str = include_str!("schema_migration_initial_schema.sql");
 const ALEMBIC_VERSION_NUM_LENGTH: i32 = 64;
 const PASSWORD_HASH_STORAGE_METADATA_QUERY: &str =
@@ -136,9 +136,34 @@ const POSTGRES_REVISION_CATALOG: &[MigrationRevisionCatalogEntry] = &[
         filename: "20260517_1600_project_core_defaults_hardening.py",
     },
     MigrationRevisionCatalogEntry {
-        revision: POSTGRES_ALEMBIC_HEAD,
+        revision: "20260712_password_hash_phc_text",
         down_revision: Some("20260517_project_core_defaults"),
         filename: "20260712_1200_password_hash_phc_text.py",
+    },
+    MigrationRevisionCatalogEntry {
+        revision: "20260716_autopilot_invocation_audit",
+        down_revision: Some("20260712_password_hash_phc_text"),
+        filename: "20260716_2200_autopilot_invocation_audit.py",
+    },
+    MigrationRevisionCatalogEntry {
+        revision: "20260719_durable_novel_autopilot",
+        down_revision: Some("20260716_autopilot_invocation_audit"),
+        filename: "20260719_1200_durable_novel_autopilot.py",
+    },
+    MigrationRevisionCatalogEntry {
+        revision: "20260719_analysis_content_digest",
+        down_revision: Some("20260719_durable_novel_autopilot"),
+        filename: "20260719_1600_plot_analysis_source_content_digest.py",
+    },
+    MigrationRevisionCatalogEntry {
+        revision: "20260719_autopilot_user_id_capacity",
+        down_revision: Some("20260719_analysis_content_digest"),
+        filename: "20260719_1700_novel_autopilot_user_id_capacity.py",
+    },
+    MigrationRevisionCatalogEntry {
+        revision: POSTGRES_ALEMBIC_HEAD,
+        down_revision: Some("20260719_autopilot_user_id_capacity"),
+        filename: "20260720_0900_autopilot_audit_actor_user_id_capacity.py",
     },
 ];
 
@@ -1359,6 +1384,191 @@ $$"#,
     },
 ];
 
+const AUTOPILOT_INVOCATION_AUDIT_UPGRADE_STEPS: &[RustMigrationSqlStep] = &[
+    RustMigrationSqlStep {
+        sql: r#"CREATE TABLE autopilot_invocation_audits (
+    id VARCHAR(36) NOT NULL,
+    task_id VARCHAR(36) NOT NULL,
+    project_id VARCHAR(36) NOT NULL,
+    actor_user_id VARCHAR(36) NOT NULL,
+    schema_version VARCHAR(64) NOT NULL,
+    tool_name VARCHAR(128) NOT NULL,
+    tool_schema_version VARCHAR(64) NOT NULL,
+    confirmed_by_user BOOLEAN NOT NULL,
+    execution_mode VARCHAR(64) NOT NULL,
+    provider_name TEXT,
+    model_name TEXT,
+    prompt_digest VARCHAR(80),
+    input_digest VARCHAR(80) NOT NULL,
+    input_summary TEXT NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    result_summary TEXT,
+    error_code VARCHAR(128),
+    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    started_at TIMESTAMP WITHOUT TIME ZONE,
+    completed_at TIMESTAMP WITHOUT TIME ZONE,
+    CONSTRAINT pk_autopilot_invocation_audits PRIMARY KEY (id),
+    CONSTRAINT fk_autopilot_invocation_audits_project_id
+        FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+)"#,
+        statement_kind: "ddl_create_table",
+    },
+    RustMigrationSqlStep {
+        sql: "CREATE UNIQUE INDEX uq_autopilot_invocation_audits_task_id ON autopilot_invocation_audits (task_id)",
+        statement_kind: "ddl_create_unique_index",
+    },
+    RustMigrationSqlStep {
+        sql: "CREATE INDEX ix_autopilot_invocation_audits_project_created_at ON autopilot_invocation_audits (project_id, created_at)",
+        statement_kind: "ddl_create_index",
+    },
+];
+
+const AUTOPILOT_INVOCATION_AUDIT_DOWNGRADE_STEPS: &[RustMigrationSqlStep] =
+    &[RustMigrationSqlStep {
+        sql: "DROP TABLE autopilot_invocation_audits",
+        statement_kind: "ddl_drop_table",
+    }];
+
+const DURABLE_NOVEL_AUTOPILOT_UPGRADE_STEPS: &[RustMigrationSqlStep] = &[
+    RustMigrationSqlStep {
+        sql: r#"CREATE TABLE novel_autopilot_runs (
+    id VARCHAR(36) NOT NULL,
+    project_id VARCHAR(36) NOT NULL,
+    user_id VARCHAR(36) NOT NULL,
+    schema_version VARCHAR(64) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    current_phase VARCHAR(64) NOT NULL,
+    current_step VARCHAR(128),
+    active_scope_key VARCHAR(36),
+    current_chapter_id VARCHAR(36),
+    current_chapter_number INTEGER,
+    total_chapters INTEGER NOT NULL,
+    completed_chapters INTEGER NOT NULL,
+    failed_chapters JSON NOT NULL,
+    pending_rewrites JSON NOT NULL,
+    total_word_count BIGINT NOT NULL,
+    execution_scope VARCHAR(64) NOT NULL,
+    human_gate_mode VARCHAR(64) NOT NULL,
+    gate_interval INTEGER,
+    config_snapshot JSON NOT NULL,
+    max_chapters INTEGER,
+    max_tokens BIGINT,
+    max_estimated_cost DOUBLE PRECISION,
+    max_runtime_seconds BIGINT,
+    used_tokens BIGINT NOT NULL,
+    estimated_cost DOUBLE PRECISION NOT NULL,
+    epoch BIGINT NOT NULL,
+    version BIGINT NOT NULL,
+    consecutive_provider_failures INTEGER NOT NULL,
+    consecutive_quality_failures INTEGER NOT NULL,
+    last_error_code VARCHAR(128),
+    guidance_digest VARCHAR(80),
+    active_background_task_id VARCHAR(36),
+    final_export_ref TEXT,
+    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    started_at TIMESTAMP WITHOUT TIME ZONE,
+    paused_at TIMESTAMP WITHOUT TIME ZONE,
+    completed_at TIMESTAMP WITHOUT TIME ZONE,
+    CONSTRAINT pk_novel_autopilot_runs PRIMARY KEY (id),
+    CONSTRAINT fk_novel_autopilot_runs_project_id
+        FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
+    CONSTRAINT fk_novel_autopilot_runs_current_chapter_id
+        FOREIGN KEY (current_chapter_id) REFERENCES chapters (id) ON DELETE SET NULL
+)"#,
+        statement_kind: "ddl_create_table",
+    },
+    RustMigrationSqlStep {
+        sql: "CREATE UNIQUE INDEX uq_novel_autopilot_runs_active_scope_key ON novel_autopilot_runs (active_scope_key)",
+        statement_kind: "ddl_create_unique_index",
+    },
+    RustMigrationSqlStep {
+        sql: "CREATE INDEX ix_novel_autopilot_runs_project_created_at ON novel_autopilot_runs (project_id, created_at)",
+        statement_kind: "ddl_create_index",
+    },
+    RustMigrationSqlStep {
+        sql: r#"CREATE TABLE novel_autopilot_step_runs (
+    id VARCHAR(36) NOT NULL,
+    run_id VARCHAR(36) NOT NULL,
+    step_key VARCHAR(160) NOT NULL,
+    step_type VARCHAR(64) NOT NULL,
+    phase VARCHAR(64) NOT NULL,
+    chapter_id VARCHAR(36),
+    chapter_number INTEGER,
+    attempt INTEGER NOT NULL,
+    run_epoch BIGINT NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    background_task_id VARCHAR(36),
+    input_digest VARCHAR(80) NOT NULL,
+    result_digest VARCHAR(80),
+    quality_decision VARCHAR(32),
+    error_code VARCHAR(128),
+    started_at TIMESTAMP WITHOUT TIME ZONE,
+    completed_at TIMESTAMP WITHOUT TIME ZONE,
+    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    CONSTRAINT pk_novel_autopilot_step_runs PRIMARY KEY (id),
+    CONSTRAINT fk_novel_autopilot_step_runs_run_id
+        FOREIGN KEY (run_id) REFERENCES novel_autopilot_runs (id) ON DELETE CASCADE,
+    CONSTRAINT fk_novel_autopilot_step_runs_chapter_id
+        FOREIGN KEY (chapter_id) REFERENCES chapters (id) ON DELETE SET NULL,
+    CONSTRAINT uq_novel_autopilot_step_runs_run_step_attempt
+        UNIQUE (run_id, step_key, attempt)
+)"#,
+        statement_kind: "ddl_create_table",
+    },
+    RustMigrationSqlStep {
+        sql: "CREATE INDEX ix_novel_autopilot_step_runs_run_status_created_at ON novel_autopilot_step_runs (run_id, status, created_at)",
+        statement_kind: "ddl_create_index",
+    },
+];
+
+const DURABLE_NOVEL_AUTOPILOT_DOWNGRADE_STEPS: &[RustMigrationSqlStep] = &[
+    RustMigrationSqlStep {
+        sql: "DROP TABLE novel_autopilot_step_runs",
+        statement_kind: "ddl_drop_table",
+    },
+    RustMigrationSqlStep {
+        sql: "DROP TABLE novel_autopilot_runs",
+        statement_kind: "ddl_drop_table",
+    },
+];
+
+const PLOT_ANALYSIS_CONTENT_DIGEST_UPGRADE_STEPS: &[RustMigrationSqlStep] =
+    &[RustMigrationSqlStep {
+        sql: "ALTER TABLE plot_analysis ADD COLUMN source_content_digest VARCHAR(80)",
+        statement_kind: "ddl_add_column",
+    }];
+
+const PLOT_ANALYSIS_CONTENT_DIGEST_DOWNGRADE_STEPS: &[RustMigrationSqlStep] =
+    &[RustMigrationSqlStep {
+        sql: "ALTER TABLE plot_analysis DROP COLUMN source_content_digest",
+        statement_kind: "ddl_drop_column",
+    }];
+
+const AUTOPILOT_USER_ID_CAPACITY_UPGRADE_STEPS: &[RustMigrationSqlStep] = &[RustMigrationSqlStep {
+    sql: "ALTER TABLE novel_autopilot_runs ALTER COLUMN user_id TYPE VARCHAR(100)",
+    statement_kind: "ddl_alter_column_type",
+}];
+
+const AUTOPILOT_USER_ID_CAPACITY_DOWNGRADE_STEPS: &[RustMigrationSqlStep] =
+    &[RustMigrationSqlStep {
+        sql: "ALTER TABLE novel_autopilot_runs ALTER COLUMN user_id TYPE VARCHAR(36)",
+        statement_kind: "ddl_alter_column_type",
+    }];
+
+const AUTOPILOT_AUDIT_ACTOR_ID_CAPACITY_UPGRADE_STEPS: &[RustMigrationSqlStep] =
+    &[RustMigrationSqlStep {
+        sql: "ALTER TABLE autopilot_invocation_audits ALTER COLUMN actor_user_id TYPE VARCHAR(100)",
+        statement_kind: "ddl_alter_column_type",
+    }];
+
+const AUTOPILOT_AUDIT_ACTOR_ID_CAPACITY_DOWNGRADE_STEPS: &[RustMigrationSqlStep] =
+    &[RustMigrationSqlStep {
+        sql: "ALTER TABLE autopilot_invocation_audits ALTER COLUMN actor_user_id TYPE VARCHAR(36)",
+        statement_kind: "ddl_alter_column_type",
+    }];
+
 const RUST_EXECUTABLE_POSTGRES_REVISIONS: &[RustMigrationExecutableRevision] = &[
     RustMigrationExecutableRevision {
         revision: "ee0a189f1532",
@@ -1494,11 +1704,46 @@ const RUST_EXECUTABLE_POSTGRES_REVISIONS: &[RustMigrationExecutableRevision] = &
         downgrade_steps: PROJECT_CORE_DEFAULTS_DOWNGRADE_STEPS,
     },
     RustMigrationExecutableRevision {
-        revision: POSTGRES_ALEMBIC_HEAD,
+        revision: "20260712_password_hash_phc_text",
         filename: "20260712_1200_password_hash_phc_text.py",
         execution_scope: RUST_EXECUTABLE_MIGRATION_COVERAGE,
         upgrade_steps: PASSWORD_HASH_PHC_TEXT_UPGRADE_STEPS,
         downgrade_steps: PASSWORD_HASH_PHC_TEXT_DOWNGRADE_STEPS,
+    },
+    RustMigrationExecutableRevision {
+        revision: "20260716_autopilot_invocation_audit",
+        filename: "20260716_2200_autopilot_invocation_audit.py",
+        execution_scope: RUST_EXECUTABLE_MIGRATION_COVERAGE,
+        upgrade_steps: AUTOPILOT_INVOCATION_AUDIT_UPGRADE_STEPS,
+        downgrade_steps: AUTOPILOT_INVOCATION_AUDIT_DOWNGRADE_STEPS,
+    },
+    RustMigrationExecutableRevision {
+        revision: "20260719_durable_novel_autopilot",
+        filename: "20260719_1200_durable_novel_autopilot.py",
+        execution_scope: RUST_EXECUTABLE_MIGRATION_COVERAGE,
+        upgrade_steps: DURABLE_NOVEL_AUTOPILOT_UPGRADE_STEPS,
+        downgrade_steps: DURABLE_NOVEL_AUTOPILOT_DOWNGRADE_STEPS,
+    },
+    RustMigrationExecutableRevision {
+        revision: "20260719_analysis_content_digest",
+        filename: "20260719_1600_plot_analysis_source_content_digest.py",
+        execution_scope: RUST_EXECUTABLE_MIGRATION_COVERAGE,
+        upgrade_steps: PLOT_ANALYSIS_CONTENT_DIGEST_UPGRADE_STEPS,
+        downgrade_steps: PLOT_ANALYSIS_CONTENT_DIGEST_DOWNGRADE_STEPS,
+    },
+    RustMigrationExecutableRevision {
+        revision: "20260719_autopilot_user_id_capacity",
+        filename: "20260719_1700_novel_autopilot_user_id_capacity.py",
+        execution_scope: RUST_EXECUTABLE_MIGRATION_COVERAGE,
+        upgrade_steps: AUTOPILOT_USER_ID_CAPACITY_UPGRADE_STEPS,
+        downgrade_steps: AUTOPILOT_USER_ID_CAPACITY_DOWNGRADE_STEPS,
+    },
+    RustMigrationExecutableRevision {
+        revision: POSTGRES_ALEMBIC_HEAD,
+        filename: "20260720_0900_autopilot_audit_actor_user_id_capacity.py",
+        execution_scope: RUST_EXECUTABLE_MIGRATION_COVERAGE,
+        upgrade_steps: AUTOPILOT_AUDIT_ACTOR_ID_CAPACITY_UPGRADE_STEPS,
+        downgrade_steps: AUTOPILOT_AUDIT_ACTOR_ID_CAPACITY_DOWNGRADE_STEPS,
     },
 ];
 
@@ -3276,7 +3521,7 @@ mod tests {
     fn postgres_revision_catalog_matches_current_alembic_single_chain() {
         let catalog = postgres_revision_catalog();
 
-        assert_eq!(catalog.len(), 20);
+        assert_eq!(catalog.len(), rust_executable_postgres_revisions().len());
         assert_eq!(catalog[0].revision, "ee0a189f1532");
         assert_eq!(catalog[0].down_revision, None);
         assert_eq!(catalog[catalog.len() - 1].revision, POSTGRES_ALEMBIC_HEAD);
@@ -3305,7 +3550,7 @@ mod tests {
     ) {
         let executable = rust_executable_postgres_revisions();
 
-        assert_eq!(executable.len(), 20);
+        assert_eq!(executable.len(), postgres_revision_catalog().len());
         assert_eq!(
             executable.first().map(|entry| entry.revision),
             Some("ee0a189f1532")
@@ -3319,7 +3564,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.upgrade_steps.len())
                 .sum::<usize>(),
-            120
+            131
         );
         assert!(executable
             .iter()
@@ -3360,10 +3605,9 @@ mod tests {
 
     #[test]
     fn password_hash_phc_text_revision_keeps_upgrade_and_guarded_downgrade_contract() {
-        let revision = rust_executable_revision(POSTGRES_ALEMBIC_HEAD)
+        let revision = rust_executable_revision("20260712_password_hash_phc_text")
             .expect("password hash PHC text revision should be executable");
 
-        assert_eq!(POSTGRES_ALEMBIC_HEAD, "20260712_password_hash_phc_text");
         assert_eq!(revision.filename, "20260712_1200_password_hash_phc_text.py");
         assert_eq!(revision.upgrade_steps.len(), 2);
         assert!(revision.upgrade_steps[0]
@@ -3385,6 +3629,104 @@ mod tests {
         assert!(INITIAL_SCHEMA_SQL.contains("password_hash TEXT NOT NULL"));
         assert!(INITIAL_SCHEMA_SQL.contains("Argon2 PHC 或兼容的 legacy SHA256"));
         assert!(!INITIAL_SCHEMA_SQL.contains("password_hash VARCHAR(64) NOT NULL"));
+    }
+
+    #[test]
+    fn autopilot_invocation_audit_revision_keeps_durable_indexes() {
+        let revision = rust_executable_revision("20260716_autopilot_invocation_audit")
+            .expect("autopilot invocation audit revision should be executable");
+
+        assert_eq!(
+            revision.filename,
+            "20260716_2200_autopilot_invocation_audit.py"
+        );
+        assert_eq!(revision.upgrade_steps.len(), 3);
+        assert!(revision.upgrade_steps[0]
+            .sql
+            .contains("CREATE TABLE autopilot_invocation_audits"));
+        assert!(revision.upgrade_steps[1]
+            .sql
+            .contains("CREATE UNIQUE INDEX uq_autopilot_invocation_audits_task_id"));
+        assert!(revision.upgrade_steps[2]
+            .sql
+            .contains("ix_autopilot_invocation_audits_project_created_at"));
+        assert_eq!(revision.downgrade_steps.len(), 1);
+        assert!(revision.downgrade_steps[0]
+            .sql
+            .contains("DROP TABLE autopilot_invocation_audits"));
+    }
+
+    #[test]
+    fn durable_novel_autopilot_revision_has_run_step_constraints() {
+        let revision = rust_executable_revision("20260719_durable_novel_autopilot")
+            .expect("durable novel autopilot revision should be executable");
+
+        assert_eq!(
+            revision.filename,
+            "20260719_1200_durable_novel_autopilot.py"
+        );
+        assert_eq!(revision.upgrade_steps.len(), 5);
+        assert!(revision.upgrade_steps[0]
+            .sql
+            .contains("CREATE TABLE novel_autopilot_runs"));
+        assert!(revision.upgrade_steps[1]
+            .sql
+            .contains("uq_novel_autopilot_runs_active_scope_key"));
+        assert!(revision.upgrade_steps[3]
+            .sql
+            .contains("CREATE TABLE novel_autopilot_step_runs"));
+        assert!(revision.upgrade_steps[3]
+            .sql
+            .contains("UNIQUE (run_id, step_key, attempt)"));
+        assert!(revision.upgrade_steps[4]
+            .sql
+            .contains("ix_novel_autopilot_step_runs_run_status_created_at"));
+        assert_eq!(revision.downgrade_steps.len(), 2);
+        assert!(revision.downgrade_steps[0]
+            .sql
+            .contains("DROP TABLE novel_autopilot_step_runs"));
+        assert!(revision.downgrade_steps[1]
+            .sql
+            .contains("DROP TABLE novel_autopilot_runs"));
+    }
+
+    #[test]
+    fn autopilot_user_id_capacity_revision_remains_executable() {
+        let revision = rust_executable_revision("20260719_autopilot_user_id_capacity")
+            .expect("autopilot user id capacity revision should be executable");
+
+        assert_eq!(
+            revision.filename,
+            "20260719_1700_novel_autopilot_user_id_capacity.py"
+        );
+        assert_eq!(revision.upgrade_steps.len(), 1);
+        assert!(revision.upgrade_steps[0]
+            .sql
+            .contains("ALTER COLUMN user_id TYPE VARCHAR(100)"));
+        assert_eq!(revision.downgrade_steps.len(), 1);
+        assert!(revision.downgrade_steps[0]
+            .sql
+            .contains("ALTER COLUMN user_id TYPE VARCHAR(36)"));
+    }
+
+    #[test]
+    fn autopilot_audit_actor_id_capacity_revision_is_the_catalog_head() {
+        let revision = rust_executable_revision(POSTGRES_ALEMBIC_HEAD)
+            .expect("autopilot audit actor id capacity revision should be executable");
+
+        assert_eq!(POSTGRES_ALEMBIC_HEAD, "20260720_audit_actor_id_capacity");
+        assert_eq!(
+            revision.filename,
+            "20260720_0900_autopilot_audit_actor_user_id_capacity.py"
+        );
+        assert_eq!(revision.upgrade_steps.len(), 1);
+        assert!(revision.upgrade_steps[0]
+            .sql
+            .contains("ALTER COLUMN actor_user_id TYPE VARCHAR(100)"));
+        assert_eq!(revision.downgrade_steps.len(), 1);
+        assert!(revision.downgrade_steps[0]
+            .sql
+            .contains("ALTER COLUMN actor_user_id TYPE VARCHAR(36)"));
     }
 
     #[test]
@@ -3470,7 +3812,10 @@ mod tests {
         );
         assert_eq!(contract["startup_schema_sync_allowed"], false);
         assert_eq!(contract["postgres_alembic_head"], POSTGRES_ALEMBIC_HEAD);
-        assert_eq!(contract["postgres_revision_catalog"]["revision_count"], 20);
+        assert_eq!(
+            contract["postgres_revision_catalog"]["revision_count"],
+            json!(postgres_revision_catalog().len())
+        );
         assert_eq!(
             contract["postgres_revision_catalog"]["head"],
             POSTGRES_ALEMBIC_HEAD
@@ -3481,7 +3826,7 @@ mod tests {
         );
         assert_eq!(
             contract["rust_executable_revision_catalog"]["revision_count"],
-            20
+            json!(rust_executable_postgres_revisions().len())
         );
         assert_eq!(
             contract["rust_executable_revision_catalog"]["coverage"],
@@ -3644,10 +3989,15 @@ mod tests {
                 "20260517_regeneration_task_defaults",
                 "20260517_settings_core_defaults",
                 "20260517_project_core_defaults",
+                "20260712_password_hash_phc_text",
+                "20260716_autopilot_invocation_audit",
+                "20260719_durable_novel_autopilot",
+                "20260719_analysis_content_digest",
+                "20260719_autopilot_user_id_capacity",
                 POSTGRES_ALEMBIC_HEAD,
             ]
         );
-        assert_eq!(plan.pending_files.len(), 20);
+        assert_eq!(plan.pending_files.len(), postgres_revision_catalog().len());
         assert_eq!(
             plan.rust_executable_pending_revisions,
             vec![
@@ -3670,17 +4020,23 @@ mod tests {
                 "20260517_regeneration_task_defaults",
                 "20260517_settings_core_defaults",
                 "20260517_project_core_defaults",
+                "20260712_password_hash_phc_text",
+                "20260716_autopilot_invocation_audit",
+                "20260719_durable_novel_autopilot",
+                "20260719_analysis_content_digest",
+                "20260719_autopilot_user_id_capacity",
                 POSTGRES_ALEMBIC_HEAD,
             ]
         );
         assert!(plan.pending_revisions_all_have_rust_steps);
-        assert_eq!(plan.rust_executable_pending_sql_step_count, 120);
+        assert_eq!(plan.rust_executable_pending_sql_step_count, 131);
         assert!(plan.ddl_replay_ready);
         assert!(plan.can_replace_python_migrator);
     }
 
     #[test]
-    fn rust_migration_replay_plan_from_previous_head_only_applies_password_hash_revision() {
+    fn rust_migration_replay_plan_from_previous_head_applies_password_hash_audit_and_durable_run_revisions(
+    ) {
         let check =
             LiveAlembicHeadCheck::from_live_head("20260517_project_core_defaults".to_string());
 
@@ -3688,12 +4044,29 @@ mod tests {
 
         assert!(plan.ok);
         assert_eq!(plan.status, "pending_catalog_revisions_have_rust_steps");
-        assert_eq!(plan.pending_revisions, vec![POSTGRES_ALEMBIC_HEAD]);
+        assert_eq!(
+            plan.pending_revisions,
+            vec![
+                "20260712_password_hash_phc_text",
+                "20260716_autopilot_invocation_audit",
+                "20260719_durable_novel_autopilot",
+                "20260719_analysis_content_digest",
+                "20260719_autopilot_user_id_capacity",
+                POSTGRES_ALEMBIC_HEAD,
+            ]
+        );
         assert_eq!(
             plan.rust_executable_pending_revisions,
-            vec![POSTGRES_ALEMBIC_HEAD]
+            vec![
+                "20260712_password_hash_phc_text",
+                "20260716_autopilot_invocation_audit",
+                "20260719_durable_novel_autopilot",
+                "20260719_analysis_content_digest",
+                "20260719_autopilot_user_id_capacity",
+                POSTGRES_ALEMBIC_HEAD,
+            ]
         );
-        assert_eq!(plan.rust_executable_pending_sql_step_count, 2);
+        assert_eq!(plan.rust_executable_pending_sql_step_count, 13);
         assert!(plan.pending_revisions_all_have_rust_steps);
         assert!(plan.ddl_replay_ready);
     }

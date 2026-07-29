@@ -34,7 +34,12 @@ use crate::api::wizard::{
     RegenerateWorldBuildingRequest, WorldBuildingRequest,
 };
 use crate::services::auth::Claims;
+use crate::services::autopilot_coordinator_service::execute_novel_autopilot_task;
+use crate::services::autopilot_invocation_audit_service::{
+    create_queued_autopilot_invocation_audit, mark_autopilot_invocation_cancelled,
+};
 use crate::services::book_import_service::BookImportService;
+use crate::services::chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig;
 use crate::services::chapter_regeneration_prepare_service::{
     build_full_chapter_regeneration_stream_request_from_route_payload,
     build_partial_regeneration_stream_workflow_request_from_route_payload,
@@ -43,13 +48,25 @@ use crate::services::chapter_regeneration_prepare_service::{
 use crate::services::chapter_regeneration_stream_workflow_service::{
     execute_chapter_regeneration_task, execute_partial_regeneration_task,
 };
+use crate::services::cooperative_cancellation_service::{
+    global_cooperative_cancellation_registry, CooperativeCancellationScope,
+    CooperativeCancellationToken,
+};
+use crate::services::novel_autopilot::{
+    coordinator::{
+        execute_novel_book_autopilot_tick, NovelAutopilotNextTickLease, NovelAutopilotTickOutcome,
+    },
+    output_observer::NovelAutopilotOutputObserver,
+    repository::{NovelAutopilotRepository, NovelAutopilotRepositoryError},
+    types::NovelAutopilotRunStatus,
+};
 use crate::tasks::checkpoint::touch_checkpoint_at;
 use crate::tasks::registry::TaskRegistry;
 use crate::tasks::stream::TaskStreamHub;
 use crate::tasks::types::{
     TaskCreateRequest, TaskEvent, TaskListQuery, TaskRecord, TaskStatus, TaskWorkflowUpdate,
 };
-use crate::utils::sse::{SseChannel, SseTaskCapture};
+use crate::utils::sse::{SseChannel, SseTaskCapture, SseTaskOutputEvent};
 
 const BACKGROUND_TASKS_LIST_CREATE_ROUTE: &str = "/background-tasks";
 const BACKGROUND_TASKS_DETAIL_ROUTE: &str = "/background-tasks/{task_id}";
@@ -59,6 +76,8 @@ const BACKGROUND_TASKS_WORKFLOW_STATE_ROUTE: &str = "/background-tasks/{task_id}
 const TASK_LIST_LIMIT_DEFAULT: usize = 20;
 const TASK_LIST_LIMIT_MIN: i64 = 1;
 const TASK_LIST_LIMIT_MAX: usize = 100;
+const NOVEL_BOOK_AUTOPILOT_TASK_TYPE: &str = "novel_book_autopilot";
+const NOVEL_BOOK_AUTOPILOT_SCHEDULE_FAILED: &str = "novel_autopilot_schedule_failed";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TaskListQueryRequestError {
@@ -187,6 +206,15 @@ fn enrich_task_payload(record: &TaskRecord, payload: Value) -> Value {
     }
 }
 
+fn prepare_task_execution_payload(record: &TaskRecord, payload: Value) -> Value {
+    // Autopilot 的调用协议是严格 DTO；作用域与操作者始终以 TaskRecord 为准，不能注入其 payload。
+    if record.task_type == "novel_autopilot" {
+        payload
+    } else {
+        enrich_task_payload(record, payload)
+    }
+}
+
 fn build_task_list_response(tasks: Vec<TaskRecord>) -> Value {
     json!({
         "success": true,
@@ -225,6 +253,7 @@ fn build_connected_task_event(task_id: &str, record: &TaskRecord) -> TaskEvent {
         message: Some(record.message.clone()),
         progress: Some(record.progress),
         status: Some(record.status.to_string()),
+        content: None,
         data: Some(record_json),
         error: None,
     }
@@ -418,6 +447,285 @@ fn task_type_allows_empty_project(task_type: &str) -> bool {
     )
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AuthenticatedTaskCreateError {
+    ProjectRequired,
+    AutopilotAuditUnavailable,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AuthenticatedTaskCreateResponse {
+    pub(crate) status: StatusCode,
+    pub(crate) payload: Value,
+}
+
+#[derive(Debug)]
+enum AuthenticatedTaskPreparation {
+    Existing(AuthenticatedTaskCreateResponse),
+    Ready {
+        response: AuthenticatedTaskCreateResponse,
+        record: TaskRecord,
+        execution_payload: Value,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) enum NovelBookAutopilotTaskScheduleOutcome {
+    Scheduled { task: Value },
+    Superseded,
+}
+
+#[derive(Debug)]
+pub(crate) enum NovelBookAutopilotTaskScheduleError {
+    TaskCreate(AuthenticatedTaskCreateError),
+    InvalidTaskResponse,
+    Repository(NovelAutopilotRepositoryError),
+}
+
+impl NovelBookAutopilotTaskScheduleError {
+    pub(crate) const fn code(&self) -> &'static str {
+        match self {
+            Self::TaskCreate(AuthenticatedTaskCreateError::ProjectRequired) => {
+                "novel_autopilot_project_required"
+            }
+            Self::TaskCreate(AuthenticatedTaskCreateError::AutopilotAuditUnavailable) => {
+                "novel_autopilot_task_audit_unavailable"
+            }
+            Self::InvalidTaskResponse => "novel_autopilot_task_response_invalid",
+            Self::Repository(error) => error.code(),
+        }
+    }
+}
+
+async fn prepare_task_for_authenticated_user(
+    db: &DatabaseConnection,
+    registry: &TaskRegistry,
+    user_id: &str,
+    req: TaskCreateRequest,
+) -> Result<AuthenticatedTaskPreparation, AuthenticatedTaskCreateError> {
+    if !task_type_allows_empty_project(&req.task_type) && req.project_id.trim().is_empty() {
+        return Err(AuthenticatedTaskCreateError::ProjectRequired);
+    }
+
+    let task_id = Uuid::new_v4().to_string();
+    let fingerprint = req.payload.as_ref().map(|payload| {
+        let json_str = serde_json::to_string(payload).unwrap_or_default();
+        format!("{:x}", md5::compute(json_str.as_bytes()))
+    });
+
+    // Deduplication remains owned by the generic task lifecycle.
+    if let Some(ref fingerprint) = fingerprint {
+        if let Some(existing) = registry
+            .find_active(user_id, &req.task_type, &req.project_id, Some(fingerprint))
+            .await
+        {
+            let mut payload = compatible_task_payload(&existing);
+            if let Some(map) = payload.as_object_mut() {
+                map.insert("message".to_string(), json!("相同任务已在执行中"));
+            }
+            return Ok(AuthenticatedTaskPreparation::Existing(
+                AuthenticatedTaskCreateResponse {
+                    status: StatusCode::OK,
+                    payload,
+                },
+            ));
+        }
+    }
+
+    let mut record = TaskRecord::new(
+        task_id,
+        req.task_type,
+        user_id.to_string(),
+        req.project_id,
+        req.execution_mode,
+    );
+
+    record.stage_code = req.stage_code;
+    record.workflow_scope = req.workflow_scope;
+    record.payload_fingerprint = fingerprint;
+    if let Some(checkpoint) = req.checkpoint {
+        record.checkpoint = Some(checkpoint);
+    }
+
+    let payload = req.payload.unwrap_or_else(|| json!({}));
+    if record.task_type == "novel_autopilot" {
+        create_queued_autopilot_invocation_audit(db, &record, &payload)
+            .await
+            .map_err(|error| {
+                tracing::error!(
+                    event = "autopilot_invocation_audit_queue_failed",
+                    task_id = %record.task_id,
+                    error_code = error.code(),
+                    "autopilot task was not spawned because its durable audit could not be created"
+                );
+                AuthenticatedTaskCreateError::AutopilotAuditUnavailable
+            })?;
+    }
+
+    registry.insert(record.clone()).await;
+    let execution_payload = prepare_task_execution_payload(&record, payload);
+    let response = AuthenticatedTaskCreateResponse {
+        status: StatusCode::CREATED,
+        payload: compatible_task_payload(&record),
+    };
+    Ok(AuthenticatedTaskPreparation::Ready {
+        response,
+        record,
+        execution_payload,
+    })
+}
+
+pub(crate) async fn create_task_for_authenticated_user(
+    db: DatabaseConnection,
+    registry: TaskRegistry,
+    stream_hub: TaskStreamHub,
+    book_import_service: Arc<BookImportService>,
+    user_id: &str,
+    req: TaskCreateRequest,
+) -> Result<AuthenticatedTaskCreateResponse, AuthenticatedTaskCreateError> {
+    match prepare_task_for_authenticated_user(&db, &registry, user_id, req).await? {
+        AuthenticatedTaskPreparation::Existing(response) => Ok(response),
+        AuthenticatedTaskPreparation::Ready {
+            response,
+            record,
+            execution_payload,
+        } => {
+            spawn_task_execution(
+                db,
+                registry,
+                stream_hub,
+                book_import_service,
+                None,
+                record,
+                execution_payload,
+            );
+            Ok(response)
+        }
+    }
+}
+
+pub(crate) async fn schedule_owned_novel_book_autopilot_tick(
+    db: DatabaseConnection,
+    registry: TaskRegistry,
+    stream_hub: TaskStreamHub,
+    book_import_service: Arc<BookImportService>,
+    candidate_gateway_config: ChapterCandidateRouteGatewayConfig,
+    lease: &NovelAutopilotNextTickLease,
+    decision: Option<&str>,
+) -> Result<NovelBookAutopilotTaskScheduleOutcome, NovelBookAutopilotTaskScheduleError> {
+    let mut payload = json!({
+        "run_id": lease.run_id,
+        "run_epoch": lease.epoch,
+        "run_version": lease.version,
+    });
+    if let Some(decision) = decision {
+        payload["decision"] = json!(decision);
+    }
+    let preparation = prepare_task_for_authenticated_user(
+        &db,
+        &registry,
+        &lease.user_id,
+        TaskCreateRequest {
+            task_type: NOVEL_BOOK_AUTOPILOT_TASK_TYPE.to_string(),
+            project_id: lease.project_id.clone(),
+            payload: Some(payload),
+            stage_code: Some(lease.current_phase.clone()),
+            execution_mode: "auto".to_string(),
+            workflow_scope: Some(NOVEL_BOOK_AUTOPILOT_TASK_TYPE.to_string()),
+            checkpoint: Some(json!({
+                "run_id": lease.run_id,
+                "epoch": lease.epoch,
+                "version": lease.version,
+            })),
+        },
+    )
+    .await
+    .map_err(NovelBookAutopilotTaskScheduleError::TaskCreate)?;
+
+    let (response, pending_execution) = match preparation {
+        AuthenticatedTaskPreparation::Existing(response) => (response, None),
+        AuthenticatedTaskPreparation::Ready {
+            response,
+            record,
+            execution_payload,
+        } => (response, Some((record, execution_payload))),
+    };
+    let task_id = response
+        .payload
+        .get("task_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or(NovelBookAutopilotTaskScheduleError::InvalidTaskResponse)?;
+
+    let binding = NovelAutopilotRepository::set_active_background_task_owned(
+        &db,
+        &lease.run_id,
+        &lease.user_id,
+        lease.version,
+        lease.epoch,
+        Some(&task_id),
+    )
+    .await;
+    match binding {
+        Ok(_) => {
+            if let Some((record, execution_payload)) = pending_execution {
+                spawn_task_execution(
+                    db,
+                    registry,
+                    stream_hub,
+                    book_import_service,
+                    Some(candidate_gateway_config),
+                    record,
+                    execution_payload,
+                );
+            }
+            Ok(NovelBookAutopilotTaskScheduleOutcome::Scheduled {
+                task: response.payload,
+            })
+        }
+        Err(NovelAutopilotRepositoryError::StaleVersion)
+        | Err(NovelAutopilotRepositoryError::StaleEpoch)
+        | Err(NovelAutopilotRepositoryError::InvalidTransition) => {
+            let latest = match NovelAutopilotRepository::find_owned(
+                &db,
+                &lease.run_id,
+                &lease.user_id,
+            )
+            .await
+            {
+                Ok(latest) => latest,
+                Err(error) => {
+                    let _ =
+                        cancel_task_runtime(&registry, &stream_hub, &task_id, &lease.user_id).await;
+                    return Err(NovelBookAutopilotTaskScheduleError::Repository(error));
+                }
+            };
+            if latest.active_background_task_id.as_deref() == Some(task_id.as_str()) {
+                if let Some((record, execution_payload)) = pending_execution {
+                    spawn_task_execution(
+                        db,
+                        registry,
+                        stream_hub,
+                        book_import_service,
+                        Some(candidate_gateway_config),
+                        record,
+                        execution_payload,
+                    );
+                }
+                return Ok(NovelBookAutopilotTaskScheduleOutcome::Scheduled {
+                    task: response.payload,
+                });
+            }
+            let _ = cancel_task_runtime(&registry, &stream_hub, &task_id, &lease.user_id).await;
+            Ok(NovelBookAutopilotTaskScheduleOutcome::Superseded)
+        }
+        Err(error) => {
+            let _ = cancel_task_runtime(&registry, &stream_hub, &task_id, &lease.user_id).await;
+            Err(NovelBookAutopilotTaskScheduleError::Repository(error))
+        }
+    }
+}
+
 /// POST /api/background-tasks
 pub async fn create_task(
     Extension(claims): Extension<Claims>,
@@ -427,68 +735,40 @@ pub async fn create_task(
     Extension(book_import_service): Extension<Arc<BookImportService>>,
     Json(req): Json<TaskCreateRequest>,
 ) -> impl IntoResponse {
-    if !task_type_allows_empty_project(&req.task_type) && req.project_id.trim().is_empty() {
+    if req.task_type == "novel_book_autopilot" {
         return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"success": false, "message": "project_id is required for this task type"})),
+            StatusCode::CONFLICT,
+            Json(json!({
+                "success": false,
+                "code": "owner_managed_task_type",
+                "message": "Create durable novel autopilot tasks through the project Run API",
+            })),
         )
             .into_response();
     }
 
-    let task_id = Uuid::new_v4().to_string();
-
-    let fingerprint = req.payload.as_ref().map(|p| {
-        let json_str = serde_json::to_string(p).unwrap_or_default();
-        format!("{:x}", md5::compute(json_str.as_bytes()))
-    });
-
-    // Deduplication: check for existing active task with same fingerprint
-    if let Some(ref fp) = fingerprint {
-        if let Some(existing) = registry
-            .find_active(&claims.sub, &req.task_type, &req.project_id, Some(fp))
-            .await
-        {
-            return (
-                StatusCode::OK,
-                Json({
-                    let mut payload = compatible_task_payload(&existing);
-                    if let Some(map) = payload.as_object_mut() {
-                        map.insert("message".to_string(), json!("相同任务已在执行中"));
-                    }
-                    payload
-                }),
-            )
-                .into_response();
-        }
-    }
-
-    let mut record = TaskRecord::new(
-        task_id.clone(),
-        req.task_type,
-        claims.sub.clone(),
-        req.project_id,
-        req.execution_mode,
-    );
-
-    record.stage_code = req.stage_code;
-    record.workflow_scope = req.workflow_scope;
-    record.payload_fingerprint = fingerprint;
-    if let Some(cp) = req.checkpoint {
-        record.checkpoint = Some(cp);
-    }
-
-    registry.insert(record.clone()).await;
-    let payload = enrich_task_payload(&record, req.payload.unwrap_or_else(|| json!({})));
-    spawn_task_execution(
+    match create_task_for_authenticated_user(
         db,
-        registry.clone(),
-        stream_hub.clone(),
+        registry,
+        stream_hub,
         book_import_service,
-        record.clone(),
-        payload,
-    );
-
-    (StatusCode::CREATED, Json(compatible_task_payload(&record))).into_response()
+        &claims.sub,
+        req,
+    )
+    .await
+    {
+        Ok(response) => (response.status, Json(response.payload)).into_response(),
+        Err(AuthenticatedTaskCreateError::ProjectRequired) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"success": false, "message": "project_id is required for this task type"})),
+        )
+            .into_response(),
+        Err(AuthenticatedTaskCreateError::AutopilotAuditUnavailable) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": "Unable to create autopilot task"})),
+        )
+            .into_response(),
+    }
 }
 
 fn spawn_task_execution(
@@ -496,27 +776,41 @@ fn spawn_task_execution(
     registry: TaskRegistry,
     stream_hub: TaskStreamHub,
     book_import_service: Arc<BookImportService>,
+    candidate_gateway_config: Option<ChapterCandidateRouteGatewayConfig>,
     record: TaskRecord,
     payload: serde_json::Value,
 ) {
     tokio::spawn(async move {
+        let cancellation_registration = global_cooperative_cancellation_registry().register(
+            CooperativeCancellationScope::BackgroundTask,
+            record.task_id.clone(),
+        );
         if !mark_task_running(&registry, &stream_hub, &record.task_id, "任务已开始执行").await
         {
+            cancellation_registration.cleanup();
             return;
         }
-        let result = execute_task(
-            &db,
-            &registry,
-            &stream_hub,
-            &book_import_service,
-            &record,
-            payload,
-        )
-        .await;
 
-        if let Err(error) = result {
+        let cancellation_token = cancellation_registration.token();
+        let result = tokio::select! {
+            biased;
+            _ = cancellation_token.cancelled() => None,
+            result = execute_task(
+                &db,
+                &registry,
+                &stream_hub,
+                book_import_service.clone(),
+                candidate_gateway_config.clone(),
+                &record,
+                payload,
+                cancellation_token.clone(),
+            ) => Some(result),
+        };
+
+        if let Some(Err(error)) = result {
             fail_task(&registry, &stream_hub, &record.task_id, &error).await;
         }
+        cancellation_registration.cleanup();
     });
 }
 
@@ -553,6 +847,7 @@ async fn mark_task_running(
                     message: Some(record.message),
                     progress: Some(record.progress),
                     status: Some(record.status.to_string()),
+                    content: None,
                     data: None,
                     error: None,
                 },
@@ -598,6 +893,7 @@ async fn complete_task(
                     message: Some(record.message.clone()),
                     progress: Some(record.progress),
                     status: Some(record.status.to_string()),
+                    content: None,
                     data: record.result.clone(),
                     error: None,
                 },
@@ -612,6 +908,7 @@ async fn complete_task(
                     message: Some(record.message),
                     progress: Some(100),
                     status: Some("completed".into()),
+                    content: None,
                     data: record.result,
                     error: None,
                 },
@@ -651,12 +948,55 @@ async fn fail_task(
                     message: Some(record.message.clone()),
                     progress: Some(record.progress),
                     status: Some(record.status.to_string()),
+                    content: None,
                     data: None,
                     error: record.error,
                 },
             )
             .await;
     }
+}
+
+async fn fanout_channel_output_events_if_active(
+    registry: &TaskRegistry,
+    stream_hub: &TaskStreamHub,
+    task_id: &str,
+    output_events: Vec<SseTaskOutputEvent>,
+) -> bool {
+    if output_events.is_empty() {
+        return registry
+            .get(task_id)
+            .await
+            .is_some_and(|record| record.status.is_active());
+    }
+
+    let is_active = registry
+        .get(task_id)
+        .await
+        .is_some_and(|record| record.status.is_active());
+    if !is_active {
+        return false;
+    }
+
+    for output_event in output_events {
+        stream_hub
+            .fanout(
+                task_id,
+                &TaskEvent {
+                    event_type: output_event.event_type().to_string(),
+                    task_id: Some(task_id.to_string()),
+                    message: None,
+                    progress: None,
+                    status: None,
+                    content: Some(output_event.content().to_string()),
+                    data: None,
+                    error: None,
+                },
+            )
+            .await;
+    }
+
+    true
 }
 
 async fn sync_channel_state_to_task(
@@ -666,8 +1006,14 @@ async fn sync_channel_state_to_task(
     state_capture: Arc<Mutex<SseTaskCapture>>,
     result_capture: Arc<Mutex<Option<serde_json::Value>>>,
 ) -> Result<serde_json::Value, String> {
-    let state = state_capture.lock().await.clone();
+    let (state, output_events) = {
+        let mut capture = state_capture.lock().await;
+        let output_events = capture.drain_output_events();
+        (capture.clone(), output_events)
+    };
     let result = result_capture.lock().await.clone().or(state.result.clone());
+
+    fanout_channel_output_events_if_active(registry, stream_hub, task_id, output_events).await;
 
     if let Some(error) = state.error {
         return Err(error);
@@ -700,6 +1046,7 @@ async fn sync_channel_state_to_task(
                     message: Some(record.message),
                     progress: Some(record.progress),
                     status: Some(record.status.to_string()),
+                    content: None,
                     data: None,
                     error: None,
                 },
@@ -715,6 +1062,7 @@ fn spawn_channel_progress_bridge(
     stream_hub: TaskStreamHub,
     task_id: String,
     state_capture: Arc<Mutex<SseTaskCapture>>,
+    cancellation_token: CooperativeCancellationToken,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut last_message: Option<String> = None;
@@ -722,9 +1070,28 @@ fn spawn_channel_progress_bridge(
         let mut last_status: Option<String> = None;
 
         loop {
-            tokio::time::sleep(Duration::from_millis(250)).await;
+            tokio::select! {
+                biased;
+                _ = cancellation_token.cancelled() => break,
+                _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+            }
 
-            let state = state_capture.lock().await.clone();
+            let (state, output_events) = {
+                let mut capture = state_capture.lock().await;
+                let output_events = capture.drain_output_events();
+                (capture.clone(), output_events)
+            };
+            if !fanout_channel_output_events_if_active(
+                &registry,
+                &stream_hub,
+                &task_id,
+                output_events,
+            )
+            .await
+            {
+                break;
+            }
+
             let progress = state.progress.map(|value| value.clamp(0, 100) as i32);
             let has_update =
                 state.message.is_some() || progress.is_some() || state.status.is_some();
@@ -761,6 +1128,7 @@ fn spawn_channel_progress_bridge(
                                 message: Some(record.message),
                                 progress: Some(record.progress),
                                 status: Some(record.status.to_string()),
+                                content: None,
                                 data: None,
                                 error: None,
                             },
@@ -782,18 +1150,166 @@ fn spawn_channel_progress_bridge(
     })
 }
 
+pub(crate) async fn best_effort_wait_for_human_after_schedule_failure(
+    db: &DatabaseConnection,
+    lease: &NovelAutopilotNextTickLease,
+    error_code: &str,
+) {
+    match NovelAutopilotRepository::transition_owned(
+        db,
+        &lease.run_id,
+        &lease.user_id,
+        lease.version,
+        NovelAutopilotRunStatus::WaitingHuman,
+    )
+    .await
+    {
+        Ok(_) => {
+            tracing::warn!(
+                event = "novel_book_autopilot_schedule_failure_waiting_human",
+                error_code,
+                run_id = %lease.run_id,
+                run_epoch = lease.epoch,
+                run_version = lease.version,
+                "durable novel autopilot entered waiting_human after next tick scheduling failed"
+            );
+        }
+        Err(
+            NovelAutopilotRepositoryError::StaleVersion
+            | NovelAutopilotRepositoryError::StaleEpoch
+            | NovelAutopilotRepositoryError::InvalidTransition,
+        ) => {
+            tracing::info!(
+                event = "novel_book_autopilot_schedule_failure_superseded",
+                error_code,
+                run_id = %lease.run_id,
+                run_epoch = lease.epoch,
+                run_version = lease.version,
+                "durable novel autopilot schedule failure was superseded by a newer run state"
+            );
+        }
+        Err(error) => {
+            tracing::error!(
+                event = "novel_book_autopilot_schedule_failure_fallback_failed",
+                error_code,
+                repository_error_code = error.code(),
+                run_id = %lease.run_id,
+                run_epoch = lease.epoch,
+                run_version = lease.version,
+                "durable novel autopilot could not enter waiting_human after scheduling failure"
+            );
+        }
+    }
+}
+
 async fn execute_task(
     db: &DatabaseConnection,
     registry: &TaskRegistry,
     stream_hub: &TaskStreamHub,
-    book_import_service: &BookImportService,
+    book_import_service: Arc<BookImportService>,
+    candidate_gateway_config: Option<ChapterCandidateRouteGatewayConfig>,
     record: &TaskRecord,
     payload: serde_json::Value,
+    cancellation_token: CooperativeCancellationToken,
 ) -> Result<(), String> {
     match record.task_type.as_str() {
+        "novel_autopilot" => {
+            let result = execute_novel_autopilot_task(db, record, payload).await?;
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                result,
+                Some("小说自动驾驶已执行确认操作".to_string()),
+            )
+            .await;
+        }
+        "novel_book_autopilot" => {
+            let candidate_gateway_config = candidate_gateway_config
+                .as_ref()
+                .ok_or_else(|| NOVEL_BOOK_AUTOPILOT_SCHEDULE_FAILED.to_string())?;
+            let output_observer =
+                NovelAutopilotOutputObserver::new(stream_hub.clone(), record.task_id.clone());
+            let outcome = execute_novel_book_autopilot_tick(
+                db,
+                record,
+                payload,
+                candidate_gateway_config,
+                &output_observer,
+                cancellation_token.clone(),
+            )
+            .await?;
+            let task_result = match outcome {
+                NovelAutopilotTickOutcome::Completed { task_result }
+                | NovelAutopilotTickOutcome::AwaitingHuman { task_result } => task_result,
+                NovelAutopilotTickOutcome::ScheduleNext {
+                    mut task_result,
+                    lease,
+                } => {
+                    match schedule_owned_novel_book_autopilot_tick(
+                        db.clone(),
+                        registry.clone(),
+                        stream_hub.clone(),
+                        book_import_service.clone(),
+                        candidate_gateway_config.clone(),
+                        &lease,
+                        None,
+                    )
+                    .await
+                    {
+                        Ok(NovelBookAutopilotTaskScheduleOutcome::Scheduled { task }) => {
+                            if let Some(result) = task_result.as_object_mut() {
+                                result.insert("next_task".to_string(), task);
+                            }
+                        }
+                        Ok(NovelBookAutopilotTaskScheduleOutcome::Superseded) => {
+                            if let Some(result) = task_result.as_object_mut() {
+                                result.insert(
+                                    "next_dispatch_status".to_string(),
+                                    json!("superseded"),
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            let error_code = error.code();
+                            tracing::error!(
+                                event = "novel_book_autopilot_next_tick_schedule_failed",
+                                error_code,
+                                run_id = %lease.run_id,
+                                run_epoch = lease.epoch,
+                                run_version = lease.version,
+                                parent_task_id = %record.task_id,
+                                "durable novel autopilot could not schedule its next tick"
+                            );
+                            best_effort_wait_for_human_after_schedule_failure(
+                                db, &lease, error_code,
+                            )
+                            .await;
+                            return Err(NOVEL_BOOK_AUTOPILOT_SCHEDULE_FAILED.to_string());
+                        }
+                    }
+                    task_result
+                }
+            };
+            complete_task(
+                registry,
+                stream_hub,
+                &record.task_id,
+                task_result,
+                Some("整本小说自动创作编排步骤已完成".to_string()),
+            )
+            .await;
+        }
         "wizard_world_building" => {
-            let result =
-                run_wizard_world_building(db, registry, stream_hub, record, payload).await?;
+            let result = run_wizard_world_building(
+                db,
+                registry,
+                stream_hub,
+                record,
+                payload,
+                cancellation_token.clone(),
+            )
+            .await?;
             complete_task(
                 registry,
                 stream_hub,
@@ -804,8 +1320,15 @@ async fn execute_task(
             .await;
         }
         "wizard_career_system" | "careers_generate_system" => {
-            let result =
-                run_wizard_career_system(db, registry, stream_hub, record, payload).await?;
+            let result = run_wizard_career_system(
+                db,
+                registry,
+                stream_hub,
+                record,
+                payload,
+                cancellation_token.clone(),
+            )
+            .await?;
             complete_task(
                 registry,
                 stream_hub,
@@ -816,7 +1339,15 @@ async fn execute_task(
             .await;
         }
         "wizard_characters" => {
-            let result = run_wizard_characters(db, registry, stream_hub, record, payload).await?;
+            let result = run_wizard_characters(
+                db,
+                registry,
+                stream_hub,
+                record,
+                payload,
+                cancellation_token.clone(),
+            )
+            .await?;
             complete_task(
                 registry,
                 stream_hub,
@@ -827,7 +1358,15 @@ async fn execute_task(
             .await;
         }
         "wizard_outline" | "outline_generate" => {
-            let result = run_wizard_outline(db, registry, stream_hub, record, payload).await?;
+            let result = run_wizard_outline(
+                db,
+                registry,
+                stream_hub,
+                record,
+                payload,
+                cancellation_token.clone(),
+            )
+            .await?;
             complete_task(
                 registry,
                 stream_hub,
@@ -838,7 +1377,15 @@ async fn execute_task(
             .await;
         }
         "world_regenerate" => {
-            let result = run_world_regenerate(db, registry, stream_hub, record, payload).await?;
+            let result = run_world_regenerate(
+                db,
+                registry,
+                stream_hub,
+                record,
+                payload,
+                cancellation_token.clone(),
+            )
+            .await?;
             complete_task(
                 registry,
                 stream_hub,
@@ -950,11 +1497,12 @@ async fn execute_task(
         "book_import_apply" => {
             let result = run_book_import_apply(
                 db,
-                book_import_service,
+                book_import_service.as_ref(),
                 registry,
                 stream_hub,
                 record,
                 payload,
+                cancellation_token.clone(),
             )
             .await?;
             complete_task(
@@ -969,11 +1517,12 @@ async fn execute_task(
         "book_import_retry_failed_steps" => {
             let result = run_book_import_retry_failed_steps(
                 db,
-                book_import_service,
+                book_import_service.as_ref(),
                 registry,
                 stream_hub,
                 record,
                 payload,
+                cancellation_token.clone(),
             )
             .await?;
             complete_task(
@@ -1021,6 +1570,7 @@ async fn run_wizard_world_building(
     stream_hub: &TaskStreamHub,
     record: &TaskRecord,
     payload: serde_json::Value,
+    cancellation_token: CooperativeCancellationToken,
 ) -> Result<serde_json::Value, String> {
     let body = serde_json::from_value::<WorldBuildingRequest>(payload)
         .map_err(|error| format!("无效的世界观任务参数: {}", error))?;
@@ -1033,6 +1583,7 @@ async fn run_wizard_world_building(
         stream_hub.clone(),
         record.task_id.clone(),
         state_capture.clone(),
+        cancellation_token.clone(),
     );
 
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
@@ -1059,6 +1610,7 @@ async fn run_wizard_career_system(
     stream_hub: &TaskStreamHub,
     record: &TaskRecord,
     payload: serde_json::Value,
+    cancellation_token: CooperativeCancellationToken,
 ) -> Result<serde_json::Value, String> {
     let body = serde_json::from_value::<CareerSystemRequest>(payload)
         .map_err(|error| format!("无效的职业体系任务参数: {}", error))?;
@@ -1071,6 +1623,7 @@ async fn run_wizard_career_system(
         stream_hub.clone(),
         record.task_id.clone(),
         state_capture.clone(),
+        cancellation_token.clone(),
     );
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
@@ -1096,6 +1649,7 @@ async fn run_wizard_characters(
     stream_hub: &TaskStreamHub,
     record: &TaskRecord,
     payload: serde_json::Value,
+    cancellation_token: CooperativeCancellationToken,
 ) -> Result<serde_json::Value, String> {
     let body = serde_json::from_value::<CharactersRequest>(payload)
         .map_err(|error| format!("无效的角色任务参数: {}", error))?;
@@ -1108,6 +1662,7 @@ async fn run_wizard_characters(
         stream_hub.clone(),
         record.task_id.clone(),
         state_capture.clone(),
+        cancellation_token.clone(),
     );
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
@@ -1133,6 +1688,7 @@ async fn run_wizard_outline(
     stream_hub: &TaskStreamHub,
     record: &TaskRecord,
     payload: serde_json::Value,
+    cancellation_token: CooperativeCancellationToken,
 ) -> Result<serde_json::Value, String> {
     let body = serde_json::from_value::<OutlineRequest>(payload)
         .map_err(|error| format!("无效的大纲任务参数: {}", error))?;
@@ -1145,6 +1701,7 @@ async fn run_wizard_outline(
         stream_hub.clone(),
         record.task_id.clone(),
         state_capture.clone(),
+        cancellation_token.clone(),
     );
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
@@ -1170,6 +1727,7 @@ async fn run_world_regenerate(
     stream_hub: &TaskStreamHub,
     record: &TaskRecord,
     payload: serde_json::Value,
+    cancellation_token: CooperativeCancellationToken,
 ) -> Result<serde_json::Value, String> {
     let body =
         serde_json::from_value::<RegenerateWorldBuildingRequest>(payload).unwrap_or_default();
@@ -1182,6 +1740,7 @@ async fn run_world_regenerate(
         stream_hub.clone(),
         record.task_id.clone(),
         state_capture.clone(),
+        cancellation_token.clone(),
     );
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
@@ -1353,6 +1912,7 @@ async fn run_book_import_apply(
     stream_hub: &TaskStreamHub,
     record: &TaskRecord,
     mut payload: serde_json::Value,
+    cancellation_token: CooperativeCancellationToken,
 ) -> Result<serde_json::Value, String> {
     let book_import_task_id =
         take_required_string(&mut payload, "book_import_task_id", "book_import_apply")?;
@@ -1385,6 +1945,7 @@ async fn run_book_import_apply(
         stream_hub.clone(),
         record.task_id.clone(),
         state_capture.clone(),
+        cancellation_token.clone(),
     );
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
@@ -1422,6 +1983,7 @@ async fn run_book_import_retry_failed_steps(
     stream_hub: &TaskStreamHub,
     record: &TaskRecord,
     mut payload: serde_json::Value,
+    cancellation_token: CooperativeCancellationToken,
 ) -> Result<serde_json::Value, String> {
     let book_import_task_id = take_required_string(
         &mut payload,
@@ -1452,6 +2014,7 @@ async fn run_book_import_retry_failed_steps(
         stream_hub.clone(),
         record.task_id.clone(),
         state_capture.clone(),
+        cancellation_token.clone(),
     );
     let drain_handle = tokio::spawn(async move { while rx.recv().await.is_some() {} });
 
@@ -1559,28 +2122,89 @@ fn map_task_list_query_request_error(
 mod tests {
     use std::sync::Arc;
 
-    use axum::http::StatusCode;
-    use chrono::{DateTime, Utc};
+    use axum::{
+        extract::{Extension, Path},
+        http::StatusCode,
+        response::IntoResponse,
+    };
+    use chrono::{DateTime, NaiveDate, Utc};
+    use sea_orm::{
+        ActiveModelTrait, ConnectionTrait, Database, DatabaseConnection, DbBackend, EntityTrait,
+        Schema, Set, Statement,
+    };
     use serde_json::json;
-    use tokio::sync::{Barrier, Mutex};
+    use tokio::sync::{mpsc, Barrier, Mutex};
 
     use super::{
         adapt_character_generation_task_request, adapt_organization_generation_task_request,
         build_background_tasks_route_owner_contract, build_connected_task_event,
-        build_missing_task_payload, build_task_list_response, cancel_active_task,
-        compatible_task_payload, complete_task, enrich_task_payload, fail_task,
+        build_missing_task_payload, build_task_list_response, cancel_active_task, cancel_task,
+        compatible_task_payload, complete_task, enrich_task_payload, execute_task, fail_task,
         map_task_list_query_request_error, mark_task_running, next_task_stream_data,
-        normalize_task_statuses_query, spawn_channel_progress_bridge,
-        subscribe_task_with_latest_snapshot, sync_channel_state_to_task,
-        task_type_allows_empty_project, TaskListQueryRequestError, TaskListRequest,
-        TaskStreamState, BACKGROUND_TASKS_CANCEL_ROUTE, BACKGROUND_TASKS_DETAIL_ROUTE,
-        BACKGROUND_TASKS_LIST_CREATE_ROUTE, BACKGROUND_TASKS_STREAM_ROUTE,
-        BACKGROUND_TASKS_WORKFLOW_STATE_ROUTE,
+        normalize_task_statuses_query, prepare_task_execution_payload,
+        spawn_channel_progress_bridge, spawn_task_execution, subscribe_task_with_latest_snapshot,
+        sync_channel_state_to_task, task_type_allows_empty_project, TaskListQueryRequestError,
+        TaskListRequest, TaskStreamState, BACKGROUND_TASKS_CANCEL_ROUTE,
+        BACKGROUND_TASKS_DETAIL_ROUTE, BACKGROUND_TASKS_LIST_CREATE_ROUTE,
+        BACKGROUND_TASKS_STREAM_ROUTE, BACKGROUND_TASKS_WORKFLOW_STATE_ROUTE,
+    };
+    use crate::models::{autopilot_invocation_audit, project};
+    use crate::services::auth::Claims;
+    use crate::services::autopilot_invocation_audit_service::{
+        create_queued_autopilot_invocation_audit, list_project_autopilot_invocation_audits,
+        mark_autopilot_invocation_running,
+    };
+    use crate::services::autopilot_safety_gate_fixture as safety_fixture;
+    use crate::services::book_import_service::BookImportService;
+    use crate::services::cooperative_cancellation_service::{
+        CooperativeCancellationRegistry, CooperativeCancellationScope,
     };
     use crate::tasks::registry::TaskRegistry;
     use crate::tasks::stream::TaskStreamHub;
     use crate::tasks::types::{TaskEvent, TaskListQuery, TaskRecord, TaskStatus};
-    use crate::utils::sse::SseTaskCapture;
+    use crate::utils::sse::{SseChannel, SseTaskCapture};
+
+    async fn setup_project_db() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect project sqlite memory db");
+        let builder = DbBackend::Sqlite;
+        let schema = Schema::new(builder);
+        db.execute(builder.build(&schema.create_table_from_entity(project::Entity)))
+            .await
+            .expect("create projects table");
+        db.execute(
+            builder.build(&schema.create_table_from_entity(autopilot_invocation_audit::Entity)),
+        )
+        .await
+        .expect("create autopilot invocation audits table");
+        db
+    }
+
+    async fn insert_project(db: &DatabaseConnection, id: &str, user_id: &str, status: &str) {
+        let created_at = NaiveDate::from_ymd_opt(2026, 7, 16)
+            .expect("valid date")
+            .and_hms_opt(8, 0, 0)
+            .expect("valid time");
+        project::ActiveModel {
+            id: Set(id.to_string()),
+            user_id: Set(user_id.to_string()),
+            title: Set(format!("Workflow {id}")),
+            target_words: Set(100_000),
+            current_words: Set(0),
+            status: Set(status.to_string()),
+            wizard_status: Set("completed".to_string()),
+            wizard_step: Set(0),
+            outline_mode: Set("linear".to_string()),
+            character_count: Set(0),
+            created_at: Set(created_at),
+            updated_at: Set(Some(created_at)),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .expect("insert project");
+    }
 
     fn task_record() -> TaskRecord {
         TaskRecord {
@@ -1631,6 +2255,7 @@ mod tests {
     #[test]
     fn project_scoped_background_task_types_require_project() {
         for task_type in [
+            "novel_autopilot",
             "chapter_regenerate",
             "chapter_partial_regenerate",
             "world_regenerate",
@@ -1642,6 +2267,214 @@ mod tests {
                 "{task_type} should require a project"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn novel_autopilot_executor_projects_confirmed_receipt_into_generic_task_result() {
+        let db = setup_project_db().await;
+        insert_project(&db, "project-1", "owner-1", "foundation").await;
+        let registry = TaskRegistry::new();
+        let stream_hub = TaskStreamHub::new();
+        let mut record = task_record();
+        record.task_type = "novel_autopilot".to_string();
+        record.user_id = "owner-1".to_string();
+        record.project_id = "project-1".to_string();
+        let payload = json!({
+            "tool_name": "transition_project_workflow",
+            "arguments": r#"{"project_id":"project-1","expected_phase":"foundation","target_phase":"world_building"}"#,
+            "confirmed_by_user": true
+        });
+        create_queued_autopilot_invocation_audit(&db, &record, &payload)
+            .await
+            .expect("queued audit before direct executor test");
+        registry.insert(record.clone()).await;
+        let cancellation_registration = CooperativeCancellationRegistry::default().register(
+            CooperativeCancellationScope::BackgroundTask,
+            record.task_id.clone(),
+        );
+        let service = BookImportService::new();
+
+        execute_task(
+            &db,
+            &registry,
+            &stream_hub,
+            Arc::new(service),
+            None,
+            &record,
+            payload,
+            cancellation_registration.token(),
+        )
+        .await
+        .expect("autopilot executor succeeds");
+        cancellation_registration.cleanup();
+
+        let stored = registry.get(&record.task_id).await.expect("completed task");
+        assert_eq!(stored.status, TaskStatus::Completed);
+        assert_eq!(stored.progress, 100);
+        assert_eq!(
+            stored
+                .result
+                .as_ref()
+                .and_then(|result| result.get("schema_version"))
+                .and_then(serde_json::Value::as_str),
+            Some("autopilot-tool-contract/v1")
+        );
+        assert_eq!(
+            stored
+                .result
+                .as_ref()
+                .and_then(|result| result.get("tool_name"))
+                .and_then(serde_json::Value::as_str),
+            Some("transition_project_workflow")
+        );
+    }
+
+    #[tokio::test]
+    async fn novel_autopilot_terminal_audit_failure_keeps_generic_task_as_failed_terminal_owner() {
+        let db = setup_project_db().await;
+        insert_project(
+            &db,
+            safety_fixture::PROJECT_ID,
+            safety_fixture::OWNER_ID,
+            safety_fixture::EXPECTED_PHASE,
+        )
+        .await;
+        let registry = TaskRegistry::new();
+        let stream_hub = TaskStreamHub::new();
+        let mut record = task_record();
+        record.task_id = safety_fixture::TASK_ID.to_string();
+        record.task_type = "novel_autopilot".to_string();
+        record.user_id = safety_fixture::OWNER_ID.to_string();
+        record.project_id = safety_fixture::PROJECT_ID.to_string();
+        record.status = TaskStatus::Pending;
+        record.progress = 0;
+        record.message = "等待执行".to_string();
+        let payload = safety_fixture::confirmed_transition_payload(safety_fixture::PROJECT_ID);
+        create_queued_autopilot_invocation_audit(&db, &record, &payload)
+            .await
+            .expect("queue audit before generic runner execution");
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            format!(
+                "CREATE TRIGGER g2_delete_audit_before_generic_terminal \
+                 AFTER UPDATE OF status ON projects \
+                 BEGIN DELETE FROM autopilot_invocation_audits WHERE task_id = '{}'; END",
+                safety_fixture::TASK_ID
+            ),
+        ))
+        .await
+        .expect("install terminal audit failure trigger");
+        registry.insert(record.clone()).await;
+
+        spawn_task_execution(
+            db.clone(),
+            registry.clone(),
+            stream_hub,
+            Arc::new(BookImportService::new()),
+            None,
+            record.clone(),
+            payload,
+        );
+
+        let terminal = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                let stored = registry
+                    .get(&record.task_id)
+                    .await
+                    .expect("generic task remains in registry");
+                match stored.status {
+                    TaskStatus::Failed => return stored,
+                    TaskStatus::Completed | TaskStatus::Cancelled => {
+                        panic!("generic task must fail when terminal audit projection fails")
+                    }
+                    TaskStatus::Pending | TaskStatus::Running => {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("generic task should reach a terminal state");
+
+        assert_eq!(terminal.status, TaskStatus::Failed);
+        assert_eq!(
+            terminal.error.as_deref(),
+            Some("autopilot task execution failed")
+        );
+        assert_eq!(terminal.result, None);
+        let workflow = project::Entity::find_by_id(safety_fixture::PROJECT_ID)
+            .one(&db)
+            .await
+            .expect("read workflow after generic task terminal failure")
+            .expect("fixture project remains available");
+        assert_eq!(workflow.status, safety_fixture::EXPECTED_PHASE);
+        let audits = list_project_autopilot_invocation_audits(&db, safety_fixture::PROJECT_ID, 10)
+            .await
+            .expect("fallback audit remains readable");
+        assert_eq!(audits.len(), 1);
+        assert_eq!(audits[0].status, "failed");
+        assert_eq!(
+            audits[0].error_code.as_deref(),
+            Some(safety_fixture::TERMINAL_AUDIT_FAILURE_CODE)
+        );
+    }
+    #[tokio::test]
+    async fn cancel_task_route_marks_running_novel_autopilot_audit_cancelled() {
+        let db = setup_project_db().await;
+        insert_project(&db, "project-1", "owner-1", "foundation").await;
+        let registry = TaskRegistry::new();
+        let stream_hub = TaskStreamHub::new();
+        let mut record = task_record();
+        record.task_id = "autopilot-cancel-route-task".to_string();
+        record.task_type = "novel_autopilot".to_string();
+        record.user_id = "owner-1".to_string();
+        record.project_id = "project-1".to_string();
+        let payload = json!({
+            "tool_name": "transition_project_workflow",
+            "arguments": r#"{"project_id":"project-1","expected_phase":"foundation","target_phase":"world_building"}"#,
+            "confirmed_by_user": true,
+        });
+        create_queued_autopilot_invocation_audit(&db, &record, &payload)
+            .await
+            .expect("queued audit before cancellation route test");
+        mark_autopilot_invocation_running(&db, &record.task_id)
+            .await
+            .expect("running audit before cancellation route test");
+        registry.insert(record.clone()).await;
+
+        let response = cancel_task(
+            Extension(Claims {
+                sub: "owner-1".to_string(),
+                username: "owner".to_string(),
+                is_admin: false,
+                exp: 0,
+                iat: 0,
+            }),
+            Extension(db.clone()),
+            Extension(registry.clone()),
+            Extension(stream_hub),
+            Path(record.task_id.clone()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            registry
+                .get(&record.task_id)
+                .await
+                .expect("cancelled task record")
+                .status,
+            TaskStatus::Cancelled
+        );
+        let audits = list_project_autopilot_invocation_audits(&db, "project-1", 20)
+            .await
+            .expect("read cancelled audit");
+        assert_eq!(audits.len(), 1);
+        assert_eq!(audits[0].task_id, record.task_id);
+        assert_eq!(audits[0].status, "cancelled");
+        assert_eq!(audits[0].error_code.as_deref(), Some("cancelled_by_user"));
+        assert!(audits[0].completed_at.is_some());
     }
 
     #[test]
@@ -1953,13 +2786,14 @@ mod tests {
         let registry = TaskRegistry::new();
         let stream_hub = TaskStreamHub::new();
         registry.insert(task_record()).await;
-        let state_capture = Arc::new(Mutex::new(SseTaskCapture {
-            message: Some("流式处理完成".to_string()),
-            progress: Some(100),
-            status: Some("success".to_string()),
-            result: Some(json!({"chapter": "done"})),
-            error: None,
-            done: true,
+        let state_capture = Arc::new(Mutex::new({
+            let mut capture = SseTaskCapture::default();
+            capture.message = Some("流式处理完成".to_string());
+            capture.progress = Some(100);
+            capture.status = Some("success".to_string());
+            capture.result = Some(json!({"chapter": "done"}));
+            capture.done = true;
+            capture
         }));
         let result_capture = Arc::new(Mutex::new(None));
 
@@ -2007,13 +2841,14 @@ mod tests {
         let cancelled = cancel_active_task(&registry, "task-1", "user-1")
             .await
             .expect("running task should be cancelled");
-        let state_capture = Arc::new(Mutex::new(SseTaskCapture {
-            message: Some("迟到的成功事件".to_string()),
-            progress: Some(100),
-            status: Some("success".to_string()),
-            result: Some(json!({"late": true})),
-            error: None,
-            done: true,
+        let state_capture = Arc::new(Mutex::new({
+            let mut capture = SseTaskCapture::default();
+            capture.message = Some("迟到的成功事件".to_string());
+            capture.progress = Some(100);
+            capture.status = Some("success".to_string());
+            capture.result = Some(json!({"late": true}));
+            capture.done = true;
+            capture
         }));
 
         let result = sync_channel_state_to_task(
@@ -2037,6 +2872,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn channel_state_sync_flushes_transient_output_without_persisting_it() {
+        let registry = TaskRegistry::new();
+        let stream_hub = TaskStreamHub::new();
+        registry.insert(task_record()).await;
+        let mut receiver = stream_hub.subscribe("task-1").await;
+        let (tx, _rx) = mpsc::channel(8);
+        let result_capture = Arc::new(Mutex::new(None));
+        let state_capture = Arc::new(Mutex::new(SseTaskCapture::default()));
+        let channel = SseChannel::with_captures(tx, result_capture.clone(), state_capture.clone());
+
+        channel.reasoning_chunk("显式推理").await;
+        channel.chunk("生成正文").await;
+        channel.result(&json!({"saved": true})).await;
+
+        let result = sync_channel_state_to_task(
+            &registry,
+            &stream_hub,
+            "task-1",
+            state_capture,
+            result_capture,
+        )
+        .await
+        .expect("captured result should be returned");
+        assert_eq!(result, json!({"saved": true}));
+
+        let reasoning: TaskEvent = serde_json::from_str(
+            &receiver
+                .recv()
+                .await
+                .expect("reasoning event should be broadcast"),
+        )
+        .expect("reasoning event should be valid JSON");
+        assert_eq!(reasoning.event_type, "reasoning_chunk");
+        assert_eq!(reasoning.content.as_deref(), Some("显式推理"));
+
+        let content: TaskEvent = serde_json::from_str(
+            &receiver
+                .recv()
+                .await
+                .expect("content event should be broadcast"),
+        )
+        .expect("content event should be valid JSON");
+        assert_eq!(content.event_type, "chunk");
+        assert_eq!(content.content.as_deref(), Some("生成正文"));
+
+        let record = registry.get("task-1").await.expect("task should remain");
+        assert_eq!(record.result, None);
+        assert!(!record.message.contains("显式推理"));
+        assert!(!record.message.contains("生成正文"));
+    }
+
+    #[tokio::test]
     async fn channel_progress_bridge_stops_after_terminal_update_is_rejected() {
         let registry = TaskRegistry::new();
         let stream_hub = TaskStreamHub::new();
@@ -2044,20 +2931,23 @@ mod tests {
         let cancelled = cancel_active_task(&registry, "task-1", "user-1")
             .await
             .expect("running task should be cancelled");
-        let state_capture = Arc::new(Mutex::new(SseTaskCapture {
-            message: Some("迟到的进度事件".to_string()),
-            progress: Some(99),
-            status: Some("processing".to_string()),
-            result: None,
-            error: None,
-            done: false,
+        let state_capture = Arc::new(Mutex::new({
+            let mut capture = SseTaskCapture::default();
+            capture.message = Some("迟到的进度事件".to_string());
+            capture.progress = Some(99);
+            capture.status = Some("processing".to_string());
+            capture
         }));
 
+        let cancellation_registry = CooperativeCancellationRegistry::default();
+        let registration =
+            cancellation_registry.register(CooperativeCancellationScope::BackgroundTask, "task-1");
         let mut bridge = spawn_channel_progress_bridge(
             registry.clone(),
             stream_hub,
             "task-1".to_string(),
             state_capture,
+            registration.token(),
         );
         if tokio::time::timeout(std::time::Duration::from_secs(1), &mut bridge)
             .await
@@ -2074,6 +2964,30 @@ mod tests {
         assert_eq!(unchanged.updated_at, cancelled.updated_at);
         assert_eq!(unchanged.completed_at, cancelled.completed_at);
         assert_eq!(unchanged.result, None);
+    }
+
+    #[tokio::test]
+    async fn channel_progress_bridge_exits_when_cancellation_token_is_signalled() {
+        let registry = TaskRegistry::new();
+        let stream_hub = TaskStreamHub::new();
+        registry.insert(task_record()).await;
+        let cancellation_registry = CooperativeCancellationRegistry::default();
+        let registration =
+            cancellation_registry.register(CooperativeCancellationScope::BackgroundTask, "task-1");
+        let token = registration.token();
+        let bridge = spawn_channel_progress_bridge(
+            registry,
+            stream_hub,
+            "task-1".to_string(),
+            Arc::new(Mutex::new(SseTaskCapture::default())),
+            token.clone(),
+        );
+
+        assert!(token.cancel());
+        tokio::time::timeout(std::time::Duration::from_secs(1), bridge)
+            .await
+            .expect("cancelled bridge should exit before timeout")
+            .expect("cancelled bridge should not panic");
     }
 
     #[test]
@@ -2095,6 +3009,31 @@ mod tests {
         assert_eq!(payload["user_id"], "user-1");
     }
 
+    #[test]
+    fn prepare_task_execution_payload_preserves_strict_novel_autopilot_invocation() {
+        let mut record = task_record();
+        record.task_type = "novel_autopilot".to_string();
+        let payload = json!({
+            "tool_name": "transition_project_workflow",
+            "arguments": "{\"project_id\":\"project-1\"}",
+            "confirmed_by_user": true,
+        });
+
+        let prepared = prepare_task_execution_payload(&record, payload.clone());
+
+        assert_eq!(prepared, payload);
+        assert!(prepared.get("project_id").is_none());
+        assert!(prepared.get("user_id").is_none());
+    }
+
+    #[test]
+    fn prepare_task_execution_payload_enriches_non_autopilot_task() {
+        let payload = prepare_task_execution_payload(&task_record(), json!({"hello": "world"}));
+
+        assert_eq!(payload["hello"], "world");
+        assert_eq!(payload["project_id"], "project-1");
+        assert_eq!(payload["user_id"], "user-1");
+    }
     #[test]
     fn compatible_task_payload_exposes_recovery_semantics_at_top_level_and_data() {
         let mut record = task_record();
@@ -2467,16 +3406,42 @@ async fn cancel_active_task(
         .await
 }
 
+pub(crate) async fn cancel_task_runtime(
+    registry: &TaskRegistry,
+    stream_hub: &TaskStreamHub,
+    task_id: &str,
+    user_id: &str,
+) -> Option<TaskRecord> {
+    let updated = cancel_active_task(registry, task_id, user_id).await?;
+    global_cooperative_cancellation_registry()
+        .cancel(CooperativeCancellationScope::BackgroundTask, task_id);
+    let event = TaskEvent {
+        event_type: "cancelled".into(),
+        task_id: Some(task_id.to_string()),
+        message: Some("任务已取消".into()),
+        progress: None,
+        status: Some("cancelled".into()),
+        content: None,
+        data: None,
+        error: None,
+    };
+    stream_hub.fanout_terminal(task_id, &event).await;
+    Some(updated)
+}
+
 /// POST /api/background-tasks/:task_id/cancel
 pub async fn cancel_task(
     Extension(claims): Extension<Claims>,
+    Extension(db): Extension<DatabaseConnection>,
     Extension(registry): Extension<TaskRegistry>,
     Extension(stream_hub): Extension<TaskStreamHub>,
     Path(task_id): Path<String>,
 ) -> impl IntoResponse {
     match registry.get(&task_id).await {
         Some(record) if record.user_id == claims.sub && record.status.is_active() => {
-            let Some(updated) = cancel_active_task(&registry, &task_id, &claims.sub).await else {
+            let Some(updated) =
+                cancel_task_runtime(&registry, &stream_hub, &task_id, &claims.sub).await
+            else {
                 return (
                     StatusCode::OK,
                     Json(json!({"success": false, "message": "任务不存在或已完成"})),
@@ -2484,16 +3449,16 @@ pub async fn cancel_task(
                     .into_response();
             };
 
-            let event = TaskEvent {
-                event_type: "cancelled".into(),
-                task_id: Some(task_id.clone()),
-                message: Some("任务已取消".into()),
-                progress: None,
-                status: Some("cancelled".into()),
-                data: None,
-                error: None,
-            };
-            stream_hub.fanout_terminal(&task_id, &event).await;
+            if updated.task_type == "novel_autopilot" {
+                if let Err(error) = mark_autopilot_invocation_cancelled(&db, &task_id).await {
+                    tracing::error!(
+                        event = "autopilot_invocation_audit_cancel_update_failed",
+                        task_id = %task_id,
+                        error_code = error.code(),
+                        "autopilot invocation audit cancellation could not be persisted"
+                    );
+                }
+            }
 
             (
                 StatusCode::OK,
@@ -2561,6 +3526,7 @@ pub async fn update_workflow_state(
                     message: Some(updated.message.clone()),
                     progress: Some(updated.progress),
                     status: Some(updated.status.to_string()),
+                    content: None,
                     data: None,
                     error: None,
                 };

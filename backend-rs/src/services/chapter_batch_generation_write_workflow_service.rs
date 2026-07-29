@@ -52,8 +52,9 @@ mod tests {
     };
     use crate::models::chapter;
     use crate::models::{
-        batch_generation_snapshot, batch_generation_task, generation_history, project,
-        project_default_style, settings,
+        batch_generation_snapshot, batch_generation_task, career, character, character_career,
+        generation_history, organization, plot_analysis, project, project_default_style,
+        relationship, settings, story_memory,
     };
     use crate::services::chapter_batch_generation_runtime_state_service::BatchGenerationQueuedCreateResponseChapter;
     use crate::services::chapter_batch_generation_task_payload_base_service::estimated_task_minutes;
@@ -64,6 +65,11 @@ mod tests {
         batch_generation_request_runtime_state_payload, BatchGenerationRequestRuntimeState,
     };
     use crate::services::chapter_generation_runtime_service::story_repair_quality_context_owner::aggregate_story_repair_quality_summaries;
+    use crate::services::generation_contract_service::{
+        build_generation_contract_snapshot, read_generation_contract_runtime_snapshot,
+        GenerationContractSnapshotRead, GenerationIntentKind, GenerationIntentV1, GenerationTarget,
+        StoryPacketV1,
+    };
     use crate::services::project_service::ProjectAccessQueryError;
 
     #[test]
@@ -310,6 +316,27 @@ mod tests {
         db.execute(builder.build(&schema.create_table_from_entity(generation_history::Entity)))
             .await
             .expect("create generation history table");
+        db.execute(builder.build(&schema.create_table_from_entity(character::Entity)))
+            .await
+            .expect("create characters table");
+        db.execute(builder.build(&schema.create_table_from_entity(relationship::Entity)))
+            .await
+            .expect("create relationships table");
+        db.execute(builder.build(&schema.create_table_from_entity(story_memory::Entity)))
+            .await
+            .expect("create story memories table");
+        db.execute(builder.build(&schema.create_table_from_entity(plot_analysis::Entity)))
+            .await
+            .expect("create plot analyses table");
+        db.execute(builder.build(&schema.create_table_from_entity(organization::Entity)))
+            .await
+            .expect("create organizations table");
+        db.execute(builder.build(&schema.create_table_from_entity(career::Entity)))
+            .await
+            .expect("create careers table");
+        db.execute(builder.build(&schema.create_table_from_entity(character_career::Entity)))
+            .await
+            .expect("create character careers table");
 
         db
     }
@@ -468,6 +495,7 @@ mod tests {
                     reference_assets: "[]".to_string(),
                     mcp_references: String::new(),
                 },
+            role_policy_context: None,
         }
     }
 
@@ -1268,13 +1296,38 @@ mod tests {
         );
         assert_eq!(created_task.target_word_count, 2500);
         assert!(created_task.enable_analysis);
-        assert_eq!(created_task.status, "pending");
+        assert!(
+            matches!(
+                created_task.status.as_str(),
+                "pending" | "running" | "completed" | "failed"
+            ),
+            "dispatch may advance the persisted task after the pending response: {}",
+            created_task.status
+        );
         assert_eq!(created_task.total_chapters, 2);
         assert_eq!(created_task.max_retries, 4);
 
-        assert_eq!(runtime_state["phase"], "pending");
-        assert_eq!(runtime_state["status"], "pending");
-        assert_eq!(runtime_state["last_event"], "queued");
+        // `persist_and_dispatch` 返回的是稳定的 pending 响应，但后台 runtime 可能在
+        // 随后的两次数据库查询之间推进 snapshot；这里验证持久化结构与业务字段，
+        // 精确的初始 pending/queued 合同由上面的响应断言和 plan 级测试覆盖。
+        assert!(
+            runtime_state["phase"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty()),
+            "persisted runtime phase should remain a non-empty string"
+        );
+        assert!(
+            runtime_state["status"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty()),
+            "persisted runtime status should remain a non-empty string"
+        );
+        assert!(
+            runtime_state["last_event"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty()),
+            "persisted runtime last_event should remain a non-empty string"
+        );
         assert_eq!(
             runtime_state["batch_request_runtime_state"]["model_override"],
             "create-db-model"
@@ -1867,6 +1920,46 @@ mod tests {
         assert_eq!(
             resolved_compat_options.story_repair_targets(),
             &["压缩说明".to_string()]
+        );
+    }
+
+    #[test]
+    fn should_merge_batch_generation_contract_without_overwriting_runtime_fields() {
+        let runtime_state = json!({
+            "progress": {"completed": 1, "total": 2},
+            "quality": {"status": "passed"},
+            "candidate_gateway": {"selected": "candidate-1"},
+            "checkpoint": {"stage": "prepared"},
+            "last_event": "running"
+        });
+        let target = GenerationTarget::chapter_batch(
+            "project-1",
+            vec!["chapter-1".to_owned(), "chapter-2".to_owned()],
+        );
+        let packet = StoryPacketV1::new("project-1", target.clone());
+        let intent = GenerationIntentV1::new(GenerationIntentKind::BatchChapterGenerate, target);
+        let snapshot =
+            build_generation_contract_snapshot(packet, intent).expect("build batch contract");
+        let mut runtime_seed =
+            BatchGenerationCreateRuntimeSeed::from_runtime_state_payload(runtime_state.clone());
+
+        runtime_seed
+            .merge_generation_contract_snapshot(&snapshot)
+            .expect("merge batch contract");
+        let (merged_runtime_state, _) = runtime_seed.into_parts();
+
+        for field in [
+            "progress",
+            "quality",
+            "candidate_gateway",
+            "checkpoint",
+            "last_event",
+        ] {
+            assert_eq!(merged_runtime_state[field], runtime_state[field]);
+        }
+        assert_eq!(
+            read_generation_contract_runtime_snapshot(&merged_runtime_state),
+            GenerationContractSnapshotRead::Valid(snapshot)
         );
     }
 

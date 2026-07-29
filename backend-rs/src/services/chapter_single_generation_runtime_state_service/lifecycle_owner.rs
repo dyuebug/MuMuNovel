@@ -10,7 +10,8 @@ use crate::services::chapter_generation_execution_contract_service::{
 };
 use crate::services::chapter_generation_runtime_service::snapshot_persistence_owner::upsert_chapter_generation_runtime_snapshot;
 use crate::services::chapter_generation_runtime_service::{
-    generate_and_persist_chapter_content_with_candidate_route_gateway, GeneratedChapterResult,
+    generate_and_persist_single_chapter_content_with_candidate_route_gateway,
+    GeneratedChapterResult,
 };
 use crate::services::chapter_single_generation_runtime_state_service::{
     build_single_generation_error_terminal_state,
@@ -43,6 +44,7 @@ impl SingleGenerationRuntimeLaunchInput {
     pub(crate) async fn execute_generation_with_gateway_config(
         self,
         db: &DatabaseConnection,
+        task_id: Option<&str>,
         candidate_gateway_config: ChapterCandidateRouteGatewayConfig,
     ) -> Result<GeneratedChapterResult, String> {
         let Self {
@@ -58,11 +60,13 @@ impl SingleGenerationRuntimeLaunchInput {
         let crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig {
             ai_config,
             provider_payload,
+            role_policy_context,
         } = execution_config;
 
         let prompt_overrides = build_prompt_overrides_from_compat_options(&compat_options);
-        generate_and_persist_chapter_content_with_candidate_route_gateway(
+        generate_and_persist_single_chapter_content_with_candidate_route_gateway(
             db,
+            task_id,
             &user_id,
             &chapter_id,
             target_word_count,
@@ -70,6 +74,7 @@ impl SingleGenerationRuntimeLaunchInput {
             &prompt_overrides,
             ai_config,
             candidate_gateway_config,
+            role_policy_context,
         )
         .await
     }
@@ -162,7 +167,11 @@ impl SingleGenerationRuntimeLifecyclePlan {
     ) -> Result<GeneratedChapterResult, String> {
         self.runtime_input
             .clone()
-            .execute_generation_with_gateway_config(db, self.candidate_gateway_config.clone())
+            .execute_generation_with_gateway_config(
+                db,
+                Some(&self.task_id),
+                self.candidate_gateway_config.clone(),
+            )
             .await
     }
 

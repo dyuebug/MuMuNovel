@@ -1,5 +1,8 @@
 use chrono::Utc;
-use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
+    TransactionTrait,
+};
 use serde_json::{json, Value};
 
 use crate::models::{batch_generation_snapshot, batch_generation_task};
@@ -23,6 +26,9 @@ use crate::services::chapter_generation_runtime_service::quality_runtime_context
     resolve_batch_quality_runtime_context_from_snapshot_and_runtime_state,
     resolve_generation_quality_runtime_context_from_persisted_sources,
     BatchGenerationQualityRuntimeContext, GenerationQualityRuntimeContext,
+};
+use crate::services::cooperative_cancellation_service::{
+    global_cooperative_cancellation_registry, CooperativeCancellationScope,
 };
 
 use super::{
@@ -506,37 +512,65 @@ impl BatchGenerationCancelledPersistencePlan {
             merged_runtime_state,
             quality_status_context,
         } = self;
+        let transaction = db.begin().await.map_err(|error| error.to_string())?;
 
-        let response_task = if let Some(task_model) =
-            batch_generation_task::Entity::find_by_id(&batch_id)
-                .one(db)
-                .await
-                .map_err(|error| error.to_string())?
-        {
-            let completed_chapters = task_model.completed_chapters;
-            let total_chapters = task_model.total_chapters;
-            let mut active: batch_generation_task::ActiveModel = task_model.into();
-            BatchGenerationTaskStage::Cancelled.apply_to_active_model(
-                &mut active,
-                None,
-                None,
-                completed_chapters,
-                total_chapters,
-                None,
-                Utc::now().naive_utc(),
+        let task_model = batch_generation_task::Entity::find_by_id(&batch_id)
+            .one(&transaction)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| {
+                "Batch generation task not found during cancel persistence".to_string()
+            })?;
+        let completed_chapters = task_model.completed_chapters;
+        let total_chapters = task_model.total_chapters;
+        let mut active: batch_generation_task::ActiveModel = task_model.into();
+        BatchGenerationTaskStage::Cancelled.apply_to_active_model(
+            &mut active,
+            None,
+            None,
+            completed_chapters,
+            total_chapters,
+            None,
+            Utc::now().naive_utc(),
+        );
+
+        let update_result = batch_generation_task::Entity::update_many()
+            .set(active)
+            .filter(batch_generation_task::Column::Id.eq(&batch_id))
+            .filter(batch_generation_task::Column::Status.is_in(["pending", "running"]))
+            .exec(&transaction)
+            .await
+            .map_err(|error| error.to_string())?;
+        if update_result.rows_affected == 0 {
+            return Err(
+                "Batch generation cancel persistence rejected by inactive task status".to_string(),
             );
-            active.update(db).await.map_err(|error| error.to_string())?
-        } else {
-            return Err("Batch generation task not found during cancel persistence".to_string());
-        };
-        let response_owner = BatchGenerationCancelledPersistencePlan {
-            batch_id: batch_id.clone(),
-            merged_runtime_state: merged_runtime_state.clone(),
-            quality_status_context,
-        };
-        upsert_batch_generation_runtime_snapshot(db, &batch_id, merged_runtime_state).await?;
+        }
 
-        Ok(response_owner.build_response_payload_for_task(response_task))
+        upsert_batch_generation_runtime_snapshot(
+            &transaction,
+            &batch_id,
+            merged_runtime_state.clone(),
+        )
+        .await?;
+        let response_task = batch_generation_task::Entity::find_by_id(&batch_id)
+            .one(&transaction)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| {
+                "Batch generation task not found after cancel persistence".to_string()
+            })?;
+        transaction
+            .commit()
+            .await
+            .map_err(|error| error.to_string())?;
+
+        Ok(BatchGenerationCancelledPersistencePlan {
+            batch_id,
+            merged_runtime_state,
+            quality_status_context,
+        }
+        .build_response_payload_for_task(response_task))
     }
 }
 
@@ -565,11 +599,15 @@ pub(crate) async fn cancel_owned_batch_generation_runtime_command(
         .map_err(map_prepare_owned_batch_generation_cancel_sources_error)?
         .into_parts();
 
-    prepare_batch_generation_cancel_persistence_plan(&task, snapshot.as_ref())
-        .map_err(map_prepare_batch_generation_cancel_persistence_error)?
-        .persist(db)
-        .await
-        .map_err(CancelBatchGenerationTaskCommandError::Domain)
+    let response_payload =
+        prepare_batch_generation_cancel_persistence_plan(&task, snapshot.as_ref())
+            .map_err(map_prepare_batch_generation_cancel_persistence_error)?
+            .persist(db)
+            .await
+            .map_err(CancelBatchGenerationTaskCommandError::Domain)?;
+    global_cooperative_cancellation_registry()
+        .cancel(CooperativeCancellationScope::BatchGeneration, batch_id);
+    Ok(response_payload)
 }
 
 #[derive(Debug, Clone, PartialEq)]

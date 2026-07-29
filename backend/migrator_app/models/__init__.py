@@ -26,6 +26,18 @@ _MODEL_EXPORTS: Dict[str, Tuple[str, str]] = {
     "BatchGenerationSnapshot": ("migrator_app.models.batch_generation_snapshot", "BatchGenerationSnapshot"),
     "AnalysisTask": ("migrator_app.models.analysis_task", "AnalysisTask"),
     "BatchGenerationTask": ("migrator_app.models.batch_generation_task", "BatchGenerationTask"),
+    "AutopilotInvocationAudit": (
+        "migrator_app.models.autopilot_invocation_audit",
+        "AutopilotInvocationAudit",
+    ),
+    "NovelAutopilotRun": (
+        "migrator_app.models.novel_autopilot_run",
+        "NovelAutopilotRun",
+    ),
+    "NovelAutopilotStepRun": (
+        "migrator_app.models.novel_autopilot_step_run",
+        "NovelAutopilotStepRun",
+    ),
     "Settings": ("migrator_app.models.settings", "Settings"),
     "StoryMemory": ("migrator_app.models.memory_analysis", "StoryMemory"),
     "PlotAnalysis": ("migrator_app.models.memory_analysis", "PlotAnalysis"),

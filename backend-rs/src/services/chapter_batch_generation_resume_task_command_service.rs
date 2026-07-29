@@ -30,6 +30,12 @@ pub(crate) enum ResumeBatchGenerationDomainError {
     SingleChapterUnavailable(String),
     ChaptersUnavailable,
     PrerequisitesBlocked(String),
+    UnsupportedBusinessCheckpoint,
+    InvalidBusinessCheckpoint,
+    BusinessCheckpointInputDigestMismatch,
+    BusinessCheckpointOutputMissing,
+    BusinessCheckpointOutputEmpty,
+    BusinessCheckpointOutputOutOfScope,
     Internal(String),
 }
 
@@ -43,6 +49,24 @@ impl ResumeBatchGenerationDomainError {
             Self::ChaptersUnavailable => "Some chapters no longer exist".to_string(),
             Self::PrerequisitesBlocked(detail) => {
                 format!("Resume blocked by prerequisites: {detail}")
+            }
+            Self::UnsupportedBusinessCheckpoint => {
+                "Resume blocked by an unsupported business checkpoint".to_string()
+            }
+            Self::InvalidBusinessCheckpoint => {
+                "Resume blocked by an invalid business checkpoint".to_string()
+            }
+            Self::BusinessCheckpointInputDigestMismatch => {
+                "Resume blocked because the business checkpoint input no longer matches".to_string()
+            }
+            Self::BusinessCheckpointOutputMissing => {
+                "Resume blocked because the checkpoint output no longer exists".to_string()
+            }
+            Self::BusinessCheckpointOutputEmpty => {
+                "Resume blocked because the checkpoint output is empty".to_string()
+            }
+            Self::BusinessCheckpointOutputOutOfScope => {
+                "Resume blocked because the checkpoint output is outside the task scope".to_string()
             }
             Self::Internal(detail) => detail.clone(),
         }
@@ -102,13 +126,19 @@ mod tests {
     use crate::models::project;
     use crate::models::settings;
     use crate::models::story_memory;
+    use crate::services::business_checkpoint_service::{
+        build_business_checkpoint, merge_business_checkpoint_runtime_state,
+        read_business_checkpoint_runtime_state, BusinessCheckpointBoundary,
+        BusinessCheckpointOutputReferenceV1, BusinessCheckpointRead,
+    };
     use crate::services::chapter_access_service::LoadAccessibleChapterForGenerationError;
     use crate::services::chapter_batch_generation_read_context_service::LoadOwnedBatchGenerationTaskError;
     use crate::services::chapter_batch_generation_resume_task_command_service::ResumeBatchGenerationTaskCommandError;
     use crate::services::chapter_batch_generation_runtime_state_service::prepare_batch_generation_resume_restored_runtime_state;
     use crate::services::chapter_batch_generation_runtime_state_service::{
         build_batch_generation_execution_input, build_pending_batch_generation_runtime_checkpoint,
-        BatchGenerationResumeResetPersistencePlan, RestoredResumeRuntimeStateProjection,
+        BatchGenerationFailureKind, BatchGenerationResumeResetPersistencePlan,
+        BatchGenerationRuntimePersistencePlan, RestoredResumeRuntimeStateProjection,
         ResumeBatchGenerationCommandState, ResumeExecutionSelection, ResumeResetSemantics,
     };
     use crate::services::chapter_batch_generation_task_payload_base_service::BatchGenerationTaskKind;
@@ -130,6 +160,10 @@ mod tests {
         PrepareSingleChapterGenerationRequestError, SingleChapterGenerationTarget,
     };
     use crate::services::chapter_single_generation_runtime_state_service::SingleGenerationRuntimeLaunchInput;
+    use crate::services::generation_contract_service::{
+        build_generation_contract_snapshot, merge_generation_contract_runtime_snapshot,
+        GenerationIntentKind, GenerationIntentV1, GenerationTarget, StoryPacketV1,
+    };
     use serde_json::{json, Value};
 
     use super::{
@@ -138,8 +172,8 @@ mod tests {
         resolve_resume_active_story_repair_payload_from_runtime_context,
         restore_resume_compat_options_from_runtime_context,
         restored_resume_quality_runtime_context, BatchGenerationResumeLaunchPersistencePlan,
-        ResumeBatchGenerationDomainError, ResumeExecutionDispatchPlan,
-        ResumeExecutionEligibilityPlan, ValidatedResumeExecutionPlan,
+        PrepareOwnedBatchGenerationResumeError, ResumeBatchGenerationDomainError,
+        ResumeExecutionDispatchPlan, ResumeExecutionEligibilityPlan, ValidatedResumeExecutionPlan,
     };
 
     fn test_single_generation_gateway_config() -> ChapterCandidateRouteGatewayConfig {
@@ -157,6 +191,7 @@ mod tests {
         crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig {
             ai_config: crate::ai::AIConfig::default(),
             provider_payload: crate::services::chapter_generation_prompt_service::build_placeholder_prompt_context_provider_payload(),
+                    role_policy_context: None,
         }
     }
 
@@ -1588,6 +1623,7 @@ mod tests {
                 crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig {
                     ai_config: crate::ai::AIConfig::default(),
                     provider_payload: crate::services::chapter_generation_prompt_service::build_placeholder_prompt_context_provider_payload(),
+                                    role_policy_context: None,
                 },
                 test_single_generation_gateway_config(),
             ),
@@ -1617,6 +1653,7 @@ mod tests {
                     execution_config: crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig {
                         ai_config: crate::ai::AIConfig::default(),
                         provider_payload: crate::services::chapter_generation_prompt_service::build_placeholder_prompt_context_provider_payload(),
+                                            role_policy_context: None,
                     },
                 },
             },
@@ -1836,6 +1873,392 @@ mod tests {
             response_payload["quality_metrics_summary"]["quality_gate"]["decision"],
             "allow_resume"
         );
+    }
+
+    #[tokio::test]
+    async fn should_prepare_db_backed_resume_after_persisted_business_checkpoint_after_chapter_success(
+    ) {
+        let user_id = "user-resume-checkpoint-valid";
+        let db = setup_owned_resume_checkpoint_db(user_id).await;
+        let (contract_runtime_state, input_digest) =
+            build_resume_generation_contract_runtime_state(vec![
+                "chapter-1".to_string(),
+                "chapter-2".to_string(),
+            ]);
+        replace_resume_snapshot_runtime_state(&db, contract_runtime_state).await;
+        mark_resume_chapter_content(&db, "chapter-1", Some("已持久化的第一章正文")).await;
+
+        let task = batch_generation_task::Entity::find_by_id("batch-resume-db-smoke")
+            .one(&db)
+            .await
+            .expect("load checkpoint resume task")
+            .expect("checkpoint resume task exists");
+        let mut active_task = task.into_active_model();
+        active_task.status = Set("running".to_string());
+        active_task.completed_at = Set(None);
+        active_task.error_message = Set(None);
+        active_task
+            .update(&db)
+            .await
+            .expect("activate task before persisting chapter checkpoint");
+
+        let chapter_one = chapter::Entity::find_by_id("chapter-1")
+            .one(&db)
+            .await
+            .expect("load first resume chapter")
+            .expect("first resume chapter exists");
+        BatchGenerationRuntimePersistencePlan::chapter_succeeded(&chapter_one, 1, 2)
+            .persist(&db, "batch-resume-db-smoke")
+            .await
+            .expect("persist chapter success checkpoint");
+
+        let success_snapshot =
+            batch_generation_snapshot::Entity::find_by_id("snapshot-resume-db-smoke")
+                .one(&db)
+                .await
+                .expect("load chapter success snapshot")
+                .expect("chapter success snapshot exists");
+        let success_runtime_state = success_snapshot
+            .workflow_runtime_state
+            .as_ref()
+            .expect("chapter success runtime state");
+        let persisted_checkpoint =
+            match read_business_checkpoint_runtime_state(success_runtime_state) {
+                BusinessCheckpointRead::Valid(checkpoint) => checkpoint,
+                other => panic!("expected valid persisted checkpoint, got {other:?}"),
+            };
+        assert_eq!(persisted_checkpoint.input_digest, input_digest);
+        assert_eq!(persisted_checkpoint.revision, 1);
+        assert_eq!(
+            persisted_checkpoint.output_reference,
+            BusinessCheckpointOutputReferenceV1::Chapter {
+                id: "chapter-1".to_string(),
+            }
+        );
+        let persisted_idempotency_key = persisted_checkpoint.idempotency_key.clone();
+
+        BatchGenerationRuntimePersistencePlan::failed(
+            Some("chapter-2"),
+            Some(2),
+            Some("第二章"),
+            1,
+            2,
+            BatchGenerationFailureKind::GenerationError,
+            1,
+            "provider interrupted after chapter checkpoint".to_string(),
+            "provider interrupted after chapter checkpoint".to_string(),
+        )
+        .persist(&db, "batch-resume-db-smoke")
+        .await
+        .expect("persist later chapter failure");
+
+        let failed_snapshot =
+            batch_generation_snapshot::Entity::find_by_id("snapshot-resume-db-smoke")
+                .one(&db)
+                .await
+                .expect("load failed resume snapshot")
+                .expect("failed resume snapshot exists");
+        let failed_runtime_state = failed_snapshot
+            .workflow_runtime_state
+            .as_ref()
+            .expect("failed resume runtime state");
+        let preserved_checkpoint =
+            match read_business_checkpoint_runtime_state(failed_runtime_state) {
+                BusinessCheckpointRead::Valid(checkpoint) => checkpoint,
+                other => panic!("expected preserved checkpoint, got {other:?}"),
+            };
+        assert_eq!(
+            preserved_checkpoint.idempotency_key,
+            persisted_idempotency_key
+        );
+
+        let plan = super::prepare_owned_batch_generation_resume(
+            &db,
+            "batch-resume-db-smoke",
+            user_id,
+            test_single_generation_gateway_config(),
+        )
+        .await
+        .expect("valid business checkpoint should allow resume");
+
+        let ResumeExecutionDispatchPlan::Batch { runtime_input } = plan.dispatch_plan() else {
+            panic!("valid checkpoint resume should keep batch dispatch");
+        };
+        assert_eq!(runtime_input.chapter_ids, vec!["chapter-2".to_string()]);
+        let resumed_runtime_state = plan
+            .reset_persistence_plan()
+            .resume_snapshot_plan()
+            .runtime_state();
+        assert_eq!(
+            resumed_runtime_state["business_checkpoint"]["output_reference"]["id"],
+            "chapter-1"
+        );
+        assert_eq!(
+            resumed_runtime_state["business_checkpoint"]["schema_version"],
+            "business-checkpoint/v1"
+        );
+    }
+
+    #[tokio::test]
+    async fn should_reject_db_backed_resume_when_business_checkpoint_digest_mismatches() {
+        let user_id = "user-resume-checkpoint-digest-mismatch";
+        let db = setup_owned_resume_checkpoint_db(user_id).await;
+        replace_resume_snapshot_runtime_state(
+            &db,
+            build_resume_business_checkpoint_runtime_state(
+                "chapter-1",
+                vec!["chapter-1".to_string(), "chapter-2".to_string()],
+                Some(format!("sha256:{}", "1".repeat(64))),
+            ),
+        )
+        .await;
+
+        let error = super::prepare_owned_batch_generation_resume(
+            &db,
+            "batch-resume-db-smoke",
+            user_id,
+            test_single_generation_gateway_config(),
+        )
+        .await
+        .expect_err("digest mismatch must block resume");
+
+        assert!(matches!(
+            error,
+            PrepareOwnedBatchGenerationResumeError::Domain(
+                ResumeBatchGenerationDomainError::BusinessCheckpointInputDigestMismatch
+            )
+        ));
+    }
+
+    #[tokio::test]
+    async fn should_reject_db_backed_resume_when_checkpoint_output_is_missing() {
+        let user_id = "user-resume-checkpoint-output-missing";
+        let db = setup_owned_resume_checkpoint_db(user_id).await;
+        replace_resume_task_chapter_ids(&db, json!(["chapter-missing", "chapter-2"])).await;
+        replace_resume_snapshot_runtime_state(
+            &db,
+            build_resume_business_checkpoint_runtime_state(
+                "chapter-missing",
+                vec!["chapter-missing".to_string(), "chapter-2".to_string()],
+                None,
+            ),
+        )
+        .await;
+
+        let error = super::prepare_owned_batch_generation_resume(
+            &db,
+            "batch-resume-db-smoke",
+            user_id,
+            test_single_generation_gateway_config(),
+        )
+        .await
+        .expect_err("missing checkpoint output must block resume");
+
+        assert!(matches!(
+            error,
+            PrepareOwnedBatchGenerationResumeError::Domain(
+                ResumeBatchGenerationDomainError::BusinessCheckpointOutputMissing
+            )
+        ));
+    }
+
+    #[tokio::test]
+    async fn should_reject_db_backed_resume_when_checkpoint_output_content_is_empty() {
+        let user_id = "user-resume-checkpoint-output-empty";
+        let db = setup_owned_resume_checkpoint_db(user_id).await;
+        mark_resume_chapter_content(&db, "chapter-1", Some("  \n\t")).await;
+        replace_resume_snapshot_runtime_state(
+            &db,
+            build_resume_business_checkpoint_runtime_state(
+                "chapter-1",
+                vec!["chapter-1".to_string(), "chapter-2".to_string()],
+                None,
+            ),
+        )
+        .await;
+
+        let error = super::prepare_owned_batch_generation_resume(
+            &db,
+            "batch-resume-db-smoke",
+            user_id,
+            test_single_generation_gateway_config(),
+        )
+        .await
+        .expect_err("empty checkpoint output must block resume");
+
+        assert!(matches!(
+            error,
+            PrepareOwnedBatchGenerationResumeError::Domain(
+                ResumeBatchGenerationDomainError::BusinessCheckpointOutputEmpty
+            )
+        ));
+    }
+
+    #[tokio::test]
+    async fn should_reject_db_backed_resume_when_checkpoint_output_is_outside_task_scope() {
+        let user_id = "user-resume-checkpoint-task-scope";
+        let db = setup_owned_resume_checkpoint_db(user_id).await;
+        replace_resume_snapshot_runtime_state(
+            &db,
+            build_resume_business_checkpoint_runtime_state(
+                "chapter-outside",
+                vec!["chapter-1".to_string(), "chapter-2".to_string()],
+                None,
+            ),
+        )
+        .await;
+
+        let error = super::prepare_owned_batch_generation_resume(
+            &db,
+            "batch-resume-db-smoke",
+            user_id,
+            test_single_generation_gateway_config(),
+        )
+        .await
+        .expect_err("out-of-task checkpoint output must block resume");
+
+        assert!(matches!(
+            error,
+            PrepareOwnedBatchGenerationResumeError::Domain(
+                ResumeBatchGenerationDomainError::BusinessCheckpointOutputOutOfScope
+            )
+        ));
+    }
+
+    #[tokio::test]
+    async fn should_reject_db_backed_resume_when_checkpoint_output_is_outside_project_scope() {
+        let user_id = "user-resume-checkpoint-project-scope";
+        let db = setup_owned_resume_checkpoint_db(user_id).await;
+        mark_resume_chapter_content(&db, "chapter-1", Some("跨项目正文")).await;
+        let mut checkpoint_chapter = chapter::Entity::find_by_id("chapter-1")
+            .one(&db)
+            .await
+            .expect("load checkpoint chapter")
+            .expect("checkpoint chapter exists")
+            .into_active_model();
+        checkpoint_chapter.project_id = Set("project-other".to_string());
+        checkpoint_chapter
+            .update(&db)
+            .await
+            .expect("move checkpoint chapter outside project scope");
+        replace_resume_snapshot_runtime_state(
+            &db,
+            build_resume_business_checkpoint_runtime_state(
+                "chapter-1",
+                vec!["chapter-1".to_string(), "chapter-2".to_string()],
+                None,
+            ),
+        )
+        .await;
+
+        let error = super::prepare_owned_batch_generation_resume(
+            &db,
+            "batch-resume-db-smoke",
+            user_id,
+            test_single_generation_gateway_config(),
+        )
+        .await
+        .expect_err("out-of-project checkpoint output must block resume");
+
+        assert!(matches!(
+            error,
+            PrepareOwnedBatchGenerationResumeError::Domain(
+                ResumeBatchGenerationDomainError::BusinessCheckpointOutputOutOfScope
+            )
+        ));
+    }
+
+    #[tokio::test]
+    async fn should_reject_db_backed_resume_with_unknown_business_checkpoint_schema() {
+        let user_id = "user-resume-checkpoint-unsupported";
+        let db = setup_owned_resume_checkpoint_db(user_id).await;
+        replace_resume_snapshot_runtime_state(
+            &db,
+            json!({
+                "business_checkpoint": {
+                    "schema_version": "business-checkpoint/v999"
+                }
+            }),
+        )
+        .await;
+
+        let error = super::prepare_owned_batch_generation_resume(
+            &db,
+            "batch-resume-db-smoke",
+            user_id,
+            test_single_generation_gateway_config(),
+        )
+        .await
+        .expect_err("unsupported checkpoint schema must block resume");
+
+        assert!(matches!(
+            error,
+            PrepareOwnedBatchGenerationResumeError::Domain(
+                ResumeBatchGenerationDomainError::UnsupportedBusinessCheckpoint
+            )
+        ));
+    }
+
+    #[tokio::test]
+    async fn should_reject_db_backed_resume_with_invalid_business_checkpoint() {
+        let user_id = "user-resume-checkpoint-invalid";
+        let db = setup_owned_resume_checkpoint_db(user_id).await;
+        replace_resume_snapshot_runtime_state(
+            &db,
+            json!({
+                "business_checkpoint": {
+                    "schema_version": "business-checkpoint/v1",
+                    "revision": 0
+                }
+            }),
+        )
+        .await;
+
+        let error = super::prepare_owned_batch_generation_resume(
+            &db,
+            "batch-resume-db-smoke",
+            user_id,
+            test_single_generation_gateway_config(),
+        )
+        .await
+        .expect_err("invalid checkpoint must block resume");
+
+        assert!(matches!(
+            error,
+            PrepareOwnedBatchGenerationResumeError::Domain(
+                ResumeBatchGenerationDomainError::InvalidBusinessCheckpoint
+            )
+        ));
+    }
+
+    #[tokio::test]
+    async fn should_reject_db_backed_resume_when_checkpoint_idempotency_key_is_tampered() {
+        let user_id = "user-resume-checkpoint-key-tampered";
+        let db = setup_owned_resume_checkpoint_db(user_id).await;
+        let mut runtime_state = build_resume_business_checkpoint_runtime_state(
+            "chapter-1",
+            vec!["chapter-1".to_string(), "chapter-2".to_string()],
+            None,
+        );
+        runtime_state["business_checkpoint"]["idempotency_key"] =
+            json!(format!("sha256:{}", "0".repeat(64)));
+        replace_resume_snapshot_runtime_state(&db, runtime_state).await;
+
+        let error = super::prepare_owned_batch_generation_resume(
+            &db,
+            "batch-resume-db-smoke",
+            user_id,
+            test_single_generation_gateway_config(),
+        )
+        .await
+        .expect_err("tampered checkpoint key must block resume");
+
+        assert!(matches!(
+            error,
+            PrepareOwnedBatchGenerationResumeError::Domain(
+                ResumeBatchGenerationDomainError::InvalidBusinessCheckpoint
+            )
+        ));
     }
 
     #[tokio::test]
@@ -2435,6 +2858,102 @@ mod tests {
             persistence_plan.response_payload()["batch_id"],
             command_state.batch_id
         );
+    }
+
+    fn build_resume_generation_contract_runtime_state(
+        contract_chapter_ids: Vec<String>,
+    ) -> (Value, String) {
+        let target = GenerationTarget::chapter_batch("project-1", contract_chapter_ids);
+        let packet = StoryPacketV1::new("project-1", target.clone());
+        let intent = GenerationIntentV1::new(GenerationIntentKind::BatchChapterGenerate, target);
+        let contract = build_generation_contract_snapshot(packet, intent)
+            .expect("build resume generation contract");
+        let input_digest = contract.input_digest.clone();
+        let mut runtime_state = json!({
+            "phase": "failed",
+            "last_event": "failed"
+        });
+        merge_generation_contract_runtime_snapshot(&mut runtime_state, &contract)
+            .expect("merge resume generation contract");
+        (runtime_state, input_digest)
+    }
+
+    fn build_resume_business_checkpoint_runtime_state(
+        output_chapter_id: &str,
+        contract_chapter_ids: Vec<String>,
+        checkpoint_input_digest: Option<String>,
+    ) -> Value {
+        let (mut runtime_state, input_digest) =
+            build_resume_generation_contract_runtime_state(contract_chapter_ids);
+        let checkpoint = build_business_checkpoint(
+            "batch-resume-db-smoke",
+            BusinessCheckpointBoundary::ChapterDraftSaved,
+            1,
+            checkpoint_input_digest.as_deref().unwrap_or(&input_digest),
+            BusinessCheckpointOutputReferenceV1::Chapter {
+                id: output_chapter_id.to_string(),
+            },
+            Utc::now(),
+        )
+        .expect("build resume business checkpoint");
+        merge_business_checkpoint_runtime_state(&mut runtime_state, &checkpoint)
+            .expect("merge resume business checkpoint");
+        runtime_state
+    }
+
+    async fn replace_resume_snapshot_runtime_state(db: &DatabaseConnection, runtime_state: Value) {
+        let mut snapshot =
+            batch_generation_snapshot::Entity::find_by_id("snapshot-resume-db-smoke")
+                .one(db)
+                .await
+                .expect("load resume snapshot")
+                .expect("resume snapshot exists")
+                .into_active_model();
+        snapshot.workflow_runtime_state = Set(Some(runtime_state));
+        snapshot
+            .update(db)
+            .await
+            .expect("replace resume snapshot runtime state");
+    }
+
+    async fn mark_resume_chapter_content(
+        db: &DatabaseConnection,
+        chapter_id: &str,
+        content: Option<&str>,
+    ) {
+        let mut chapter = chapter::Entity::find_by_id(chapter_id)
+            .one(db)
+            .await
+            .expect("load resume chapter")
+            .expect("resume chapter exists")
+            .into_active_model();
+        chapter.content = Set(content.map(str::to_string));
+        chapter.status = Set("completed".to_string());
+        chapter
+            .update(db)
+            .await
+            .expect("update resume chapter content");
+    }
+
+    async fn replace_resume_task_chapter_ids(db: &DatabaseConnection, chapter_ids: Value) {
+        let mut task = batch_generation_task::Entity::find_by_id("batch-resume-db-smoke")
+            .one(db)
+            .await
+            .expect("load resume task")
+            .expect("resume task exists")
+            .into_active_model();
+        task.chapter_ids = Set(chapter_ids);
+        task.update(db)
+            .await
+            .expect("replace resume task chapter ids");
+    }
+
+    async fn setup_owned_resume_checkpoint_db(user_id: &str) -> DatabaseConnection {
+        let db = setup_resume_settings_db().await;
+        seed_resume_settings(&db, user_id).await;
+        seed_resume_project_and_chapters(&db, user_id).await;
+        seed_owned_resume_task_and_snapshot(&db, user_id).await;
+        db
     }
 
     #[test]

@@ -3,13 +3,20 @@ pub(crate) use self::candidate_runtime_owner::build_single_generation_direct_fal
 pub(crate) use self::candidate_runtime_owner::{
     build_single_generation_candidate_executor_request,
     build_single_generation_candidate_gateway_metadata,
-    execute_single_generation_candidate_runtime, single_generation_candidate_gateway_content,
+    execute_single_generation_candidate_runtime,
+    execute_single_generation_candidate_runtime_tracked,
+    execute_single_generation_candidate_runtime_tracked_with_guidance,
+    execute_single_generation_candidate_runtime_with_guidance,
+    single_generation_candidate_gateway_content,
 };
 use self::context_compaction_owner::build_generation_context_compaction_owner_contract;
 use self::quality_runtime_context_owner::build_generation_quality_runtime_owner_contract;
 pub(crate) use self::runtime_execution_owner::{
+    build_batch_generation_contract_snapshot,
     build_single_generation_runtime_execution_owner_contract,
+    generate_and_persist_batch_chapter_content_with_candidate_route_gateway,
     generate_and_persist_chapter_content_with_candidate_route_gateway,
+    generate_and_persist_single_chapter_content_with_candidate_route_gateway,
 };
 pub(crate) use self::single_generation_candidate_quality_owner::build_chapter_single_generation_candidate_quality_owner_contract;
 use self::snapshot_persistence_owner::build_chapter_generation_snapshot_owner_contract;
@@ -94,6 +101,8 @@ pub(crate) struct SingleGenerationCandidateRuntimeExecutionContext {
     pub(crate) previous_chapter_exists: bool,
     pub(crate) previous_chapter_prompt_context: PreviousChapterPromptContext,
     pub(crate) story_packet: Value,
+    pub(crate) generation_contract_snapshot:
+        Option<crate::services::generation_contract_service::GenerationContractSnapshotV1>,
 }
 
 pub(crate) fn build_single_generation_candidate_runtime_owner_contract() -> Value {
@@ -197,8 +206,10 @@ mod tests {
         build_single_generation_candidate_gateway_metadata,
         build_single_generation_candidate_runtime_owner_contract,
         build_single_generation_direct_fallback_candidate_payload,
+        candidate_runtime_owner::build_single_generation_runtime_prompt_with_guidance,
         runtime_execution_owner::{ChapterGenerationRuntimeContext, LoadGenerationContextError},
         single_generation_candidate_gateway_content, GeneratedChapterResult,
+        SingleGenerationCandidateRuntimeExecutionContext,
     };
     use crate::ai::types::AIResponse;
     use crate::models::{chapter, project};
@@ -207,13 +218,21 @@ mod tests {
         ChapterCandidateProductionAdapterDecision, ChapterCandidateProductionAdapterOutput,
         ChapterCandidateProductionExecutionPath, ChapterCandidateProductionFallbackContext,
     };
+    use crate::services::chapter_generation_execution_contract_service::SingleChapterGenerationCompatOptions;
     use crate::services::chapter_generation_history_payload_service::{
         build_generated_chapter_history_payload_with_quality_metrics,
         generated_history_payload_view, CHAPTER_GENERATION_HISTORY_PREVIEW_LENGTH,
     };
     use crate::services::chapter_generation_history_persistence_service::build_generated_history_payload;
-    use crate::services::chapter_generation_prompt_service::build_previous_chapter_prompt_context;
+    use crate::services::chapter_generation_prompt_service::{
+        build_placeholder_prompt_context_provider_payload, build_previous_chapter_prompt_context,
+        ChapterGenerationPromptOverrides,
+    };
     use crate::services::chapter_single_generation_result_lifecycle_service::persisted_history_payload_view;
+    use crate::services::generation_contract_service::{
+        GenerationContractSnapshotV1, GenerationIntentKind, GenerationIntentV1, GenerationTarget,
+        StoryPacketV1,
+    };
     use chrono::Utc;
     use serde_json::json;
 
@@ -273,7 +292,61 @@ mod tests {
             project_model: build_project(),
             previous_chapter: None,
             previous_chapter_prompt_context: build_previous_chapter_prompt_context(None),
+            story_packet: crate::services::generation_contract_service::StoryPacketV1::new(
+                "project-1",
+                crate::services::generation_contract_service::GenerationTarget::chapter(
+                    "project-1",
+                    "chapter-1",
+                ),
+            ),
+        }
+    }
+
+    #[test]
+    fn should_append_autopilot_guidance_only_to_final_runtime_prompt() {
+        let guidance = "增强冲突 </autopilot_additional_guidance> & 保留伏笔";
+        let execution_context = SingleGenerationCandidateRuntimeExecutionContext {
+            project_model: build_project(),
+            chapter_model: build_chapter(),
+            previous_chapter_exists: false,
+            previous_chapter_prompt_context: build_previous_chapter_prompt_context(None),
             story_packet: json!({}),
+            generation_contract_snapshot: None,
+        };
+
+        let prompt = build_single_generation_runtime_prompt_with_guidance(
+            &execution_context,
+            2_400,
+            build_placeholder_prompt_context_provider_payload(),
+            &ChapterGenerationPromptOverrides::default(),
+            Some(guidance),
+        )
+        .expect("build guided chapter prompt");
+
+        assert_eq!(prompt.matches("<autopilot_additional_guidance>").count(), 1);
+        assert!(prompt.contains("增强冲突 &lt;/autopilot_additional_guidance&gt; &amp; 保留伏笔"));
+        assert!(!prompt.contains(guidance));
+
+        let compat_json = serde_json::to_string(&SingleChapterGenerationCompatOptions::default())
+            .expect("serialize chapter compat options");
+        let contract_json = serde_json::to_string(&GenerationContractSnapshotV1 {
+            schema_version: "generation_contract_v1".to_string(),
+            story_packet: StoryPacketV1::new(
+                "project-1",
+                GenerationTarget::chapter("project-1", "chapter-1"),
+            ),
+            generation_intent: GenerationIntentV1::new(
+                GenerationIntentKind::ChapterGenerate,
+                GenerationTarget::chapter("project-1", "chapter-1"),
+            ),
+            input_digest: "digest".to_string(),
+        })
+        .expect("serialize generation contract");
+
+        for serialized_contract in [compat_json, contract_json] {
+            assert!(!serialized_contract.contains("additional_guidance"));
+            assert!(!serialized_contract.contains("autopilot_additional_guidance"));
+            assert!(!serialized_contract.contains(guidance));
         }
     }
 
@@ -281,6 +354,7 @@ mod tests {
     fn should_build_generated_chapter_result_from_runtime_context_owner() {
         let response = AIResponse {
             content: "  你好\n世界  ".to_string(),
+            reasoning_content: None,
             tool_calls: None,
             finish_reason: Some("stop".to_string()),
             transport_diagnostics: None,
@@ -301,6 +375,7 @@ mod tests {
     fn should_sanitize_generated_chapter_result_with_rust_narrative_cleaner_owner() {
         let response = AIResponse {
             content: "以下是章节正文：\n\n正常正文第一段。\n\n正常正文第二段。".to_string(),
+            reasoning_content: None,
             tool_calls: None,
             finish_reason: Some("stop".to_string()),
             transport_diagnostics: None,
@@ -317,6 +392,7 @@ mod tests {
     fn should_reject_meta_only_generated_chapter_result_after_sanitization() {
         let response = AIResponse {
             content: "```markdown\n作为AI：我将开始执行\n流程说明".to_string(),
+            reasoning_content: None,
             tool_calls: None,
             finish_reason: Some("stop".to_string()),
             transport_diagnostics: None,

@@ -5,7 +5,7 @@ use axum::{
     routing::post,
     Router,
 };
-use futures::StreamExt;
+use futures::{stream, StreamExt};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -13,6 +13,7 @@ use crate::ai::config::AIConfig;
 use crate::ai::service::AIService;
 use crate::ai::types::AIStreamChunk;
 use crate::services::auth::Claims;
+use crate::utils::sse::{sse_chunk, sse_done, sse_error, sse_reasoning_chunk};
 
 const AI_TEST_ROUTE: &str = "/ai-test";
 const AI_TEST_STREAM_ROUTE: &str = "/ai-test-stream";
@@ -149,6 +150,27 @@ async fn test_ai(
     }
 }
 
+fn project_ai_test_stream_events(
+    chunk: Result<AIStreamChunk, String>,
+) -> Vec<Result<axum::response::sse::Event, std::convert::Infallible>> {
+    let mut events = Vec::with_capacity(3);
+    match chunk {
+        Ok(chunk) => {
+            if let Some(reasoning) = chunk.reasoning_content.filter(|value| !value.is_empty()) {
+                events.push(Ok(sse_reasoning_chunk(&reasoning)));
+            }
+            if let Some(content) = chunk.content.filter(|value| !value.is_empty()) {
+                events.push(Ok(sse_chunk(&content)));
+            }
+            if chunk.done {
+                events.push(Ok(sse_done()));
+            }
+        }
+        Err(_) => events.push(Ok(sse_error("模型测试流调用失败", 500))),
+    }
+    events
+}
+
 async fn test_ai_stream(
     Extension(claims): Extension<Claims>,
     Json(body): Json<TestAIRequest>,
@@ -170,26 +192,7 @@ async fn test_ai_stream(
 
     let service = AIService::new(cfg);
     let rx = service.generate_text_stream(body.prompt, body.system_prompt, None);
-
-    let sse_stream = rx.map(|chunk| {
-        let event = match chunk {
-            Ok(AIStreamChunk {
-                content: Some(text),
-                ..
-            }) => axum::response::sse::Event::default().data(text),
-            Ok(AIStreamChunk {
-                done: true,
-                finish_reason,
-                ..
-            }) => {
-                let reason = finish_reason.unwrap_or_else(|| "stop".into());
-                axum::response::sse::Event::default().data(format!("[DONE] {}", reason))
-            }
-            Ok(_) => axum::response::sse::Event::default().data(""),
-            Err(e) => axum::response::sse::Event::default().data(format!("[ERROR] {}", e)),
-        };
-        Ok::<_, std::convert::Infallible>(event)
-    });
+    let sse_stream = rx.flat_map(|chunk| stream::iter(project_ai_test_stream_events(chunk)));
 
     Sse::new(sse_stream.boxed())
 }

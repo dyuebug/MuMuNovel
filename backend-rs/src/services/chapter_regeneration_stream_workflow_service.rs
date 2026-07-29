@@ -11,9 +11,11 @@ use crate::services::chapter_access_service::{
     load_accessible_chapter, LoadAccessibleChapterError,
 };
 use crate::services::chapter_candidate_output_service::{
-    build_chapter_candidate_output_owner_contract, collect_generation_candidate_output,
-    ChapterCandidateOutputProgress, ChapterCandidateOutputRequest,
+    build_chapter_candidate_output_owner_contract, collect_generation_candidate_output_tracked,
+    collect_generation_candidate_output_tracked_with_reasoning, ChapterCandidateOutputProgress,
+    ChapterCandidateOutputRequest,
 };
+use crate::services::chapter_generation_execution_contract_service::PreparedRoleModelPolicyContext;
 use crate::services::chapter_narrative_cleaner_service::{
     contains_chapter_workflow_meta_text, sanitize_generated_narrative_text,
 };
@@ -30,7 +32,12 @@ use crate::services::chapter_regeneration_task_service::{
     create_full_regeneration_task, load_latest_chapter_analysis, mark_regeneration_task_completed,
     mark_regeneration_task_failed,
 };
-use crate::utils::sse::{sse_chunk, sse_done, sse_error, sse_json, sse_result, SseProgress};
+use crate::services::generation_execution_audit_service::{
+    build_generation_execution_audit, merge_generation_execution_audit, GenerationExecutionAuditV1,
+};
+use crate::utils::sse::{
+    sse_chunk, sse_done, sse_error, sse_json, sse_reasoning_chunk, sse_result, SseProgress,
+};
 
 const CHAPTER_REGENERATION_STREAM_WORKFLOW_ROUTE_GROUP: &str = "chapter_regeneration";
 const CHAPTER_REGENERATION_STREAM_WORKFLOW_ROLLBACK_BOUNDARY: &str =
@@ -74,10 +81,16 @@ enum OwnedRegenerationInitialEvent {
     },
 }
 
+struct TrackedRegenerationTextOutput {
+    full_content: String,
+    audit: GenerationExecutionAuditV1,
+}
+
 struct OwnedRegenerationStreamLaunchInput {
     task_label: String,
     prompt: String,
     ai_service: AIService,
+    role_policy_context: PreparedRoleModelPolicyContext,
     initial_events: Vec<OwnedRegenerationInitialEvent>,
     completion_message: String,
     task_created_event: Option<Value>,
@@ -192,13 +205,14 @@ async fn emit_regeneration_finalize_error(
 async fn execute_regeneration_text_stream<F>(
     tx: &mpsc::Sender<Result<Event, Infallible>>,
     ai_service: AIService,
+    role_policy_context: PreparedRoleModelPolicyContext,
     prompt: String,
     mut build_progress_event: F,
-) -> Result<String, ()>
+) -> Result<TrackedRegenerationTextOutput, ()>
 where
     F: FnMut(RegenerationChunkProgress) -> Option<Event>,
 {
-    match collect_generation_candidate_output(
+    match collect_generation_candidate_output_tracked_with_reasoning(
         ChapterCandidateOutputRequest {
             ai_service,
             prompt,
@@ -208,6 +222,7 @@ where
             max_output_chars: None,
             runtime_state: None,
         },
+        role_policy_context.allow_model_fallback,
         |chunk_content, progress| {
             let event = build_progress_event(progress.into());
             let tx = tx.clone();
@@ -219,15 +234,41 @@ where
                 Ok(())
             }
         },
+        |reasoning_content| {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(Ok(sse_reasoning_chunk(&reasoning_content))).await;
+                Ok(())
+            }
+        },
     )
     .await
     {
-        Ok(output) => Ok(output.full_content),
+        Ok(output) => match build_generation_execution_audit(
+            &role_policy_context.resolved_policy,
+            &output.execution,
+        ) {
+            Ok(audit) => Ok(TrackedRegenerationTextOutput {
+                full_content: output.output.full_content,
+                audit,
+            }),
+            Err(error) => {
+                let _ = tx.send(Ok(sse_error(&error.to_string(), 500))).await;
+                Err(())
+            }
+        },
         Err(error) => {
             let _ = tx.send(Ok(sse_error(&error, 500))).await;
             Err(())
         }
     }
+}
+
+fn merge_regeneration_audit(
+    payload: &mut Value,
+    audit: &GenerationExecutionAuditV1,
+) -> Result<(), String> {
+    merge_generation_execution_audit(payload, audit).map_err(|error| error.to_string())
 }
 
 fn apply_owned_regeneration_initial_event(
@@ -271,6 +312,7 @@ where
             task_label,
             prompt,
             ai_service,
+            role_policy_context,
             initial_events,
             completion_message,
             task_created_event,
@@ -286,22 +328,25 @@ where
             let _ = tx.send(Ok(sse_json(&task_created_event))).await;
         }
 
-        let full_content =
-            match execute_regeneration_text_stream(&tx, ai_service, prompt, |progress| {
-                build_progress_event(&mut tracker, progress)
-            })
-            .await
-            {
-                Ok(full_content) => full_content,
-                Err(()) => {
-                    if let Some(failed) = on_failed {
-                        let _ = tx.send(Ok(sse_json(&failed))).await;
-                    }
-                    return;
+        let output = match execute_regeneration_text_stream(
+            &tx,
+            ai_service,
+            role_policy_context,
+            prompt,
+            |progress| build_progress_event(&mut tracker, progress),
+        )
+        .await
+        {
+            Ok(output) => output,
+            Err(()) => {
+                if let Some(failed) = on_failed {
+                    let _ = tx.send(Ok(sse_json(&failed))).await;
                 }
-            };
+                return;
+            }
+        };
 
-        let payload = match finalize_payload(&full_content) {
+        let mut payload = match finalize_payload(&output.full_content) {
             Ok(payload) => payload,
             Err(error) => {
                 if let Some(failed) = on_failed {
@@ -311,6 +356,15 @@ where
                 return;
             }
         };
+        if merge_regeneration_audit(&mut payload, &output.audit).is_err() {
+            let _ = tx
+                .send(Ok(sse_error(
+                    "Failed to attach regeneration execution audit",
+                    500,
+                )))
+                .await;
+            return;
+        }
         if let Some(succeeded) = on_succeeded {
             let _ = tx.send(Ok(sse_json(&succeeded))).await;
         }
@@ -376,6 +430,9 @@ pub(crate) fn build_chapter_regeneration_stream_workflow_owner_contract() -> Val
             "shared_stream_owner_entrypoints": [
                 "build_owned_regeneration_stream",
                 "execute_regeneration_text_stream",
+                "collect_generation_candidate_output_tracked",
+                "build_generation_execution_audit",
+                "merge_regeneration_audit",
                 "normalize_partial_regeneration_output",
                 "finalize_chapter_regeneration_result",
                 "finalize_partial_regeneration_result",
@@ -398,7 +455,16 @@ pub(crate) fn build_chapter_regeneration_stream_workflow_owner_contract() -> Val
             "request_guards": [
                 "validate_full_chapter_regeneration_stream_request_bounds",
                 "validate_partial_regeneration_stream_request_bounds"
-            ]
+            ],
+            "execution_audit_policy": {
+                "tracked_execution_owner": "collect_generation_candidate_output_tracked",
+                "audit_builder": "build_generation_execution_audit",
+                "result_field": "generation_execution_audit",
+                "sse_event_kind": "result",
+                "background_result_additive": true,
+                "chapter_content_persistence_unchanged": true,
+                "database_migration_required": false
+            }
         },
         "source_map_policy": {
             "status": "source_map_only",
@@ -440,6 +506,8 @@ pub(crate) fn build_chapter_regeneration_stream_workflow_owner_contract() -> Val
             "partial_stream_owner": "create_partial_regeneration_stream_workflow",
             "shared_stream_owner": "build_owned_regeneration_stream",
             "candidate_output_owner": "collect_generation_candidate_output",
+            "tracked_candidate_output_owner": "collect_generation_candidate_output_tracked",
+            "execution_audit_owner": "generation_execution_audit_service",
             "full_finalize_owner": "finalize_chapter_regeneration_result",
             "partial_finalize_owner": "finalize_partial_regeneration_result",
             "source_map_closeout_ready": true,
@@ -496,6 +564,7 @@ fn build_full_chapter_regeneration_stream_launch_input(
         chapter_word_count,
         prompt,
         ai_service,
+        role_policy_context,
         ..
     } = input;
 
@@ -503,6 +572,7 @@ fn build_full_chapter_regeneration_stream_launch_input(
         task_label: "Chapter Rewrite".to_string(),
         prompt,
         ai_service,
+        role_policy_context,
         initial_events: vec![
             OwnedRegenerationInitialEvent::Preparing {
                 message: Some("Building rewrite prompt...".to_string()),
@@ -536,6 +606,7 @@ fn build_full_chapter_regeneration_stream(
             task_label,
             prompt,
             ai_service,
+            role_policy_context,
             initial_events,
             completion_message,
             task_created_event,
@@ -551,31 +622,39 @@ fn build_full_chapter_regeneration_stream(
             let _ = tx.send(Ok(sse_json(&task_created_event))).await;
         }
 
-        let full_content =
-            match execute_regeneration_text_stream(&tx, ai_service, prompt, |_| None).await {
-                Ok(full_content) => full_content,
-                Err(()) => {
-                    let failed = build_full_regeneration_task_failed_event(&task_id);
-                    let _ = tx.send(Ok(sse_json(&failed))).await;
-                    if let Err(error) = mark_regeneration_task_failed(
-                        &db,
-                        &task_id,
-                        "generation stream execution failed",
-                    )
-                    .await
-                    {
-                        let _ = tx
-                            .send(Ok(sse_error(
-                                &format!("Failed to persist regeneration task failure: {error}"),
-                                500,
-                            )))
-                            .await;
-                    }
-                    return;
+        let output = match execute_regeneration_text_stream(
+            &tx,
+            ai_service,
+            role_policy_context,
+            prompt,
+            |_| None,
+        )
+        .await
+        {
+            Ok(output) => output,
+            Err(()) => {
+                let failed = build_full_regeneration_task_failed_event(&task_id);
+                let _ = tx.send(Ok(sse_json(&failed))).await;
+                if let Err(error) = mark_regeneration_task_failed(
+                    &db,
+                    &task_id,
+                    "generation stream execution failed",
+                )
+                .await
+                {
+                    let _ = tx
+                        .send(Ok(sse_error(
+                            &format!("Failed to persist regeneration task failure: {error}"),
+                            500,
+                        )))
+                        .await;
                 }
-            };
+                return;
+            }
+        };
 
-        let payload = match finalize_chapter_regeneration_result(&full_content, &task_id) {
+        let mut payload = match finalize_chapter_regeneration_result(&output.full_content, &task_id)
+        {
             Ok(payload) => payload,
             Err(error) => {
                 let detail = describe_regeneration_finalize_error(&error);
@@ -598,7 +677,20 @@ fn build_full_chapter_regeneration_stream(
             }
         };
 
-        if let Err(error) = mark_regeneration_task_completed(&db, &task_id, &full_content).await {
+        if merge_regeneration_audit(&mut payload, &output.audit).is_err() {
+            let failed = build_full_regeneration_task_failed_event(&task_id);
+            let _ = tx.send(Ok(sse_json(&failed))).await;
+            let _ = tx
+                .send(Ok(sse_error(
+                    "Failed to attach regeneration execution audit",
+                    500,
+                )))
+                .await;
+            return;
+        }
+        if let Err(error) =
+            mark_regeneration_task_completed(&db, &task_id, &output.full_content).await
+        {
             let failed = build_full_regeneration_task_failed_event(&task_id);
             let _ = tx.send(Ok(sse_json(&failed))).await;
             let _ = tx
@@ -638,6 +730,8 @@ fn build_partial_chapter_regeneration_stream_launch_input(
         end_position,
         prompt,
         ai_service,
+        role_policy_context,
+        ..
     } = input;
 
     (
@@ -645,6 +739,7 @@ fn build_partial_chapter_regeneration_stream_launch_input(
             task_label: "Partial Rewrite".to_string(),
             prompt,
             ai_service,
+            role_policy_context,
             initial_events: vec![
                 OwnedRegenerationInitialEvent::Preparing {
                     message: Some("Preparing rewrite context...".to_string()),
@@ -730,7 +825,7 @@ pub async fn execute_partial_regeneration_task(
     let (launch_input, _, original_word_count, start_position, end_position) =
         build_partial_chapter_regeneration_stream_launch_input(stream_input);
 
-    let output = collect_generation_candidate_output(
+    let output = collect_generation_candidate_output_tracked(
         ChapterCandidateOutputRequest {
             ai_service: launch_input.ai_service,
             prompt: launch_input.prompt,
@@ -740,6 +835,7 @@ pub async fn execute_partial_regeneration_task(
             max_output_chars: None,
             runtime_state: None,
         },
+        launch_input.role_policy_context.allow_model_fallback,
         |_chunk_content, _progress| async { Ok(()) },
     )
     .await
@@ -751,8 +847,8 @@ pub async fn execute_partial_regeneration_task(
         )
     })?;
 
-    finalize_partial_regeneration_result(
-        &output.full_content,
+    let mut payload = finalize_partial_regeneration_result(
+        &output.output.full_content,
         original_word_count,
         start_position,
         end_position,
@@ -765,7 +861,26 @@ pub async fn execute_partial_regeneration_task(
                 ),
             ),
         )
-    })
+    })?;
+    let audit = build_generation_execution_audit(
+        &launch_input.role_policy_context.resolved_policy,
+        &output.execution,
+    )
+    .map_err(|error| {
+        CreatePartialRegenerationStreamWorkflowError::Prepare(
+            PreparePartialRegenerationStreamError::Config(
+                BuildRegenerationAiServiceError::InvalidConfig(error.to_string()),
+            ),
+        )
+    })?;
+    merge_regeneration_audit(&mut payload, &audit).map_err(|error| {
+        CreatePartialRegenerationStreamWorkflowError::Prepare(
+            PreparePartialRegenerationStreamError::Config(
+                BuildRegenerationAiServiceError::InvalidConfig(error),
+            ),
+        )
+    })?;
+    Ok(payload)
 }
 
 pub async fn execute_chapter_regeneration_task(
@@ -816,7 +931,7 @@ pub async fn execute_chapter_regeneration_task(
         })?;
 
     let launch_input = build_full_chapter_regeneration_stream_launch_input(stream_input);
-    let output = collect_generation_candidate_output(
+    let output = collect_generation_candidate_output_tracked(
         ChapterCandidateOutputRequest {
             ai_service: launch_input.ai_service,
             prompt: launch_input.prompt,
@@ -826,6 +941,7 @@ pub async fn execute_chapter_regeneration_task(
             max_output_chars: None,
             runtime_state: None,
         },
+        launch_input.role_policy_context.allow_model_fallback,
         |_chunk_content, _progress| async { Ok(()) },
     )
     .await
@@ -835,18 +951,34 @@ pub async fn execute_chapter_regeneration_task(
         )
     })?;
 
-    let payload = match finalize_chapter_regeneration_result(&output.full_content, &task.id) {
-        Ok(payload) => payload,
-        Err(error) => {
-            let detail = describe_regeneration_finalize_error(&error);
-            let _ = mark_regeneration_task_failed(db, &task.id, detail).await;
-            return Err(CreateChapterRegenerationStreamWorkflowError::Prepare(
-                BuildRegenerationAiServiceError::InvalidConfig(detail.to_string()),
-            ));
-        }
-    };
+    let mut payload =
+        match finalize_chapter_regeneration_result(&output.output.full_content, &task.id) {
+            Ok(payload) => payload,
+            Err(error) => {
+                let detail = describe_regeneration_finalize_error(&error);
+                let _ = mark_regeneration_task_failed(db, &task.id, detail).await;
+                return Err(CreateChapterRegenerationStreamWorkflowError::Prepare(
+                    BuildRegenerationAiServiceError::InvalidConfig(detail.to_string()),
+                ));
+            }
+        };
 
-    mark_regeneration_task_completed(db, &task.id, &output.full_content)
+    let audit = build_generation_execution_audit(
+        &launch_input.role_policy_context.resolved_policy,
+        &output.execution,
+    )
+    .map_err(|error| {
+        CreateChapterRegenerationStreamWorkflowError::Prepare(
+            BuildRegenerationAiServiceError::InvalidConfig(error.to_string()),
+        )
+    })?;
+    merge_regeneration_audit(&mut payload, &audit).map_err(|error| {
+        CreateChapterRegenerationStreamWorkflowError::Prepare(
+            BuildRegenerationAiServiceError::InvalidConfig(error),
+        )
+    })?;
+
+    mark_regeneration_task_completed(db, &task.id, &output.output.full_content)
         .await
         .map_err(|error| {
             CreateChapterRegenerationStreamWorkflowError::TaskLifecycle(
@@ -938,14 +1070,19 @@ mod tests {
         build_full_chapter_regeneration_stream_launch_input,
         build_partial_chapter_regeneration_stream_launch_input,
         describe_regeneration_finalize_error, finalize_chapter_regeneration_result,
-        finalize_partial_regeneration_result, normalize_partial_regeneration_output,
+        finalize_partial_regeneration_result, merge_regeneration_audit,
+        normalize_partial_regeneration_output,
         run_chapter_regeneration_stream_workflow_smoke_suite,
         CreateChapterRegenerationStreamWorkflowError, CreatePartialRegenerationStreamWorkflowError,
         CreateRegenerationStreamWorkflowError, FinalizePartialRegenerationError,
         OwnedRegenerationInitialEvent,
     };
+    use crate::ai::execution_trace::{
+        AIExecutionOutcome, AIExecutionTraceV1, AI_EXECUTION_TRACE_SCHEMA_VERSION,
+    };
     use crate::ai::AIConfig;
     use crate::services::chapter_access_service::LoadAccessibleChapterError;
+    use crate::services::chapter_generation_execution_contract_service::PreparedRoleModelPolicyContext;
     use crate::services::chapter_regeneration_prepare_service::{
         BuildRegenerationAiServiceError, PreparePartialRegenerationError,
         PreparePartialRegenerationStreamError,
@@ -953,7 +1090,60 @@ mod tests {
     use crate::services::chapter_regeneration_prepare_service::{
         FullChapterRegenerationStreamInput, PartialChapterRegenerationStreamInput,
     };
+    use crate::services::generation_contract_service::{
+        build_generation_contract_snapshot, GenerationContractSnapshotV1, GenerationIntentKind,
+        GenerationIntentV1, GenerationSelection, GenerationTarget, StoryPacketV1,
+    };
+    use crate::services::generation_execution_audit_service::build_generation_execution_audit;
+    use crate::services::role_model_policy_service::{
+        GenerationRole, ModelSelectionSource, ResolvedRoleModelPolicyV1,
+        ROLE_MODEL_POLICY_SCHEMA_VERSION,
+    };
     use crate::utils::sse::SseProgress;
+
+    fn build_test_role_policy_context() -> PreparedRoleModelPolicyContext {
+        PreparedRoleModelPolicyContext {
+            resolved_policy: ResolvedRoleModelPolicyV1 {
+                role: GenerationRole::Writer,
+                policy_schema_version: ROLE_MODEL_POLICY_SCHEMA_VERSION.to_string(),
+                policy_digest: "test-policy-digest".to_string(),
+                requested_provider: Some("openai".to_string()),
+                requested_model: Some("test-model".to_string()),
+                resolved_provider: "openai".to_string(),
+                resolved_model: "test-model".to_string(),
+                provider_source: ModelSelectionSource::GlobalSettings,
+                model_source: ModelSelectionSource::GlobalSettings,
+            },
+            allow_model_fallback: false,
+        }
+    }
+
+    fn build_test_full_generation_contract() -> GenerationContractSnapshotV1 {
+        let target = GenerationTarget::chapter("project-1", "chapter-1");
+        let story_packet = StoryPacketV1::new("project-1", target.clone());
+        let intent = GenerationIntentV1::new(GenerationIntentKind::ChapterRegenerate, target);
+
+        build_generation_contract_snapshot(story_packet, intent)
+            .expect("full regeneration test contract should build")
+    }
+
+    fn build_test_partial_generation_contract() -> GenerationContractSnapshotV1 {
+        let target = GenerationTarget::chapter_selection(
+            "project-1",
+            "chapter-1",
+            GenerationSelection {
+                start_index: 12,
+                end_index: 36,
+                selected_text: Some("选中的原始正文".to_string()),
+            },
+        );
+        let story_packet = StoryPacketV1::new("project-1", target.clone());
+        let intent =
+            GenerationIntentV1::new(GenerationIntentKind::ChapterPartialRegenerate, target);
+
+        build_generation_contract_snapshot(story_packet, intent)
+            .expect("partial regeneration test contract should build")
+    }
 
     #[test]
     fn should_normalize_partial_regeneration_output_prefixes_and_quotes() {
@@ -1017,6 +1207,44 @@ mod tests {
             error,
             FinalizePartialRegenerationError::EmptyContent
         ));
+    }
+
+    #[test]
+    fn should_merge_regeneration_audit_without_overwriting_result_fields() {
+        let role_policy_context = build_test_role_policy_context();
+        let execution = AIExecutionTraceV1 {
+            schema_version: AI_EXECUTION_TRACE_SCHEMA_VERSION.to_string(),
+            requested_provider: "openai".to_string(),
+            requested_model: "test-model".to_string(),
+            actual_provider: "openai".to_string(),
+            actual_model: "test-model".to_string(),
+            outcome: AIExecutionOutcome::Succeeded,
+            fallbacks: Vec::new(),
+            endpoint_summary: None,
+        };
+        let audit =
+            build_generation_execution_audit(&role_policy_context.resolved_policy, &execution)
+                .expect("test regeneration audit should build");
+        let mut payload = serde_json::json!({
+            "content": "重生成正文",
+            "task_id": "task-1",
+            "start_position": 12,
+            "end_position": 36,
+            "word_count": 2400
+        });
+
+        merge_regeneration_audit(&mut payload, &audit)
+            .expect("regeneration audit should merge additively");
+
+        assert_eq!(payload["content"], "重生成正文");
+        assert_eq!(payload["task_id"], "task-1");
+        assert_eq!(payload["start_position"], 12);
+        assert_eq!(payload["end_position"], 36);
+        assert_eq!(payload["word_count"], 2400);
+        assert_eq!(payload["generation_execution_audit"]["role"], "writer");
+        assert!(payload.get("prompt").is_none());
+        assert!(payload.get("authorization").is_none());
+        assert!(payload.get("api_key").is_none());
     }
 
     #[test]
@@ -1171,6 +1399,26 @@ mod tests {
             contract["behavior_contract"]["shared_stream_owner_entrypoints"][0],
             "build_owned_regeneration_stream"
         );
+        assert!(
+            contract["behavior_contract"]["shared_stream_owner_entrypoints"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry == "collect_generation_candidate_output_tracked")
+        );
+        assert_eq!(
+            contract["behavior_contract"]["execution_audit_policy"]["result_field"],
+            "generation_execution_audit"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["execution_audit_policy"]["sse_event_kind"],
+            "result"
+        );
+        assert_eq!(
+            contract["behavior_contract"]["execution_audit_policy"]
+                ["chapter_content_persistence_unchanged"],
+            true
+        );
         assert_eq!(
             contract["task_owner_contract"]["owner"],
             "chapter_regeneration_task_service"
@@ -1323,9 +1571,16 @@ mod tests {
                 chapter_word_count: 2400,
                 prompt: "prompt".to_string(),
                 ai_service: crate::ai::service::AIService::new(AIConfig::default()),
+                role_policy_context: build_test_role_policy_context(),
+                generation_contract: build_test_full_generation_contract(),
             },
         );
 
+        assert_eq!(
+            launch_input.role_policy_context.resolved_policy.role,
+            GenerationRole::Writer
+        );
+        assert!(!launch_input.role_policy_context.allow_model_fallback);
         assert_eq!(launch_input.task_label, "Chapter Rewrite");
         assert_eq!(launch_input.prompt, "prompt");
         assert_eq!(launch_input.completion_message, "Rewrite complete");
@@ -1361,6 +1616,8 @@ mod tests {
                     end_position: 36,
                     prompt: "prompt".to_string(),
                     ai_service: crate::ai::service::AIService::new(AIConfig::default()),
+                    role_policy_context: build_test_role_policy_context(),
+                    generation_contract: build_test_partial_generation_contract(),
                 },
             );
 
@@ -1368,6 +1625,11 @@ mod tests {
         assert_eq!(original_word_count, 900);
         assert_eq!(start_position, 12);
         assert_eq!(end_position, 36);
+        assert_eq!(
+            launch_input.role_policy_context.resolved_policy.role,
+            GenerationRole::Writer
+        );
+        assert!(!launch_input.role_policy_context.allow_model_fallback);
         assert_eq!(launch_input.task_label, "Partial Rewrite");
         assert_eq!(launch_input.prompt, "prompt");
         assert_eq!(launch_input.completion_message, "Rewrite complete");

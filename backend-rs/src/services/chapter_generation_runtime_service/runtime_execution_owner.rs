@@ -4,13 +4,13 @@ use crate::services::chapter_access_service::{
     load_accessible_chapter_for_generation, LoadAccessibleChapterForGenerationError,
 };
 use crate::services::chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig;
+use crate::services::chapter_generation_contract_prepare_service::build_chapter_story_packet_contract;
+use crate::services::chapter_generation_execution_contract_service::PreparedRoleModelPolicyContext;
 use crate::services::chapter_generation_history_payload_service::payload_owner::generated_history_runtime_snapshot_from_payload;
-use crate::services::chapter_generation_history_persistence_service::persist_single_generation_generated_result;
+use crate::services::chapter_generation_history_persistence_service::persist_single_generation_generated_result_with_contract_and_audit;
 use crate::services::chapter_generation_prompt_service::{
-    build_previous_chapter_prompt_context, PreviousChapterPromptContext,
-};
-use crate::services::chapter_generation_prompt_service::{
-    ChapterGenerationPromptOverrides, PromptContextProviderPayload,
+    build_previous_chapter_prompt_context, resolve_prompt_preference,
+    ChapterGenerationPromptOverrides, PreviousChapterPromptContext, PromptContextProviderPayload,
 };
 #[cfg(test)]
 use crate::services::chapter_generation_runtime_service::candidate_runtime_owner::{
@@ -21,11 +21,25 @@ use crate::services::chapter_generation_runtime_service::story_continuity_ledger
     load_project_continuity_ledger, ProjectContinuityLedger,
 };
 use crate::services::chapter_generation_runtime_service::{
-    execute_single_generation_candidate_runtime, GeneratedChapterResult,
+    execute_single_generation_candidate_runtime_tracked_with_guidance,
+    execute_single_generation_candidate_runtime_with_guidance, GeneratedChapterResult,
+};
+use crate::services::generation_contract_service::{
+    apply_generation_intent_overrides, build_generation_contract_snapshot, fill_missing_continuity,
+    merge_generation_contract_runtime_snapshot, merge_story_packet_layers,
+    story_packet_to_legacy_flat_value, GenerationContractSnapshotV1, GenerationCreativeOverrides,
+    GenerationIntentKind, GenerationIntentOverrides, GenerationIntentV1, GenerationTarget,
+    GenerationTargetKind, StoryPacketFactLayer, StoryPacketSource, StoryPacketSourceKind,
+    StoryPacketV1,
+};
+use crate::services::generation_execution_audit_service::{
+    build_generation_execution_audit, GenerationExecutionAuditV1,
 };
 use crate::services::wizard_service::build_project_long_term_goal;
+use chrono::Utc;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LoadGenerationContextError {
@@ -58,7 +72,7 @@ pub(crate) struct ChapterGenerationRuntimeContext {
     pub(crate) project_model: project::Model,
     pub(crate) previous_chapter: Option<chapter::Model>,
     pub(crate) previous_chapter_prompt_context: PreviousChapterPromptContext,
-    pub(crate) story_packet: Value,
+    pub(crate) story_packet: StoryPacketV1,
 }
 
 impl ChapterGenerationRuntimeContext {
@@ -67,8 +81,18 @@ impl ChapterGenerationRuntimeContext {
         db: &DatabaseConnection,
         prompt: String,
         result: GeneratedChapterResult,
+        generation_contract_snapshot: Option<&GenerationContractSnapshotV1>,
+        generation_execution_audit: Option<&GenerationExecutionAuditV1>,
     ) -> Result<GeneratedChapterResult, String> {
-        persist_single_generation_generated_result(db, &self.chapter_model, prompt, result).await
+        persist_single_generation_generated_result_with_contract_and_audit(
+            db,
+            &self.chapter_model,
+            prompt,
+            result,
+            generation_contract_snapshot,
+            generation_execution_audit,
+        )
+        .await
     }
 
     #[cfg(test)]
@@ -99,24 +123,296 @@ impl ChapterGenerationRuntimeContext {
         overrides: &ChapterGenerationPromptOverrides,
         gateway_config: ChapterCandidateRouteGatewayConfig,
     ) -> Result<GeneratedChapterResult, String> {
+        self.generate_and_persist_with_optional_contract(
+            db,
+            ai_config,
+            target_word_count,
+            provider_payload,
+            overrides,
+            gateway_config,
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn generate_and_persist_single_with_candidate_route_gateway(
+        self,
+        db: &DatabaseConnection,
+        task_id: Option<&str>,
+        ai_config: AIConfig,
+        target_word_count: i32,
+        provider_payload: PromptContextProviderPayload,
+        overrides: &ChapterGenerationPromptOverrides,
+        gateway_config: ChapterCandidateRouteGatewayConfig,
+        role_policy_context: Option<PreparedRoleModelPolicyContext>,
+    ) -> Result<GeneratedChapterResult, String> {
+        let snapshot =
+            self.build_single_generation_contract_snapshot(target_word_count, overrides)?;
+        if let Some(task_id) = task_id {
+            let mut runtime_state = Value::Null;
+            merge_generation_contract_runtime_snapshot(&mut runtime_state, &snapshot)
+                .map_err(|error| error.to_string())?;
+            crate::services::chapter_generation_runtime_service::snapshot_persistence_owner::upsert_chapter_generation_runtime_snapshot(
+                db,
+                task_id,
+                runtime_state,
+                Utc::now().naive_utc(),
+            )
+            .await?;
+        }
+
+        self.generate_and_persist_with_optional_contract(
+            db,
+            ai_config,
+            target_word_count,
+            provider_payload,
+            overrides,
+            gateway_config,
+            Some(snapshot),
+            role_policy_context,
+        )
+        .await
+    }
+
+    fn build_single_generation_contract_snapshot(
+        &self,
+        target_word_count: i32,
+        overrides: &ChapterGenerationPromptOverrides,
+    ) -> Result<GenerationContractSnapshotV1, String> {
+        let request_target_word_count = positive_u32(target_word_count);
+        let mut story_packet = self.story_packet.clone();
+        if let Some(target_word_count) = request_target_word_count {
+            story_packet.target_word_count = Some(target_word_count);
+            append_story_packet_source(
+                &mut story_packet,
+                StoryPacketSource {
+                    kind: StoryPacketSourceKind::LegacyRequestAdapter,
+                    reference: Some("single_generation_target_word_count".to_owned()),
+                },
+            );
+        }
+
+        let target = story_packet.target.clone();
+        let mut intent = GenerationIntentV1::new(GenerationIntentKind::ChapterGenerate, target);
+        apply_generation_intent_overrides(
+            &mut intent,
+            build_chapter_generation_intent_overrides(
+                &self.project_model,
+                request_target_word_count,
+                overrides,
+                "single_generation_active_route",
+            ),
+        );
+        build_generation_contract_snapshot(story_packet, intent).map_err(|error| error.to_string())
+    }
+
+    pub(crate) async fn generate_candidate_only(
+        &self,
+        ai_config: AIConfig,
+        target_word_count: i32,
+        provider_payload: PromptContextProviderPayload,
+        overrides: &ChapterGenerationPromptOverrides,
+        gateway_config: ChapterCandidateRouteGatewayConfig,
+        role_policy_context: Option<PreparedRoleModelPolicyContext>,
+    ) -> Result<GeneratedChapterResult, String> {
+        self.generate_candidate_only_with_guidance(
+            ai_config,
+            target_word_count,
+            provider_payload,
+            overrides,
+            None,
+            gateway_config,
+            role_policy_context,
+        )
+        .await
+    }
+
+    pub(crate) async fn generate_candidate_only_with_guidance(
+        &self,
+        ai_config: AIConfig,
+        target_word_count: i32,
+        provider_payload: PromptContextProviderPayload,
+        overrides: &ChapterGenerationPromptOverrides,
+        additional_guidance: Option<&str>,
+        gateway_config: ChapterCandidateRouteGatewayConfig,
+        role_policy_context: Option<PreparedRoleModelPolicyContext>,
+    ) -> Result<GeneratedChapterResult, String> {
+        let generation_contract_snapshot =
+            self.build_single_generation_contract_snapshot(target_word_count, overrides)?;
+        let (_, result, _, _) = self
+            .generate_candidate_with_optional_contract(
+                ai_config,
+                target_word_count,
+                provider_payload,
+                overrides,
+                additional_guidance,
+                gateway_config,
+                Some(generation_contract_snapshot),
+                role_policy_context,
+            )
+            .await?;
+        Ok(result)
+    }
+
+    pub(crate) async fn generate_candidate_only_with_contract(
+        &self,
+        ai_config: AIConfig,
+        target_word_count: i32,
+        provider_payload: PromptContextProviderPayload,
+        overrides: &ChapterGenerationPromptOverrides,
+        gateway_config: ChapterCandidateRouteGatewayConfig,
+        generation_contract_snapshot: GenerationContractSnapshotV1,
+        role_policy_context: Option<PreparedRoleModelPolicyContext>,
+    ) -> Result<GeneratedChapterResult, String> {
+        self.generate_candidate_only_with_contract_and_guidance(
+            ai_config,
+            target_word_count,
+            provider_payload,
+            overrides,
+            None,
+            gateway_config,
+            generation_contract_snapshot,
+            role_policy_context,
+        )
+        .await
+    }
+
+    pub(crate) async fn generate_candidate_only_with_contract_and_guidance(
+        &self,
+        ai_config: AIConfig,
+        target_word_count: i32,
+        provider_payload: PromptContextProviderPayload,
+        overrides: &ChapterGenerationPromptOverrides,
+        additional_guidance: Option<&str>,
+        gateway_config: ChapterCandidateRouteGatewayConfig,
+        generation_contract_snapshot: GenerationContractSnapshotV1,
+        role_policy_context: Option<PreparedRoleModelPolicyContext>,
+    ) -> Result<GeneratedChapterResult, String> {
+        let (_, result, _, _) = self
+            .generate_candidate_with_optional_contract(
+                ai_config,
+                target_word_count,
+                provider_payload,
+                overrides,
+                additional_guidance,
+                gateway_config,
+                Some(generation_contract_snapshot),
+                role_policy_context,
+            )
+            .await?;
+        Ok(result)
+    }
+
+    async fn generate_candidate_with_optional_contract(
+        &self,
+        ai_config: AIConfig,
+        target_word_count: i32,
+        provider_payload: PromptContextProviderPayload,
+        overrides: &ChapterGenerationPromptOverrides,
+        additional_guidance: Option<&str>,
+        gateway_config: ChapterCandidateRouteGatewayConfig,
+        generation_contract_snapshot: Option<GenerationContractSnapshotV1>,
+        role_policy_context: Option<PreparedRoleModelPolicyContext>,
+    ) -> Result<
+        (
+            String,
+            GeneratedChapterResult,
+            Option<GenerationContractSnapshotV1>,
+            Option<GenerationExecutionAuditV1>,
+        ),
+        String,
+    > {
+        let legacy_story_packet = generation_contract_snapshot
+            .as_ref()
+            .map(|snapshot| story_packet_to_legacy_flat_value(&snapshot.story_packet))
+            .unwrap_or_else(|| story_packet_to_legacy_flat_value(&self.story_packet));
         let execution_context =
             crate::services::chapter_generation_runtime_service::SingleGenerationCandidateRuntimeExecutionContext {
                 project_model: self.project_model.clone(),
                 chapter_model: self.chapter_model.clone(),
                 previous_chapter_exists: self.previous_chapter.is_some(),
                 previous_chapter_prompt_context: self.previous_chapter_prompt_context.clone(),
-                story_packet: self.story_packet.clone(),
+                story_packet: legacy_story_packet,
+                generation_contract_snapshot,
             };
-        let (prompt, result) = execute_single_generation_candidate_runtime(
-            &execution_context,
-            ai_config,
-            target_word_count,
-            provider_payload,
-            overrides,
-            gateway_config,
+        let (prompt, result, generation_execution_audit) =
+            if let Some(role_policy_context) = role_policy_context {
+                let (prompt, result, execution) =
+                    execute_single_generation_candidate_runtime_tracked_with_guidance(
+                        &execution_context,
+                        ai_config,
+                        target_word_count,
+                        provider_payload,
+                        overrides,
+                        additional_guidance,
+                        gateway_config,
+                        role_policy_context.allow_model_fallback,
+                    )
+                    .await?;
+                let audit = execution
+                    .as_ref()
+                    .map(|execution| {
+                        build_generation_execution_audit(
+                            &role_policy_context.resolved_policy,
+                            execution,
+                        )
+                    })
+                    .transpose()
+                    .map_err(|error| error.to_string())?;
+                (prompt, result, audit)
+            } else {
+                let (prompt, result) = execute_single_generation_candidate_runtime_with_guidance(
+                    &execution_context,
+                    ai_config,
+                    target_word_count,
+                    provider_payload,
+                    overrides,
+                    additional_guidance,
+                    gateway_config,
+                )
+                .await?;
+                (prompt, result, None)
+            };
+        Ok((
+            prompt,
+            result,
+            execution_context.generation_contract_snapshot,
+            generation_execution_audit,
+        ))
+    }
+
+    async fn generate_and_persist_with_optional_contract(
+        self,
+        db: &DatabaseConnection,
+        ai_config: AIConfig,
+        target_word_count: i32,
+        provider_payload: PromptContextProviderPayload,
+        overrides: &ChapterGenerationPromptOverrides,
+        gateway_config: ChapterCandidateRouteGatewayConfig,
+        generation_contract_snapshot: Option<GenerationContractSnapshotV1>,
+        role_policy_context: Option<PreparedRoleModelPolicyContext>,
+    ) -> Result<GeneratedChapterResult, String> {
+        let (prompt, result, generation_contract_snapshot, generation_execution_audit) = self
+            .generate_candidate_with_optional_contract(
+                ai_config,
+                target_word_count,
+                provider_payload,
+                overrides,
+                None,
+                gateway_config,
+                generation_contract_snapshot,
+                role_policy_context,
+            )
+            .await?;
+        self.persist_generated_result(
+            db,
+            prompt,
+            result,
+            generation_contract_snapshot.as_ref(),
+            generation_execution_audit.as_ref(),
         )
-        .await?;
-        self.persist_generated_result(db, prompt, result).await
+        .await
     }
 }
 
@@ -182,7 +478,7 @@ pub(crate) async fn load_generation_context(
     let project_continuity_ledger = load_project_continuity_ledger(db, Some(&project_model.id), 4)
         .await
         .map_err(LoadGenerationContextError::Internal)?;
-    let story_packet = build_single_generation_story_packet(
+    let story_packet = build_single_generation_story_packet_contract(
         &project_model,
         &chapter_model,
         previous_story_runtime_snapshot.as_ref(),
@@ -220,72 +516,249 @@ async fn load_previous_story_runtime_snapshot(
         .and_then(|payload| generated_history_runtime_snapshot_from_payload(&payload)))
 }
 
+fn build_single_generation_story_packet_contract(
+    project_model: &project::Model,
+    chapter_model: &chapter::Model,
+    previous_story_runtime_snapshot: Option<&Value>,
+    project_continuity_ledger: Option<&ProjectContinuityLedger>,
+) -> StoryPacketV1 {
+    build_chapter_story_packet_contract(
+        project_model,
+        chapter_model,
+        previous_story_runtime_snapshot,
+        project_continuity_ledger.map(ProjectContinuityLedger::to_story_continuity_snapshot),
+    )
+}
+
+pub(crate) fn build_batch_generation_contract_snapshot(
+    project_model: &project::Model,
+    chapter_ids: Vec<String>,
+    start_chapter_number: i32,
+    normalized_target_word_count: i32,
+    target_word_count_overridden: bool,
+    overrides: &ChapterGenerationPromptOverrides,
+    project_continuity_ledger: Option<&ProjectContinuityLedger>,
+) -> Result<GenerationContractSnapshotV1, String> {
+    let target_word_count = positive_u32(normalized_target_word_count);
+    let target = GenerationTarget::chapter_batch(project_model.id.clone(), chapter_ids);
+    let mut system_defaults = StoryPacketV1::new(project_model.id.clone(), target.clone());
+    system_defaults.sources.push(StoryPacketSource {
+        kind: StoryPacketSourceKind::SystemDefaults,
+        reference: None,
+    });
+
+    let authoritative_facts = StoryPacketFactLayer {
+        sources: vec![StoryPacketSource {
+            kind: StoryPacketSourceKind::AuthoritativeDatabase,
+            reference: Some(format!("project:{}/chapter-batch", project_model.id)),
+        }],
+        current_chapter_number: positive_u32(start_chapter_number),
+        chapter_count: project_model.chapter_count.and_then(positive_u32),
+        target_word_count,
+        story_long_term_goal: build_project_long_term_goal(
+            project_model.theme.as_deref(),
+            project_model.description.as_deref(),
+            project_model.default_story_creation_brief.as_deref(),
+            project_model
+                .chapter_count
+                .and_then(|value| usize::try_from(value).ok()),
+            usize::try_from(project_model.target_words).ok(),
+        ),
+        compatibility_metadata: BTreeMap::from([(
+            "legacy_source".to_owned(),
+            json!("batch_generation_create"),
+        )]),
+        ..StoryPacketFactLayer::default()
+    };
+    let mut story_packet = merge_story_packet_layers(system_defaults, authoritative_facts, None);
+    if target_word_count_overridden {
+        append_story_packet_source(
+            &mut story_packet,
+            StoryPacketSource {
+                kind: StoryPacketSourceKind::LegacyRequestAdapter,
+                reference: Some("batch_generation_target_word_count".to_owned()),
+            },
+        );
+    }
+    if let Some(project_continuity_ledger) = project_continuity_ledger {
+        fill_missing_continuity(
+            &mut story_packet.continuity,
+            project_continuity_ledger.to_story_continuity_snapshot(),
+        );
+    }
+
+    let mut intent = GenerationIntentV1::new(GenerationIntentKind::BatchChapterGenerate, target);
+    apply_generation_intent_overrides(
+        &mut intent,
+        build_chapter_generation_intent_overrides(
+            project_model,
+            target_word_count,
+            overrides,
+            "batch_generation_create",
+        ),
+    );
+    build_generation_contract_snapshot(story_packet, intent).map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
 fn build_single_generation_story_packet(
     project_model: &project::Model,
     chapter_model: &chapter::Model,
     previous_story_runtime_snapshot: Option<&Value>,
     project_continuity_ledger: Option<&ProjectContinuityLedger>,
 ) -> Value {
-    let mut packet = serde_json::Map::new();
-    packet.insert(
-        "source".to_string(),
-        json!("single_generation_active_route"),
-    );
-    packet.insert("project_id".to_string(), json!(project_model.id.clone()));
-    packet.insert("chapter_id".to_string(), json!(chapter_model.id.clone()));
-    packet.insert(
-        "current_chapter_number".to_string(),
-        json!(chapter_model.chapter_number),
-    );
-    packet.insert(
-        "chapter_count".to_string(),
-        project_model
-            .chapter_count
-            .map_or(Value::Null, |value| json!(value)),
-    );
-    packet.insert(
-        "target_word_count".to_string(),
-        json!(project_model.target_words),
-    );
+    story_packet_to_legacy_flat_value(&build_single_generation_story_packet_contract(
+        project_model,
+        chapter_model,
+        previous_story_runtime_snapshot,
+        project_continuity_ledger,
+    ))
+}
 
-    if let Some(long_term_goal) = build_project_long_term_goal(
-        project_model.theme.as_deref(),
-        project_model.description.as_deref(),
+fn positive_u32(value: i32) -> Option<u32> {
+    u32::try_from(value).ok().filter(|value| *value > 0)
+}
+
+fn append_story_packet_source(packet: &mut StoryPacketV1, source: StoryPacketSource) {
+    if !packet.sources.contains(&source) {
+        packet.sources.push(source);
+    }
+}
+
+pub(crate) fn build_chapter_generation_intent_overrides(
+    project_model: &project::Model,
+    target_word_count: Option<u32>,
+    overrides: &ChapterGenerationPromptOverrides,
+    legacy_mode: &str,
+) -> GenerationIntentOverrides {
+    let narrative_style = resolved_prompt_value(
+        overrides.narrative_perspective.as_deref(),
+        project_model.narrative_perspective.as_deref(),
+    );
+    let creative_mode = resolved_prompt_value(
+        overrides.creative_mode.as_deref(),
+        project_model.default_creative_mode.as_deref(),
+    );
+    let story_focus = resolved_prompt_value(
+        overrides.story_focus.as_deref(),
+        project_model.default_story_focus.as_deref(),
+    );
+    let plot_stage = resolved_prompt_value(
+        overrides.plot_stage.as_deref(),
+        project_model.default_plot_stage.as_deref(),
+    );
+    let story_creation_brief = resolved_prompt_value(
+        overrides.story_creation_brief.as_deref(),
         project_model.default_story_creation_brief.as_deref(),
-        project_model
-            .chapter_count
-            .and_then(|value| usize::try_from(value).ok()),
-        usize::try_from(project_model.target_words).ok(),
-    ) {
-        packet.insert("story_long_term_goal".to_string(), json!(long_term_goal));
-    }
+    );
+    let quality_preset = resolved_prompt_value(
+        overrides.quality_preset.as_deref(),
+        project_model.default_quality_preset.as_deref(),
+    );
+    let quality_notes = resolved_prompt_value(
+        overrides.quality_notes.as_deref(),
+        project_model.default_quality_notes.as_deref(),
+    );
 
-    if let Some(snapshot) = previous_story_runtime_snapshot.and_then(Value::as_object) {
-        for field_name in [
-            "story_long_term_goal",
-            "character_focus",
-            "foreshadow_payoff_plan",
-            "character_state_ledger",
-            "relationship_state_ledger",
-            "foreshadow_state_ledger",
-            "organization_state_ledger",
-            "career_state_ledger",
-        ] {
-            if let Some(value) = snapshot
-                .get(field_name)
-                .cloned()
-                .filter(|value| !value.is_null())
-            {
-                packet.insert(field_name.to_string(), value);
-            }
-        }
+    let mut opaque_overrides = BTreeMap::new();
+    insert_optional_override(
+        &mut opaque_overrides,
+        "creative_mode",
+        creative_mode.as_ref(),
+    );
+    insert_optional_override(&mut opaque_overrides, "story_focus", story_focus.as_ref());
+    insert_optional_override(&mut opaque_overrides, "plot_stage", plot_stage.as_ref());
+    insert_optional_override(
+        &mut opaque_overrides,
+        "story_creation_brief",
+        story_creation_brief.as_ref(),
+    );
+    insert_optional_override(
+        &mut opaque_overrides,
+        "quality_preset",
+        quality_preset.as_ref(),
+    );
+    insert_optional_override(
+        &mut opaque_overrides,
+        "quality_notes",
+        quality_notes.as_ref(),
+    );
+    if overrides.web_research_enabled {
+        opaque_overrides.insert("web_research_enabled".to_owned(), Value::Bool(true));
+        insert_optional_override(
+            &mut opaque_overrides,
+            "web_research_query",
+            overrides.web_research_query.as_ref(),
+        );
     }
+    insert_optional_override(
+        &mut opaque_overrides,
+        "story_repair_summary",
+        overrides.story_repair_summary.as_ref(),
+    );
+    insert_string_array_override(
+        &mut opaque_overrides,
+        "story_repair_targets",
+        &overrides.story_repair_targets,
+    );
+    insert_string_array_override(
+        &mut opaque_overrides,
+        "story_preserve_strengths",
+        &overrides.story_preserve_strengths,
+    );
 
-    if let Some(project_continuity_ledger) = project_continuity_ledger {
-        project_continuity_ledger.fill_missing_story_packet_ledgers(&mut packet);
+    GenerationIntentOverrides {
+        target_word_count,
+        creative_overrides: GenerationCreativeOverrides {
+            narrative_style,
+            creative_direction: story_creation_brief,
+            story_direction: story_focus,
+            quality_requirements: quality_notes,
+            extra_constraints: Vec::new(),
+            opaque_overrides,
+        },
+        compatibility_metadata: BTreeMap::from([("legacy_mode".to_owned(), json!(legacy_mode))]),
+        ..GenerationIntentOverrides::default()
     }
+}
 
-    Value::Object(packet)
+fn resolved_prompt_value(
+    override_value: Option<&str>,
+    project_default: Option<&str>,
+) -> Option<String> {
+    let value = resolve_prompt_preference(override_value, project_default);
+    (!value.trim().is_empty()).then_some(value)
+}
+
+fn insert_optional_override(
+    overrides: &mut BTreeMap<String, Value>,
+    key: &str,
+    value: Option<&String>,
+) {
+    if let Some(value) = value
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        overrides.insert(key.to_owned(), Value::String(value.to_owned()));
+    }
+}
+
+fn insert_string_array_override(
+    overrides: &mut BTreeMap<String, Value>,
+    key: &str,
+    values: &[String],
+) {
+    let values = values
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| Value::String(value.to_owned()))
+        .collect::<Vec<_>>();
+    if !values.is_empty() {
+        overrides.insert(key.to_owned(), Value::Array(values));
+    }
 }
 
 pub(crate) async fn generate_and_persist_chapter_content_with_candidate_route_gateway(
@@ -312,15 +785,137 @@ pub(crate) async fn generate_and_persist_chapter_content_with_candidate_route_ga
         .await
 }
 
+fn build_batch_chapter_attempt_contract_snapshot(
+    context: &ChapterGenerationRuntimeContext,
+    batch_snapshot: &GenerationContractSnapshotV1,
+    target_word_count: i32,
+    overrides: &ChapterGenerationPromptOverrides,
+) -> Result<Option<GenerationContractSnapshotV1>, String> {
+    let batch_story_target = &batch_snapshot.story_packet.target;
+    let batch_intent_target = &batch_snapshot.generation_intent.target;
+    let project_id = &context.project_model.id;
+    let chapter_id = &context.chapter_model.id;
+    let has_expected_batch_semantics = batch_snapshot.generation_intent.kind
+        == GenerationIntentKind::BatchChapterGenerate
+        && batch_story_target.kind == GenerationTargetKind::ChapterBatch
+        && batch_intent_target.kind == GenerationTargetKind::ChapterBatch
+        && batch_snapshot.story_packet.project_id == *project_id
+        && batch_story_target.project_id == *project_id
+        && batch_intent_target.project_id == *project_id
+        && batch_story_target.chapter_ids == batch_intent_target.chapter_ids
+        && batch_story_target
+            .chapter_ids
+            .iter()
+            .any(|id| id == chapter_id);
+    if !has_expected_batch_semantics {
+        return Ok(None);
+    }
+
+    let story_packet = batch_snapshot.story_packet.clone();
+    let target = GenerationTarget::chapter(project_id.clone(), chapter_id.clone());
+    let mut intent = GenerationIntentV1::new(GenerationIntentKind::ChapterGenerate, target);
+    apply_generation_intent_overrides(
+        &mut intent,
+        build_chapter_generation_intent_overrides(
+            &context.project_model,
+            positive_u32(target_word_count),
+            overrides,
+            "batch_generation_chapter_attempt",
+        ),
+    );
+    build_generation_contract_snapshot(story_packet, intent)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) async fn generate_and_persist_batch_chapter_content_with_candidate_route_gateway(
+    db: &DatabaseConnection,
+    user_id: &str,
+    chapter_id: &str,
+    target_word_count: i32,
+    provider_payload: PromptContextProviderPayload,
+    overrides: &ChapterGenerationPromptOverrides,
+    ai_config: AIConfig,
+    gateway_config: ChapterCandidateRouteGatewayConfig,
+    batch_generation_contract_snapshot: Option<&GenerationContractSnapshotV1>,
+    role_policy_context: Option<PreparedRoleModelPolicyContext>,
+) -> Result<GeneratedChapterResult, String> {
+    let context = load_generation_context(db, user_id, chapter_id)
+        .await
+        .map_err(LoadGenerationContextError::into_runtime_message)?;
+    let attempt_contract_snapshot = match batch_generation_contract_snapshot {
+        Some(snapshot) => build_batch_chapter_attempt_contract_snapshot(
+            &context,
+            snapshot,
+            target_word_count,
+            overrides,
+        )?,
+        None => None,
+    };
+
+    context
+        .generate_and_persist_with_optional_contract(
+            db,
+            ai_config,
+            target_word_count,
+            provider_payload,
+            overrides,
+            gateway_config,
+            attempt_contract_snapshot,
+            role_policy_context,
+        )
+        .await
+}
+
+pub(crate) async fn generate_and_persist_single_chapter_content_with_candidate_route_gateway(
+    db: &DatabaseConnection,
+    task_id: Option<&str>,
+    user_id: &str,
+    chapter_id: &str,
+    target_word_count: i32,
+    provider_payload: PromptContextProviderPayload,
+    overrides: &ChapterGenerationPromptOverrides,
+    ai_config: AIConfig,
+    gateway_config: ChapterCandidateRouteGatewayConfig,
+    role_policy_context: Option<PreparedRoleModelPolicyContext>,
+) -> Result<GeneratedChapterResult, String> {
+    load_generation_context(db, user_id, chapter_id)
+        .await
+        .map_err(LoadGenerationContextError::into_runtime_message)?
+        .generate_and_persist_single_with_candidate_route_gateway(
+            db,
+            task_id,
+            ai_config,
+            target_word_count,
+            provider_payload,
+            overrides,
+            gateway_config,
+            role_policy_context,
+        )
+        .await
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{build_single_generation_story_packet, load_generation_context};
+    use super::{
+        build_batch_chapter_attempt_contract_snapshot, build_batch_generation_contract_snapshot,
+        build_single_generation_story_packet, build_single_generation_story_packet_contract,
+        load_generation_context, ChapterGenerationRuntimeContext,
+    };
     use crate::models::{
         career, chapter, character, character_career, generation_history, organization,
         plot_analysis, project, relationship, story_memory,
     };
+    use crate::services::chapter_generation_prompt_service::{
+        build_previous_chapter_prompt_context, ChapterGenerationPromptOverrides,
+    };
     use crate::services::chapter_generation_runtime_service::story_continuity_ledger_owner::{
         ProjectContinuityLedger, ProjectContinuityLedgerEntry,
+    };
+    use crate::services::generation_contract_service::{
+        story_packet_to_legacy_flat_value, validate_generation_contract_snapshot,
+        GenerationIntentKind, GenerationTargetKind, StoryPacketSourceKind,
+        GENERATION_CONTRACT_SCHEMA_VERSION,
     };
     use chrono::{NaiveDate, NaiveDateTime, Utc};
     use sea_orm::{
@@ -434,6 +1029,281 @@ mod tests {
         assert_eq!(packet["career_state_ledger"][0]["summary"], "stage 4");
     }
 
+    #[test]
+    fn should_build_typed_single_generation_contract_with_request_target_word_count() {
+        let project_model = build_project();
+        let chapter_model = build_chapter();
+        let context = ChapterGenerationRuntimeContext {
+            chapter_model: chapter_model.clone(),
+            project_model: project_model.clone(),
+            previous_chapter: None,
+            previous_chapter_prompt_context: build_previous_chapter_prompt_context(None),
+            story_packet: build_single_generation_story_packet_contract(
+                &project_model,
+                &chapter_model,
+                None,
+                None,
+            ),
+        };
+
+        let snapshot = context
+            .build_single_generation_contract_snapshot(
+                3_200,
+                &ChapterGenerationPromptOverrides::default(),
+            )
+            .expect("build typed single generation contract");
+
+        assert_eq!(snapshot.story_packet.target_word_count, Some(3_200));
+        assert_eq!(snapshot.generation_intent.target_word_count, Some(3_200));
+        assert_eq!(
+            snapshot.generation_intent.kind,
+            GenerationIntentKind::ChapterGenerate
+        );
+        assert!(snapshot.story_packet.sources.iter().any(|source| {
+            source.kind == StoryPacketSourceKind::LegacyRequestAdapter
+                && source.reference.as_deref() == Some("single_generation_target_word_count")
+        }));
+    }
+
+    #[test]
+    fn should_map_prompt_overrides_to_typed_intent_without_mutating_story_facts() {
+        let project_model = build_project();
+        let chapter_model = build_chapter();
+        let story_packet = build_single_generation_story_packet_contract(
+            &project_model,
+            &chapter_model,
+            None,
+            None,
+        );
+        let expected_story_packet = story_packet.clone();
+        let context = ChapterGenerationRuntimeContext {
+            chapter_model,
+            project_model,
+            previous_chapter: None,
+            previous_chapter_prompt_context: build_previous_chapter_prompt_context(None),
+            story_packet,
+        };
+        let overrides = ChapterGenerationPromptOverrides {
+            narrative_perspective: Some("第一人称".to_owned()),
+            creative_mode: Some("沉浸式".to_owned()),
+            story_focus: Some("推进主线冲突".to_owned()),
+            plot_stage: Some("升级".to_owned()),
+            story_creation_brief: Some("放大选择代价".to_owned()),
+            quality_preset: Some("strict".to_owned()),
+            quality_notes: Some("避免信息重复".to_owned()),
+            web_research_enabled: true,
+            web_research_query: Some("宋代夜禁".to_owned()),
+            story_repair_summary: Some("修复人物动机".to_owned()),
+            story_repair_targets: vec!["动机".to_owned()],
+            story_preserve_strengths: vec!["氛围".to_owned()],
+        };
+
+        let snapshot = context
+            .build_single_generation_contract_snapshot(0, &overrides)
+            .expect("build typed intent overrides");
+        let creative = &snapshot.generation_intent.creative_overrides;
+
+        assert_eq!(snapshot.story_packet, expected_story_packet);
+        assert_eq!(creative.narrative_style.as_deref(), Some("第一人称"));
+        assert_eq!(creative.creative_direction.as_deref(), Some("放大选择代价"));
+        assert_eq!(creative.story_direction.as_deref(), Some("推进主线冲突"));
+        assert_eq!(
+            creative.quality_requirements.as_deref(),
+            Some("避免信息重复")
+        );
+        assert_eq!(creative.opaque_overrides["creative_mode"], "沉浸式");
+        assert_eq!(creative.opaque_overrides["plot_stage"], "升级");
+        assert_eq!(creative.opaque_overrides["quality_preset"], "strict");
+        assert_eq!(creative.opaque_overrides["web_research_enabled"], true);
+        assert_eq!(creative.opaque_overrides["web_research_query"], "宋代夜禁");
+        assert_eq!(
+            creative.opaque_overrides["story_repair_summary"],
+            "修复人物动机"
+        );
+        assert_eq!(creative.opaque_overrides["story_repair_targets"][0], "动机");
+        assert_eq!(
+            creative.opaque_overrides["story_preserve_strengths"][0],
+            "氛围"
+        );
+    }
+
+    #[test]
+    fn should_build_batch_generation_contract_with_ordered_targets_and_valid_digest() {
+        let chapter_ids = vec![
+            "chapter-3".to_owned(),
+            "chapter-4".to_owned(),
+            "chapter-5".to_owned(),
+        ];
+        let snapshot = build_batch_generation_contract_snapshot(
+            &build_project(),
+            chapter_ids.clone(),
+            3,
+            2_800,
+            true,
+            &ChapterGenerationPromptOverrides::default(),
+            None,
+        )
+        .expect("build batch generation contract");
+
+        assert_eq!(snapshot.schema_version, GENERATION_CONTRACT_SCHEMA_VERSION);
+        assert_eq!(
+            snapshot.story_packet.target.kind,
+            GenerationTargetKind::ChapterBatch
+        );
+        assert_eq!(snapshot.story_packet.target.chapter_ids, chapter_ids);
+        assert_eq!(snapshot.story_packet.current_chapter_number, Some(3));
+        assert_eq!(snapshot.story_packet.chapter_count, Some(12));
+        assert_eq!(snapshot.story_packet.target_word_count, Some(2_800));
+        assert_eq!(
+            snapshot.story_packet.compatibility_metadata["legacy_source"],
+            "batch_generation_create"
+        );
+        assert!(snapshot.story_packet.sources.iter().any(|source| {
+            source.kind == StoryPacketSourceKind::LegacyRequestAdapter
+                && source.reference.as_deref() == Some("batch_generation_target_word_count")
+        }));
+        assert_eq!(
+            snapshot.generation_intent.kind,
+            GenerationIntentKind::BatchChapterGenerate
+        );
+        assert_eq!(
+            snapshot.generation_intent.target.kind,
+            GenerationTargetKind::ChapterBatch
+        );
+        assert_eq!(
+            snapshot.generation_intent.target.chapter_ids,
+            snapshot.story_packet.target.chapter_ids
+        );
+        assert_eq!(snapshot.generation_intent.target_word_count, Some(2_800));
+        assert_eq!(
+            snapshot.generation_intent.compatibility_metadata["legacy_mode"],
+            "batch_generation_create"
+        );
+        validate_generation_contract_snapshot(&snapshot).expect("validate batch contract digest");
+    }
+
+    #[test]
+    fn should_derive_distinct_chapter_intents_from_stable_batch_story_packet() {
+        let project_model = build_project();
+        let batch_snapshot = build_batch_generation_contract_snapshot(
+            &project_model,
+            vec!["chapter-3".to_owned(), "chapter-4".to_owned()],
+            3,
+            3_200,
+            false,
+            &ChapterGenerationPromptOverrides::default(),
+            None,
+        )
+        .expect("build batch contract");
+        let mut first_chapter = build_chapter();
+        first_chapter.id = "chapter-3".to_owned();
+        first_chapter.chapter_number = 3;
+        let mut second_chapter = build_chapter();
+        second_chapter.id = "chapter-4".to_owned();
+        second_chapter.chapter_number = 4;
+        let first_context = ChapterGenerationRuntimeContext {
+            chapter_model: first_chapter,
+            project_model: project_model.clone(),
+            previous_chapter: None,
+            previous_chapter_prompt_context: build_previous_chapter_prompt_context(None),
+            story_packet: batch_snapshot.story_packet.clone(),
+        };
+        let second_context = ChapterGenerationRuntimeContext {
+            chapter_model: second_chapter,
+            project_model,
+            previous_chapter: None,
+            previous_chapter_prompt_context: build_previous_chapter_prompt_context(None),
+            story_packet: batch_snapshot.story_packet.clone(),
+        };
+
+        let first_attempt = build_batch_chapter_attempt_contract_snapshot(
+            &first_context,
+            &batch_snapshot,
+            3_200,
+            &ChapterGenerationPromptOverrides::default(),
+        )
+        .expect("build first chapter attempt")
+        .expect("first chapter belongs to batch");
+        let second_attempt = build_batch_chapter_attempt_contract_snapshot(
+            &second_context,
+            &batch_snapshot,
+            3_200,
+            &ChapterGenerationPromptOverrides::default(),
+        )
+        .expect("build second chapter attempt")
+        .expect("second chapter belongs to batch");
+
+        assert_eq!(first_attempt.story_packet, batch_snapshot.story_packet);
+        assert_eq!(second_attempt.story_packet, batch_snapshot.story_packet);
+        assert_eq!(
+            first_attempt.generation_intent.kind,
+            GenerationIntentKind::ChapterGenerate
+        );
+        assert_eq!(
+            second_attempt.generation_intent.kind,
+            GenerationIntentKind::ChapterGenerate
+        );
+        assert_eq!(
+            first_attempt.generation_intent.target.chapter_id.as_deref(),
+            Some("chapter-3")
+        );
+        assert_eq!(
+            second_attempt
+                .generation_intent
+                .target
+                .chapter_id
+                .as_deref(),
+            Some("chapter-4")
+        );
+        assert_ne!(first_attempt.input_digest, second_attempt.input_digest);
+        assert_eq!(
+            first_attempt.generation_intent.compatibility_metadata["legacy_mode"],
+            "batch_generation_chapter_attempt"
+        );
+        assert_eq!(
+            second_attempt.generation_intent.compatibility_metadata["legacy_mode"],
+            "batch_generation_chapter_attempt"
+        );
+        validate_generation_contract_snapshot(&first_attempt)
+            .expect("validate first chapter attempt digest");
+        validate_generation_contract_snapshot(&second_attempt)
+            .expect("validate second chapter attempt digest");
+    }
+
+    #[test]
+    fn should_fallback_when_chapter_attempt_does_not_match_batch_contract() {
+        let project_model = build_project();
+        let batch_snapshot = build_batch_generation_contract_snapshot(
+            &project_model,
+            vec!["chapter-3".to_owned(), "chapter-4".to_owned()],
+            3,
+            3_200,
+            false,
+            &ChapterGenerationPromptOverrides::default(),
+            None,
+        )
+        .expect("build batch contract");
+        let mut unrelated_chapter = build_chapter();
+        unrelated_chapter.id = "chapter-outside-batch".to_owned();
+        let unrelated_context = ChapterGenerationRuntimeContext {
+            chapter_model: unrelated_chapter,
+            project_model,
+            previous_chapter: None,
+            previous_chapter_prompt_context: build_previous_chapter_prompt_context(None),
+            story_packet: batch_snapshot.story_packet.clone(),
+        };
+
+        let attempt = build_batch_chapter_attempt_contract_snapshot(
+            &unrelated_context,
+            &batch_snapshot,
+            3_200,
+            &ChapterGenerationPromptOverrides::default(),
+        )
+        .expect("semantic mismatch should not be an error");
+
+        assert!(attempt.is_none());
+    }
+
     fn ledger_entry(label: &str, summary: &str) -> ProjectContinuityLedgerEntry {
         ProjectContinuityLedgerEntry {
             label: Some(label.to_string()),
@@ -463,35 +1333,33 @@ mod tests {
                 .map(|chapter| chapter.id.as_str()),
             Some("chapter-prev")
         );
-        assert_eq!(
-            context.story_packet["source"],
-            "single_generation_active_route"
-        );
-        assert_eq!(context.story_packet["project_id"], "project-1");
-        assert_eq!(context.story_packet["chapter_id"], "chapter-current");
+        let legacy_packet = story_packet_to_legacy_flat_value(&context.story_packet);
+        assert_eq!(legacy_packet["source"], "single_generation_active_route");
+        assert_eq!(legacy_packet["project_id"], "project-1");
+        assert_eq!(legacy_packet["chapter_id"], "chapter-current");
 
         assert_eq!(
-            context.story_packet["character_state_ledger"][0]["label"],
+            legacy_packet["character_state_ledger"][0]["label"],
             "快照角色"
         );
         assert_eq!(
-            context.story_packet["relationship_state_ledger"][0]["label"],
+            legacy_packet["relationship_state_ledger"][0]["label"],
             "林河/白露"
         );
         assert_eq!(
-            context.story_packet["relationship_state_ledger"][0]["summary"],
+            legacy_packet["relationship_state_ledger"][0]["summary"],
             "盟友; 互相隐瞒代价"
         );
         assert_eq!(
-            context.story_packet["foreshadow_state_ledger"][0]["label"],
+            legacy_packet["foreshadow_state_ledger"][0]["label"],
             "断裂的铜钥匙"
         );
         assert_eq!(
-            context.story_packet["organization_state_ledger"][0]["label"],
+            legacy_packet["organization_state_ledger"][0]["label"],
             "白塔"
         );
         assert_eq!(
-            context.story_packet["career_state_ledger"][0]["summary"],
+            legacy_packet["career_state_ledger"][0]["summary"],
             "stage 4; progress 60%"
         );
     }

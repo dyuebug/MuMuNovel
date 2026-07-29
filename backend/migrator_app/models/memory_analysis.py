@@ -92,6 +92,7 @@ class PlotAnalysis(Base):
         unique=True,
         index=True,
     )
+    source_content_digest = Column(String(80), nullable=True)
     plot_stage = Column(String(50), comment="剧情阶段: 开端/发展/高潮/结局/过渡")
     conflict_level = Column(Integer, comment="冲突强度 1-10")
     conflict_types = Column(JSON, comment="冲突类型列表")
@@ -124,6 +125,7 @@ class PlotAnalysis(Base):
         return {
             "id": self.id,
             "chapter_id": self.chapter_id,
+            "source_content_digest": self.source_content_digest,
             "plot_stage": self.plot_stage,
             "conflict_level": self.conflict_level,
             "conflict_types": self.conflict_types or [],

@@ -1806,6 +1806,45 @@ mod tests {
         PROMPT_WORKSHOP_SUBMIT_ROUTE,
     };
     use serde_json::json;
+    use std::{
+        ffi::OsString,
+        sync::{Mutex, MutexGuard},
+    };
+
+    static INSTANCE_ID_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct ScopedInstanceIdEnv {
+        original: Option<OsString>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl ScopedInstanceIdEnv {
+        fn set(value: &str) -> Self {
+            let lock = INSTANCE_ID_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let original = std::env::var_os("INSTANCE_ID");
+            unsafe {
+                std::env::set_var("INSTANCE_ID", value);
+            }
+            Self {
+                original,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for ScopedInstanceIdEnv {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(value) = self.original.take() {
+                    std::env::set_var("INSTANCE_ID", value);
+                } else {
+                    std::env::remove_var("INSTANCE_ID");
+                }
+            }
+        }
+    }
 
     #[test]
     fn should_publish_prompt_workshop_route_owner_contract() {
@@ -1968,23 +2007,10 @@ mod tests {
 
     #[test]
     fn workshop_user_identifier_uses_instance_prefix() {
-        let original = std::env::var("INSTANCE_ID").ok();
-        unsafe {
-            std::env::set_var("INSTANCE_ID", "test-instance");
-        }
+        let _instance_id = ScopedInstanceIdEnv::set("test-instance");
 
         assert_eq!(workshop_instance_id(), "test-instance");
         assert_eq!(workshop_user_identifier("user-7"), "test-instance:user-7");
-
-        if let Some(value) = original {
-            unsafe {
-                std::env::set_var("INSTANCE_ID", value);
-            }
-        } else {
-            unsafe {
-                std::env::remove_var("INSTANCE_ID");
-            }
-        }
     }
 
     #[test]
@@ -1997,10 +2023,7 @@ mod tests {
 
     #[test]
     fn prepare_submit_prompt_request_keeps_proxy_payload_contract() {
-        let original = std::env::var("INSTANCE_ID").ok();
-        unsafe {
-            std::env::set_var("INSTANCE_ID", "test-instance");
-        }
+        let _instance_id = ScopedInstanceIdEnv::set("test-instance");
 
         let request = prepare_submit_prompt_request(
             "instance-a",
@@ -2034,16 +2057,6 @@ mod tests {
         assert_eq!(request.proxy_payload["is_anonymous"], true);
         assert_eq!(request.proxy_payload["tags"][0], "tag-1");
         assert_eq!(request.proxy_payload["tags"][1], "tag-2");
-
-        if let Some(value) = original {
-            unsafe {
-                std::env::set_var("INSTANCE_ID", value);
-            }
-        } else {
-            unsafe {
-                std::env::remove_var("INSTANCE_ID");
-            }
-        }
     }
 
     #[test]

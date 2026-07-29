@@ -1,16 +1,21 @@
-use sea_orm::DatabaseConnection;
+use sea_orm::{DatabaseConnection, EntityTrait};
 use serde_json::{json, Value};
 
-use crate::models::batch_generation_snapshot;
+use crate::models::{batch_generation_snapshot, chapter};
+use crate::services::business_checkpoint_service::{
+    validate_business_checkpoint_idempotency_key, BusinessCheckpointOutputReferenceV1,
+    BusinessCheckpointRead,
+};
 use crate::services::chapter_access_service::{
     load_accessible_chapters_for_generation, LoadAccessibleChapterForGenerationError,
 };
 use crate::services::chapter_batch_generation_runtime_state_service::{
     dispatch_batch_generation_runtime, prepare_batch_generation_resume_restored_runtime_state,
     reset_batch_generation_task_for_resume, BatchGenerationExecutionInput,
-    BatchGenerationResumeResetPersistencePlan, PreparedBatchGenerationResumeRuntimeLaunch,
-    PreparedSingleChapterResumeRuntimeLaunch, RestoredResumeRuntimeStateProjection,
-    ResumeBatchGenerationCommandState, ResumeExecutionSelection,
+    BatchGenerationPersistedRuntimeContext, BatchGenerationResumeResetPersistencePlan,
+    PreparedBatchGenerationResumeRuntimeLaunch, PreparedSingleChapterResumeRuntimeLaunch,
+    RestoredResumeRuntimeStateProjection, ResumeBatchGenerationCommandState,
+    ResumeExecutionSelection,
 };
 use crate::services::chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig;
 use crate::services::chapter_generation_execution_contract_service::normalize_chapter_generation_target_word_count;
@@ -82,6 +87,12 @@ pub(crate) fn build_batch_generation_resume_launch_owner_contract() -> Value {
                 "SingleChapterUnavailable",
                 "ChaptersUnavailable",
                 "PrerequisitesBlocked",
+                "UnsupportedBusinessCheckpoint",
+                "InvalidBusinessCheckpoint",
+                "BusinessCheckpointInputDigestMismatch",
+                "BusinessCheckpointOutputMissing",
+                "BusinessCheckpointOutputEmpty",
+                "BusinessCheckpointOutputOutOfScope",
                 "Internal"
             ]
         },
@@ -160,6 +171,71 @@ pub(super) fn map_prepare_resume_runtime_state_error(
     }
 }
 
+async fn validate_batch_generation_business_checkpoint_for_resume(
+    db: &DatabaseConnection,
+    command_state: &ResumeBatchGenerationCommandState,
+    snapshot: Option<&batch_generation_snapshot::Model>,
+) -> Result<(), ResumeBatchGenerationDomainError> {
+    let persisted_runtime_context =
+        BatchGenerationPersistedRuntimeContext::from_snapshot(snapshot.cloned());
+    let checkpoint = match persisted_runtime_context.business_checkpoint_read() {
+        BusinessCheckpointRead::Missing => return Ok(()),
+        BusinessCheckpointRead::UnsupportedSchema { .. } => {
+            return Err(ResumeBatchGenerationDomainError::UnsupportedBusinessCheckpoint);
+        }
+        BusinessCheckpointRead::Invalid => {
+            return Err(ResumeBatchGenerationDomainError::InvalidBusinessCheckpoint);
+        }
+        BusinessCheckpointRead::Valid(checkpoint) => checkpoint,
+    };
+
+    let Some(generation_contract_snapshot) =
+        persisted_runtime_context.generation_contract_snapshot()
+    else {
+        return Err(ResumeBatchGenerationDomainError::BusinessCheckpointInputDigestMismatch);
+    };
+    if checkpoint.input_digest != generation_contract_snapshot.input_digest {
+        return Err(ResumeBatchGenerationDomainError::BusinessCheckpointInputDigestMismatch);
+    }
+    validate_business_checkpoint_idempotency_key(&command_state.batch_id, checkpoint)
+        .map_err(|_| ResumeBatchGenerationDomainError::InvalidBusinessCheckpoint)?;
+
+    let chapter_id = match &checkpoint.output_reference {
+        BusinessCheckpointOutputReferenceV1::Chapter { id } => id,
+    };
+    if !command_state
+        .parsed_chapter_ids()
+        .iter()
+        .any(|task_chapter_id| task_chapter_id == chapter_id)
+    {
+        return Err(ResumeBatchGenerationDomainError::BusinessCheckpointOutputOutOfScope);
+    }
+
+    let checkpoint_chapter = chapter::Entity::find_by_id(chapter_id)
+        .one(db)
+        .await
+        .map_err(|_| {
+            ResumeBatchGenerationDomainError::Internal(
+                "Failed to validate business checkpoint output".to_string(),
+            )
+        })?
+        .ok_or(ResumeBatchGenerationDomainError::BusinessCheckpointOutputMissing)?;
+    if checkpoint_chapter.project_id != command_state.project_id {
+        return Err(ResumeBatchGenerationDomainError::BusinessCheckpointOutputOutOfScope);
+    }
+    if checkpoint_chapter
+        .content
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
+        return Err(ResumeBatchGenerationDomainError::BusinessCheckpointOutputEmpty);
+    }
+
+    Ok(())
+}
+
 impl BatchGenerationResumeLaunchPersistencePlan {
     pub(crate) fn new(
         command_state: ResumeBatchGenerationCommandState,
@@ -226,6 +302,8 @@ impl BatchGenerationResumeLaunchPersistencePlan {
         let (restored_runtime_state, existing_workflow_runtime_state) =
             prepare_batch_generation_resume_restored_runtime_state(&command_state, snapshot)
                 .map_err(map_prepare_resume_runtime_state_error)?;
+        validate_batch_generation_business_checkpoint_for_resume(db, &command_state, snapshot)
+            .await?;
         let execution =
             ValidatedResumeExecutionPlan::from_command_state(db, user_id, &command_state).await?;
 

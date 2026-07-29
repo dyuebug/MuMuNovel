@@ -5,10 +5,13 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Qu
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::models::{
-    analysis_task, career, chapter, character, character_career, generation_history, organization,
-    organization_member, outline, plot_analysis, project, project_default_style, relationship,
-    story_memory, writing_style,
+use crate::{
+    models::{
+        analysis_task, career, chapter, character, character_career, generation_history,
+        organization, organization_member, outline, plot_analysis, project, project_default_style,
+        relationship, story_memory, writing_style,
+    },
+    services::novel_workflow_service::{canonicalize_import_phase, NovelWorkflowError},
 };
 
 const SUPPORTED_IMPORT_VERSIONS: [&str; 3] = ["1.0.0", "1.1.0", "rust-strangler-1"];
@@ -60,33 +63,36 @@ fn build_project_import_validation_result(data: &Value) -> Value {
         {
             errors.push("项目标题不能为空".to_string());
         }
+        if let Err(error) = canonical_project_import_status(project) {
+            errors.push(format!("项目状态无效: {error}"));
+        }
     } else {
         errors.push("缺少项目信息".to_string());
     }
 
-    let legacy_memories_count = top_level_array_len(&data, "memories");
-    let story_memories_count = top_level_array_len(&data, "story_memories");
+    let legacy_memories_count = top_level_array_len(data, "memories");
+    let story_memories_count = top_level_array_len(data, "story_memories");
     let stats = json!({
-        "chapters": top_level_array_len(&data, "chapters"),
-        "characters": top_level_array_len(&data, "characters"),
-        "outlines": top_level_array_len(&data, "outlines"),
-        "relationships": top_level_array_len(&data, "relationships"),
-        "organizations": top_level_array_len(&data, "organizations"),
-        "organization_members": top_level_array_len(&data, "organization_members"),
-        "writing_styles": top_level_array_len(&data, "writing_styles"),
-        "generation_history": top_level_array_len(&data, "generation_history"),
-        "careers": top_level_array_len(&data, "careers"),
-        "character_careers": top_level_array_len(&data, "character_careers"),
+        "chapters": top_level_array_len(data, "chapters"),
+        "characters": top_level_array_len(data, "characters"),
+        "outlines": top_level_array_len(data, "outlines"),
+        "relationships": top_level_array_len(data, "relationships"),
+        "organizations": top_level_array_len(data, "organizations"),
+        "organization_members": top_level_array_len(data, "organization_members"),
+        "writing_styles": top_level_array_len(data, "writing_styles"),
+        "generation_history": top_level_array_len(data, "generation_history"),
+        "careers": top_level_array_len(data, "careers"),
+        "character_careers": top_level_array_len(data, "character_careers"),
         "memories": legacy_memories_count,
         "story_memories": story_memories_count,
-        "plot_analysis": top_level_array_len(&data, "plot_analysis"),
+        "plot_analysis": top_level_array_len(data, "plot_analysis"),
         "has_default_style": data.get("project_default_style").is_some(),
     });
 
-    if top_level_array_len(&data, "chapters") == 0 {
+    if top_level_array_len(data, "chapters") == 0 {
         warnings.push("项目没有章节数据".to_string());
     }
-    if top_level_array_len(&data, "characters") == 0 {
+    if top_level_array_len(data, "characters") == 0 {
         warnings.push("项目没有角色数据".to_string());
     }
 
@@ -101,6 +107,20 @@ fn build_project_import_validation_result(data: &Value) -> Value {
         "errors": errors,
         "warnings": warnings,
     })
+}
+
+fn canonical_project_import_status(project: &Value) -> Result<&'static str, NovelWorkflowError> {
+    let status = match project.get("status") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(status)) => Some(status.as_str()),
+        Some(value) => {
+            return Err(NovelWorkflowError::InvalidPhase {
+                value: value.to_string(),
+            });
+        }
+    };
+
+    canonicalize_import_phase(status).map(|phase| phase.as_str())
 }
 
 fn build_project_import_validation_failure_result(validation: &Value) -> Value {
@@ -152,6 +172,8 @@ pub(crate) async fn import_project_write_workflow(
     let now = Utc::now().naive_utc();
     let project_id = Uuid::new_v4().to_string();
     let title = json_string(project_data, "title").unwrap_or_else(|| "导入项目".to_string());
+    let project_status = canonical_project_import_status(project_data)
+        .expect("valid import payload should contain a known workflow phase");
     let target_words = json_i32(project_data, "target_words", 100_000);
     let chapters = data
         .get("chapters")
@@ -170,7 +192,7 @@ pub(crate) async fn import_project_write_workflow(
             genre: Set(json_string(project_data, "genre")),
             target_words: Set(target_words),
             current_words: Set(0),
-            status: Set(json_string(project_data, "status").unwrap_or_else(|| "draft".to_string())),
+            status: Set(project_status.to_string()),
             wizard_status: Set(json_string(project_data, "wizard_status")
                 .unwrap_or_else(|| "completed".to_string())),
             wizard_step: Set(json_i32(project_data, "wizard_step", 0)),
@@ -1444,6 +1466,7 @@ async fn import_plot_analysis_for_project(
             id: Set(Uuid::new_v4().to_string()),
             project_id: Set(project_id.to_string()),
             chapter_id: Set(chapter_id.clone()),
+            source_content_digest: Set(None),
             plot_stage: Set(record.plot_stage),
             conflict_level: Set(record.conflict_level),
             conflict_types: Set(record.conflict_types),
@@ -1548,7 +1571,7 @@ async fn import_project_default_style_for_project(
 #[cfg(test)]
 mod tests {
     use super::{
-        import_project_write_workflow, read_import_career_records,
+        canonical_project_import_status, import_project_write_workflow, read_import_career_records,
         read_import_chapter_expansion_plan, read_import_character_career_records,
         read_import_character_records, read_import_character_traits,
         read_import_generation_history_records, read_import_organization_member_records,
@@ -1644,6 +1667,129 @@ mod tests {
                 .and_then(|v| v.as_array())
                 .map(Vec::len),
             Some(0)
+        );
+    }
+
+    #[test]
+    fn project_import_phase_defaults_missing_null_or_blank_status_to_foundation() {
+        let projects = [
+            json!({ "title": "缺省状态" }),
+            json!({ "title": "空状态", "status": null }),
+            json!({ "title": "空串状态", "status": "" }),
+            json!({ "title": "空白状态", "status": "   " }),
+        ];
+
+        for project in projects {
+            assert_eq!(
+                canonical_project_import_status(&project)
+                    .expect("missing or blank import status should use the default phase"),
+                "foundation"
+            );
+
+            let payload = json!({
+                "version": "rust-strangler-1",
+                "project": project,
+            });
+            let result = validate_project_import_payload(
+                serde_json::to_vec(&payload)
+                    .expect("payload should serialize")
+                    .as_slice(),
+            )
+            .expect("payload should produce a validation result");
+
+            assert_eq!(
+                result.get("valid").and_then(|value| value.as_bool()),
+                Some(true)
+            );
+        }
+    }
+
+    #[test]
+    fn project_import_phase_canonicalizes_legacy_aliases() {
+        for (legacy, canonical) in [
+            ("planning", "foundation"),
+            ("draft", "foundation"),
+            ("revising", "reviewing"),
+            ("active", "writing"),
+        ] {
+            let project = json!({
+                "title": "历史状态导入",
+                "status": legacy,
+            });
+
+            assert_eq!(
+                canonical_project_import_status(&project)
+                    .expect("legacy import phase should be accepted"),
+                canonical
+            );
+
+            let payload = json!({
+                "version": "rust-strangler-1",
+                "project": project,
+            });
+            let result = validate_project_import_payload(
+                serde_json::to_vec(&payload)
+                    .expect("payload should serialize")
+                    .as_slice(),
+            )
+            .expect("payload should produce a validation result");
+
+            assert_eq!(
+                result.get("valid").and_then(|value| value.as_bool()),
+                Some(true)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn project_import_phase_rejects_unknown_status_before_database_access() {
+        let payload = serde_json::to_vec(&json!({
+            "version": "rust-strangler-1",
+            "project": {
+                "title": "未知状态导入",
+                "status": "mystery"
+            }
+        }))
+        .expect("payload should serialize");
+
+        let validation = validate_project_import_payload(&payload)
+            .expect("payload should produce a validation result");
+        assert_eq!(
+            validation.get("valid").and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            validation.get("errors"),
+            Some(&json!(["项目状态无效: invalid workflow phase: mystery"]))
+        );
+
+        let malformed_payload = serde_json::to_vec(&json!({
+            "version": "rust-strangler-1",
+            "project": {
+                "title": "错误类型状态导入",
+                "status": 42
+            }
+        }))
+        .expect("payload should serialize");
+        let malformed_validation = validate_project_import_payload(&malformed_payload)
+            .expect("malformed status should produce a validation result");
+        assert_eq!(
+            malformed_validation.get("errors"),
+            Some(&json!(["项目状态无效: invalid workflow phase: 42"]))
+        );
+
+        let result =
+            import_project_write_workflow(&DatabaseConnection::Disconnected, "user-1", &payload)
+                .await
+                .expect("unknown workflow phase should return validation failure before DB access");
+
+        assert_eq!(
+            result.get("success").and_then(|value| value.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            result.get("message").and_then(|value| value.as_str()),
+            Some("数据验证失败: 项目状态无效: invalid workflow phase: mystery")
         );
     }
 

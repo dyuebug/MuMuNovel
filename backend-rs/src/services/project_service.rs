@@ -13,6 +13,11 @@ use crate::models::{
     regeneration_task, relationship, story_memory, writing_style,
 };
 
+use super::novel_workflow_service::{
+    resolve_internal_foundation_reset, resolve_internal_writing_transition,
+    resolve_public_transition, NovelWorkflowAuditContext, NovelWorkflowError, NovelWorkflowPhase,
+};
+
 pub struct ProjectService;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,7 +111,9 @@ impl ProjectService {
             genre: Set(genre.map(|s| s.to_string())),
             target_words: Set(target_words.unwrap_or(0)),
             current_words: Set(0),
-            status: Set("planning".to_string()),
+            status: Set(NovelWorkflowPhase::default_new_project_phase()
+                .as_str()
+                .to_string()),
             wizard_status: Set("incomplete".to_string()),
             wizard_step: Set(0),
             outline_mode: Set(outline_mode.unwrap_or("one-to-many").to_string()),
@@ -144,7 +151,9 @@ impl ProjectService {
             genre: Set(params.genre),
             target_words: Set(params.target_words),
             current_words: Set(0),
-            status: Set("planning".to_string()),
+            status: Set(NovelWorkflowPhase::default_new_project_phase()
+                .as_str()
+                .to_string()),
             wizard_status: Set("incomplete".to_string()),
             wizard_step: Set(1),
             outline_mode: Set(params.outline_mode),
@@ -203,13 +212,15 @@ impl ProjectService {
             .await
             .map_err(|e| format!("{}", e))?
             .ok_or("项目不存在")?;
+        let target_phase = resolve_internal_writing_transition(&model.status)
+            .map_err(|error| error.to_string())?;
         let mut active: project::ActiveModel = model.into();
         active.chapter_count = Set(Some(chapter_count));
         if let Some(np) = narrative_perspective {
             active.narrative_perspective = Set(Some(np.to_string()));
         }
         active.target_words = Set(target_words);
-        active.status = Set("writing".to_string());
+        active.status = Set(target_phase.as_str().to_string());
         active.wizard_status = Set("completed".to_string());
         active.wizard_step = Set(4);
         active.updated_at = Set(Some(Utc::now().naive_utc()));
@@ -281,6 +292,8 @@ impl ProjectService {
         theme: Option<&str>,
         genre: Option<&str>,
         status: Option<&str>,
+        workflow_reason: Option<&str>,
+        workflow_related_task_id: Option<&str>,
         target_words: Option<i32>,
         world_time_period: Option<&str>,
         world_location: Option<&str>,
@@ -295,11 +308,25 @@ impl ProjectService {
         default_story_creation_brief: Option<&str>,
         default_quality_preset: Option<&str>,
         default_quality_notes: Option<&str>,
-    ) -> Result<Option<project::Model>, String> {
-        let existing = Self::get(db, project_id, user_id).await?;
+    ) -> Result<Option<project::Model>, NovelWorkflowError> {
+        let existing = Self::get(db, project_id, user_id)
+            .await
+            .map_err(NovelWorkflowError::Internal)?;
         let Some(model) = existing else {
             return Ok(None);
         };
+        let target_phase = status
+            .map(|requested_phase| {
+                resolve_public_transition(
+                    &model.status,
+                    requested_phase,
+                    NovelWorkflowAuditContext {
+                        reason: workflow_reason.map(str::to_string),
+                        related_task_id: workflow_related_task_id.map(str::to_string),
+                    },
+                )
+            })
+            .transpose()?;
 
         let mut active: project::ActiveModel = model.into();
         if let Some(v) = title {
@@ -314,8 +341,8 @@ impl ProjectService {
         if let Some(v) = genre {
             active.genre = Set(Some(v.to_string()));
         }
-        if let Some(v) = status {
-            active.status = Set(v.to_string());
+        if let Some(target_phase) = target_phase {
+            active.status = Set(target_phase.as_str().to_string());
         }
         if let Some(v) = target_words {
             active.target_words = Set(v);
@@ -364,7 +391,7 @@ impl ProjectService {
         active
             .update(db)
             .await
-            .map_err(|e| format!("{}", e))
+            .map_err(|error| NovelWorkflowError::Internal(error.to_string()))
             .map(Some)
     }
 
@@ -536,8 +563,10 @@ impl ProjectService {
             .map_err(|e| format!("{}", e))?
             .ok_or_else(|| "项目不存在".to_string())?;
 
+        let reset_phase = resolve_internal_foundation_reset(&project_model.status)
+            .map_err(|error| error.to_string())?;
         let mut active: project::ActiveModel = project_model.into();
-        active.status = Set("planning".to_string());
+        active.status = Set(reset_phase.as_str().to_string());
         active.wizard_status = Set("incomplete".to_string());
         active.wizard_step = Set(0);
         active.world_time_period = Set(None);
@@ -559,7 +588,86 @@ impl ProjectService {
 
 #[cfg(test)]
 mod tests {
-    use super::ProjectAccessQueryError;
+    use sea_orm::{ActiveModelTrait, ConnectionTrait, Database, DbBackend, Schema};
+
+    use super::*;
+
+    async fn setup_project_db(include_cleanup_tables: bool) -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect project service sqlite memory db");
+        let builder = DbBackend::Sqlite;
+        let schema = Schema::new(builder);
+        let mut statements = vec![schema.create_table_from_entity(project::Entity)];
+        if include_cleanup_tables {
+            statements.extend([
+                schema.create_table_from_entity(character::Entity),
+                schema.create_table_from_entity(organization::Entity),
+                schema.create_table_from_entity(batch_generation_task::Entity),
+                schema.create_table_from_entity(batch_generation_snapshot::Entity),
+                schema.create_table_from_entity(chapter_draft_attempt::Entity),
+                schema.create_table_from_entity(regeneration_task::Entity),
+                schema.create_table_from_entity(plot_analysis::Entity),
+                schema.create_table_from_entity(generation_history::Entity),
+                schema.create_table_from_entity(analysis_task::Entity),
+                schema.create_table_from_entity(story_memory::Entity),
+                schema.create_table_from_entity(relationship::Entity),
+                schema.create_table_from_entity(foreshadow::Entity),
+                schema.create_table_from_entity(organization_member::Entity),
+                schema.create_table_from_entity(character_career::Entity),
+                schema.create_table_from_entity(career::Entity),
+                schema.create_table_from_entity(chapter::Entity),
+                schema.create_table_from_entity(outline::Entity),
+            ]);
+        }
+        for statement in statements {
+            db.execute(builder.build(&statement))
+                .await
+                .expect("create project service test table");
+        }
+        db
+    }
+
+    async fn create_project_with_status(db: &DatabaseConnection, status: &str) -> project::Model {
+        let model = ProjectService::create(
+            db,
+            "owner",
+            "Workflow Project",
+            None,
+            None,
+            None,
+            None,
+            Some(100_000),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("create project fixture");
+        let mut active: project::ActiveModel = model.into();
+        active.status = Set(status.to_string());
+        active
+            .update(db)
+            .await
+            .expect("set project fixture workflow status")
+    }
+
+    async fn update_project(
+        db: &DatabaseConnection,
+        project_id: &str,
+        title: Option<&str>,
+        status: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<Option<project::Model>, NovelWorkflowError> {
+        ProjectService::update(
+            db, project_id, "owner", title, None, None, None, status, reason, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None,
+        )
+        .await
+    }
 
     #[test]
     fn project_access_query_error_equality_is_stable() {
@@ -571,5 +679,159 @@ mod tests {
             ProjectAccessQueryError::Internal("boom".to_string()),
             ProjectAccessQueryError::Internal("boom".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn project_creation_entrypoints_write_canonical_foundation_phase() {
+        let db = setup_project_db(false).await;
+
+        let created = ProjectService::create(
+            &db,
+            "owner",
+            "Simple",
+            None,
+            None,
+            None,
+            None,
+            Some(80_000),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("create simple project");
+        assert_eq!(created.status, "foundation");
+
+        let created_full = ProjectService::create_full(
+            &db,
+            CreateProjectParams {
+                user_id: "owner".to_string(),
+                title: "Full".to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create full project");
+        assert_eq!(created_full.status, "foundation");
+    }
+
+    #[tokio::test]
+    async fn legacy_put_preserves_metadata_only_and_canonicalizes_explicit_alias() {
+        let db = setup_project_db(false).await;
+        let project = create_project_with_status(&db, " Planning ").await;
+
+        let metadata_only = update_project(&db, &project.id, Some("Renamed"), None, None)
+            .await
+            .expect("metadata-only update")
+            .expect("owned project");
+        assert_eq!(metadata_only.title, "Renamed");
+        assert_eq!(metadata_only.status, " Planning ");
+
+        let canonical = update_project(&db, &project.id, None, Some("planning"), None)
+            .await
+            .expect("legacy alias update")
+            .expect("owned project");
+        assert_eq!(canonical.status, "foundation");
+    }
+
+    #[tokio::test]
+    async fn legacy_put_rejects_unknown_illegal_and_unreasoned_rollback() {
+        let db = setup_project_db(false).await;
+        let project = create_project_with_status(&db, "foundation").await;
+
+        let unknown = update_project(&db, &project.id, None, Some("mystery"), None)
+            .await
+            .expect_err("unknown phase must fail");
+        assert_eq!(
+            unknown,
+            NovelWorkflowError::InvalidPhase {
+                value: "mystery".to_string()
+            }
+        );
+
+        let illegal = update_project(&db, &project.id, None, Some("completed"), None)
+            .await
+            .expect_err("non-adjacent transition must fail");
+        assert_eq!(
+            illegal,
+            NovelWorkflowError::IllegalTransition {
+                from: NovelWorkflowPhase::Foundation,
+                to: NovelWorkflowPhase::Completed,
+            }
+        );
+
+        let writing = update_project(&db, &project.id, None, Some("writing"), None)
+            .await
+            .expect("foundation to writing")
+            .expect("owned project");
+        assert_eq!(writing.status, "writing");
+
+        let missing_reason = update_project(&db, &project.id, None, Some("outline"), None)
+            .await
+            .expect_err("rollback without reason must fail");
+        assert_eq!(
+            missing_reason,
+            NovelWorkflowError::ReasonRequired {
+                from: NovelWorkflowPhase::Writing,
+                to: NovelWorkflowPhase::Outline,
+            }
+        );
+
+        let rolled_back = update_project(
+            &db,
+            &project.id,
+            None,
+            Some("outline"),
+            Some("重新调整大纲"),
+        )
+        .await
+        .expect("rollback with reason")
+        .expect("owned project");
+        assert_eq!(rolled_back.status, "outline");
+    }
+
+    #[tokio::test]
+    async fn wizard_completion_writes_canonical_writing_phase() {
+        let db = setup_project_db(false).await;
+        let project = create_project_with_status(&db, " PLANNING ").await;
+
+        ProjectService::complete_wizard(&db, &project.id, 24, Some("third_person"), 120_000)
+            .await
+            .expect("complete wizard");
+
+        let stored = project::Entity::find_by_id(&project.id)
+            .one(&db)
+            .await
+            .expect("load completed wizard project")
+            .expect("project exists");
+        assert_eq!(stored.status, "writing");
+        assert_eq!(stored.wizard_status, "completed");
+        assert_eq!(stored.wizard_step, 4);
+    }
+
+    #[tokio::test]
+    async fn wizard_cleanup_resets_known_phase_to_canonical_foundation() {
+        let db = setup_project_db(true).await;
+        let project = create_project_with_status(&db, "completed").await;
+
+        let counts = ProjectService::cleanup_wizard_data(&db, &project.id, "owner")
+            .await
+            .expect("cleanup wizard data")
+            .expect("owned project");
+        assert_eq!(counts.characters, 0);
+        assert_eq!(counts.outlines, 0);
+        assert_eq!(counts.chapters, 0);
+
+        let stored = project::Entity::find_by_id(&project.id)
+            .one(&db)
+            .await
+            .expect("load cleaned project")
+            .expect("project exists");
+        assert_eq!(stored.status, "foundation");
+        assert_eq!(stored.wizard_status, "incomplete");
+        assert_eq!(stored.wizard_step, 0);
     }
 }

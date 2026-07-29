@@ -393,14 +393,18 @@ impl OpenAIClient {
             .filter(|value| value.is_finite() && *value > 0.0)
             .map(Duration::from_secs_f64)
             .unwrap_or_else(|| Duration::from_secs(300));
-        let client = Client::builder()
-            .timeout(timeout)
+        let normalized_base_url = base_url.trim().trim_end_matches('/').to_string();
+        let mut client_builder = Client::builder().timeout(timeout);
+        if super::should_bypass_system_proxy(&normalized_base_url) {
+            client_builder = client_builder.no_proxy();
+        }
+        let client = client_builder
             .build()
             .expect("failed to create HTTP client");
         Self {
             client,
             api_key: api_key.to_string(),
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url: normalized_base_url,
             backup_urls: backup_urls
                 .into_iter()
                 .map(|value| value.trim().trim_end_matches('/').to_string())
@@ -1091,10 +1095,22 @@ impl OpenAIClient {
             let text = resp.text().await.unwrap_or_default();
             if let Ok(json) = serde_json::from_str::<Value>(&text) {
                 let parsed = Self::parse_response(&json)?;
+                if let Some(reasoning_content) = parsed.reasoning_content.as_ref() {
+                    let _ = tx
+                        .send(Ok(AIStreamChunk {
+                            content: None,
+                            reasoning_content: Some(reasoning_content.clone()),
+                            tool_calls: None,
+                            done: false,
+                            finish_reason: None,
+                        }))
+                        .await;
+                }
                 if !parsed.content.is_empty() {
                     let _ = tx
                         .send(Ok(AIStreamChunk {
                             content: Some(parsed.content),
+                            reasoning_content: None,
                             tool_calls: None,
                             done: false,
                             finish_reason: None,
@@ -1104,6 +1120,7 @@ impl OpenAIClient {
                 let _ = tx
                     .send(Ok(AIStreamChunk {
                         content: None,
+                        reasoning_content: None,
                         tool_calls: parsed.tool_calls,
                         done: true,
                         finish_reason: parsed.finish_reason.or(Some("stop".into())),
@@ -1137,6 +1154,7 @@ impl OpenAIClient {
                     let _ = tx
                         .send(Ok(AIStreamChunk {
                             content: None,
+                            reasoning_content: None,
                             tool_calls: if tool_calls_buffer.is_empty() {
                                 None
                             } else {
@@ -1154,11 +1172,27 @@ impl OpenAIClient {
                     if let Some(choices) = choices {
                         for choice in choices {
                             if let Some(delta) = choice.get("delta") {
+                                if let Some(reasoning_content) = delta
+                                    .get("reasoning_content")
+                                    .and_then(Value::as_str)
+                                    .filter(|value| !value.is_empty())
+                                {
+                                    let _ = tx
+                                        .send(Ok(AIStreamChunk {
+                                            content: None,
+                                            reasoning_content: Some(reasoning_content.to_string()),
+                                            tool_calls: None,
+                                            done: false,
+                                            finish_reason: None,
+                                        }))
+                                        .await;
+                                }
                                 if let Some(content) = delta.get("content").and_then(|c| c.as_str())
                                 {
                                     let _ = tx
                                         .send(Ok(AIStreamChunk {
                                             content: Some(content.to_string()),
+                                            reasoning_content: None,
                                             tool_calls: None,
                                             done: false,
                                             finish_reason: None,
@@ -1215,6 +1249,7 @@ impl OpenAIClient {
                                     let _ = tx
                                         .send(Ok(AIStreamChunk {
                                             content: None,
+                                            reasoning_content: None,
                                             tool_calls: if tool_calls_buffer.is_empty() {
                                                 None
                                             } else {
@@ -1249,6 +1284,11 @@ impl OpenAIClient {
             .and_then(|c| c.as_str())
             .unwrap_or("")
             .to_string();
+        let reasoning_content = msg
+            .get("reasoning_content")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
         let finish_reason = choices
             .first()
             .and_then(|c| c.get("finish_reason"))
@@ -1261,6 +1301,7 @@ impl OpenAIClient {
 
         Ok(AIResponse {
             content,
+            reasoning_content,
             tool_calls,
             finish_reason,
             transport_diagnostics: None,
@@ -1269,6 +1310,7 @@ impl OpenAIClient {
 
     fn parse_stream_text(raw_sse_text: &str) -> Result<AIResponse, String> {
         let mut content = String::new();
+        let mut reasoning_content = String::new();
         let mut tool_calls_buffer: Vec<ToolCall> = Vec::new();
         let mut finish_reason: Option<String> = None;
 
@@ -1299,6 +1341,11 @@ impl OpenAIClient {
                 if let Some(delta) = choice.get("delta") {
                     if let Some(delta_content) = delta.get("content").and_then(|c| c.as_str()) {
                         content.push_str(delta_content);
+                    }
+                    if let Some(delta_reasoning) =
+                        delta.get("reasoning_content").and_then(Value::as_str)
+                    {
+                        reasoning_content.push_str(delta_reasoning);
                     }
                     if let Some(tc_deltas) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                         for tc_delta in tc_deltas {
@@ -1333,6 +1380,11 @@ impl OpenAIClient {
                     if let Some(message_content) = message.get("content").and_then(|c| c.as_str()) {
                         content.push_str(message_content);
                     }
+                    if let Some(message_reasoning) =
+                        message.get("reasoning_content").and_then(Value::as_str)
+                    {
+                        reasoning_content.push_str(message_reasoning);
+                    }
                     if tool_calls_buffer.is_empty() {
                         if let Some(tool_calls) = message
                             .get("tool_calls")
@@ -1351,6 +1403,7 @@ impl OpenAIClient {
 
         Ok(AIResponse {
             content,
+            reasoning_content: (!reasoning_content.is_empty()).then_some(reasoning_content),
             tool_calls: if tool_calls_buffer.is_empty() {
                 None
             } else {
@@ -1368,6 +1421,36 @@ mod tests {
 
     use super::OpenAIClient;
     use crate::ai::types::{ToolChoice, ToolChoiceFunction};
+
+    #[test]
+    fn parses_explicit_reasoning_from_chat_completion_response() {
+        let response = OpenAIClient::parse_response(&json!({
+            "choices": [{
+                "message": {
+                    "content": "最终正文",
+                    "reasoning_content": "显式推理"
+                },
+                "finish_reason": "stop"
+            }]
+        }))
+        .expect("parse response");
+
+        assert_eq!(response.content, "最终正文");
+        assert_eq!(response.reasoning_content.as_deref(), Some("显式推理"));
+    }
+
+    #[test]
+    fn aggregates_reasoning_and_content_separately_from_raw_sse() {
+        let response = OpenAIClient::parse_stream_text(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"分析\"}}]}\n\
+             data: {\"choices\":[{\"delta\":{\"content\":\"正文\"},\"finish_reason\":\"stop\"}]}\n\
+             data: [DONE]\n",
+        )
+        .expect("parse stream");
+
+        assert_eq!(response.reasoning_content.as_deref(), Some("分析"));
+        assert_eq!(response.content, "正文");
+    }
 
     #[test]
     fn prefers_similar_chat_model_for_fallback() {

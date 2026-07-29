@@ -1,5 +1,5 @@
 use chrono::Utc;
-use sea_orm::DatabaseConnection;
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 use serde_json::{json, Value};
 
 use crate::services::chapter_generation_runtime_service::snapshot_persistence_owner::{
@@ -90,7 +90,7 @@ pub(crate) fn project_merged_batch_generation_runtime_state(
 }
 
 pub(crate) async fn upsert_batch_generation_runtime_snapshot(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     task_id: &str,
     workflow_runtime_state: Value,
 ) -> Result<(), String> {

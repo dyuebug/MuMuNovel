@@ -21,6 +21,22 @@ mod tests {
     use serde_json::json;
     use tokio::net::TcpListener;
 
+    #[test]
+    fn parses_thinking_and_text_blocks_separately() {
+        let response = AnthropicClient::parse_response(&json!({
+            "content": [
+                {"type": "thinking", "thinking": "显式思考"},
+                {"type": "text", "text": "最终正文"},
+                {"type": "redacted_thinking", "data": "do-not-show"}
+            ],
+            "stop_reason": "end_turn"
+        }))
+        .expect("parse response");
+
+        assert_eq!(response.reasoning_content.as_deref(), Some("显式思考"));
+        assert_eq!(response.content, "最终正文");
+    }
+
     use super::AnthropicClient;
     use crate::ai::types::{ChatMessage, ToolChoice, ToolChoiceFunction};
 
@@ -102,14 +118,18 @@ impl AnthropicClient {
     }
 
     pub fn new(api_key: &str, base_url: &str) -> Self {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(300))
+        let normalized_base_url = base_url.trim().trim_end_matches('/').to_string();
+        let mut client_builder = Client::builder().timeout(Duration::from_secs(300));
+        if super::should_bypass_system_proxy(&normalized_base_url) {
+            client_builder = client_builder.no_proxy();
+        }
+        let client = client_builder
             .build()
             .expect("failed to create HTTP client");
         Self {
             client,
             api_key: api_key.to_string(),
-            base_url: base_url.trim_end_matches('/').to_string(),
+            base_url: normalized_base_url,
         }
     }
 
@@ -331,6 +351,21 @@ impl AnthropicClient {
                         if let Some(delta) = event.get("delta") {
                             if let Some(delta_type) = delta.get("type").and_then(|t| t.as_str()) {
                                 match delta_type {
+                                    "thinking_delta" => {
+                                        if let Some(thinking) =
+                                            delta.get("thinking").and_then(Value::as_str)
+                                        {
+                                            let _ = tx
+                                                .send(Ok(AIStreamChunk {
+                                                    content: None,
+                                                    reasoning_content: Some(thinking.to_string()),
+                                                    tool_calls: None,
+                                                    done: false,
+                                                    finish_reason: None,
+                                                }))
+                                                .await;
+                                        }
+                                    }
                                     "text_delta" => {
                                         if let Some(text) =
                                             delta.get("text").and_then(|t| t.as_str())
@@ -338,6 +373,7 @@ impl AnthropicClient {
                                             let _ = tx
                                                 .send(Ok(AIStreamChunk {
                                                     content: Some(text.to_string()),
+                                                    reasoning_content: None,
                                                     tool_calls: None,
                                                     done: false,
                                                     finish_reason: None,
@@ -412,6 +448,7 @@ impl AnthropicClient {
                         let _ = tx
                             .send(Ok(AIStreamChunk {
                                 content: None,
+                                reasoning_content: None,
                                 tool_calls: if tool_calls_buffer.is_empty() {
                                     None
                                 } else {
@@ -440,6 +477,7 @@ impl AnthropicClient {
 
     fn parse_response(json: &Value) -> Result<AIResponse, String> {
         let mut content = String::new();
+        let mut reasoning_content = String::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let finish_reason = json
             .get("stop_reason")
@@ -450,6 +488,11 @@ impl AnthropicClient {
             for block in blocks {
                 let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
                 match block_type {
+                    "thinking" => {
+                        if let Some(thinking) = block.get("thinking").and_then(Value::as_str) {
+                            reasoning_content.push_str(thinking);
+                        }
+                    }
                     "text" => {
                         if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
                             content.push_str(text);
@@ -483,6 +526,7 @@ impl AnthropicClient {
 
         Ok(AIResponse {
             content,
+            reasoning_content: (!reasoning_content.is_empty()).then_some(reasoning_content),
             tool_calls: if tool_calls.is_empty() {
                 None
             } else {

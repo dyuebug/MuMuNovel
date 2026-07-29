@@ -567,6 +567,7 @@ mod chapter_batch_generation_active_gateway_smoke_owner {
             PreparedGenerationExecutionConfig {
                 ai_config,
                 provider_payload: build_placeholder_prompt_context_provider_payload(),
+                role_policy_context: None,
             },
             probe.config.clone(),
         );
@@ -2779,6 +2780,7 @@ mod chapter_single_generation_active_gateway_smoke_owner {
                 reference_assets: "[]".to_string(),
                 mcp_references: String::new(),
             },
+            role_policy_context: None,
         }
     }
 
@@ -4204,6 +4206,9 @@ mod tests {
         RUST_MIGRATION_NOOP_EXECUTOR_SMOKE_ROUTE,
     };
     use crate::config::{AppConfig, AppRuntimeMode};
+    use crate::services::schema_migration_metadata_service::{
+        postgres_revision_catalog, POSTGRES_ALEMBIC_HEAD,
+    };
     use axum::http::StatusCode;
     use axum::Extension;
     use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Statement};
@@ -4262,7 +4267,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_fail_release_readiness_closed_for_non_postgres_storage_evidence() {
-        let db = setup_schema_migration_smoke_db("20260712_password_hash_phc_text").await;
+        let db = setup_schema_migration_smoke_db(POSTGRES_ALEMBIC_HEAD).await;
 
         let (status, axum::Json(body)) = release_readiness_check(Some(Extension(db))).await;
 
@@ -4279,7 +4284,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_report_ready_when_live_alembic_head_matches_catalog() {
-        let db = setup_schema_migration_smoke_db("20260712_password_hash_phc_text").await;
+        let db = setup_schema_migration_smoke_db(POSTGRES_ALEMBIC_HEAD).await;
 
         let (status, axum::Json(body)) = readiness_check(Some(Extension(db))).await;
 
@@ -4381,11 +4386,11 @@ mod tests {
         );
         assert_eq!(
             body["checks"]["schema_migration"]["postgres_revision_catalog"]["revision_count"],
-            20
+            json!(postgres_revision_catalog().len())
         );
         assert_eq!(
             body["checks"]["schema_migration"]["postgres_revision_catalog"]["head"],
-            "20260712_password_hash_phc_text"
+            POSTGRES_ALEMBIC_HEAD
         );
         assert_eq!(
             body["checks"]["schema_migration"]["postgres_revision_catalog"]["execution_ready"],
@@ -4397,7 +4402,7 @@ mod tests {
         );
         assert_eq!(
             body["checks"]["schema_migration"]["live_database_head"]["expected_head"],
-            "20260712_password_hash_phc_text"
+            POSTGRES_ALEMBIC_HEAD
         );
         assert_eq!(
             body["checks"]["schema_migration"]["live_database_head"]["matches_catalog_head"],
@@ -4445,7 +4450,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_keep_rust_migration_noop_executor_smoke_disabled_by_default() {
-        let db = setup_schema_migration_smoke_db("20260712_password_hash_phc_text").await;
+        let db = setup_schema_migration_smoke_db(POSTGRES_ALEMBIC_HEAD).await;
         let config = schema_migration_smoke_config(false);
 
         let (status, axum::Json(body)) =
@@ -4461,7 +4466,7 @@ mod tests {
 
     #[tokio::test]
     async fn should_pass_rust_migration_noop_executor_smoke_for_matching_head_when_gated() {
-        let db = setup_schema_migration_smoke_db("20260712_password_hash_phc_text").await;
+        let db = setup_schema_migration_smoke_db(POSTGRES_ALEMBIC_HEAD).await;
         let config = schema_migration_smoke_config(true);
 
         let (status, axum::Json(body)) =
@@ -4472,7 +4477,7 @@ mod tests {
         assert_eq!(body["status"], "noop_executor_smoke_passed");
         assert_eq!(body["gate_enabled"], true);
         assert_eq!(body["ddl_executed"], false);
-        assert_eq!(body["live_head"], "20260712_password_hash_phc_text");
+        assert_eq!(body["live_head"], POSTGRES_ALEMBIC_HEAD);
         assert_eq!(body["blockers"], json!([]));
     }
 

@@ -97,7 +97,7 @@ pub(crate) struct FullChapterRegenerationStreamRouteRequest {
     pub(crate) auto_apply: Option<bool>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FullChapterRegenerationStreamRequest {
     pub(crate) modification_source: Option<String>,
     pub(crate) target_word_count: Option<i64>,
@@ -122,6 +122,12 @@ pub(crate) struct FullChapterRegenerationStreamRequest {
     pub(crate) style_id: Option<i32>,
     pub(crate) version_note: Option<String>,
     pub(crate) auto_apply: bool,
+}
+
+impl Default for FullChapterRegenerationStreamRequest {
+    fn default() -> Self {
+        Self::from_route_request(FullChapterRegenerationStreamRouteRequest::default())
+    }
 }
 
 impl FullChapterRegenerationStreamRequest {

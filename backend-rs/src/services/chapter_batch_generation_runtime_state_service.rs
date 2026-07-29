@@ -323,9 +323,14 @@ mod tests {
         BatchGenerationFailedTerminalKind, BatchGenerationFailedTerminalSemantics,
     };
     use crate::services::chapter_batch_generation_write_workflow_service::build_batch_generation_runtime_state_payload_from_parts_with_explicit_payload;
+    use crate::services::cooperative_cancellation_service::{
+        global_cooperative_cancellation_registry, CooperativeCancellationScope,
+    };
     use crate::services::chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig;
-    use crate::services::chapter_generation_execution_contract_service::BatchGenerationRequestRuntimeState;
-    use crate::services::chapter_generation_execution_contract_service::PreparedGenerationExecutionConfig;
+    use crate::services::chapter_generation_execution_contract_service::{
+        BatchGenerationRequestRuntimeState, PreparedGenerationExecutionConfig,
+        PreparedRoleModelPolicyContext,
+    };
     use crate::services::chapter_generation_execution_contract_service::{
         build_prompt_overrides_from_compat_options, SingleChapterGenerationCompatOptions,
     };
@@ -338,6 +343,14 @@ mod tests {
         build_manual_review_terminal_runtime_patch_contract,
     };
     use crate::services::chapter_generation_runtime_service::GeneratedChapterResult;
+    use crate::services::generation_contract_service::{
+        build_generation_contract_snapshot, merge_generation_contract_runtime_snapshot,
+        read_generation_contract_runtime_snapshot, GenerationContractSnapshotRead,
+        GenerationIntentKind, GenerationIntentV1, GenerationTarget, StoryPacketV1,
+    };
+    use crate::services::role_model_policy_service::{
+        resolve_role_model_policy, GenerationRole, RoleModelPolicyV1, RoleModelResolutionInput,
+    };
     use chrono::NaiveDate;
     use sea_orm::{
         ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
@@ -1614,6 +1627,199 @@ mod tests {
             runtime_state_seed["quality_metrics_history"][0]["overall_score"],
             88
         );
+    }
+
+    #[test]
+    fn should_restore_valid_batch_contract_without_digest_drift() {
+        let target = GenerationTarget::chapter_batch(
+            "project-1",
+            vec!["chapter-1".to_owned(), "chapter-2".to_owned()],
+        );
+        let mut packet = StoryPacketV1::new("project-1", target.clone());
+        packet.current_chapter_number = Some(1);
+        packet.target_word_count = Some(2_800);
+        let mut intent =
+            GenerationIntentV1::new(GenerationIntentKind::BatchChapterGenerate, target);
+        intent.target_word_count = Some(2_800);
+        let contract_snapshot =
+            build_generation_contract_snapshot(packet, intent).expect("build batch contract");
+        let request_runtime_state = BatchGenerationRequestRuntimeState::new(
+            SingleChapterGenerationCompatOptions {
+                story_repair_summary: Some("保留旧修复配置".to_owned()),
+                ..SingleChapterGenerationCompatOptions::default()
+            },
+            Some("gpt-4.1".to_owned()),
+        );
+        let mut workflow_runtime_state = json!({
+            "batch_request_runtime_state": request_runtime_state,
+            "progress": {"completed": 1, "total": 2},
+            "quality": {"status": "passed"},
+            "candidate_gateway": {"selected": "candidate-1"},
+            "checkpoint": {"stage": "prepared"}
+        });
+        merge_generation_contract_runtime_snapshot(&mut workflow_runtime_state, &contract_snapshot)
+            .expect("merge contract into batch runtime state");
+        let workflow_runtime_state: Value = serde_json::from_str(
+            &serde_json::to_string(&workflow_runtime_state).expect("serialize runtime state"),
+        )
+        .expect("deserialize runtime state");
+
+        let persisted_context = BatchGenerationPersistedRuntimeContext::from_sources(
+            Some(workflow_runtime_state.clone()),
+            None,
+            None,
+            None,
+        );
+        let restored_contract = persisted_context
+            .generation_contract_snapshot()
+            .expect("restore typed batch contract");
+        assert_eq!(restored_contract, &contract_snapshot);
+        assert_eq!(
+            restored_contract.input_digest,
+            contract_snapshot.input_digest
+        );
+
+        let mut task = build_task("failed");
+        task.id = "task-contract-resume".to_owned();
+        let command_state = ResumeBatchGenerationCommandState::from_task(&task);
+        let persisted_snapshot =
+            build_snapshot_with_runtime_state(workflow_runtime_state.clone(), None);
+        let (restored_runtime_state, existing_workflow_runtime_state) =
+            prepare_batch_generation_resume_restored_runtime_state(
+                &command_state,
+                Some(&persisted_snapshot),
+            )
+            .expect("prepare resume with typed contract");
+
+        assert_eq!(
+            restored_runtime_state
+                .request_runtime_state
+                .model_override
+                .as_deref(),
+            Some("gpt-4.1")
+        );
+        let existing_workflow_runtime_state =
+            existing_workflow_runtime_state.expect("preserve original workflow state");
+        assert_eq!(
+            read_generation_contract_runtime_snapshot(&existing_workflow_runtime_state),
+            GenerationContractSnapshotRead::Valid(contract_snapshot)
+        );
+        assert_eq!(
+            existing_workflow_runtime_state["progress"],
+            workflow_runtime_state["progress"]
+        );
+        assert_eq!(
+            existing_workflow_runtime_state["quality"],
+            workflow_runtime_state["quality"]
+        );
+        assert_eq!(
+            existing_workflow_runtime_state["candidate_gateway"],
+            workflow_runtime_state["candidate_gateway"]
+        );
+        assert_eq!(
+            existing_workflow_runtime_state["checkpoint"],
+            workflow_runtime_state["checkpoint"]
+        );
+    }
+
+    #[test]
+    fn should_fallback_for_missing_legacy_unsupported_and_malformed_batch_contracts() {
+        let request_runtime_state = BatchGenerationRequestRuntimeState::new(
+            SingleChapterGenerationCompatOptions {
+                story_repair_summary: Some("沿用旧运行态配置".to_owned()),
+                story_repair_targets: vec!["保持兼容恢复".to_owned()],
+                ..SingleChapterGenerationCompatOptions::default()
+            },
+            Some("gpt-4.1".to_owned()),
+        );
+        let base_state = json!({
+            "batch_request_runtime_state": request_runtime_state,
+            "quality_metrics_summary": {"overall_score": 82}
+        });
+        let missing_state = base_state.clone();
+        let mut legacy_state = base_state.clone();
+        legacy_state["story_packet"] = json!({"project_id": "project-1"});
+        let mut unsupported_state = base_state.clone();
+        unsupported_state["story_packet"] = json!({"schema_version": "generation-contract/v9"});
+
+        let target = GenerationTarget::chapter_batch(
+            "project-1",
+            vec!["chapter-1".to_owned(), "chapter-2".to_owned()],
+        );
+        let packet = StoryPacketV1::new("project-1", target.clone());
+        let intent = GenerationIntentV1::new(GenerationIntentKind::BatchChapterGenerate, target);
+        let contract_snapshot =
+            build_generation_contract_snapshot(packet, intent).expect("build batch contract");
+        let mut malformed_state = base_state.clone();
+        merge_generation_contract_runtime_snapshot(&mut malformed_state, &contract_snapshot)
+            .expect("merge contract before corrupting digest");
+        malformed_state["story_packet"]["input_digest"] = json!("sha256:corrupted");
+
+        let mut task = build_task("failed");
+        task.id = "task-contract-fallback".to_owned();
+        let command_state = ResumeBatchGenerationCommandState::from_task(&task);
+        for (case, workflow_runtime_state) in [
+            ("missing", missing_state),
+            ("legacy", legacy_state),
+            ("unsupported", unsupported_state),
+            ("malformed", malformed_state),
+        ] {
+            let persisted_context = BatchGenerationPersistedRuntimeContext::from_sources(
+                Some(workflow_runtime_state.clone()),
+                None,
+                None,
+                None,
+            );
+            assert!(
+                persisted_context.generation_contract_snapshot().is_none(),
+                "{case} contract must use the legacy fallback"
+            );
+            assert_eq!(
+                persisted_context
+                    .request_runtime_state()
+                    .model_override
+                    .as_deref(),
+                Some("gpt-4.1"),
+                "{case} model override"
+            );
+            assert_eq!(
+                persisted_context
+                    .request_runtime_state()
+                    .compat_options
+                    .story_repair_summary(),
+                "沿用旧运行态配置",
+                "{case} compat options"
+            );
+
+            let snapshot = build_snapshot_with_runtime_state(workflow_runtime_state.clone(), None);
+            let (restored_runtime_state, existing_workflow_runtime_state) =
+                prepare_batch_generation_resume_restored_runtime_state(
+                    &command_state,
+                    Some(&snapshot),
+                )
+                .unwrap_or_else(|error| panic!("{case} resume fallback failed: {error:?}"));
+            assert_eq!(
+                restored_runtime_state
+                    .request_runtime_state
+                    .model_override
+                    .as_deref(),
+                Some("gpt-4.1"),
+                "{case} restored model override"
+            );
+            assert_eq!(
+                restored_runtime_state
+                    .request_runtime_state
+                    .compat_options
+                    .story_repair_summary(),
+                "沿用旧运行态配置",
+                "{case} restored compat options"
+            );
+            assert_eq!(
+                existing_workflow_runtime_state,
+                Some(workflow_runtime_state),
+                "{case} original workflow state"
+            );
+        }
     }
 
     #[test]
@@ -3334,13 +3540,17 @@ mod tests {
         db
     }
 
-    async fn seed_cancel_runtime_owner_fixture(db: &DatabaseConnection) {
+    async fn seed_cancel_runtime_owner_fixture(
+        db: &DatabaseConnection,
+        batch_id: &str,
+        user_id: &str,
+    ) {
         let now = chrono::Utc::now().naive_utc();
 
         batch_generation_task::ActiveModel {
-            id: Set("batch-cancel-db-smoke".to_string()),
+            id: Set(batch_id.to_string()),
             project_id: Set("project-cancel-db-smoke".to_string()),
-            user_id: Set("user-cancel-db-smoke".to_string()),
+            user_id: Set(user_id.to_string()),
             start_chapter_number: Set(2),
             chapter_count: Set(3),
             chapter_ids: Set(json!([
@@ -3369,8 +3579,8 @@ mod tests {
         .expect("insert cancel db smoke task");
 
         batch_generation_snapshot::ActiveModel {
-            id: Set("snapshot-cancel-db-smoke".to_string()),
-            batch_task_id: Set("batch-cancel-db-smoke".to_string()),
+            id: Set(format!("snapshot-{batch_id}")),
+            batch_task_id: Set(batch_id.to_string()),
             latest_quality_metrics: Set(Some(json!({
                 "overall_score": 89.0,
                 "source": "cancel-db-smoke"
@@ -3407,22 +3617,23 @@ mod tests {
     #[tokio::test]
     async fn should_persist_db_backed_cancelled_batch_generation_from_runtime_command_owner() {
         let db = setup_cancel_runtime_owner_db().await;
-        seed_cancel_runtime_owner_fixture(&db).await;
+        let batch_id = "batch-cancel-db-success";
+        let user_id = "user-cancel-db-success";
+        seed_cancel_runtime_owner_fixture(&db, batch_id, user_id).await;
+        let registration = global_cooperative_cancellation_registry()
+            .register(CooperativeCancellationScope::BatchGeneration, batch_id);
+        let token = registration.token();
 
-        let payload = super::cancel_owned_batch_generation_runtime_command(
-            &db,
-            "batch-cancel-db-smoke",
-            "user-cancel-db-smoke",
-        )
-        .await
-        .expect("db-backed cancel payload");
-        let updated_task = batch_generation_task::Entity::find_by_id("batch-cancel-db-smoke")
+        let payload = super::cancel_owned_batch_generation_runtime_command(&db, batch_id, user_id)
+            .await
+            .expect("db-backed cancel payload");
+        let updated_task = batch_generation_task::Entity::find_by_id(batch_id)
             .one(&db)
             .await
             .expect("load cancelled task")
             .expect("cancelled task exists");
         let updated_snapshot = batch_generation_snapshot::Entity::find()
-            .filter(batch_generation_snapshot::Column::BatchTaskId.eq("batch-cancel-db-smoke"))
+            .filter(batch_generation_snapshot::Column::BatchTaskId.eq(batch_id))
             .one(&db)
             .await
             .expect("load cancelled snapshot")
@@ -3431,7 +3642,7 @@ mod tests {
             .workflow_runtime_state
             .expect("cancelled runtime state");
 
-        assert_eq!(payload["batch_id"], "batch-cancel-db-smoke");
+        assert_eq!(payload["batch_id"], batch_id);
         assert_eq!(payload["status"], "cancelled");
         assert_eq!(payload["message"], "Batch generation cancelled");
         assert_eq!(payload["checkpoint"]["phase"], "cancelled");
@@ -3463,6 +3674,188 @@ mod tests {
             runtime_state["active_story_repair_payload"]["mode"],
             "cancel-db-smoke"
         );
+        assert!(token.is_cancelled());
+
+        for (label, late_plan) in [
+            (
+                "preparing",
+                super::BatchGenerationRuntimePersistencePlan::preparing(3),
+            ),
+            (
+                "cancelled",
+                super::BatchGenerationRuntimePersistencePlan::cancelled(1, 3),
+            ),
+            (
+                "failed",
+                super::BatchGenerationRuntimePersistencePlan::failed(
+                    Some("chapter-cancel-3"),
+                    Some(3),
+                    Some("late chapter"),
+                    1,
+                    3,
+                    BatchGenerationFailureKind::GenerationError,
+                    2,
+                    "late failure entry".to_string(),
+                    "late failure".to_string(),
+                ),
+            ),
+        ] {
+            let error = late_plan
+                .persist(&db, batch_id)
+                .await
+                .expect_err("cancelled task must reject late runtime persistence");
+            assert!(
+                error.contains("rejected by terminal task status"),
+                "{label} late write returned unexpected error: {error}"
+            );
+        }
+
+        let task_after_late_writes = batch_generation_task::Entity::find_by_id(batch_id)
+            .one(&db)
+            .await
+            .expect("load task after late writes")
+            .expect("task exists after late writes");
+        let snapshot_after_late_writes = batch_generation_snapshot::Entity::find()
+            .filter(batch_generation_snapshot::Column::BatchTaskId.eq(batch_id))
+            .one(&db)
+            .await
+            .expect("load snapshot after late writes")
+            .expect("snapshot exists after late writes");
+        assert_eq!(task_after_late_writes.status, "cancelled");
+        assert_eq!(
+            snapshot_after_late_writes.workflow_runtime_state,
+            Some(runtime_state)
+        );
+        registration.cleanup();
+    }
+
+    #[tokio::test]
+    async fn should_allow_only_one_terminal_owner_when_cancel_races_completion() {
+        let db = setup_cancel_runtime_owner_db().await;
+        let batch_id = "batch-cancel-complete-race";
+        let user_id = "user-cancel-complete-race";
+        seed_cancel_runtime_owner_fixture(&db, batch_id, user_id).await;
+        let registration = global_cooperative_cancellation_registry()
+            .register(CooperativeCancellationScope::BatchGeneration, batch_id);
+        let token = registration.token();
+        let chapter_model = chapter::Model {
+            id: "chapter-cancel-4".to_string(),
+            project_id: "project-cancel-db-smoke".to_string(),
+            chapter_number: 4,
+            title: "终章".to_string(),
+            content: Some("已持久化终章正文".to_string()),
+            summary: None,
+            word_count: 1200,
+            status: "completed".to_string(),
+            outline_id: None,
+            sub_index: 0,
+            expansion_plan: None,
+            created_at: chrono::Utc::now().naive_utc(),
+            updated_at: None,
+        };
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(3));
+
+        let cancel_db = db.clone();
+        let cancel_barrier = barrier.clone();
+        let cancel_task_id = batch_id.to_string();
+        let cancel_user_id = user_id.to_string();
+        let cancel_handle = tokio::spawn(async move {
+            cancel_barrier.wait().await;
+            super::cancel_owned_batch_generation_runtime_command(
+                &cancel_db,
+                &cancel_task_id,
+                &cancel_user_id,
+            )
+            .await
+        });
+
+        let completion_db = db.clone();
+        let completion_barrier = barrier.clone();
+        let completion_task_id = batch_id.to_string();
+        let completion_handle = tokio::spawn(async move {
+            completion_barrier.wait().await;
+            super::BatchGenerationRuntimePersistencePlan::chapter_succeeded(&chapter_model, 3, 3)
+                .persist(&completion_db, &completion_task_id)
+                .await
+        });
+
+        barrier.wait().await;
+        let (cancel_result, completion_result) = tokio::join!(cancel_handle, completion_handle);
+        let cancel_result = cancel_result.expect("join cancel competitor");
+        let completion_result = completion_result.expect("join completion competitor");
+        assert_ne!(
+            cancel_result.is_ok(),
+            completion_result.is_ok(),
+            "exactly one terminal CAS owner must succeed: cancel={cancel_result:?}, completion={completion_result:?}"
+        );
+
+        let terminal_task = batch_generation_task::Entity::find_by_id(batch_id)
+            .one(&db)
+            .await
+            .expect("load terminal race task")
+            .expect("terminal race task exists");
+        let terminal_snapshot = batch_generation_snapshot::Entity::find()
+            .filter(batch_generation_snapshot::Column::BatchTaskId.eq(batch_id))
+            .one(&db)
+            .await
+            .expect("load terminal race snapshot")
+            .expect("terminal race snapshot exists");
+        let terminal_runtime_state = terminal_snapshot
+            .workflow_runtime_state
+            .expect("terminal race runtime state");
+
+        match terminal_task.status.as_str() {
+            "cancelled" => {
+                assert!(cancel_result.is_ok());
+                assert!(completion_result
+                    .expect_err("cancel winner must reject completion")
+                    .contains("rejected by terminal task status"));
+                assert!(token.is_cancelled());
+                assert_eq!(terminal_runtime_state["phase"], "cancelled");
+            }
+            "completed" => {
+                assert!(completion_result.is_ok());
+                assert!(cancel_result.is_err());
+                assert!(!token.is_cancelled());
+                assert_eq!(terminal_runtime_state["phase"], "completed");
+            }
+            other => panic!("unexpected terminal race status: {other}"),
+        }
+        registration.cleanup();
+    }
+
+    #[tokio::test]
+    async fn should_not_signal_batch_token_when_cancel_persistence_fails() {
+        let db = setup_cancel_runtime_owner_db().await;
+        let batch_id = "batch-cancel-db-persist-failure";
+        let user_id = "user-cancel-db-persist-failure";
+        seed_cancel_runtime_owner_fixture(&db, batch_id, user_id).await;
+        db.execute_unprepared(
+            "CREATE TRIGGER reject_batch_cancel_update BEFORE UPDATE ON batch_generation_tasks              BEGIN SELECT RAISE(FAIL, 'injected cancel persistence failure'); END;",
+        )
+        .await
+        .expect("install cancel persistence failure trigger");
+        let registration = global_cooperative_cancellation_registry()
+            .register(CooperativeCancellationScope::BatchGeneration, batch_id);
+        let token = registration.token();
+
+        let error = super::cancel_owned_batch_generation_runtime_command(&db, batch_id, user_id)
+            .await
+            .expect_err("injected persistence failure should reject cancel command");
+
+        assert!(matches!(
+            error,
+            super::CancelBatchGenerationTaskCommandError::Domain(ref detail)
+                if detail.contains("injected cancel persistence failure")
+        ));
+        assert!(!token.is_cancelled());
+        let unchanged_task = batch_generation_task::Entity::find_by_id(batch_id)
+            .one(&db)
+            .await
+            .expect("load task after failed cancellation")
+            .expect("task exists after failed cancellation");
+        assert_eq!(unchanged_task.status, "running");
+        registration.cleanup();
     }
 
     #[test]
@@ -3475,6 +3868,7 @@ mod tests {
             PreparedGenerationExecutionConfig {
                 ai_config: AIConfig::default(),
                 provider_payload: crate::services::chapter_generation_prompt_service::build_placeholder_prompt_context_provider_payload(),
+                            role_policy_context: None,
             },
             test_candidate_gateway_config(),
         );
@@ -3538,6 +3932,7 @@ mod tests {
             PreparedGenerationExecutionConfig {
                 ai_config: AIConfig::default(),
                 provider_payload: crate::services::chapter_generation_prompt_service::build_placeholder_prompt_context_provider_payload(),
+                            role_policy_context: None,
             },
             test_candidate_gateway_config(),
         );
@@ -3576,6 +3971,7 @@ mod tests {
                 PreparedGenerationExecutionConfig {
                     ai_config: AIConfig::default(),
                     provider_payload: crate::services::chapter_generation_prompt_service::build_placeholder_prompt_context_provider_payload(),
+                                    role_policy_context: None,
                 },
                 test_candidate_gateway_config(),
             );
@@ -3593,6 +3989,19 @@ mod tests {
 
     #[test]
     fn should_build_batch_generation_runtime_session_from_execution_owner() {
+        let resolved_policy = resolve_role_model_policy(
+            RoleModelResolutionInput {
+                intent_kind: GenerationIntentKind::BatchChapterGenerate,
+                policy: &RoleModelPolicyV1::default(),
+                route_provider: None,
+                route_model: None,
+                global_provider: Some("openai"),
+                global_model: Some("gpt-4.1"),
+                runtime_default_provider: "openai",
+            },
+            |_| "gpt-4.1-mini".to_string(),
+        )
+        .expect("resolve batch role model policy");
         let (session, chapter_ids) =
             BatchGenerationRuntimeSession::from_execution_input(BatchGenerationExecutionInput {
                 user_id: "user-10".to_string(),
@@ -3600,6 +4009,10 @@ mod tests {
                 target_word_count: 2800,
                 compat_options: SingleChapterGenerationCompatOptions::default(),
                 ai_config: AIConfig::default(),
+                role_policy_context: Some(PreparedRoleModelPolicyContext {
+                    resolved_policy,
+                    allow_model_fallback: false,
+                }),
                 candidate_gateway_config: test_candidate_gateway_config(),
             });
 
@@ -3608,6 +4021,15 @@ mod tests {
         assert_eq!(session.total_chapters, 2);
         assert!(session.candidate_gateway_config.rust_executor_enabled);
         assert!(!session.candidate_gateway_config.fallback_on_rust_error);
+        let role_policy_context = session
+            .role_policy_context
+            .as_ref()
+            .expect("batch role policy context should reach runtime session");
+        assert_eq!(
+            role_policy_context.resolved_policy.role,
+            GenerationRole::Writer
+        );
+        assert!(!role_policy_context.allow_model_fallback);
         assert_eq!(
             session.compat_options,
             SingleChapterGenerationCompatOptions::default()
@@ -4366,6 +4788,7 @@ mod tests {
                 ..Default::default()
             },
             ai_config: AIConfig::default(),
+            role_policy_context: None,
             candidate_gateway_config: test_candidate_gateway_config(),
         };
 
@@ -5616,6 +6039,7 @@ mod tests {
                     ..Default::default()
                 },
                 ai_config: AIConfig::default(),
+                role_policy_context: None,
                 candidate_gateway_config: test_candidate_gateway_config(),
             });
 
@@ -5647,6 +6071,7 @@ mod tests {
                 target_word_count: 2500,
                 compat_options: SingleChapterGenerationCompatOptions::default(),
                 ai_config: AIConfig::default(),
+                role_policy_context: None,
                 candidate_gateway_config: test_candidate_gateway_config(),
             },
         );

@@ -67,6 +67,7 @@ mod tests {
             message: Some("running".to_string()),
             progress: Some(42),
             status: Some("running".to_string()),
+            content: None,
             data: None,
             error: None,
         }
@@ -139,6 +140,7 @@ mod tests {
             message: Some("completed".to_string()),
             progress: Some(100),
             status: Some("completed".to_string()),
+            content: None,
             data: None,
             error: None,
         };

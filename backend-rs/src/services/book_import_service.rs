@@ -14,6 +14,7 @@ use uuid::Uuid;
 use super::career_service::CareerService;
 use super::chapter_service::ChapterService;
 use super::character_service::CharacterService;
+use super::novel_workflow_service::{resolve_internal_writing_transition, NovelWorkflowError};
 use super::outline_service::OutlineService;
 use super::project_service::{CreateProjectParams, ProjectService};
 use super::prompt_template_service::PromptTemplateService;
@@ -85,6 +86,22 @@ pub async fn create_book_import_project(
     ProjectService::create_full(db, create_params)
         .await
         .map_err(|error| format!("项目创建失败: {}", error))
+}
+
+async fn commit_book_import_project_workflow(
+    db: &DatabaseConnection,
+    project: &project::Model,
+) -> Result<project::Model, NovelWorkflowError> {
+    let target_phase = resolve_internal_writing_transition(&project.status)?;
+    let mut active: project::ActiveModel = project.clone().into();
+    active.wizard_step = Set(4);
+    active.wizard_status = Set("completed".to_string());
+    active.status = Set(target_phase.as_str().to_string());
+    active.updated_at = Set(Some(Utc::now().naive_utc()));
+    active
+        .update(db)
+        .await
+        .map_err(|error| NovelWorkflowError::Internal(error.to_string()))
 }
 
 pub async fn import_book_import_outlines(
@@ -1690,13 +1707,18 @@ impl BookImportService {
             .progress("正在保存到数据库...", 95, "processing")
             .await;
 
-        // Update project wizard status
-        let mut pactive: crate::models::project::ActiveModel = project.clone().into();
-        pactive.wizard_step = Set(4);
-        pactive.wizard_status = Set("completed".to_string());
-        pactive.status = Set("writing".to_string());
-        pactive.updated_at = Set(Some(chrono::Utc::now().naive_utc()));
-        let _ = pactive.update(db).await;
+        // Update project wizard status through the novel workflow owner.
+        if let Err(error) = commit_book_import_project_workflow(db, &project).await {
+            let (message, status_code) = match error {
+                NovelWorkflowError::Internal(message) => {
+                    (format!("项目状态保存失败: {message}"), 500)
+                }
+                error => (format!("项目工作流状态更新失败: {error}"), 409),
+            };
+            channel.error(&message, status_code).await;
+            channel.done().await;
+            return;
+        }
 
         // Update task + store failed_steps for retry
         {
@@ -2185,13 +2207,15 @@ fn detect_narrative_perspective(text: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDateTime;
+    use sea_orm::{ActiveModelTrait, ConnectionTrait, Database, DbBackend, EntityTrait, Schema};
 
     use crate::models::project;
+    use crate::services::novel_workflow_service::{NovelWorkflowError, NovelWorkflowPhase};
 
     use super::{
         build_book_import_career_system_prompt_params, build_book_import_characters_prompt_params,
-        build_book_import_world_building_prompt_params, BookImportAiExecutionContext,
-        BookImportAiStepKind, TxtParserService,
+        build_book_import_world_building_prompt_params, commit_book_import_project_workflow,
+        BookImportAiExecutionContext, BookImportAiStepKind, TxtParserService,
     };
 
     fn sample_project() -> project::Model {
@@ -2224,6 +2248,85 @@ mod tests {
             created_at: NaiveDateTime::default(),
             updated_at: Some(NaiveDateTime::default()),
         }
+    }
+
+    async fn setup_book_import_project_db() -> sea_orm::DatabaseConnection {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect book import sqlite memory db");
+        let builder = DbBackend::Sqlite;
+        let schema = Schema::new(builder);
+        db.execute(builder.build(&schema.create_table_from_entity(project::Entity)))
+            .await
+            .expect("create projects table");
+        db
+    }
+
+    async fn insert_sample_project(
+        db: &sea_orm::DatabaseConnection,
+        status: &str,
+    ) -> project::Model {
+        let mut project = sample_project();
+        project.status = status.to_string();
+        let active: project::ActiveModel = project.into();
+        active.insert(db).await.expect("insert sample project")
+    }
+
+    #[tokio::test]
+    async fn should_commit_book_import_project_to_canonical_writing_phase() {
+        let db = setup_book_import_project_db().await;
+        let project = insert_sample_project(&db, " Draft ").await;
+
+        let committed = commit_book_import_project_workflow(&db, &project)
+            .await
+            .expect("commit book import workflow");
+
+        assert_eq!(committed.status, "writing");
+        assert_eq!(committed.wizard_status, "completed");
+        assert_eq!(committed.wizard_step, 4);
+        let stored = project::Entity::find_by_id(&project.id)
+            .one(&db)
+            .await
+            .expect("load committed project")
+            .expect("project exists");
+        assert_eq!(stored.status, "writing");
+    }
+
+    #[tokio::test]
+    async fn should_reject_illegal_book_import_phase_without_mutation() {
+        let db = setup_book_import_project_db().await;
+        let project = insert_sample_project(&db, "completed").await;
+
+        let error = commit_book_import_project_workflow(&db, &project)
+            .await
+            .expect_err("completed project cannot jump to writing");
+        assert_eq!(
+            error,
+            NovelWorkflowError::IllegalTransition {
+                from: NovelWorkflowPhase::Completed,
+                to: NovelWorkflowPhase::Writing,
+            }
+        );
+        let stored = project::Entity::find_by_id(&project.id)
+            .one(&db)
+            .await
+            .expect("load unchanged project")
+            .expect("project exists");
+        assert_eq!(stored.status, "completed");
+    }
+
+    #[tokio::test]
+    async fn should_surface_book_import_project_persistence_failure() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite without project table");
+        let mut project = sample_project();
+        project.status = "foundation".to_string();
+
+        let error = commit_book_import_project_workflow(&db, &project)
+            .await
+            .expect_err("missing projects table must fail");
+        assert!(matches!(error, NovelWorkflowError::Internal(_)));
     }
 
     #[test]

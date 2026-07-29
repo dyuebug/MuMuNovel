@@ -4,15 +4,27 @@ use serde_json::Value;
 
 use crate::ai::service::AIService;
 use crate::models::chapter;
+use crate::services::chapter_generation_execution_contract_service::{
+    prepare_role_aware_generation_execution_config_with_provider_payload,
+    PreparedGenerationExecutionConfig, PreparedRoleModelPolicyContext,
+};
 use crate::services::chapter_generation_prompt_service::{
     PreviousChapterPromptContext, PromptContextProviderPayload,
 };
 use crate::services::chapter_generation_runtime_service::context_compaction_owner::compact_generation_context;
+use crate::services::chapter_generation_runtime_service::runtime_execution_owner::load_generation_context;
 use crate::services::chapter_single_generation_prepare_service::research_payload_owner::build_single_chapter_research_provider_payload;
 use crate::services::chapter_single_generation_prepare_service::SingleChapterGenerationTarget;
+use crate::services::generation_contract_service::{
+    GenerationContractSnapshotV1, GenerationIntentKind,
+};
 use crate::services::settings_service::SettingsService;
 use crate::services::writing_style_service::WritingStyleService;
 
+use super::contract_prepare_owner::{
+    build_full_chapter_regeneration_contract_snapshot,
+    build_partial_chapter_regeneration_contract_snapshot,
+};
 use super::request_prepare_owner::{
     build_partial_length_requirement, calculate_partial_target_words,
     BuildRegenerationAiServiceError, FullChapterRegenerationStreamRequest,
@@ -29,6 +41,8 @@ pub struct FullChapterRegenerationStreamInput {
     pub chapter_word_count: usize,
     pub prompt: String,
     pub ai_service: AIService,
+    pub role_policy_context: PreparedRoleModelPolicyContext,
+    pub generation_contract: GenerationContractSnapshotV1,
 }
 
 pub struct PartialChapterRegenerationStreamInput {
@@ -38,12 +52,15 @@ pub struct PartialChapterRegenerationStreamInput {
     pub end_position: usize,
     pub prompt: String,
     pub ai_service: AIService,
+    pub role_policy_context: PreparedRoleModelPolicyContext,
+    pub generation_contract: GenerationContractSnapshotV1,
 }
 
 pub struct PreparedPartialRegenerationInput {
     pub original_word_count: usize,
     pub target_words: usize,
     pub max_tokens: u32,
+    pub selected_text: String,
     pub prompt: String,
 }
 
@@ -302,6 +319,7 @@ pub fn prepare_partial_regeneration_input(
         original_word_count,
         target_words,
         max_tokens,
+        selected_text,
         prompt,
     })
 }
@@ -318,6 +336,28 @@ pub async fn build_regeneration_ai_service(
         ai_config.max_tokens = max_tokens;
     }
     Ok(AIService::new(ai_config))
+}
+
+async fn build_role_aware_regeneration_execution_config(
+    db: &sea_orm::DatabaseConnection,
+    user_id: &str,
+    intent_kind: GenerationIntentKind,
+    provider_payload: PromptContextProviderPayload,
+    max_tokens_override: Option<u32>,
+) -> Result<PreparedGenerationExecutionConfig, BuildRegenerationAiServiceError> {
+    let mut prepared = prepare_role_aware_generation_execution_config_with_provider_payload(
+        db,
+        user_id,
+        intent_kind,
+        None,
+        provider_payload,
+    )
+    .await
+    .map_err(BuildRegenerationAiServiceError::InvalidConfig)?;
+    if let Some(max_tokens) = max_tokens_override {
+        prepared.ai_config.max_tokens = max_tokens;
+    }
+    Ok(prepared)
 }
 
 pub async fn load_partial_style_content(
@@ -386,7 +426,32 @@ pub async fn prepare_chapter_regeneration_stream(
         Some(&provider_payload.external_assets),
         Some(&provider_payload.reference_assets),
     );
-    let ai_service = build_regeneration_ai_service(db, user_id, None).await?;
+    let generation_context = load_generation_context(db, user_id, &chapter.id)
+        .await
+        .map_err(|error| {
+            BuildRegenerationAiServiceError::InvalidConfig(error.into_runtime_message())
+        })?;
+    let generation_contract = build_full_chapter_regeneration_contract_snapshot(
+        &generation_context.project_model,
+        generation_context.story_packet,
+        request,
+        web_research_default,
+    )
+    .map_err(|error| BuildRegenerationAiServiceError::InvalidConfig(error.to_string()))?;
+    let prepared_execution = build_role_aware_regeneration_execution_config(
+        db,
+        user_id,
+        GenerationIntentKind::ChapterRegenerate,
+        provider_payload,
+        None,
+    )
+    .await?;
+    let role_policy_context = prepared_execution.role_policy_context.ok_or_else(|| {
+        BuildRegenerationAiServiceError::InvalidConfig(
+            "Chapter regeneration role policy context is missing".to_string(),
+        )
+    })?;
+    let ai_service = AIService::new(prepared_execution.ai_config);
 
     Ok(FullChapterRegenerationStreamInput {
         chapter: chapter.clone(),
@@ -397,6 +462,8 @@ pub async fn prepare_chapter_regeneration_stream(
         chapter_word_count: chapter.word_count as usize,
         prompt,
         ai_service,
+        role_policy_context,
+        generation_contract,
     })
 }
 
@@ -474,9 +541,44 @@ pub async fn prepare_partial_regeneration_stream(
     )
     .map_err(PreparePartialRegenerationStreamError::Input)?;
 
-    let ai_service = build_regeneration_ai_service(db, user_id, Some(prepared.max_tokens))
+    let generation_context = load_generation_context(db, user_id, &chapter.id)
         .await
-        .map_err(PreparePartialRegenerationStreamError::Config)?;
+        .map_err(|error| {
+            PreparePartialRegenerationStreamError::Config(
+                BuildRegenerationAiServiceError::InvalidConfig(error.into_runtime_message()),
+            )
+        })?;
+    let generation_contract = build_partial_chapter_regeneration_contract_snapshot(
+        &generation_context.project_model,
+        generation_context.story_packet,
+        request,
+        prepared.selected_text.clone(),
+        prepared.target_words,
+        style_content.as_deref(),
+        web_research_default,
+    )
+    .map_err(|error| {
+        PreparePartialRegenerationStreamError::Config(
+            BuildRegenerationAiServiceError::InvalidConfig(error.to_string()),
+        )
+    })?;
+    let prepared_execution = build_role_aware_regeneration_execution_config(
+        db,
+        user_id,
+        GenerationIntentKind::ChapterPartialRegenerate,
+        provider_payload,
+        Some(prepared.max_tokens),
+    )
+    .await
+    .map_err(PreparePartialRegenerationStreamError::Config)?;
+    let role_policy_context = prepared_execution.role_policy_context.ok_or_else(|| {
+        PreparePartialRegenerationStreamError::Config(
+            BuildRegenerationAiServiceError::InvalidConfig(
+                "Partial chapter regeneration role policy context is missing".to_string(),
+            ),
+        )
+    })?;
+    let ai_service = AIService::new(prepared_execution.ai_config);
 
     Ok(PartialChapterRegenerationStreamInput {
         target_words: prepared.target_words,
@@ -485,5 +587,7 @@ pub async fn prepare_partial_regeneration_stream(
         end_position: request.end_position(),
         prompt: prepared.prompt,
         ai_service,
+        role_policy_context,
+        generation_contract,
     })
 }

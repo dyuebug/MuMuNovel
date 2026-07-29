@@ -14,25 +14,23 @@ use crate::services::chapter_analysis_runtime_service::state_sync_owner::{
 use crate::services::chapter_analysis_service::{
     apply_analysis_task_state_by_id, AnalysisTaskStage,
 };
+use crate::services::chapter_content_digest_service::chapter_content_digest;
 use crate::services::chapter_single_generation_result_lifecycle_service::update_latest_generated_chapter_history_quality_metrics;
 
-pub(crate) async fn persist_chapter_analysis_result(
-    db: &DatabaseConnection,
-    user_id: &str,
+pub(crate) fn build_plot_analysis_active_model(
     chapter_model: &chapter::Model,
-    task_id: &str,
     payload: &Value,
-) -> Result<Value, String> {
-    let now = Utc::now().naive_utc();
+    now: chrono::NaiveDateTime,
+) -> plot_analysis::ActiveModel {
     let scores = payload.get("scores").cloned().unwrap_or(Value::Null);
     let conflict = payload.get("conflict").cloned().unwrap_or(Value::Null);
     let emotional_arc = payload.get("emotional_arc").cloned().unwrap_or(Value::Null);
-    let quality_metrics_payload = build_chapter_analysis_quality_metrics_payload(payload);
 
-    let analysis = plot_analysis::ActiveModel {
+    plot_analysis::ActiveModel {
         id: Set(Uuid::new_v4().to_string()),
         project_id: Set(chapter_model.project_id.clone()),
         chapter_id: Set(chapter_model.id.clone()),
+        source_content_digest: Set(chapter_model.content.as_deref().map(chapter_content_digest)),
         plot_stage: Set(payload
             .get("plot_stage")
             .and_then(Value::as_str)
@@ -100,10 +98,7 @@ pub(crate) async fn persist_chapter_analysis_result(
             .map(|items| items.len() as i32)
             .unwrap_or(0)),
         character_states: Set(payload.get("character_states").cloned()),
-        scenes: Set(payload
-            .get("scenes")
-            .cloned()
-            .or_else(|| payload.get("serial_rhythm").cloned())),
+        scenes: Set(payload.get("scenes").cloned()),
         pacing: Set(payload
             .get("pacing")
             .and_then(Value::as_str)
@@ -124,13 +119,16 @@ pub(crate) async fn persist_chapter_analysis_result(
             payload.get("description_ratio").and_then(Value::as_f64),
         )),
         created_at: Set(Some(now)),
-    };
+    }
+}
 
-    let saved_analysis = analysis
-        .insert(db)
-        .await
-        .map_err(|error| error.to_string())?;
-
+pub(crate) async fn synchronize_chapter_analysis_derivatives(
+    db: &DatabaseConnection,
+    user_id: &str,
+    chapter_model: &chapter::Model,
+    payload: &Value,
+) -> Result<Value, String> {
+    let quality_metrics_payload = build_chapter_analysis_quality_metrics_payload(payload);
     let memories_count =
         replace_analysis_memories_after_persist(db, user_id, chapter_model, payload).await?;
     let foreshadow_stats = sync_analysis_foreshadows_after_persist(db, chapter_model, payload)
@@ -156,6 +154,28 @@ pub(crate) async fn persist_chapter_analysis_result(
         .await;
     }
 
+    Ok(json!({
+        "quality_metrics": quality_metrics_payload,
+        "memories_count": memories_count,
+        "foreshadow_stats": foreshadow_stats,
+    }))
+}
+
+pub(crate) async fn persist_chapter_analysis_result(
+    db: &DatabaseConnection,
+    user_id: &str,
+    chapter_model: &chapter::Model,
+    task_id: &str,
+    payload: &Value,
+) -> Result<Value, String> {
+    let now = Utc::now().naive_utc();
+    let saved_analysis = build_plot_analysis_active_model(chapter_model, payload, now)
+        .insert(db)
+        .await
+        .map_err(|error| error.to_string())?;
+    let derivatives =
+        synchronize_chapter_analysis_derivatives(db, user_id, chapter_model, payload).await?;
+
     if !task_id.trim().is_empty() {
         let _ =
             apply_analysis_task_state_by_id(db, task_id, AnalysisTaskStage::Completed, None, now)
@@ -165,9 +185,9 @@ pub(crate) async fn persist_chapter_analysis_result(
 
     Ok(json!({
         "analysis": saved_analysis,
-        "quality_metrics": quality_metrics_payload,
-        "memories_count": memories_count,
-        "foreshadow_stats": foreshadow_stats,
+        "quality_metrics": derivatives["quality_metrics"].clone(),
+        "memories_count": derivatives["memories_count"].clone(),
+        "foreshadow_stats": derivatives["foreshadow_stats"].clone(),
     }))
 }
 

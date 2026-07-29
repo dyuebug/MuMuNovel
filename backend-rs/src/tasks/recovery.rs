@@ -32,6 +32,14 @@ pub struct TaskRecoveryPolicyEntry {
 
 pub const TASK_RECOVERY_POLICIES: &[TaskRecoveryPolicyEntry] = &[
     TaskRecoveryPolicyEntry {
+        task_type: "novel_autopilot",
+        policy: TaskRecoveryPolicy::NonResumable,
+    },
+    TaskRecoveryPolicyEntry {
+        task_type: "novel_book_autopilot",
+        policy: TaskRecoveryPolicy::CheckpointResumable,
+    },
+    TaskRecoveryPolicyEntry {
         task_type: "chapter_analysis",
         policy: TaskRecoveryPolicy::Restartable,
     },
@@ -321,14 +329,14 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_exactly_23_unique_known_task_types() {
+    fn registry_contains_exactly_25_unique_known_task_types() {
         let unique: HashSet<_> = TASK_RECOVERY_POLICIES
             .iter()
             .map(|entry| entry.task_type)
             .collect();
 
-        assert_eq!(TASK_RECOVERY_POLICIES.len(), 23);
-        assert_eq!(unique.len(), 23);
+        assert_eq!(TASK_RECOVERY_POLICIES.len(), 25);
+        assert_eq!(unique.len(), 25);
         assert!(TASK_RECOVERY_POLICIES
             .iter()
             .all(|entry| has_explicit_recovery_policy(entry.task_type)));
@@ -344,7 +352,7 @@ mod tests {
                 .iter()
                 .filter(|entry| entry.policy == TaskRecoveryPolicy::CheckpointResumable)
                 .count(),
-            2
+            3
         );
         assert_eq!(
             TASK_RECOVERY_POLICIES
@@ -352,6 +360,33 @@ mod tests {
                 .filter(|entry| entry.policy == TaskRecoveryPolicy::ManualConfirmation)
                 .count(),
             16
+        );
+    }
+
+    #[test]
+    fn durable_novel_autopilot_uses_checkpoint_resumable_policy() {
+        assert_eq!(
+            recovery_policy_for("novel_book_autopilot"),
+            TaskRecoveryPolicy::CheckpointResumable
+        );
+    }
+
+    #[tokio::test]
+    async fn novel_autopilot_orphan_fails_as_explicit_non_resumable_without_replay() {
+        let registry = TaskRegistry::new();
+        registry
+            .insert(record("autopilot", "novel_autopilot", TaskStatus::Running))
+            .await;
+
+        assert_eq!(recover_orphan_tasks(&registry).await, 1);
+        let recovered = registry.get("autopilot").await.expect("recovered task");
+        assert_eq!(recovered.status, TaskStatus::Failed);
+        assert_eq!(recovered.terminal_reason.as_deref(), Some("non_resumable"));
+        assert_eq!(recovered.terminal_label.as_deref(), Some("不可恢复"));
+        assert_eq!(recovered.can_resume, Some(false));
+        assert_eq!(
+            recovered.message,
+            "该任务无法恢复，请从对应业务入口重新处理"
         );
     }
 

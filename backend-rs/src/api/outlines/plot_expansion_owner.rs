@@ -5,15 +5,28 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
 };
 use serde_json::{json, Map, Value};
+use tracing::debug;
 use uuid::Uuid;
 
+use super::contract_prepare_owner::{
+    prepare_outline_expand_contract, OutlineExpandContractInput, OutlineExpandContractMode,
+};
 use crate::ai::service::AIService;
 use crate::models::{chapter, character, outline, project};
+use crate::services::generation_contract_service::GenerationIntentKind;
+use crate::services::generation_execution_audit_service::{
+    build_generation_execution_audit, GenerationExecutionAuditV1,
+};
 use crate::services::outline_service::OutlineService;
 use crate::services::prompt_template_service::PromptTemplateService;
+use crate::services::role_model_policy_service::ResolvedRoleModelPolicyV1;
 use crate::services::wizard_service::clean_json_response;
 
 const DEFAULT_ESTIMATED_WORDS: i32 = 3000;
+
+pub(super) fn outline_expand_execution_intent_kind() -> GenerationIntentKind {
+    GenerationIntentKind::OutlineExpand
+}
 
 fn truncate_text(text: &str, limit: usize) -> String {
     let normalized = text.trim();
@@ -372,13 +385,72 @@ fn parse_string_array(value: Option<&Value>) -> Vec<String> {
     value_to_string_list(value)
 }
 
+fn attach_generation_execution_audit(
+    mut result: Value,
+    generation_execution_audit: Vec<GenerationExecutionAuditV1>,
+) -> Result<Value, String> {
+    let result_object = result
+        .as_object_mut()
+        .ok_or_else(|| "大纲展开结果必须是JSON对象".to_string())?;
+    result_object.insert(
+        "generation_execution_audit".to_string(),
+        serde_json::to_value(generation_execution_audit)
+            .map_err(|error| format!("序列化大纲执行审计失败: {}", error))?,
+    );
+    Ok(result)
+}
+
+#[cfg(test)]
+fn build_outline_execution_audit_owner_contract() -> Value {
+    json!({
+        "generation_intent": "outline_expand",
+        "generation_role": "planner",
+        "role_aware_config_owner": "SettingsService::build_role_aware_ai_config",
+        "tracked_ai_owner": "AIService::generate_text_tracked",
+        "audit_builder": "build_generation_execution_audit",
+        "response_field": "generation_execution_audit",
+        "audit_shape": "ordered_array_one_entry_per_ai_call",
+        "batch_response_boundary": {
+            "audit_path": "expansion_results[].generation_execution_audit",
+            "outline_grouping": "one_ordered_array_per_outline",
+            "cross_outline_trace_merge": false,
+            "failed_outline_audit_preserved": true
+        },
+        "persistence_boundary": {
+            "outline_structure_unchanged": true,
+            "chapter_history_write": false,
+            "database_migration_required": false,
+            "new_sse_event_kind": false
+        },
+        "security_allowlist": {
+            "prompt": false,
+            "content": false,
+            "api_key": false,
+            "authorization": false,
+            "full_endpoint_url": false
+        }
+    })
+}
+
+pub(super) struct OutlineExecutionAuditContext {
+    pub(super) resolved_policy: ResolvedRoleModelPolicyV1,
+    pub(super) allow_model_fallback: bool,
+}
+
 pub(super) struct PlotExpansionService<'a> {
     ai_service: &'a AIService,
+    execution_audit_context: Option<&'a OutlineExecutionAuditContext>,
 }
 
 impl<'a> PlotExpansionService<'a> {
-    fn new(ai_service: &'a AIService) -> Self {
-        Self { ai_service }
+    fn new(
+        ai_service: &'a AIService,
+        execution_audit_context: Option<&'a OutlineExecutionAuditContext>,
+    ) -> Self {
+        Self {
+            ai_service,
+            execution_audit_context,
+        }
     }
 
     async fn load_outline_and_project(
@@ -428,6 +500,7 @@ impl<'a> PlotExpansionService<'a> {
         _provider: Option<&str>,
         _model: Option<&str>,
         batch_size: usize,
+        generation_execution_audit: &mut Vec<GenerationExecutionAuditV1>,
     ) -> Result<Vec<Value>, String> {
         let characters = self.load_characters(db, &project_model.id).await?;
         let characters_info = build_characters_info(&characters);
@@ -543,13 +616,40 @@ impl<'a> PlotExpansionService<'a> {
             let template = PromptTemplateService::system_template_info(template_key)
                 .ok_or_else(|| format!("找不到提示词模板: {}", template_key))?;
             let prompt = PromptTemplateService::format_prompt(&template.content, &params)?;
-            let response = self
-                .ai_service
-                .generate_text(&prompt, None, None)
-                .await
-                .map_err(|e| format!("AI调用失败: {}", e))?;
+            let response_content = if let Some(context) = self.execution_audit_context {
+                let tracked = match self
+                    .ai_service
+                    .generate_text_tracked(&prompt, None, None, context.allow_model_fallback)
+                    .await
+                {
+                    Ok(tracked) => tracked,
+                    Err(error) => {
+                        generation_execution_audit.push(
+                            build_generation_execution_audit(
+                                &context.resolved_policy,
+                                &error.execution,
+                            )
+                            .map_err(|audit_error| {
+                                format!("构建大纲执行审计失败: {}", audit_error)
+                            })?,
+                        );
+                        return Err(format!("AI调用失败: {}", error.error));
+                    }
+                };
+                generation_execution_audit.push(
+                    build_generation_execution_audit(&context.resolved_policy, &tracked.execution)
+                        .map_err(|error| format!("构建大纲执行审计失败: {}", error))?,
+                );
+                tracked.response.content
+            } else {
+                self.ai_service
+                    .generate_text(&prompt, None, None)
+                    .await
+                    .map_err(|error| format!("AI调用失败: {}", error))?
+                    .content
+            };
             let batch_plans =
-                parse_chapter_plans(&response.content, &outline_model.id, &outline_model.title);
+                parse_chapter_plans(&response_content, &outline_model.id, &outline_model.title);
 
             for (offset, plan) in batch_plans.into_iter().enumerate() {
                 if let Some(plan_obj) = plan.as_object() {
@@ -750,22 +850,44 @@ impl<'a> PlotExpansionService<'a> {
         let (outline_model, project_model) = self
             .load_outline_and_project(db, user_id, outline_id)
             .await?;
+        let prepared = prepare_outline_expand_contract(
+            &project_model,
+            &outline_model,
+            OutlineExpandContractInput {
+                mode: OutlineExpandContractMode::Single,
+                target_chapter_count,
+                expansion_strategy,
+                auto_create_chapters,
+                enable_scene_analysis,
+                batch_size,
+            },
+        )
+        .map_err(|error| format!("准备大纲展开契约失败: {}", error))?;
+        debug!(
+            project_id = %project_model.id,
+            outline_id = %outline_model.id,
+            input_digest = %prepared.snapshot.input_digest,
+            "Prepared single outline expansion contract"
+        );
+        let resolved = prepared.resolved;
 
+        let mut generation_execution_audit = Vec::new();
         let chapter_plans = self
             .analyze_outline_for_chapters(
                 db,
                 &outline_model,
                 &project_model,
-                target_chapter_count,
-                expansion_strategy,
-                enable_scene_analysis,
+                resolved.target_chapter_count,
+                &resolved.expansion_strategy,
+                resolved.enable_scene_analysis,
                 provider,
                 model,
-                batch_size,
+                resolved.batch_size,
+                &mut generation_execution_audit,
             )
             .await?;
 
-        let created_chapters = if auto_create_chapters {
+        let created_chapters = if resolved.auto_create_chapters {
             Some(
                 self.create_chapters_from_plans(
                     outline_id,
@@ -799,19 +921,22 @@ impl<'a> PlotExpansionService<'a> {
             )
         });
 
-        Ok(json!({
-            "success": true,
-            "message": "大纲展开完成",
-            "outline_id": outline_model.id,
-            "outline_title": outline_model.title,
-            "target_chapter_count": target_chapter_count,
-            "actual_chapter_count": chapter_plans.len(),
-            "expansion_strategy": expansion_strategy,
-            "enable_scene_analysis": enable_scene_analysis,
-            "auto_create_chapters": auto_create_chapters,
-            "chapter_plans": chapter_plans,
-            "created_chapters": created_chapters_value.unwrap_or(Value::Null),
-        }))
+        attach_generation_execution_audit(
+            json!({
+                "success": true,
+                "message": "大纲展开完成",
+                "outline_id": outline_model.id,
+                "outline_title": outline_model.title,
+                "target_chapter_count": resolved.target_chapter_count,
+                "actual_chapter_count": chapter_plans.len(),
+                "expansion_strategy": resolved.expansion_strategy,
+                "enable_scene_analysis": resolved.enable_scene_analysis,
+                "auto_create_chapters": resolved.auto_create_chapters,
+                "chapter_plans": chapter_plans,
+                "created_chapters": created_chapters_value.unwrap_or(Value::Null),
+            }),
+            generation_execution_audit,
+        )
     }
 
     pub(super) async fn batch_expand_outlines(
@@ -890,22 +1015,62 @@ impl<'a> PlotExpansionService<'a> {
                 continue;
             }
 
+            let mut generation_execution_audit = Vec::new();
+            let prepared = match prepare_outline_expand_contract(
+                &project_model,
+                &outline_model,
+                OutlineExpandContractInput {
+                    mode: OutlineExpandContractMode::Batch,
+                    target_chapter_count: chapters_per_outline,
+                    expansion_strategy,
+                    auto_create_chapters,
+                    enable_scene_analysis,
+                    batch_size: 5,
+                },
+            ) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    expansion_results.push(attach_generation_execution_audit(
+                        json!({
+                            "outline_id": outline_model.id,
+                            "outline_title": outline_model.title,
+                            "target_chapter_count": chapters_per_outline,
+                            "actual_chapter_count": 0,
+                            "expansion_strategy": expansion_strategy,
+                            "chapter_plans": [],
+                            "created_chapters": Value::Null,
+                            "error": format!("准备大纲展开契约失败: {}", error),
+                        }),
+                        generation_execution_audit,
+                    )?);
+                    continue;
+                }
+            };
+            debug!(
+                project_id = %project_model.id,
+                outline_id = %outline_model.id,
+                input_digest = %prepared.snapshot.input_digest,
+                "Prepared batch outline expansion contract"
+            );
+            let resolved = prepared.resolved;
+
             match self
                 .analyze_outline_for_chapters(
                     db,
                     &outline_model,
                     &project_model,
-                    chapters_per_outline,
-                    expansion_strategy,
-                    enable_scene_analysis,
+                    resolved.target_chapter_count,
+                    &resolved.expansion_strategy,
+                    resolved.enable_scene_analysis,
                     provider,
                     model,
-                    5,
+                    resolved.batch_size,
+                    &mut generation_execution_audit,
                 )
                 .await
             {
                 Ok(chapter_plans) => {
-                    let created_chapters_value = if auto_create_chapters {
+                    let created_chapters_value = if resolved.auto_create_chapters {
                         let created = self
                             .create_chapters_from_plans(
                                 &outline_model.id,
@@ -936,27 +1101,33 @@ impl<'a> PlotExpansionService<'a> {
                         Value::Null
                     };
 
-                    expansion_results.push(json!({
-                        "outline_id": outline_model.id,
-                        "outline_title": outline_model.title,
-                        "target_chapter_count": chapters_per_outline,
-                        "actual_chapter_count": chapter_plans.len(),
-                        "expansion_strategy": expansion_strategy,
-                        "chapter_plans": chapter_plans,
-                        "created_chapters": created_chapters_value,
-                    }));
+                    expansion_results.push(attach_generation_execution_audit(
+                        json!({
+                            "outline_id": outline_model.id,
+                            "outline_title": outline_model.title,
+                            "target_chapter_count": resolved.target_chapter_count,
+                            "actual_chapter_count": chapter_plans.len(),
+                            "expansion_strategy": resolved.expansion_strategy,
+                            "chapter_plans": chapter_plans,
+                            "created_chapters": created_chapters_value,
+                        }),
+                        generation_execution_audit,
+                    )?);
                 }
                 Err(error) => {
-                    expansion_results.push(json!({
-                        "outline_id": outline_model.id,
-                        "outline_title": outline_model.title,
-                        "target_chapter_count": chapters_per_outline,
-                        "actual_chapter_count": 0,
-                        "expansion_strategy": expansion_strategy,
-                        "chapter_plans": [],
-                        "created_chapters": Value::Null,
-                        "error": error,
-                    }));
+                    expansion_results.push(attach_generation_execution_audit(
+                        json!({
+                            "outline_id": outline_model.id,
+                            "outline_title": outline_model.title,
+                            "target_chapter_count": resolved.target_chapter_count,
+                            "actual_chapter_count": 0,
+                            "expansion_strategy": resolved.expansion_strategy,
+                            "chapter_plans": [],
+                            "created_chapters": Value::Null,
+                            "error": error,
+                        }),
+                        generation_execution_audit,
+                    )?);
                 }
             }
         }
@@ -978,21 +1149,277 @@ impl<'a> PlotExpansionService<'a> {
     }
 }
 
-pub(super) fn create_plot_expansion_service(ai_service: &AIService) -> PlotExpansionService<'_> {
-    PlotExpansionService::new(ai_service)
+pub(super) fn create_tracked_plot_expansion_service<'a>(
+    ai_service: &'a AIService,
+    execution_audit_context: &'a OutlineExecutionAuditContext,
+) -> PlotExpansionService<'a> {
+    PlotExpansionService::new(ai_service, Some(execution_audit_context))
 }
 
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDateTime;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
+    use crate::ai::execution_trace::{
+        AIExecutionFallbackKind, AIExecutionFallbackSummaryV1, AIExecutionOutcome,
+        AIExecutionTraceV1, EndpointExecutionSummaryV1, AI_EXECUTION_TRACE_SCHEMA_VERSION,
+    };
     use crate::models::{character, project};
+    use crate::services::generation_execution_audit_service::{
+        build_generation_execution_audit, GENERATION_EXECUTION_AUDIT_SCHEMA_VERSION,
+    };
+    use crate::services::role_model_policy_service::{
+        GenerationRole, ModelSelectionSource, ResolvedRoleModelPolicyV1,
+        ROLE_MODEL_POLICY_SCHEMA_VERSION,
+    };
 
     use super::{
-        build_characters_info, fallback_plan, infer_ending_type, normalize_plan_value,
-        parse_chapter_plans, truncate_text, value_to_string_list, DEFAULT_ESTIMATED_WORDS,
+        attach_generation_execution_audit, build_characters_info,
+        build_outline_execution_audit_owner_contract, fallback_plan, infer_ending_type,
+        normalize_plan_value, outline_expand_execution_intent_kind, parse_chapter_plans,
+        truncate_text, value_to_string_list, DEFAULT_ESTIMATED_WORDS,
     };
+
+    fn planner_audit(
+        actual_model: &str,
+    ) -> crate::services::generation_execution_audit_service::GenerationExecutionAuditV1 {
+        planner_audit_with_outcome(actual_model, AIExecutionOutcome::Succeeded)
+    }
+
+    fn planner_audit_with_outcome(
+        actual_model: &str,
+        outcome: AIExecutionOutcome,
+    ) -> crate::services::generation_execution_audit_service::GenerationExecutionAuditV1 {
+        let policy = ResolvedRoleModelPolicyV1 {
+            role: GenerationRole::Planner,
+            policy_schema_version: ROLE_MODEL_POLICY_SCHEMA_VERSION.to_string(),
+            policy_digest: "planner-policy-digest".to_string(),
+            requested_provider: Some("openai".to_string()),
+            requested_model: Some("planner-requested".to_string()),
+            resolved_provider: "openai".to_string(),
+            resolved_model: "planner-resolved".to_string(),
+            provider_source: ModelSelectionSource::GlobalSettings,
+            model_source: ModelSelectionSource::RoleOverride,
+        };
+        let execution = AIExecutionTraceV1 {
+            schema_version: AI_EXECUTION_TRACE_SCHEMA_VERSION.to_string(),
+            requested_provider: "openai".to_string(),
+            requested_model: "planner-resolved".to_string(),
+            actual_provider: "openai".to_string(),
+            actual_model: actual_model.to_string(),
+            outcome,
+            fallbacks: if outcome == AIExecutionOutcome::Failed {
+                vec![AIExecutionFallbackSummaryV1 {
+                    kind: AIExecutionFallbackKind::ModelFallback,
+                    reason: "fallback_failed".to_string(),
+                }]
+            } else {
+                Vec::new()
+            },
+            endpoint_summary: Some(EndpointExecutionSummaryV1 {
+                endpoint_role: "primary".to_string(),
+                endpoint_index: 0,
+                total_attempts: 1,
+                failover_count: 0,
+                backup_endpoint_used: false,
+            }),
+        };
+
+        build_generation_execution_audit(&policy, &execution).expect("build planner audit")
+    }
+
+    #[test]
+    fn outline_execution_audit_owner_contract_is_planner_tracked_and_additive() {
+        let contract = build_outline_execution_audit_owner_contract();
+
+        assert_eq!(contract["generation_intent"], "outline_expand");
+        assert_eq!(contract["generation_role"], "planner");
+        assert_eq!(
+            GenerationRole::from_intent(outline_expand_execution_intent_kind()),
+            GenerationRole::Planner
+        );
+        assert_eq!(
+            contract["audit_shape"],
+            "ordered_array_one_entry_per_ai_call"
+        );
+        assert_eq!(
+            contract["persistence_boundary"]["outline_structure_unchanged"],
+            true
+        );
+        assert_eq!(
+            contract["persistence_boundary"]["chapter_history_write"],
+            false
+        );
+        assert_eq!(
+            contract["persistence_boundary"]["new_sse_event_kind"],
+            false
+        );
+    }
+
+    #[test]
+    fn outline_execution_audit_array_preserves_body_and_excludes_sensitive_fields() {
+        let chapter_plans = json!([{
+            "title": "第一章",
+            "plot_summary": "正文摘要",
+            "structure": {"beats": ["开端", "转折"]}
+        }]);
+        let original_plans = chapter_plans.clone();
+        let result = attach_generation_execution_audit(
+            json!({
+                "success": true,
+                "chapter_plans": chapter_plans,
+                "created_chapters": Value::Null
+            }),
+            vec![
+                planner_audit("planner-model-a"),
+                planner_audit("planner-model-b"),
+            ],
+        )
+        .expect("attach execution audits");
+
+        assert_eq!(result["chapter_plans"], original_plans);
+        assert_eq!(
+            result["generation_execution_audit"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(result["generation_execution_audit"][0]["role"], "planner");
+        assert_eq!(
+            result["generation_execution_audit"][1]["actual_model"],
+            "planner-model-b"
+        );
+
+        let serialized = serde_json::to_string(&result["generation_execution_audit"])
+            .expect("serialize execution audits")
+            .to_ascii_lowercase();
+        for forbidden in [
+            "prompt",
+            "content",
+            "api_key",
+            "authorization",
+            "https://",
+            "http://",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "leaked forbidden field: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn batch_outline_execution_audit_stays_grouped_per_outline_and_additive() {
+        let contract = build_outline_execution_audit_owner_contract();
+        assert_eq!(
+            contract["batch_response_boundary"]["audit_path"],
+            "expansion_results[].generation_execution_audit"
+        );
+        assert_eq!(
+            contract["batch_response_boundary"]["outline_grouping"],
+            "one_ordered_array_per_outline"
+        );
+        assert_eq!(
+            contract["batch_response_boundary"]["cross_outline_trace_merge"],
+            false
+        );
+        assert_eq!(
+            contract["batch_response_boundary"]["failed_outline_audit_preserved"],
+            true
+        );
+
+        let first = attach_generation_execution_audit(
+            json!({
+                "outline_id": "outline-1",
+                "chapter_plans": [{"title": "第一章"}],
+                "created_chapters": Value::Null
+            }),
+            vec![
+                planner_audit("planner-model-1a"),
+                planner_audit("planner-model-1b"),
+            ],
+        )
+        .expect("attach first outline audits");
+        let second = attach_generation_execution_audit(
+            json!({
+                "outline_id": "outline-2",
+                "chapter_plans": [],
+                "created_chapters": Value::Null,
+                "error": "AI调用失败"
+            }),
+            vec![planner_audit_with_outcome(
+                "planner-model-2-failed",
+                AIExecutionOutcome::Failed,
+            )],
+        )
+        .expect("attach second outline audits");
+        let batch_result = json!({
+            "success": true,
+            "message": "批量展开完成",
+            "expansion_results": [first, second]
+        });
+
+        assert_eq!(batch_result["success"], true);
+        assert_eq!(batch_result["message"], "批量展开完成");
+        assert_eq!(
+            batch_result["expansion_results"][0]["generation_execution_audit"]
+                .as_array()
+                .expect("first outline audit array")
+                .len(),
+            2
+        );
+        assert_eq!(
+            batch_result["expansion_results"][0]["generation_execution_audit"][1]["actual_model"],
+            "planner-model-1b"
+        );
+        assert_eq!(
+            batch_result["expansion_results"][1]["generation_execution_audit"]
+                .as_array()
+                .expect("second outline audit array")
+                .len(),
+            1
+        );
+        assert_eq!(batch_result["expansion_results"][1]["error"], "AI调用失败");
+        let failed_outline_audit =
+            &batch_result["expansion_results"][1]["generation_execution_audit"][0];
+        assert_eq!(
+            failed_outline_audit["schema_version"],
+            GENERATION_EXECUTION_AUDIT_SCHEMA_VERSION
+        );
+        assert_eq!(failed_outline_audit["role"], "planner");
+        assert_eq!(failed_outline_audit["actual_provider"], "openai");
+        assert_eq!(
+            failed_outline_audit["actual_model"],
+            "planner-model-2-failed"
+        );
+        assert_eq!(
+            failed_outline_audit["fallbacks"][0]["kind"],
+            "model_fallback"
+        );
+        assert_eq!(
+            failed_outline_audit["endpoint_summary"]["endpoint_role"],
+            "primary"
+        );
+
+        let serialized = serde_json::to_string(&batch_result["expansion_results"])
+            .expect("serialize batch outline results")
+            .to_ascii_lowercase();
+        for forbidden in [
+            "prompt",
+            "content",
+            "api_key",
+            "authorization",
+            "https://",
+            "http://",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "leaked forbidden field: {forbidden}"
+            );
+        }
+    }
 
     #[test]
     fn truncate_text_trims_and_respects_limit() {

@@ -9,6 +9,7 @@ use crate::models::{
     career, chapter, character, character_career, organization, plot_analysis, relationship,
     story_memory,
 };
+use crate::services::generation_contract_service::{StoryContinuitySnapshot, StoryLedgerEntry};
 
 const MAX_RECENT_PROJECT_CONTINUITY_ANALYSES: u64 = 12;
 
@@ -30,32 +31,29 @@ pub(crate) struct ProjectContinuityLedger {
 }
 
 impl ProjectContinuityLedger {
-    pub(crate) fn fill_missing_story_packet_ledgers(&self, packet: &mut Map<String, Value>) {
-        insert_missing_story_packet_ledger(
-            packet,
-            "character_state_ledger",
-            &self.character_state_ledger,
-        );
-        insert_missing_story_packet_ledger(
-            packet,
-            "relationship_state_ledger",
-            &self.relationship_state_ledger,
-        );
-        insert_missing_story_packet_ledger(
-            packet,
-            "foreshadow_state_ledger",
-            &self.foreshadow_state_ledger,
-        );
-        insert_missing_story_packet_ledger(
-            packet,
-            "organization_state_ledger",
-            &self.organization_state_ledger,
-        );
-        insert_missing_story_packet_ledger(
-            packet,
-            "career_state_ledger",
-            &self.career_state_ledger,
-        );
+    pub(crate) fn to_story_continuity_snapshot(&self) -> StoryContinuitySnapshot {
+        StoryContinuitySnapshot {
+            character_state_ledger: project_continuity_entries_to_story_ledger(
+                "character",
+                &self.character_state_ledger,
+            ),
+            relationship_state_ledger: project_continuity_entries_to_story_ledger(
+                "relationship",
+                &self.relationship_state_ledger,
+            ),
+            foreshadow_state_ledger: project_continuity_entries_to_story_ledger(
+                "foreshadow",
+                &self.foreshadow_state_ledger,
+            ),
+            organization_state_ledger: project_continuity_entries_to_story_ledger(
+                "organization",
+                &self.organization_state_ledger,
+            ),
+            career_state_ledger: project_continuity_entries_to_story_ledger(
+                "career",
+                &self.career_state_ledger,
+            ),
+        }
     }
 }
 
@@ -910,26 +908,25 @@ fn build_project_continuity_career_state_items(
     items
 }
 
-fn insert_missing_story_packet_ledger(
-    packet: &mut Map<String, Value>,
-    field_name: &str,
+fn project_continuity_entries_to_story_ledger(
+    entity_type: &str,
     entries: &[ProjectContinuityLedgerEntry],
-) {
-    if entries.is_empty() || !story_packet_ledger_missing(packet.get(field_name)) {
-        return;
-    }
-    packet.insert(
-        field_name.to_string(),
-        Value::Array(entries.iter().map(project_continuity_entry_value).collect()),
-    );
-}
-
-fn story_packet_ledger_missing(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null) => true,
-        Some(Value::Array(items)) => items.is_empty(),
-        _ => false,
-    }
+) -> Vec<StoryLedgerEntry> {
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| StoryLedgerEntry {
+            entity_type: entity_type.to_owned(),
+            entity_id: entry
+                .label
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("{entity_type}:{index}")),
+            opaque_state: project_continuity_entry_value(entry),
+        })
+        .collect()
 }
 
 fn project_continuity_entry_value(entry: &ProjectContinuityLedgerEntry) -> Value {
@@ -1597,6 +1594,7 @@ mod tests {
                 id: "analysis-1".to_string(),
                 project_id: "project-1".to_string(),
                 chapter_id: "chapter-1".to_string(),
+                source_content_digest: None,
                 plot_stage: None,
                 conflict_level: None,
                 conflict_types: None,

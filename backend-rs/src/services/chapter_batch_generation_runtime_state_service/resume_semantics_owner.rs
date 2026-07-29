@@ -165,7 +165,7 @@ impl ResumeBatchGenerationCommandState {
     fn resolve_remaining_batch_chapter_ids(
         &self,
     ) -> Result<Vec<String>, ResolveResumeExecutionSelectionError> {
-        let chapter_ids = self.parse_batch_chapter_ids();
+        let chapter_ids = self.parsed_chapter_ids();
         if chapter_ids.is_empty() {
             return Err(ResolveResumeExecutionSelectionError::NoResumableChaptersFound);
         }
@@ -187,7 +187,7 @@ impl ResumeBatchGenerationCommandState {
         Ok(chapter_ids[resume_start_index..].to_vec())
     }
 
-    fn parse_batch_chapter_ids(&self) -> Vec<String> {
+    pub(crate) fn parsed_chapter_ids(&self) -> Vec<String> {
         self.chapter_ids
             .as_array()
             .into_iter()

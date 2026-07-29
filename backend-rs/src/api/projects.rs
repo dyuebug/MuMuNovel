@@ -10,7 +10,7 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect, Set,
 };
-use serde::{de, Deserialize, Deserializer};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -27,15 +27,41 @@ use crate::models::{
     story_memory, writing_style,
 };
 use crate::services::auth::Claims;
-use crate::services::project_service::ProjectService;
+use crate::services::autopilot_invocation_audit_service::list_project_autopilot_invocation_audits;
+use crate::services::chapter_query_service::{
+    build_quality_trend_query_request_from_route_query, load_quality_trend_payload,
+    QualityTrendRouteQuery,
+};
+use crate::services::creative_archive_service::{
+    build_creative_archive_generation_record, CreativeArchiveGenerationRecordV1,
+};
+use crate::services::novel_workflow_service::{
+    get_state as get_novel_workflow_state, transition as transition_novel_workflow,
+    NovelWorkflowAuditContext, NovelWorkflowError, NovelWorkflowPhase, NovelWorkflowStateView,
+};
+use crate::services::project_export_service::{
+    build_project_export_artifact, ProjectExportServiceError, PROJECT_EXPORT_FORMAT_TXT,
+};
+use crate::services::project_service::{ProjectAccessQueryError, ProjectService};
+use crate::services::runtime_metrics_service::{
+    RuntimeMetricsAutopilotAuditSummaryV1, RuntimeMetricsQualitySummaryV1,
+    RuntimeMetricsResponseV1, RuntimeMetricsTaskSummaryV1, RuntimeMetricsWorkflowSummaryV1,
+    RUNTIME_METRICS_AUTOPILOT_AUDIT_OBSERVED_LIMIT, RUNTIME_METRICS_QUALITY_OBSERVED_LIMIT,
+    RUNTIME_METRICS_TASK_OBSERVED_LIMIT,
+};
+use crate::tasks::registry::TaskRegistry;
 
 const MAX_STORY_CREATION_BRIEF_LEN: usize = 1200;
 const MAX_QUALITY_NOTES_LEN: usize = 600;
 
 const PROJECTS_LIST_CREATE_ROUTE: &str = "/projects";
 const PROJECTS_DETAIL_ROUTE: &str = "/projects/{project_id}";
+const PROJECTS_WORKFLOW_STATE_ROUTE: &str = "/projects/{project_id}/workflow-state";
+const PROJECTS_WORKFLOW_TRANSITION_ROUTE: &str = "/projects/{project_id}/workflow-state/transition";
 const PROJECTS_EXPORT_TXT_ROUTE: &str = "/projects/{project_id}/export";
 const PROJECTS_EXPORT_DATA_ROUTE: &str = "/projects/{project_id}/export-data";
+const PROJECTS_CREATIVE_ARCHIVE_ROUTE: &str = "/projects/{project_id}/creative-archive";
+const PROJECTS_RUNTIME_METRICS_ROUTE: &str = "/projects/{project_id}/runtime-metrics";
 const PROJECTS_CHECK_CONSISTENCY_ROUTE: &str = "/projects/{project_id}/check-consistency";
 const PROJECTS_FIX_ORGANIZATIONS_ROUTE: &str = "/projects/{project_id}/fix-organizations";
 const PROJECTS_FIX_MEMBER_COUNTS_ROUTE: &str = "/projects/{project_id}/fix-member-counts";
@@ -54,8 +80,12 @@ fn build_projects_route_owner_contract() -> Value {
             "detail": PROJECTS_DETAIL_ROUTE,
             "update": PROJECTS_DETAIL_ROUTE,
             "delete": PROJECTS_DETAIL_ROUTE,
+            "workflow_state": PROJECTS_WORKFLOW_STATE_ROUTE,
+            "workflow_transition": PROJECTS_WORKFLOW_TRANSITION_ROUTE,
             "export_txt": PROJECTS_EXPORT_TXT_ROUTE,
             "export_data": PROJECTS_EXPORT_DATA_ROUTE,
+            "creative_archive": PROJECTS_CREATIVE_ARCHIVE_ROUTE,
+            "runtime_metrics": PROJECTS_RUNTIME_METRICS_ROUTE,
             "check_consistency": PROJECTS_CHECK_CONSISTENCY_ROUTE,
             "fix_organizations": PROJECTS_FIX_ORGANIZATIONS_ROUTE,
             "fix_member_counts": PROJECTS_FIX_MEMBER_COUNTS_ROUTE,
@@ -65,8 +95,12 @@ fn build_projects_route_owner_contract() -> Value {
         "method_contract": {
             "list_create": ["GET", "POST"],
             "detail": ["GET", "PUT", "DELETE"],
+            "workflow_state": ["GET"],
+            "workflow_transition": ["POST"],
             "export_txt": ["GET"],
             "export_data": ["POST"],
+            "creative_archive": ["GET"],
+            "runtime_metrics": ["GET"],
             "check_consistency": ["POST"],
             "fix_organizations": ["POST"],
             "fix_member_counts": ["POST"],
@@ -75,8 +109,10 @@ fn build_projects_route_owner_contract() -> Value {
         },
         "service_handoffs": {
             "crud_owner": "backend-rs/src/services/project_service.rs",
+            "workflow_owner": "backend-rs/src/services/novel_workflow_service.rs",
             "export_payload_owner": "backend-rs/src/api/projects.rs",
             "export_query_owner": "backend-rs/src/api/projects.rs",
+            "runtime_metrics_projection_owner": "backend-rs/src/services/runtime_metrics_service.rs",
             "import_workflow_owner": "backend-rs/src/api/projects/import_workflow_owner.rs",
             "consistency_workflow_owner": "backend-rs/src/api/projects.rs",
             "consistency_query_owner": "backend-rs/src/api/projects.rs"
@@ -480,6 +516,41 @@ pub struct ProjectExportContext {
     pub project_default_style_style: Option<writing_style::Model>,
 }
 
+const CREATIVE_ARCHIVE_SCHEMA_VERSION: &str = "creative-archive/v1";
+
+#[derive(Debug, Clone, Serialize)]
+struct CreativeArchiveResponseV1 {
+    schema_version: &'static str,
+    read_model: &'static str,
+    project: CreativeArchiveProjectMetadataV1,
+    workflow: Option<CreativeArchiveWorkflowSummaryV1>,
+    chapters: Vec<CreativeArchiveChapterMetadataV1>,
+    generation_records: Vec<CreativeArchiveGenerationRecordV1>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CreativeArchiveProjectMetadataV1 {
+    title: String,
+    genre: Option<String>,
+    chapter_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CreativeArchiveWorkflowSummaryV1 {
+    schema_version: u32,
+    phase: NovelWorkflowPhase,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CreativeArchiveChapterMetadataV1 {
+    chapter_number: i32,
+    title: String,
+    status: String,
+    word_count: i32,
+    updated_at: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoadProjectExportContextError {
     Context(ProjectQueryContextError),
@@ -677,6 +748,54 @@ async fn load_project_export_context_with_non_empty_chapters(
 
 fn map_project_export_internal_error(error: sea_orm::DbErr) -> LoadProjectExportContextError {
     LoadProjectExportContextError::Context(ProjectQueryContextError::Internal(error.to_string()))
+}
+
+fn build_project_creative_archive_payload(
+    context: &ProjectExportContext,
+    workflow: Option<NovelWorkflowStateView>,
+) -> CreativeArchiveResponseV1 {
+    let chapter_numbers = context
+        .chapters
+        .iter()
+        .map(|chapter| (chapter.id.as_str(), chapter.chapter_number))
+        .collect::<HashMap<_, _>>();
+
+    CreativeArchiveResponseV1 {
+        schema_version: CREATIVE_ARCHIVE_SCHEMA_VERSION,
+        read_model: "derived_readonly",
+        project: CreativeArchiveProjectMetadataV1 {
+            title: context.project.title.clone(),
+            genre: context.project.genre.clone(),
+            chapter_count: context.chapters.len(),
+        },
+        workflow: workflow.map(|state| CreativeArchiveWorkflowSummaryV1 {
+            schema_version: state.schema_version,
+            phase: state.phase,
+            updated_at: format_export_datetime(state.updated_at),
+        }),
+        chapters: context
+            .chapters
+            .iter()
+            .map(|chapter| CreativeArchiveChapterMetadataV1 {
+                chapter_number: chapter.chapter_number,
+                title: chapter.title.clone(),
+                status: chapter.status.clone(),
+                word_count: chapter.word_count,
+                updated_at: format_optional_export_datetime(chapter.updated_at),
+            })
+            .collect(),
+        generation_records: context
+            .generation_history
+            .iter()
+            .map(|history| {
+                let chapter_number = history
+                    .chapter_id
+                    .as_deref()
+                    .and_then(|chapter_id| chapter_numbers.get(chapter_id).copied());
+                build_creative_archive_generation_record(history, chapter_number)
+            })
+            .collect(),
+    }
 }
 
 fn build_project_export_data_payload(
@@ -1252,6 +1371,8 @@ struct UpdateRequest {
     theme: Option<String>,
     genre: Option<String>,
     status: Option<String>,
+    workflow_reason: Option<String>,
+    workflow_related_task_id: Option<String>,
     target_words: Option<i32>,
     world_time_period: Option<String>,
     world_location: Option<String>,
@@ -1277,6 +1398,14 @@ struct UpdateRequest {
     default_quality_notes: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NovelWorkflowTransitionRequest {
+    target_phase: NovelWorkflowPhase,
+    expected_phase: NovelWorkflowPhase,
+    reason: Option<String>,
+    related_task_id: Option<String>,
+}
 #[derive(Deserialize)]
 struct ExportOptions {
     #[serde(default)]
@@ -1548,6 +1677,118 @@ async fn check_project_consistency_write_workflow(
     }))
 }
 
+fn map_novel_workflow_error(error: NovelWorkflowError) -> (StatusCode, Json<Value>) {
+    match error {
+        NovelWorkflowError::InvalidPhase { value } => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(
+                json!({"detail": "Invalid workflow phase", "code": "invalid_phase", "value": value}),
+            ),
+        ),
+        NovelWorkflowError::UnknownPersistedPhase { value } => (
+            StatusCode::CONFLICT,
+            Json(
+                json!({"detail": "Project contains an unknown workflow phase", "code": "unknown_persisted_phase", "value": value}),
+            ),
+        ),
+        NovelWorkflowError::IllegalTransition { from, to } => (
+            StatusCode::CONFLICT,
+            Json(
+                json!({"detail": "Illegal workflow phase transition", "code": "illegal_transition", "from_phase": from, "to_phase": to}),
+            ),
+        ),
+        NovelWorkflowError::ReasonRequired { from, to } => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(
+                json!({"detail": "A reason is required for this workflow transition", "code": "reason_required", "from_phase": from, "to_phase": to}),
+            ),
+        ),
+        NovelWorkflowError::StaleExpectedPhase { expected, actual } => (
+            StatusCode::CONFLICT,
+            Json(
+                json!({"detail": "Workflow phase changed since it was loaded", "code": "stale_expected_phase", "expected_phase": expected, "actual_phase": actual}),
+            ),
+        ),
+        NovelWorkflowError::NotFoundOrAccessDenied => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Project not found"})),
+        ),
+        NovelWorkflowError::Internal(detail) => {
+            tracing::error!(error = %detail, "novel workflow persistence failure");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": "Internal server error"})),
+            )
+        }
+    }
+}
+fn map_creative_archive_context_error(
+    error: LoadProjectExportContextError,
+) -> (StatusCode, Json<Value>) {
+    match error {
+        LoadProjectExportContextError::Context(ProjectQueryContextError::ProjectNotFound) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Project not found"})),
+        ),
+        LoadProjectExportContextError::Context(ProjectQueryContextError::Internal(detail)) => {
+            tracing::error!(error = %detail, "creative archive read failure");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": "Internal server error"})),
+            )
+        }
+        LoadProjectExportContextError::ProjectHasNoChapters => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Project has no chapters"})),
+        ),
+    }
+}
+
+fn map_runtime_metrics_access_error(error: ProjectAccessQueryError) -> (StatusCode, Json<Value>) {
+    match error {
+        ProjectAccessQueryError::NotFoundOrAccessDenied => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Project not found"})),
+        ),
+        ProjectAccessQueryError::Internal(detail) => {
+            tracing::error!(error = %detail, "runtime metrics access read failure");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": "Internal server error"})),
+            )
+        }
+    }
+}
+
+fn map_project_export_service_error(error: ProjectExportServiceError) -> (StatusCode, Json<Value>) {
+    match error {
+        ProjectExportServiceError::NotFoundOrAccessDenied => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Project not found"})),
+        ),
+        ProjectExportServiceError::ProjectHasNoChapters => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Project has no chapters"})),
+        ),
+        ProjectExportServiceError::UnsupportedFormat(format) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "detail": "Unsupported export format",
+                "code": "unsupported_export_format",
+                "format": format,
+            })),
+        ),
+        ProjectExportServiceError::Database(detail)
+        | ProjectExportServiceError::Serialization(detail) => {
+            tracing::error!(error = %detail, "project export artifact build failure");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"detail": "Internal server error"})),
+            )
+        }
+    }
+}
+
 fn map_project_export_context_error(
     error: LoadProjectExportContextError,
 ) -> (StatusCode, Json<Value>) {
@@ -1770,6 +2011,38 @@ async fn get_project(
     }
 }
 
+async fn get_project_workflow_state(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Path(project_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let state = get_novel_workflow_state(&db, &project_id, &claims.sub)
+        .await
+        .map_err(map_novel_workflow_error)?;
+    Ok(Json(json!(state)))
+}
+
+async fn transition_project_workflow_state(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Path(project_id): Path<String>,
+    Json(body): Json<NovelWorkflowTransitionRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let receipt = transition_novel_workflow(
+        &db,
+        &project_id,
+        &claims.sub,
+        body.expected_phase,
+        body.target_phase,
+        NovelWorkflowAuditContext {
+            reason: body.reason,
+            related_task_id: body.related_task_id,
+        },
+    )
+    .await
+    .map_err(map_novel_workflow_error)?;
+    Ok(Json(json!(receipt)))
+}
 async fn update_project(
     Extension(db): Extension<DatabaseConnection>,
     Extension(claims): Extension<Claims>,
@@ -1785,6 +2058,8 @@ async fn update_project(
         body.theme.as_deref(),
         body.genre.as_deref(),
         body.status.as_deref(),
+        body.workflow_reason.as_deref(),
+        body.workflow_related_task_id.as_deref(),
         body.target_words,
         body.world_time_period.as_deref(),
         body.world_location.as_deref(),
@@ -1815,10 +2090,7 @@ async fn update_project(
             StatusCode::NOT_FOUND,
             Json(json!({"success": false, "message": "Project not found"})),
         )),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"success": false, "message": e})),
-        )),
+        Err(error) => Err(map_novel_workflow_error(error)),
     }
 }
 
@@ -1840,6 +2112,104 @@ async fn delete_project(
             Json(json!({"success": false, "message": e})),
         )),
     }
+}
+
+async fn get_project_creative_archive(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Path(project_id): Path<String>,
+) -> Result<Json<CreativeArchiveResponseV1>, (StatusCode, Json<Value>)> {
+    let export_options = ProjectExportOptions {
+        include_generation_history: true,
+        include_writing_styles: false,
+        include_careers: false,
+        include_memories: false,
+        include_plot_analysis: false,
+    };
+    let context = load_project_export_context(&db, &project_id, &claims.sub, &export_options)
+        .await
+        .map_err(map_creative_archive_context_error)?;
+    let workflow = get_novel_workflow_state(&db, &project_id, &claims.sub)
+        .await
+        .ok();
+
+    Ok(Json(build_project_creative_archive_payload(
+        &context, workflow,
+    )))
+}
+
+async fn get_project_runtime_metrics(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(claims): Extension<Claims>,
+    Extension(registry): Extension<TaskRegistry>,
+    Path(project_id): Path<String>,
+) -> Result<Json<RuntimeMetricsResponseV1>, (StatusCode, Json<Value>)> {
+    ProjectService::ensure_owned_access(&db, &project_id, &claims.sub)
+        .await
+        .map_err(map_runtime_metrics_access_error)?;
+
+    let workflow = match get_novel_workflow_state(&db, &project_id, &claims.sub).await {
+        Ok(state) => RuntimeMetricsWorkflowSummaryV1::available(&state),
+        Err(error) => {
+            tracing::warn!(project_id = %project_id, error = ?error, "runtime metrics workflow summary unavailable");
+            RuntimeMetricsWorkflowSummaryV1::unavailable()
+        }
+    };
+    let task_records = registry
+        .list_for_user(
+            &claims.sub,
+            Some(&project_id),
+            None,
+            false,
+            Some(RUNTIME_METRICS_TASK_OBSERVED_LIMIT),
+        )
+        .await;
+    let tasks = RuntimeMetricsTaskSummaryV1::from_records(
+        &task_records,
+        RUNTIME_METRICS_TASK_OBSERVED_LIMIT,
+    );
+    let quality_request =
+        build_quality_trend_query_request_from_route_query(QualityTrendRouteQuery {
+            limit: Some(RUNTIME_METRICS_QUALITY_OBSERVED_LIMIT),
+        })
+        .expect("fixed runtime metrics quality limit must be valid");
+    let quality = match load_quality_trend_payload(&db, &project_id, &claims.sub, quality_request)
+        .await
+    {
+        Ok(payload) => RuntimeMetricsQualitySummaryV1::from_quality_trend_payload(
+            &payload,
+            RUNTIME_METRICS_QUALITY_OBSERVED_LIMIT,
+        ),
+        Err(error) => {
+            tracing::warn!(project_id = %project_id, error = ?error, "runtime metrics quality summary unavailable");
+            RuntimeMetricsQualitySummaryV1::unavailable(RUNTIME_METRICS_QUALITY_OBSERVED_LIMIT)
+        }
+    };
+    let autopilot_audits = match list_project_autopilot_invocation_audits(
+        &db,
+        &project_id,
+        RUNTIME_METRICS_AUTOPILOT_AUDIT_OBSERVED_LIMIT,
+    )
+    .await
+    {
+        Ok(records) => RuntimeMetricsAutopilotAuditSummaryV1::from_records(
+            &records,
+            RUNTIME_METRICS_AUTOPILOT_AUDIT_OBSERVED_LIMIT,
+        ),
+        Err(error) => {
+            tracing::warn!(project_id = %project_id, error = ?error, "runtime metrics audit summary unavailable");
+            RuntimeMetricsAutopilotAuditSummaryV1::unavailable(
+                RUNTIME_METRICS_AUTOPILOT_AUDIT_OBSERVED_LIMIT,
+            )
+        }
+    };
+
+    Ok(Json(RuntimeMetricsResponseV1::new(
+        workflow,
+        tasks,
+        quality,
+        autopilot_audits,
+    )))
 }
 
 async fn export_project_data(
@@ -1884,24 +2254,20 @@ async fn export_project_txt(
     Extension(claims): Extension<Claims>,
     Path(project_id): Path<String>,
 ) -> Result<Response, (StatusCode, Json<Value>)> {
-    let context =
-        load_project_export_context_with_non_empty_chapters(&db, &project_id, &claims.sub)
+    let artifact =
+        build_project_export_artifact(&db, &project_id, &claims.sub, PROJECT_EXPORT_FORMAT_TXT)
             .await
-            .map_err(map_project_export_context_error)?;
-    let project = context.project;
-    let chapters = context.chapters;
-
-    let text = build_project_export_txt_content(&project, &chapters);
-    let filename = build_safe_project_export_txt_filename(&project.title);
+            .map_err(map_project_export_service_error)?;
+    let disposition = format!("attachment; filename=\"{}\"", artifact.descriptor.filename);
     let headers = [
-        (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
         (
-            header::CONTENT_DISPOSITION,
-            &format!("attachment; filename=\"{}\"", filename),
+            header::CONTENT_TYPE,
+            artifact.descriptor.content_type.as_str(),
         ),
+        (header::CONTENT_DISPOSITION, disposition.as_str()),
     ];
 
-    Ok((headers, text).into_response())
+    Ok((headers, artifact.content).into_response())
 }
 
 async fn validate_import(
@@ -1979,8 +2345,24 @@ pub fn routes() -> Router {
             PROJECTS_DETAIL_ROUTE,
             get(get_project).put(update_project).delete(delete_project),
         )
+        .route(
+            PROJECTS_WORKFLOW_STATE_ROUTE,
+            get(get_project_workflow_state),
+        )
+        .route(
+            PROJECTS_WORKFLOW_TRANSITION_ROUTE,
+            post(transition_project_workflow_state),
+        )
         .route(PROJECTS_EXPORT_TXT_ROUTE, get(export_project_txt))
         .route(PROJECTS_EXPORT_DATA_ROUTE, post(export_project_data))
+        .route(
+            PROJECTS_CREATIVE_ARCHIVE_ROUTE,
+            get(get_project_creative_archive),
+        )
+        .route(
+            PROJECTS_RUNTIME_METRICS_ROUTE,
+            get(get_project_runtime_metrics),
+        )
         .route(
             PROJECTS_CHECK_CONSISTENCY_ROUTE,
             post(check_project_consistency),
@@ -2000,24 +2382,33 @@ pub fn routes() -> Router {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_project_export_data_payload, build_project_export_txt_content,
-        build_project_list_payload, build_projects_route_owner_contract,
-        build_safe_project_export_json_filename, build_safe_project_export_txt_filename,
-        map_import_project_write_workflow_error, map_project_consistency_write_workflow_error,
-        map_project_export_context_error, map_validate_project_import_payload_error,
+        build_project_creative_archive_payload, build_project_export_data_payload,
+        build_project_export_txt_content, build_project_list_payload,
+        build_projects_route_owner_contract, build_safe_project_export_json_filename,
+        build_safe_project_export_txt_filename, map_creative_archive_context_error,
+        map_import_project_write_workflow_error, map_novel_workflow_error,
+        map_project_consistency_write_workflow_error, map_project_export_context_error,
+        map_runtime_metrics_access_error, map_validate_project_import_payload_error,
         validate_project_import_filename, CreateRequest, CreativeModePreference, ExportOptions,
         ListQuery, LoadProjectConsistencyContextError, LoadProjectExportContextError,
-        PlotStagePreference, ProjectConsistencyWriteWorkflowError, ProjectExportContext,
-        ProjectExportOptions, ProjectListQueryRequest, QualityPresetPreference,
-        StoryFocusPreference, UpdateRequest, PROJECTS_CHECK_CONSISTENCY_ROUTE,
-        PROJECTS_DETAIL_ROUTE, PROJECTS_EXPORT_DATA_ROUTE, PROJECTS_EXPORT_TXT_ROUTE,
-        PROJECTS_FIX_MEMBER_COUNTS_ROUTE, PROJECTS_FIX_ORGANIZATIONS_ROUTE, PROJECTS_IMPORT_ROUTE,
-        PROJECTS_LIST_CREATE_ROUTE, PROJECTS_VALIDATE_IMPORT_ROUTE,
+        NovelWorkflowTransitionRequest, PlotStagePreference, ProjectConsistencyWriteWorkflowError,
+        ProjectExportContext, ProjectExportOptions, ProjectListQueryRequest,
+        ProjectQueryContextError, QualityPresetPreference, StoryFocusPreference, UpdateRequest,
+        PROJECTS_CHECK_CONSISTENCY_ROUTE, PROJECTS_CREATIVE_ARCHIVE_ROUTE, PROJECTS_DETAIL_ROUTE,
+        PROJECTS_EXPORT_DATA_ROUTE, PROJECTS_EXPORT_TXT_ROUTE, PROJECTS_FIX_MEMBER_COUNTS_ROUTE,
+        PROJECTS_FIX_ORGANIZATIONS_ROUTE, PROJECTS_IMPORT_ROUTE, PROJECTS_LIST_CREATE_ROUTE,
+        PROJECTS_RUNTIME_METRICS_ROUTE, PROJECTS_VALIDATE_IMPORT_ROUTE,
+        PROJECTS_WORKFLOW_STATE_ROUTE, PROJECTS_WORKFLOW_TRANSITION_ROUTE,
     };
     use crate::api::projects::import_workflow_owner::{
         ImportProjectWriteWorkflowError, ValidateProjectImportPayloadError,
     };
     use crate::models::project;
+    use crate::services::novel_workflow_service::{
+        NovelWorkflowError, NovelWorkflowPhase, NovelWorkflowStateView,
+        NovelWorkflowTransitionReceipt,
+    };
+    use crate::services::project_service::ProjectAccessQueryError;
     use axum::http::StatusCode;
     use chrono::NaiveDateTime;
     use serde_json::json;
@@ -2063,10 +2454,46 @@ mod tests {
         assert_eq!(contract["routes"]["list"], PROJECTS_LIST_CREATE_ROUTE);
         assert_eq!(contract["routes"]["create"], PROJECTS_LIST_CREATE_ROUTE);
         assert_eq!(contract["routes"]["detail"], PROJECTS_DETAIL_ROUTE);
+        assert_eq!(
+            contract["routes"]["workflow_state"],
+            PROJECTS_WORKFLOW_STATE_ROUTE
+        );
+        assert_eq!(
+            contract["routes"]["workflow_transition"],
+            PROJECTS_WORKFLOW_TRANSITION_ROUTE
+        );
+        assert_eq!(
+            contract["method_contract"]["workflow_state"],
+            json!(["GET"])
+        );
+        assert_eq!(
+            contract["method_contract"]["workflow_transition"],
+            json!(["POST"])
+        );
+        assert_eq!(
+            contract["service_handoffs"]["workflow_owner"],
+            "backend-rs/src/services/novel_workflow_service.rs"
+        );
         assert_eq!(contract["routes"]["export_txt"], PROJECTS_EXPORT_TXT_ROUTE);
         assert_eq!(
             contract["routes"]["export_data"],
             PROJECTS_EXPORT_DATA_ROUTE
+        );
+        assert_eq!(
+            contract["routes"]["creative_archive"],
+            PROJECTS_CREATIVE_ARCHIVE_ROUTE
+        );
+        assert_eq!(
+            contract["method_contract"]["creative_archive"],
+            json!(["GET"])
+        );
+        assert_eq!(
+            contract["routes"]["runtime_metrics"],
+            PROJECTS_RUNTIME_METRICS_ROUTE
+        );
+        assert_eq!(
+            contract["method_contract"]["runtime_metrics"],
+            json!(["GET"])
         );
         assert_eq!(
             contract["routes"]["validate_import"],
@@ -2135,6 +2562,201 @@ mod tests {
     fn test_datetime() -> NaiveDateTime {
         NaiveDateTime::parse_from_str("2026-05-17T12:30:45", "%Y-%m-%dT%H:%M:%S")
             .expect("test datetime should parse")
+    }
+
+    #[test]
+    fn novel_workflow_transition_request_accepts_canonical_contract_and_legacy_aliases() {
+        let canonical: NovelWorkflowTransitionRequest = serde_json::from_value(json!({
+            "target_phase": "reviewing",
+            "expected_phase": "writing",
+            "reason": "进入人工审校",
+            "related_task_id": null
+        }))
+        .expect("canonical workflow transition request should deserialize");
+
+        assert_eq!(canonical.target_phase, NovelWorkflowPhase::Reviewing);
+        assert_eq!(canonical.expected_phase, NovelWorkflowPhase::Writing);
+        assert_eq!(canonical.reason.as_deref(), Some("进入人工审校"));
+        assert_eq!(canonical.related_task_id, None);
+
+        let legacy: NovelWorkflowTransitionRequest = serde_json::from_value(json!({
+            "target_phase": "revising",
+            "expected_phase": "active"
+        }))
+        .expect("legacy aliases should use the shared workflow phase parser");
+
+        assert_eq!(legacy.target_phase, NovelWorkflowPhase::Reviewing);
+        assert_eq!(legacy.expected_phase, NovelWorkflowPhase::Writing);
+        assert_eq!(legacy.reason, None);
+        assert_eq!(legacy.related_task_id, None);
+    }
+
+    #[test]
+    fn novel_workflow_transition_request_rejects_unknown_phase_and_fields() {
+        let unknown_phase = serde_json::from_value::<NovelWorkflowTransitionRequest>(json!({
+            "target_phase": "mystery",
+            "expected_phase": "writing"
+        }))
+        .expect_err("unknown workflow phases must not deserialize");
+        assert!(
+            unknown_phase
+                .to_string()
+                .contains("invalid workflow phase: mystery"),
+            "unexpected error: {unknown_phase}"
+        );
+
+        let unknown_field = serde_json::from_value::<NovelWorkflowTransitionRequest>(json!({
+            "target_phase": "reviewing",
+            "expected_phase": "writing",
+            "user_id": "attacker-controlled"
+        }))
+        .expect_err("identity-like and other unknown fields must be rejected");
+        assert!(
+            unknown_field
+                .to_string()
+                .contains("unknown field `user_id`"),
+            "unexpected error: {unknown_field}"
+        );
+    }
+
+    #[test]
+    fn novel_workflow_error_mapper_exposes_typed_safe_client_contracts() {
+        let (status, body) = map_novel_workflow_error(NovelWorkflowError::InvalidPhase {
+            value: "mystery".to_string(),
+        });
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            body.0,
+            json!({
+                "detail": "Invalid workflow phase",
+                "code": "invalid_phase",
+                "value": "mystery"
+            })
+        );
+
+        let (status, body) = map_novel_workflow_error(NovelWorkflowError::UnknownPersistedPhase {
+            value: "legacy-mystery".to_string(),
+        });
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(
+            body.0,
+            json!({
+                "detail": "Project contains an unknown workflow phase",
+                "code": "unknown_persisted_phase",
+                "value": "legacy-mystery"
+            })
+        );
+
+        let (status, body) = map_novel_workflow_error(NovelWorkflowError::IllegalTransition {
+            from: NovelWorkflowPhase::Foundation,
+            to: NovelWorkflowPhase::Completed,
+        });
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(
+            body.0,
+            json!({
+                "detail": "Illegal workflow phase transition",
+                "code": "illegal_transition",
+                "from_phase": "foundation",
+                "to_phase": "completed"
+            })
+        );
+
+        let (status, body) = map_novel_workflow_error(NovelWorkflowError::ReasonRequired {
+            from: NovelWorkflowPhase::Writing,
+            to: NovelWorkflowPhase::Outline,
+        });
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            body.0,
+            json!({
+                "detail": "A reason is required for this workflow transition",
+                "code": "reason_required",
+                "from_phase": "writing",
+                "to_phase": "outline"
+            })
+        );
+
+        let (status, body) = map_novel_workflow_error(NovelWorkflowError::StaleExpectedPhase {
+            expected: NovelWorkflowPhase::Writing,
+            actual: NovelWorkflowPhase::Reviewing,
+        });
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(
+            body.0,
+            json!({
+                "detail": "Workflow phase changed since it was loaded",
+                "code": "stale_expected_phase",
+                "expected_phase": "writing",
+                "actual_phase": "reviewing"
+            })
+        );
+
+        let (status, body) = map_novel_workflow_error(NovelWorkflowError::NotFoundOrAccessDenied);
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body.0, json!({ "detail": "Project not found" }));
+    }
+
+    #[test]
+    fn novel_workflow_internal_error_mapper_does_not_leak_database_detail() {
+        let (status, body) = map_novel_workflow_error(NovelWorkflowError::Internal(
+            "postgres://user:secret@example/internal failure".to_string(),
+        ));
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body.0, json!({ "detail": "Internal server error" }));
+        assert!(!body.0.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn novel_workflow_state_and_transition_receipt_match_versioned_json_contract() {
+        let writing_state = NovelWorkflowStateView::new(
+            "project-1".to_string(),
+            NovelWorkflowPhase::Writing,
+            test_datetime(),
+        );
+        assert_eq!(
+            json!(writing_state),
+            json!({
+                "schema_version": 1,
+                "project_id": "project-1",
+                "phase": "writing",
+                "allowed_transitions": ["outline", "reviewing", "completed"],
+                "can_rollback": true,
+                "suggested_next_phase": "reviewing",
+                "updated_at": "2026-05-17T12:30:45",
+                "source": "projects.status"
+            })
+        );
+
+        let receipt = NovelWorkflowTransitionReceipt {
+            schema_version: 1,
+            changed: true,
+            previous_phase: NovelWorkflowPhase::Writing,
+            state: NovelWorkflowStateView::new(
+                "project-1".to_string(),
+                NovelWorkflowPhase::Reviewing,
+                test_datetime(),
+            ),
+        };
+        assert_eq!(
+            json!(receipt),
+            json!({
+                "schema_version": 1,
+                "changed": true,
+                "previous_phase": "writing",
+                "state": {
+                    "schema_version": 1,
+                    "project_id": "project-1",
+                    "phase": "reviewing",
+                    "allowed_transitions": ["writing", "polishing", "completed"],
+                    "can_rollback": true,
+                    "suggested_next_phase": "polishing",
+                    "updated_at": "2026-05-17T12:30:45",
+                    "source": "projects.status"
+                }
+            })
+        );
     }
 
     fn chapter_model() -> crate::models::chapter::Model {
@@ -2322,6 +2944,7 @@ mod tests {
                 id: "analysis-1".to_string(),
                 project_id: "project-1".to_string(),
                 chapter_id: "chapter-1".to_string(),
+                source_content_digest: None,
                 plot_stage: Some("opening".to_string()),
                 conflict_level: Some(3),
                 conflict_types: Some(json!(["external"])),
@@ -2369,6 +2992,141 @@ mod tests {
                 created_at: test_datetime(),
                 updated_at: test_datetime(),
             }),
+        }
+    }
+
+    #[test]
+    fn r8_creative_archive_internal_error_mapper_hides_storage_detail() {
+        let (status, body) = map_creative_archive_context_error(
+            LoadProjectExportContextError::Context(ProjectQueryContextError::Internal(
+                "postgres://user:private-password@example/internal failure".to_owned(),
+            )),
+        );
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body.0, json!({"detail": "Internal server error"}));
+        assert!(!body.0.to_string().contains("private-password"));
+    }
+
+    #[test]
+    fn r8_runtime_metrics_access_mapper_hides_storage_detail() {
+        let (status, body) = map_runtime_metrics_access_error(ProjectAccessQueryError::Internal(
+            "postgres://user:private-password@example/runtime metrics failure".to_owned(),
+        ));
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body.0, json!({"detail": "Internal server error"}));
+        assert!(!body.0.to_string().contains("private-password"));
+    }
+
+    #[test]
+    fn r8_project_creative_archive_is_versioned_and_excludes_sensitive_source_fields() {
+        use crate::services::generation_contract_service::{
+            GenerationContractHistorySummaryV1, GenerationIntentKind, GenerationTarget,
+            GENERATION_CONTRACT_SCHEMA_VERSION,
+        };
+        use crate::services::generation_execution_audit_service::{
+            GenerationExecutionAuditV1, GENERATION_EXECUTION_AUDIT_SCHEMA_VERSION,
+        };
+        use crate::services::role_model_policy_service::{GenerationRole, ModelSelectionSource};
+
+        let mut context = export_context();
+        context.generation_history[0].generated_content = Some(
+            json!({
+                "content": "private generated content",
+                "preview": "private preview",
+                "story_packet": GenerationContractHistorySummaryV1 {
+                    schema_version: GENERATION_CONTRACT_SCHEMA_VERSION.to_owned(),
+                    input_digest: "private-input-digest".to_owned(),
+                    target: GenerationTarget::chapter("private-project-id", "private-chapter-id"),
+                    intent_kind: GenerationIntentKind::ChapterReview,
+                    sources: Vec::new(),
+                },
+                "generation_execution_audit": GenerationExecutionAuditV1 {
+                    schema_version: GENERATION_EXECUTION_AUDIT_SCHEMA_VERSION.to_owned(),
+                    role: GenerationRole::Reviewer,
+                    policy_schema_version: "role-model-policy/v1".to_owned(),
+                    policy_digest: "private-policy-digest".to_owned(),
+                    requested_provider: Some("private-requested-provider".to_owned()),
+                    requested_model: Some("private-requested-model".to_owned()),
+                    resolved_provider: "private-resolved-provider".to_owned(),
+                    resolved_model: "private-resolved-model".to_owned(),
+                    actual_provider: "private-actual-provider".to_owned(),
+                    actual_model: "private-actual-model".to_owned(),
+                    provider_source: ModelSelectionSource::RoleOverride,
+                    model_source: ModelSelectionSource::RoleOverride,
+                    fallbacks: Vec::new(),
+                    endpoint_summary: None,
+                },
+                "quality_metrics": {
+                    "overall_score": 8.5,
+                    "quality_gate": {
+                        "decision": "manual_review",
+                        "summary": "private repair instruction"
+                    }
+                }
+            })
+            .to_string(),
+        );
+
+        let payload = build_project_creative_archive_payload(
+            &context,
+            Some(NovelWorkflowStateView::new(
+                "private-project-id".to_owned(),
+                NovelWorkflowPhase::Writing,
+                test_datetime(),
+            )),
+        );
+        let value = serde_json::to_value(payload).expect("serialize creative archive");
+
+        assert_eq!(value["schema_version"], "creative-archive/v1");
+        assert_eq!(value["read_model"], "derived_readonly");
+        assert_eq!(value["project"]["title"], "测试 项目/Title");
+        assert_eq!(value["workflow"]["phase"], "writing");
+        assert_eq!(value["chapters"][0]["chapter_number"], 1);
+        assert_eq!(
+            value["generation_records"][0]["feedback_link"]["chapter_number"],
+            1
+        );
+        assert_eq!(
+            value["generation_records"][0]["generation_contract"]["intent_kind"],
+            "chapter_review"
+        );
+        assert_eq!(
+            value["generation_records"][0]["execution_audit"]["execution_role"],
+            "reviewer"
+        );
+        assert_eq!(
+            value["generation_records"][0]["quality_summary"]["quality_gate_decision"],
+            "manual_review"
+        );
+
+        for forbidden_field in [
+            "project-1",
+            "user-1",
+            "chapter-1",
+            "history-1",
+            "提示",
+            "生成内容",
+            "gpt-test",
+            "private-project-id",
+            "private-chapter-id",
+            "private generated content",
+            "private preview",
+            "private-input-digest",
+            "private-policy-digest",
+            "private-requested-provider",
+            "private-requested-model",
+            "private-resolved-provider",
+            "private-resolved-model",
+            "private-actual-provider",
+            "private-actual-model",
+            "private repair instruction",
+        ] {
+            assert!(
+                !value.to_string().contains(forbidden_field),
+                "{forbidden_field} leaked into creative archive"
+            );
         }
     }
 
@@ -2463,6 +3221,14 @@ mod tests {
         assert_eq!(
             PROJECTS_EXPORT_DATA_ROUTE,
             "/projects/{project_id}/export-data"
+        );
+        assert_eq!(
+            PROJECTS_CREATIVE_ARCHIVE_ROUTE,
+            "/projects/{project_id}/creative-archive"
+        );
+        assert_eq!(
+            PROJECTS_RUNTIME_METRICS_ROUTE,
+            "/projects/{project_id}/runtime-metrics"
         );
         assert_eq!(
             PROJECTS_CHECK_CONSISTENCY_ROUTE,

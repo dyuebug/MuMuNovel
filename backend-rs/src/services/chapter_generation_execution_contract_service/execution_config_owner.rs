@@ -5,12 +5,21 @@ use crate::ai::AIConfig;
 use crate::services::chapter_generation_prompt_service::{
     build_placeholder_prompt_context_provider_payload, PromptContextProviderPayload,
 };
+use crate::services::generation_contract_service::GenerationIntentKind;
+use crate::services::role_model_policy_service::ResolvedRoleModelPolicyV1;
 use crate::services::settings_service::SettingsService;
+
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedRoleModelPolicyContext {
+    pub(crate) resolved_policy: ResolvedRoleModelPolicyV1,
+    pub(crate) allow_model_fallback: bool,
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedGenerationExecutionConfig {
     pub(crate) ai_config: AIConfig,
     pub(crate) provider_payload: PromptContextProviderPayload,
+    pub(crate) role_policy_context: Option<PreparedRoleModelPolicyContext>,
 }
 
 async fn build_user_ai_config(
@@ -32,7 +41,51 @@ pub(crate) async fn prepare_generation_execution_config_with_provider_payload(
     Ok(PreparedGenerationExecutionConfig {
         ai_config,
         provider_payload,
+        role_policy_context: None,
     })
+}
+
+pub(crate) async fn prepare_role_aware_generation_execution_config_with_provider_payload(
+    db: &DatabaseConnection,
+    user_id: &str,
+    intent_kind: GenerationIntentKind,
+    model_override: Option<&str>,
+    provider_payload: PromptContextProviderPayload,
+) -> Result<PreparedGenerationExecutionConfig, String> {
+    let prepared = SettingsService::build_role_aware_ai_config(
+        db,
+        user_id,
+        intent_kind,
+        None,
+        model_override,
+        None,
+    )
+    .await?;
+
+    Ok(PreparedGenerationExecutionConfig {
+        ai_config: prepared.ai_config,
+        provider_payload,
+        role_policy_context: Some(PreparedRoleModelPolicyContext {
+            resolved_policy: prepared.resolved_policy,
+            allow_model_fallback: prepared.allow_model_fallback,
+        }),
+    })
+}
+
+pub(crate) async fn prepare_role_aware_generation_execution_config(
+    db: &DatabaseConnection,
+    user_id: &str,
+    intent_kind: GenerationIntentKind,
+    model_override: Option<&str>,
+) -> Result<PreparedGenerationExecutionConfig, String> {
+    prepare_role_aware_generation_execution_config_with_provider_payload(
+        db,
+        user_id,
+        intent_kind,
+        model_override,
+        build_placeholder_prompt_context_provider_payload(),
+    )
+    .await
 }
 
 pub(crate) async fn prepare_generation_execution_config(
@@ -71,16 +124,22 @@ pub(crate) fn build_generation_execution_config_owner_contract() -> Value {
         "rust_owner_functions": [
             "prepare_generation_execution_config",
             "prepare_generation_execution_config_with_provider_payload",
+            "prepare_role_aware_generation_execution_config",
+            "prepare_role_aware_generation_execution_config_with_provider_payload",
             "build_user_ai_config",
             "PreparedGenerationExecutionConfig"
         ],
         "behavior_contract": {
             "ai_config_owner": "SettingsService::build_ai_config",
+            "role_aware_ai_config_owner": "SettingsService::build_role_aware_ai_config",
+            "role_policy_owner": "role_model_policy_service",
             "model_override_forwarded": true,
             "provider_payload_passthrough": true,
+            "role_policy_context_forwarded": true,
             "default_provider_payload": "build_placeholder_prompt_context_provider_payload",
-            "prepared_fields": ["ai_config", "provider_payload"],
-            "error_boundary": "SettingsService::build_ai_config string error",
+            "prepared_fields": ["ai_config", "provider_payload", "role_policy_context"],
+            "legacy_entrypoints_remain_compatible": true,
+            "error_boundary": "SettingsService AI config builder string error",
             "route_payload_shape_changed": false
         },
         "active_consumers": [

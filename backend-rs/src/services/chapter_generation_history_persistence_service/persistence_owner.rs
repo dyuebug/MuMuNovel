@@ -10,6 +10,12 @@ use crate::services::chapter_single_generation_result_lifecycle_service::{
     single_generation_candidate_draft_lifecycle_view, SingleGenerationCandidateDraftLifecycleView,
     CHAPTER_GENERATION_HISTORY_MODEL,
 };
+use crate::services::generation_contract_service::{
+    merge_generation_contract_history_summary, GenerationContractSnapshotV1,
+};
+use crate::services::generation_execution_audit_service::{
+    merge_generation_execution_audit, GenerationExecutionAuditV1,
+};
 
 pub(crate) fn build_chapter_generation_history_persistence_owner_contract() -> Value {
     json!({
@@ -119,7 +125,7 @@ pub(crate) async fn persist_single_generation_candidate_draft_attempt(
     Ok(draft_summary)
 }
 
-pub(crate) fn build_generated_history_payload(
+fn build_generated_history_payload_base(
     result: &GeneratedChapterResult,
     created_at: NaiveDateTime,
 ) -> Value {
@@ -133,39 +139,125 @@ pub(crate) fn build_generated_history_payload(
     )
 }
 
-pub(crate) fn build_generated_history_active_model(
+pub(crate) fn build_generated_history_payload(
+    result: &GeneratedChapterResult,
+    created_at: NaiveDateTime,
+) -> Value {
+    build_generated_history_payload_base(result, created_at)
+}
+
+pub(crate) fn build_generated_history_payload_with_contract(
+    result: &GeneratedChapterResult,
+    generation_contract_snapshot: Option<&GenerationContractSnapshotV1>,
+    created_at: NaiveDateTime,
+) -> Result<Value, String> {
+    build_generated_history_payload_with_contract_and_audit(
+        result,
+        generation_contract_snapshot,
+        None,
+        created_at,
+    )
+}
+
+pub(crate) fn build_generated_history_payload_with_contract_and_audit(
+    result: &GeneratedChapterResult,
+    generation_contract_snapshot: Option<&GenerationContractSnapshotV1>,
+    generation_execution_audit: Option<&GenerationExecutionAuditV1>,
+    created_at: NaiveDateTime,
+) -> Result<Value, String> {
+    let mut payload = build_generated_history_payload_base(result, created_at);
+    if let Some(snapshot) = generation_contract_snapshot {
+        merge_generation_contract_history_summary(&mut payload, snapshot)
+            .map_err(|error| error.to_string())?;
+    }
+    if let Some(audit) = generation_execution_audit {
+        merge_generation_execution_audit(&mut payload, audit).map_err(|error| error.to_string())?;
+    }
+    Ok(payload)
+}
+
+fn build_generated_history_active_model(
     chapter_model: &chapter::Model,
     prompt: String,
     result: &GeneratedChapterResult,
+    generation_contract_snapshot: Option<&GenerationContractSnapshotV1>,
+    generation_execution_audit: Option<&GenerationExecutionAuditV1>,
     created_at: NaiveDateTime,
-) -> generation_history::ActiveModel {
-    generation_history::ActiveModel {
+) -> Result<generation_history::ActiveModel, String> {
+    let generated_content = build_generated_history_payload_with_contract_and_audit(
+        result,
+        generation_contract_snapshot,
+        generation_execution_audit,
+        created_at,
+    )?;
+    Ok(generation_history::ActiveModel {
         id: Set(Uuid::new_v4().to_string()),
         project_id: Set(chapter_model.project_id.clone()),
         chapter_id: Set(Some(chapter_model.id.clone())),
         prompt: Set(Some(prompt)),
-        generated_content: Set(Some(
-            build_generated_history_payload(result, created_at).to_string(),
-        )),
+        generated_content: Set(Some(generated_content.to_string())),
         model: Set(Some(CHAPTER_GENERATION_HISTORY_MODEL.to_string())),
         tokens_used: Set(None),
         generation_time: Set(None),
         created_at: Set(Some(created_at)),
-    }
+    })
 }
 
 pub(crate) async fn persist_single_generation_generated_result(
     db: &DatabaseConnection,
     chapter_model: &chapter::Model,
     prompt: String,
+    result: GeneratedChapterResult,
+) -> Result<GeneratedChapterResult, String> {
+    persist_single_generation_generated_result_with_contract(
+        db,
+        chapter_model,
+        prompt,
+        result,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn persist_single_generation_generated_result_with_contract(
+    db: &DatabaseConnection,
+    chapter_model: &chapter::Model,
+    prompt: String,
+    result: GeneratedChapterResult,
+    generation_contract_snapshot: Option<&GenerationContractSnapshotV1>,
+) -> Result<GeneratedChapterResult, String> {
+    persist_single_generation_generated_result_with_contract_and_audit(
+        db,
+        chapter_model,
+        prompt,
+        result,
+        generation_contract_snapshot,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn persist_single_generation_generated_result_with_contract_and_audit(
+    db: &DatabaseConnection,
+    chapter_model: &chapter::Model,
+    prompt: String,
     mut result: GeneratedChapterResult,
+    generation_contract_snapshot: Option<&GenerationContractSnapshotV1>,
+    generation_execution_audit: Option<&GenerationExecutionAuditV1>,
 ) -> Result<GeneratedChapterResult, String> {
     let now = Utc::now().naive_utc();
     let txn = db.begin().await.map_err(|error| error.to_string())?;
     let previous_word_count = chapter_model.word_count.max(0);
     let should_persist_content = result.content_applied || result.provisional_draft_saved;
 
-    let history = build_generated_history_active_model(chapter_model, prompt, &result, now);
+    let history = build_generated_history_active_model(
+        chapter_model,
+        prompt,
+        &result,
+        generation_contract_snapshot,
+        generation_execution_audit,
+        now,
+    )?;
     if should_persist_content {
         let mut active: chapter::ActiveModel = chapter_model.clone().into();
         active.content = Set(Some(result.content.clone()));
