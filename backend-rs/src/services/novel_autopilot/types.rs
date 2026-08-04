@@ -64,6 +64,13 @@ string_enum! {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NovelAutopilotFailureCounterKind {
+    Provider,
+    Quality,
+    None,
+}
+
 impl NovelAutopilotRunStatus {
     pub const fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Cancelled)

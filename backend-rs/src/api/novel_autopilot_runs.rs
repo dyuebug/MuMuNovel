@@ -23,7 +23,7 @@ use crate::{
         book_import_service::BookImportService,
         chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig,
         novel_autopilot::{
-            coordinator::NovelAutopilotNextTickLease,
+            coordinator::{NovelAutopilotNextTickLease, HUMAN_DECISION_CANDIDATE_UNAVAILABLE},
             repository::{
                 CreateNovelAutopilotRun, NovelAutopilotRepository, NovelAutopilotRepositoryError,
             },
@@ -210,10 +210,28 @@ async fn list_steps(
     let steps = NovelAutopilotRepository::list_steps_owned(&db, &path.run_id, &claims.sub)
         .await
         .map_err(map_repository_error)?;
+    let candidate_id = match steps.last() {
+        Some(step) => NovelAutopilotRepository::find_waiting_chapter_candidate_id(
+            &db,
+            &path.project_id,
+            &step.id,
+        )
+        .await
+        .map_err(map_repository_error)?,
+        None => None,
+    };
     Ok((
         StatusCode::OK,
         Json(json!({
-            "items": steps.iter().map(step_view).collect::<Vec<_>>(),
+            "items": steps
+                .iter()
+                .map(|step| {
+                    let step_candidate_id = candidate_id
+                        .as_deref()
+                        .filter(|candidate_id| step.id.as_str() == *candidate_id);
+                    step_view(step, step_candidate_id)
+                })
+                .collect::<Vec<_>>(),
         })),
     ))
 }
@@ -362,6 +380,10 @@ async fn submit_decision(
         ));
     }
 
+    if matches!(request.decision, HumanDecision::Accept) {
+        ensure_accept_decision_available(&db, &path, &claims.sub, &current).await?;
+    }
+
     let mut expected_version = request.expected_version;
     if let Some(guidance) = request
         .guidance
@@ -434,6 +456,39 @@ async fn submit_decision(
     Ok((
         StatusCode::OK,
         Json(json!({"run": run_view(&run), "background_task": task})),
+    ))
+}
+
+async fn ensure_accept_decision_available(
+    db: &DatabaseConnection,
+    path: &ProjectRunPath,
+    user_id: &str,
+    run: &novel_autopilot_run::Model,
+) -> Result<(), ApiError> {
+    let latest_step = NovelAutopilotRepository::list_steps_owned(db, &path.run_id, user_id)
+        .await
+        .map_err(map_repository_error)?
+        .pop();
+    let candidate_id = match latest_step.as_ref() {
+        Some(step) => NovelAutopilotRepository::find_waiting_chapter_candidate_id(
+            db,
+            &path.project_id,
+            &step.id,
+        )
+        .await
+        .map_err(map_repository_error)?,
+        None => None,
+    };
+    let periodic_gate_without_candidate = run.last_error_code.is_none()
+        && latest_step
+            .as_ref()
+            .is_some_and(|step| step.error_code.is_none());
+    if candidate_id.is_some() || periodic_gate_without_candidate {
+        return Ok(());
+    }
+    Err(conflict_error(
+        HUMAN_DECISION_CANDIDATE_UNAVAILABLE,
+        "No waiting chapter candidate is available to accept",
     ))
 }
 
@@ -682,15 +737,15 @@ fn run_view(run: &novel_autopilot_run::Model) -> Value {
         "has_guidance": run.guidance_digest.is_some(),
         "active_background_task_id": run.active_background_task_id,
         "final_export_ref": run.final_export_ref,
-        "created_at": run.created_at,
-        "updated_at": run.updated_at,
-        "started_at": run.started_at,
-        "paused_at": run.paused_at,
-        "completed_at": run.completed_at,
+        "created_at": utc_rfc3339(run.created_at),
+        "updated_at": utc_rfc3339(run.updated_at),
+        "started_at": optional_utc_rfc3339(run.started_at),
+        "paused_at": optional_utc_rfc3339(run.paused_at),
+        "completed_at": optional_utc_rfc3339(run.completed_at),
     })
 }
 
-fn step_view(step: &novel_autopilot_step_run::Model) -> Value {
+fn step_view(step: &novel_autopilot_step_run::Model, candidate_id: Option<&str>) -> Value {
     json!({
         "id": step.id,
         "run_id": step.run_id,
@@ -705,11 +760,22 @@ fn step_view(step: &novel_autopilot_step_run::Model) -> Value {
         "background_task_id": step.background_task_id,
         "quality_decision": step.quality_decision,
         "error_code": step.error_code,
-        "started_at": step.started_at,
-        "completed_at": step.completed_at,
-        "created_at": step.created_at,
-        "updated_at": step.updated_at,
+        "candidate_id": candidate_id,
+        "started_at": optional_utc_rfc3339(step.started_at),
+        "completed_at": optional_utc_rfc3339(step.completed_at),
+        "created_at": utc_rfc3339(step.created_at),
+        "updated_at": utc_rfc3339(step.updated_at),
     })
+}
+
+fn utc_rfc3339(value: chrono::NaiveDateTime) -> String {
+    format!("{}Z", value.format("%Y-%m-%dT%H:%M:%S%.f"))
+}
+
+fn optional_utc_rfc3339(value: Option<chrono::NaiveDateTime>) -> Value {
+    value
+        .map(|value| Value::String(utc_rfc3339(value)))
+        .unwrap_or(Value::Null)
 }
 
 fn task_view(payload: &Value) -> Value {
@@ -833,13 +899,13 @@ mod tests {
 
     use super::{
         cancel_run, create_run, digest_guidance, get_run, list_runs, list_steps, pause_run,
-        resume_run, run_needs_dispatch_retry, run_view, step_view, submit_decision,
+        resume_run, run_needs_dispatch_retry, run_view, step_view, submit_decision, utc_rfc3339,
         CreateRunRequest, HumanDecision, HumanDecisionRequest, ProjectRunPath,
         VersionedControlRequest,
     };
     use crate::{
         api::background_tasks::best_effort_wait_for_human_after_schedule_failure,
-        models::{novel_autopilot_run, novel_autopilot_step_run, project},
+        models::{chapter_draft_attempt, novel_autopilot_run, novel_autopilot_step_run, project},
         services::{
             auth::Claims,
             book_import_service::BookImportService,
@@ -863,6 +929,16 @@ mod tests {
         assert!(!digest.contains("只影响后续章节"));
         assert!(digest_guidance("   ").is_err());
         assert!(digest_guidance(&"a".repeat(4_001)).is_err());
+    }
+
+    #[test]
+    fn utc_time_contract_preserves_value_and_fractional_precision() {
+        let timestamp = NaiveDate::from_ymd_opt(2026, 8, 1)
+            .expect("valid date")
+            .and_hms_micro_opt(5, 34, 58, 865_557)
+            .expect("valid timestamp");
+
+        assert_eq!(utc_rfc3339(timestamp), "2026-08-01T05:34:58.865557Z");
     }
 
     #[test]
@@ -934,11 +1010,39 @@ mod tests {
             updated_at: now,
         };
         let run_payload = run_view(&run);
-        let step_payload = step_view(&step);
+        let step_payload = step_view(&step, Some("step-1"));
         assert_eq!(run_payload["max_step_attempts"], json!(3));
         assert_eq!(run_payload["run_book_review"], json!(true));
         assert_eq!(run_payload["run_book_polish"], json!(true));
         assert_eq!(run_payload["export_format"], json!("txt"));
+        assert!(run_payload["created_at"]
+            .as_str()
+            .expect("created_at string")
+            .ends_with('Z'));
+        assert!(run_payload["updated_at"]
+            .as_str()
+            .expect("updated_at string")
+            .ends_with('Z'));
+        assert!(run_payload["started_at"]
+            .as_str()
+            .expect("started_at string")
+            .ends_with('Z'));
+        assert!(step_payload["created_at"]
+            .as_str()
+            .expect("step created_at string")
+            .ends_with('Z'));
+        assert!(step_payload["updated_at"]
+            .as_str()
+            .expect("step updated_at string")
+            .ends_with('Z'));
+        assert!(step_payload["started_at"]
+            .as_str()
+            .expect("step started_at string")
+            .ends_with('Z'));
+        assert_eq!(step_payload["candidate_id"], json!("step-1"));
+        assert!(run_payload["paused_at"].is_null());
+        assert!(run_payload["completed_at"].is_null());
+        assert!(step_payload["completed_at"].is_null());
         assert!(!run_payload.to_string().contains("private guidance"));
         for forbidden in [
             "user_id",
@@ -976,6 +1080,9 @@ mod tests {
         )
         .await
         .expect("create novel autopilot step runs table");
+        db.execute(builder.build(&schema.create_table_from_entity(chapter_draft_attempt::Entity)))
+            .await
+            .expect("create chapter draft attempts table");
         db.execute(Statement::from_string(
             builder,
             "CREATE UNIQUE INDEX uq_test_novel_autopilot_api_active_scope ON novel_autopilot_runs (active_scope_key)"
@@ -1326,6 +1433,79 @@ mod tests {
             StatusCode::CONFLICT,
             "invalid_run_transition",
         );
+    }
+
+    #[tokio::test]
+    async fn api_rejects_accept_when_waiting_human_has_no_candidate() {
+        let db = setup_api_db().await;
+        insert_project(&db, "project-no-candidate", "owner-no-candidate").await;
+        let run = seed_run(&db, "project-no-candidate", "owner-no-candidate").await;
+        let waiting = NovelAutopilotRepository::transition_owned(
+            &db,
+            &run.id,
+            "owner-no-candidate",
+            run.version,
+            crate::services::novel_autopilot::types::NovelAutopilotRunStatus::WaitingHuman,
+        )
+        .await
+        .expect("move run to waiting_human");
+        let now = chrono::Utc::now().naive_utc();
+        novel_autopilot_step_run::ActiveModel {
+            id: Set("step-no-candidate".to_string()),
+            run_id: Set(waiting.id.clone()),
+            step_key: Set("chapter:0001:analyze".to_string()),
+            step_type: Set("chapter_analyze".to_string()),
+            phase: Set("chapter_loop".to_string()),
+            chapter_id: Set(Some("chapter-1".to_string())),
+            chapter_number: Set(Some(1)),
+            attempt: Set(1),
+            run_epoch: Set(waiting.epoch),
+            status: Set("failed".to_string()),
+            background_task_id: Set(None),
+            input_digest: Set("sha256:test-input".to_string()),
+            result_digest: Set(None),
+            quality_decision: Set(Some("manual_review".to_string())),
+            error_code: Set(Some("chapter_analysis_provider_failed".to_string())),
+            started_at: Set(Some(now)),
+            completed_at: Set(Some(now)),
+            created_at: Set(now),
+            updated_at: Set(now),
+        }
+        .insert(&db)
+        .await
+        .expect("insert no-candidate failed step");
+
+        let error = submit_decision(
+            Extension(claims("owner-no-candidate")),
+            Extension(db.clone()),
+            Extension(TaskRegistry::new()),
+            Extension(TaskStreamHub::new()),
+            Extension(Arc::new(BookImportService::new())),
+            Extension(gateway_config()),
+            Path(ProjectRunPath {
+                project_id: "project-no-candidate".to_string(),
+                run_id: waiting.id.clone(),
+            }),
+            Json(HumanDecisionRequest {
+                expected_version: waiting.version,
+                decision: HumanDecision::Accept,
+                guidance: None,
+            }),
+        )
+        .await
+        .expect_err("no-candidate failure must reject accept");
+
+        assert_error(
+            error,
+            StatusCode::CONFLICT,
+            "human_decision_candidate_unavailable",
+        );
+        let unchanged =
+            NovelAutopilotRepository::find_owned(&db, &waiting.id, "owner-no-candidate")
+                .await
+                .expect("reload waiting run");
+        assert_eq!(unchanged.status, "waiting_human");
+        assert_eq!(unchanged.version, waiting.version);
     }
 
     #[tokio::test]

@@ -393,3 +393,208 @@ transaction(|txn| async move {
 // The next attempt reads only the newest fully matching retry evidence.
 let baseline = load_scoped_retry(run_id, epoch, source_digest, analysis_id).await?;
 ```
+
+## Scenario: Distinguish manual candidates, provider failures, and UTC run times
+
+### 1. Scope / Trigger
+
+Use this contract when changing chapter generation, chapter analysis, chapter
+repair, background task projection, Workbench status text, or Run/Step time
+DTOs in the durable whole-book workflow.
+
+### 2. Signatures
+
+Provider or parsing failures without a complete candidate expose an allowlisted
+diagnostic object in task results:
+
+```text
+failure_diagnostic:
+  schema_version = novel-autopilot-failure-diagnostic/v1
+  source_code    = invalid_input | context_error | analysis_not_found |
+                   execution_config_failed | generation_error | invalid_result
+  category       = timeout | rate_limited | upstream_unavailable |
+                   authentication_or_configuration | response_invalid |
+                   context_invalid | unknown
+  provider?      = bounded sanitized provider identifier
+  model?         = bounded sanitized model identifier
+  http_status?   = integer 400..599
+  retryable      = boolean
+```
+
+Failure accounting is explicit rather than inferred from `waiting_human`:
+
+```rust
+enum NovelAutopilotFailureCounterKind {
+    Provider,
+    Quality,
+    None,
+}
+```
+
+Task/SSE quality projection is an allowlist:
+
+```text
+quality_diagnostics:
+  overall_score?
+  quality_decision?
+  quality_gate_action?
+  failed_metrics[0..8].{key,label,value,threshold,gap}
+  repair_targets[0..8] (each <= 160 characters)
+  focus_areas[0..8]    (each <= 160 characters)
+  result_digest?
+```
+
+Run and Step time fields are serialized as RFC 3339 UTC strings with a `Z`
+suffix:
+
+```text
+Run:  created_at, updated_at, started_at, paused_at, completed_at
+Step: created_at, updated_at, started_at, completed_at
+```
+
+Candidate acceptance uses the existing decision endpoint and a stable conflict
+response when no acceptable candidate exists:
+
+```text
+POST /api/projects/{project_id}/novel-autopilot-runs/{run_id}/decision
+request:  { decision: "accept", expected_version, guidance? }
+response: 409 { code: "human_decision_candidate_unavailable", detail: ... }
+```
+
+### 3. Contracts
+
+- `waiting_human` means a user action is needed, but it does not by itself mean
+  a candidate exists. A candidate exists only when `candidate_id` is present and
+  points to a `chapter_draft_attempts` row.
+- Quality retry exhaustion after a complete generated or repaired chapter MUST
+  persist the final candidate before setting Run `waiting_human`.
+- Provider failures, invalid context, and invalid/parse-failed responses MUST
+  not fabricate a candidate. They use the stable reason code and
+  `failure_diagnostic` to explain why no Accept action is available. A
+  non-retryable failure or exhausted transient-provider budget keeps the Run
+  in no-candidate `waiting_human`, with Retry/Repair/Stop only.
+- Failure counters are mutually exclusive. `Provider` increments the provider
+  counter and clears the quality counter; `Quality` does the inverse; `None`
+  increments neither. Context and response-invalid failures use `None` and
+  MUST NOT consume the Provider budget.
+- Typed HTTP status has priority over message fallback. Status 401/403 maps to
+  authentication/configuration, 429 to rate limited, 408 to timeout, and 5xx
+  to upstream unavailable. Message fallback may recognize a status number only
+  next to an explicit `HTTP`, `status`, `status_code`, or `状态码` boundary;
+  ports, request IDs, and model build numbers are not statuses.
+- Stable no-candidate reason codes include
+  `chapter_analysis_provider_timeout`, `chapter_analysis_provider_rate_limited`,
+  `chapter_analysis_provider_upstream_unavailable`,
+  `chapter_analysis_provider_authentication_or_configuration`,
+  `chapter_analysis_result_invalid`, `chapter_analysis_context_invalid`, and
+  the matching `chapter_repair_*` codes. Unknown provider failures keep the
+  compatible aggregate code `chapter_*_provider_failed`.
+- Run/Step/task/SSE/log payloads MUST NOT contain raw provider errors, API keys,
+  full prompts, chapter body text, raw response bodies, URLs with query strings,
+  provider reasoning, complete quality metrics, or unbounded quality messages.
+  Task/SSE may expose only `quality_diagnostics` from the allowlist above.
+- Persisting a manual candidate requires
+  `candidate.result_digest == digest(candidate.content)`. Accept MUST compare
+  the recomputed body digest, private `candidate_content_digest`, and terminal
+  Step `result_digest`; any mismatch fails closed before the accepted chapter
+  is written.
+- Accept capability MUST be enforced by the server, not inferred from UI
+  visibility. The API reads the latest Step and waiting candidate before any
+  guidance write, Run version increment, or background-task creation. With no
+  candidate, only a periodic human gate whose Run and latest Step both have no
+  error may continue; no latest Step or any Run/Step error returns
+  `409 human_decision_candidate_unavailable`. The coordinator repeats the
+  error-bearing Step check as a final fail-closed boundary.
+- `Repair` on a `ChapterGenerate` manual candidate keeps the candidate as audit
+  evidence, stores bounded user guidance in private Run guidance, and creates a
+  new attempt of the same `chapter_generate` Step. It is guided regeneration,
+  not candidate acceptance. `ChapterAnalyze` and `ChapterRepair` Repair still
+  route to `chapter_repair`.
+- PostgreSQL `timestamp without time zone` values are UTC by convention. The API
+  adds `Z`; the frontend uses standard `Date` parsing and browser local-time
+  rendering. Do not manually add eight hours in the frontend.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+|---|---|
+| Complete candidate fails final quality attempt | Insert manual candidate, set `candidate_id`, Run `waiting_human`, reason `chapter_generation_attempts_exhausted` or `chapter_repair_manual_review` |
+| Provider timeout without candidate | No candidate row; reason `chapter_*_provider_timeout`; `retryable=true` |
+| HTTP 429 without candidate | No candidate row; reason `chapter_*_provider_rate_limited`; `http_status=429` |
+| HTTP 5xx without candidate | No candidate row; reason `chapter_*_provider_upstream_unavailable`; `http_status` retained if known |
+| Authentication/configuration failure | No candidate row; `retryable=false`; enter no-candidate `waiting_human` immediately |
+| Response cannot be parsed or validated | No candidate row; counter kind `None`; enter no-candidate `waiting_human` immediately |
+| Step facts or business context are invalid | No candidate row; counter kind `None`; enter no-candidate `waiting_human` immediately |
+| Provider transient retry budget is exhausted | No candidate row; enter no-candidate `waiting_human`; expose Retry/Repair/Stop only |
+| Crafted Accept for no-candidate failure | Return `409 human_decision_candidate_unavailable`; keep Run `waiting_human`; do not change guidance/version or create a task |
+| Persisted or recomputed candidate digest differs | Reject persistence or Accept before writing the accepted chapter |
+| User chooses Repair for a generated candidate | Preserve candidate, save private guidance, schedule the next `chapter_generate` attempt |
+| Stored UTC value `2026-08-01T05:34:58` | API returns `2026-08-01T05:34:58Z`; Workbench in Asia/Shanghai displays `2026/8/1 13:34:58` |
+
+### 5. Good / Base / Bad Cases
+
+- **Good**: Final quality exhaustion returns task result
+  `dispatch_status=waiting_human`, `candidate_id=<step_id>`, and a reason code
+  that matches Run `last_error_code` and Step `error_code`.
+- **Good**: A Provider 503 returns a stable upstream-unavailable reason and a
+  sanitized diagnostic with provider/model/status, but no chapter body or raw
+  error message.
+- **Good**: A response-invalid failure enters no-candidate `waiting_human`
+  without incrementing Provider or Quality counters and without exposing
+  Accept.
+- **Base**: If the provider error cannot be safely classified, keep
+  `chapter_*_provider_failed` and set category `unknown`.
+- **Bad**: Showing "候选已保存，等待人工复核" when `candidate_id` is absent.
+- **Bad**: Hiding Accept in the Workbench while the decision API still accepts a
+  crafted no-candidate request.
+- **Bad**: Returning a UTC database timestamp without `Z`, causing the browser
+  to interpret it as local time and display an eight-hour offset.
+
+### 6. Tests Required
+
+- Unit tests for timeout, 429, 5xx, result invalid, context invalid, and unknown
+  diagnostic mapping.
+- Redaction tests proving API keys, prompts, chapter content, URLs with query
+  strings, and raw response bodies are absent from serialized diagnostics.
+- Repository/adapter tests proving final quality exhaustion creates exactly one
+  manual candidate and Accept consumes it with existing fences.
+- Counter tests proving Provider, Quality, and None update only their intended
+  budgets; typed-status tests proving ports and bare numeric identifiers are not
+  misclassified.
+- Candidate integrity tests proving persistence and Accept reject all digest
+  mismatches, plus coordinator tests proving ChapterGenerate Repair schedules a
+  guided generation attempt.
+- API tests that craft Accept for Provider/context/result-invalid
+  no-candidate failures and assert `409 human_decision_candidate_unavailable`,
+  unchanged Run version/guidance, and no background task; coordinator tests
+  must cover the same error-bearing Step categories.
+- Task/SSE projection tests proving only bounded `quality_diagnostics` fields
+  survive and complete metrics, prompt, body, raw response, and API keys do not.
+- API tests proving non-null Run/Step times end in `Z` and null times remain
+  `null`.
+- Workbench E2E with fixed `Asia/Shanghai` timezone proving UTC `Z` values show
+  as local Beijing time and provider no-candidate failures do not expose Accept.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+finish_failure("chapter_repair_provider_failed", waiting_human = true);
+json!({ "message": raw_provider_error, "candidate_id": null });
+// The UI hides Accept, but the API accepts any waiting_human Run.
+```
+
+#### Correct
+
+```rust
+let diagnostic = error.failure_diagnostic();
+let reason_code = diagnostic.reason_code(NovelAutopilotFailureDomain::ChapterRepair);
+let counter_kind = if diagnostic.counts_as_provider_failure() {
+    NovelAutopilotFailureCounterKind::Provider
+} else {
+    NovelAutopilotFailureCounterKind::None
+};
+finish_failure(reason_code, counter_kind, waiting_human, Some(diagnostic));
+ensure_accept_decision_available(&db, &path, &user_id, &run).await?;
+```

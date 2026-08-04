@@ -20,21 +20,21 @@ use super::{
     chapter_repair_repository::{
         NovelAutopilotChapterRepairCommit, NovelAutopilotChapterRepairFailureEvidence,
     },
+    failure_diagnostic::{NovelAutopilotFailureDiagnostic, NovelAutopilotFailureDomain},
     output_observer::NovelAutopilotOutputObserver,
+    quality_diagnostic::build_safe_quality_diagnostic,
     repository::{
         ChapterBusinessSnapshot, ClaimedNovelAutopilotStep, NovelAutopilotManualReviewCandidate,
         NovelAutopilotRepository, NovelAutopilotRepositoryError,
     },
     router::AutopilotStepPlan,
     types::{
-        NovelAutopilotQualityDecision, NovelAutopilotRunConfig, NovelAutopilotStepStatus,
-        NovelAutopilotStepType,
+        NovelAutopilotFailureCounterKind, NovelAutopilotQualityDecision, NovelAutopilotRunConfig,
+        NovelAutopilotStepStatus, NovelAutopilotStepType,
     },
 };
 
-const CHAPTER_REPAIR_FACTS_INVALID: &str = "chapter_repair_step_facts_invalid";
-const CHAPTER_REPAIR_EXECUTION_CONFIG_FAILED: &str = "chapter_repair_execution_config_failed";
-const CHAPTER_REPAIR_PROVIDER_FAILED: &str = "chapter_repair_provider_failed";
+const CHAPTER_REPAIR_FACTS_INVALID: &str = "chapter_repair_context_invalid";
 const CHAPTER_REPAIR_QUALITY_RETRY: &str = "chapter_repair_quality_retry";
 const CHAPTER_REPAIR_QUALITY_AUTO_REPAIR: &str = "chapter_repair_quality_auto_repair";
 const CHAPTER_REPAIR_MANUAL_REVIEW: &str = "chapter_repair_manual_review";
@@ -95,10 +95,13 @@ pub(crate) async fn execute_chapter_repair_step(
             claimed,
             step,
             CHAPTER_REPAIR_FACTS_INVALID,
-            true,
+            NovelAutopilotFailureCounterKind::None,
             true,
             NovelAutopilotQualityDecision::ManualReview,
             None,
+            Some(NovelAutopilotFailureDiagnostic::context_invalid(
+                "invalid_input",
+            )),
         )
         .await;
     };
@@ -120,10 +123,13 @@ pub(crate) async fn execute_chapter_repair_step(
             claimed,
             step,
             CHAPTER_REPAIR_FACTS_INVALID,
-            true,
+            NovelAutopilotFailureCounterKind::None,
             true,
             NovelAutopilotQualityDecision::ManualReview,
             None,
+            Some(NovelAutopilotFailureDiagnostic::context_invalid(
+                "invalid_input",
+            )),
         )
         .await;
     }
@@ -137,14 +143,20 @@ pub(crate) async fn execute_chapter_repair_step(
     .await
     {
         Ok(execution_config) => execution_config,
-        Err(_) => {
+        Err(error) => {
+            let diagnostic = NovelAutopilotFailureDiagnostic::configuration_failure(
+                "execution_config_failed",
+                Some(&error),
+            );
+            let reason_code = diagnostic.reason_code(NovelAutopilotFailureDomain::ChapterRepair);
             return finish_provider_failure(
                 db,
                 record,
                 claimed,
                 step,
                 config,
-                CHAPTER_REPAIR_EXECUTION_CONFIG_FAILED,
+                &reason_code,
+                Some(diagnostic),
             )
             .await;
         }
@@ -169,11 +181,21 @@ pub(crate) async fn execute_chapter_repair_step(
             return Err(ChapterRepairAdapterError::Cancelled)
         }
         Err(error) => {
+            let diagnostic = error.failure_diagnostic();
+            let reason_code = diagnostic.reason_code(NovelAutopilotFailureDomain::ChapterRepair);
             tracing::warn!(
                 event = "novel_book_autopilot_chapter_repair_generation_failed",
                 error_code = error.code(),
+                reason_code = %reason_code,
+                failure_category = diagnostic.category.as_str(),
+                provider = diagnostic.provider.as_deref(),
+                model = diagnostic.model.as_deref(),
+                http_status = diagnostic.http_status,
+                retryable = diagnostic.retryable,
                 run_id = %claimed.run.id,
                 step_id = %claimed.step.id,
+                attempt = claimed.step.attempt,
+                background_task_id = %record.task_id,
                 chapter_id,
                 chapter_number,
                 "durable chapter repair candidate generation failed"
@@ -184,7 +206,8 @@ pub(crate) async fn execute_chapter_repair_step(
                 claimed,
                 step,
                 config,
-                CHAPTER_REPAIR_PROVIDER_FAILED,
+                &reason_code,
+                Some(diagnostic),
             )
             .await;
         }
@@ -201,10 +224,13 @@ pub(crate) async fn execute_chapter_repair_step(
             claimed,
             step,
             CHAPTER_REPAIR_FACTS_INVALID,
-            true,
+            NovelAutopilotFailureCounterKind::None,
             true,
             NovelAutopilotQualityDecision::ManualReview,
             None,
+            Some(NovelAutopilotFailureDiagnostic::context_invalid(
+                "invalid_result",
+            )),
         )
         .await;
     }
@@ -269,6 +295,11 @@ async fn persist_manual_review_candidate(
     )
     .await
     .map_err(ChapterRepairAdapterError::Repository)?;
+    let quality_diagnostics = build_safe_quality_diagnostic(
+        quality_metrics.as_ref(),
+        quality_gate_action.as_deref(),
+        terminal.step.result_digest.as_deref(),
+    );
 
     Ok(ChapterRepairAdapterOutcome::WaitingHuman {
         result: json!({
@@ -287,8 +318,7 @@ async fn persist_manual_review_candidate(
             "word_count": word_count,
             "quality_decision": NovelAutopilotQualityDecision::ManualReview,
             "quality_gate_action": quality_gate_action,
-            "quality_gate_message": quality_gate_message,
-            "quality_metrics": quality_metrics,
+            "quality_diagnostics": quality_diagnostics,
             "result_digest": terminal.step.result_digest,
         }),
     })
@@ -330,10 +360,13 @@ async fn commit_accepted_repair(
                 claimed,
                 step,
                 CHAPTER_REPAIR_BUSINESS_DATA_CHANGED,
-                false,
+                NovelAutopilotFailureCounterKind::None,
                 true,
                 NovelAutopilotQualityDecision::ManualReview,
                 None,
+                Some(NovelAutopilotFailureDiagnostic::context_invalid(
+                    "business_data_changed",
+                )),
             )
             .await;
         }
@@ -367,20 +400,34 @@ async fn finish_provider_failure(
     step: &AutopilotStepPlan,
     config: &NovelAutopilotRunConfig,
     reason_code: &str,
+    failure_diagnostic: Option<NovelAutopilotFailureDiagnostic>,
 ) -> Result<ChapterRepairAdapterOutcome, ChapterRepairAdapterError> {
+    let counts_as_provider_failure = failure_diagnostic
+        .as_ref()
+        .is_none_or(NovelAutopilotFailureDiagnostic::counts_as_provider_failure);
+    let retryable = failure_diagnostic
+        .as_ref()
+        .is_none_or(|diagnostic| diagnostic.retryable);
     let next_failures = claimed.run.consecutive_provider_failures.saturating_add(1);
-    let waiting_human = claimed.step.attempt >= i32_from_u32(config.max_step_attempts)
-        || next_failures >= i32_from_u32(config.max_consecutive_provider_failures);
+    let waiting_human = !retryable
+        || claimed.step.attempt >= i32_from_u32(config.max_step_attempts)
+        || (counts_as_provider_failure
+            && next_failures >= i32_from_u32(config.max_consecutive_provider_failures));
     finish_failure(
         db,
         record,
         claimed,
         step,
         reason_code,
-        true,
+        if counts_as_provider_failure {
+            NovelAutopilotFailureCounterKind::Provider
+        } else {
+            NovelAutopilotFailureCounterKind::None
+        },
         waiting_human,
         NovelAutopilotQualityDecision::Retry,
         None,
+        failure_diagnostic,
     )
     .await
 }
@@ -437,7 +484,7 @@ async fn finish_quality_failure(
         claimed,
         step,
         reason_code,
-        false,
+        NovelAutopilotFailureCounterKind::Quality,
         false,
         persisted_decision,
         Some(NovelAutopilotChapterRepairFailureEvidence {
@@ -445,6 +492,7 @@ async fn finish_quality_failure(
             draft_attempt,
             result_digest,
         }),
+        None,
     )
     .await
 }
@@ -456,19 +504,17 @@ async fn finish_failure(
     claimed: ClaimedNovelAutopilotStep,
     step: &AutopilotStepPlan,
     reason_code: &str,
-    provider_failure: bool,
+    failure_counter_kind: NovelAutopilotFailureCounterKind,
     waiting_human: bool,
     quality_decision: NovelAutopilotQualityDecision,
     candidate_evidence: Option<NovelAutopilotChapterRepairFailureEvidence>,
+    failure_diagnostic: Option<NovelAutopilotFailureDiagnostic>,
 ) -> Result<ChapterRepairAdapterOutcome, ChapterRepairAdapterError> {
     let quality_diagnostics = candidate_evidence.as_ref().map(|evidence| {
-        let payload = evidence.draft_attempt.repair_payload.as_ref();
-        (
-            evidence.draft_attempt.quality_gate_action.clone(),
-            evidence.draft_attempt.quality_metrics.clone(),
-            payload
-                .and_then(|payload| payload.get("quality_gate_message"))
-                .cloned(),
+        build_safe_quality_diagnostic(
+            evidence.draft_attempt.quality_metrics.as_ref(),
+            evidence.draft_attempt.quality_gate_action.as_deref(),
+            Some(&evidence.result_digest),
         )
     });
     let terminal = NovelAutopilotRepository::finish_chapter_repair_failure(
@@ -480,7 +526,7 @@ async fn finish_failure(
         &step.step_key,
         Some(&record.task_id),
         reason_code,
-        provider_failure,
+        failure_counter_kind,
         waiting_human,
         quality_decision,
         candidate_evidence,
@@ -504,11 +550,11 @@ async fn finish_failure(
         "quality_decision": terminal.step.quality_decision,
         "result_digest": terminal.step.result_digest,
     });
-    if let Some((quality_gate_action, quality_metrics, quality_gate_message)) = quality_diagnostics
-    {
-        result["quality_gate_action"] = json!(quality_gate_action);
-        result["quality_metrics"] = json!(quality_metrics);
-        result["quality_gate_message"] = quality_gate_message.unwrap_or(Value::Null);
+    if let Some(quality_diagnostics) = quality_diagnostics {
+        result["quality_diagnostics"] = quality_diagnostics;
+    }
+    if let Some(failure_diagnostic) = failure_diagnostic {
+        result["failure_diagnostic"] = failure_diagnostic.to_value();
     }
     if waiting_human {
         Ok(ChapterRepairAdapterOutcome::WaitingHuman { result })

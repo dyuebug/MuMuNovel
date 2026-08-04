@@ -18,8 +18,8 @@ use super::{
         ClaimedNovelAutopilotStep, NovelAutopilotRepository, NovelAutopilotRepositoryError,
     },
     types::{
-        NovelAutopilotQualityDecision, NovelAutopilotRunStatus, NovelAutopilotStepStatus,
-        NovelAutopilotStepType,
+        NovelAutopilotFailureCounterKind, NovelAutopilotQualityDecision, NovelAutopilotRunStatus,
+        NovelAutopilotStepStatus, NovelAutopilotStepType,
     },
 };
 
@@ -222,7 +222,7 @@ impl NovelAutopilotRepository {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn finish_chapter_analysis_provider_failure(
+    pub(crate) async fn finish_chapter_analysis_failure(
         db: &DatabaseConnection,
         step_id: &str,
         user_id: &str,
@@ -231,6 +231,7 @@ impl NovelAutopilotRepository {
         expected_step_key: &str,
         expected_background_task_id: Option<&str>,
         error_code: &str,
+        failure_counter_kind: NovelAutopilotFailureCounterKind,
         waiting_human: bool,
     ) -> Result<ClaimedNovelAutopilotStep, NovelAutopilotRepositoryError> {
         let step = novel_autopilot_step_run::Entity::find_by_id(step_id)
@@ -263,7 +264,7 @@ impl NovelAutopilotRepository {
             NovelAutopilotRunStatus::Running
         };
         let txn = db.begin().await.map_err(database_error)?;
-        let run_update = novel_autopilot_run::Entity::update_many()
+        let mut run_update = novel_autopilot_run::Entity::update_many()
             .col_expr(
                 novel_autopilot_run::Column::Status,
                 Expr::value(target_status.as_str()),
@@ -277,10 +278,6 @@ impl NovelAutopilotRepository {
                 Expr::value(None::<String>),
             )
             .col_expr(
-                novel_autopilot_run::Column::ConsecutiveProviderFailures,
-                Expr::col(novel_autopilot_run::Column::ConsecutiveProviderFailures).add(1),
-            )
-            .col_expr(
                 novel_autopilot_run::Column::LastErrorCode,
                 Expr::value(Some(error_code.to_string())),
             )
@@ -288,7 +285,29 @@ impl NovelAutopilotRepository {
                 novel_autopilot_run::Column::Version,
                 Expr::col(novel_autopilot_run::Column::Version).add(1),
             )
-            .col_expr(novel_autopilot_run::Column::UpdatedAt, Expr::value(now))
+            .col_expr(novel_autopilot_run::Column::UpdatedAt, Expr::value(now));
+        run_update = match failure_counter_kind {
+            NovelAutopilotFailureCounterKind::Provider => run_update
+                .col_expr(
+                    novel_autopilot_run::Column::ConsecutiveProviderFailures,
+                    Expr::col(novel_autopilot_run::Column::ConsecutiveProviderFailures).add(1),
+                )
+                .col_expr(
+                    novel_autopilot_run::Column::ConsecutiveQualityFailures,
+                    Expr::value(0),
+                ),
+            NovelAutopilotFailureCounterKind::Quality => run_update
+                .col_expr(
+                    novel_autopilot_run::Column::ConsecutiveProviderFailures,
+                    Expr::value(0),
+                )
+                .col_expr(
+                    novel_autopilot_run::Column::ConsecutiveQualityFailures,
+                    Expr::col(novel_autopilot_run::Column::ConsecutiveQualityFailures).add(1),
+                ),
+            NovelAutopilotFailureCounterKind::None => run_update,
+        };
+        let run_update = run_update
             .filter(novel_autopilot_run::Column::Id.eq(&run.id))
             .filter(novel_autopilot_run::Column::UserId.eq(user_id))
             .filter(novel_autopilot_run::Column::Version.eq(expected_run_version))

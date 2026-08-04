@@ -409,6 +409,7 @@ pub(crate) fn extract_quality_history_context(
 #[derive(Clone, Copy)]
 struct QualityMetricDescriptor {
     metric_key: &'static str,
+    detail_key: Option<&'static str>,
     focus_area: &'static str,
     label: &'static str,
     weak_threshold: f64,
@@ -440,6 +441,7 @@ const QUALITY_SUMMARY_METRIC_FIELDS: [(&str, &str); 10] = [
 const QUALITY_METRIC_DESCRIPTORS: [QualityMetricDescriptor; 8] = [
     QualityMetricDescriptor {
         metric_key: "conflict_chain_hit_rate",
+        detail_key: Some("conflict_chain"),
         focus_area: "conflict",
         label: "冲突推进",
         weak_threshold: 72.0,
@@ -448,6 +450,7 @@ const QUALITY_METRIC_DESCRIPTORS: [QualityMetricDescriptor; 8] = [
     },
     QualityMetricDescriptor {
         metric_key: "rule_grounding_hit_rate",
+        detail_key: Some("rule_grounding"),
         focus_area: "rule_grounding",
         label: "规则落地",
         weak_threshold: 72.0,
@@ -456,6 +459,7 @@ const QUALITY_METRIC_DESCRIPTORS: [QualityMetricDescriptor; 8] = [
     },
     QualityMetricDescriptor {
         metric_key: "outline_alignment_rate",
+        detail_key: Some("outline_alignment"),
         focus_area: "outline",
         label: "大纲贴合",
         weak_threshold: 72.0,
@@ -464,6 +468,7 @@ const QUALITY_METRIC_DESCRIPTORS: [QualityMetricDescriptor; 8] = [
     },
     QualityMetricDescriptor {
         metric_key: "dialogue_naturalness_rate",
+        detail_key: Some("dialogue"),
         focus_area: "dialogue",
         label: "对白自然度",
         weak_threshold: 74.0,
@@ -472,6 +477,7 @@ const QUALITY_METRIC_DESCRIPTORS: [QualityMetricDescriptor; 8] = [
     },
     QualityMetricDescriptor {
         metric_key: "opening_hook_rate",
+        detail_key: Some("opening_hook"),
         focus_area: "opening",
         label: "开场钩子",
         weak_threshold: 72.0,
@@ -480,6 +486,7 @@ const QUALITY_METRIC_DESCRIPTORS: [QualityMetricDescriptor; 8] = [
     },
     QualityMetricDescriptor {
         metric_key: "payoff_chain_rate",
+        detail_key: Some("payoff_chain"),
         focus_area: "payoff",
         label: "回报兑现",
         weak_threshold: 72.0,
@@ -488,6 +495,7 @@ const QUALITY_METRIC_DESCRIPTORS: [QualityMetricDescriptor; 8] = [
     },
     QualityMetricDescriptor {
         metric_key: "cliffhanger_rate",
+        detail_key: Some("cliffhanger"),
         focus_area: "cliffhanger",
         label: "章尾牵引",
         weak_threshold: 74.0,
@@ -496,6 +504,7 @@ const QUALITY_METRIC_DESCRIPTORS: [QualityMetricDescriptor; 8] = [
     },
     QualityMetricDescriptor {
         metric_key: "pacing_score",
+        detail_key: None,
         focus_area: "pacing",
         label: "节奏稳定度",
         weak_threshold: 7.2,
@@ -553,6 +562,26 @@ fn repair_effectiveness_metric_spec(focus_area: &str) -> Option<(&'static str, f
 
 fn metric_value_as_f64(metrics: &serde_json::Map<String, Value>, metric_key: &str) -> Option<f64> {
     metrics.get(metric_key).and_then(Value::as_f64)
+}
+
+fn metric_is_applicable(
+    metrics: &serde_json::Map<String, Value>,
+    descriptor: QualityMetricDescriptor,
+) -> bool {
+    let Some(detail_key) = descriptor.detail_key else {
+        return true;
+    };
+    let Some(details) = metrics.get("details").and_then(Value::as_object) else {
+        return true;
+    };
+    let Some(detail) = details.get(detail_key).and_then(Value::as_object) else {
+        return true;
+    };
+    match detail.get("applicable") {
+        Some(Value::Bool(false)) => false,
+        Some(Value::Bool(_)) => true,
+        Some(_) | None => true,
+    }
 }
 
 fn normalized_metric_value(metric_key: &str, value: f64) -> f64 {
@@ -728,6 +757,9 @@ fn collect_quality_metric_signals(
     QUALITY_METRIC_DESCRIPTORS
         .iter()
         .filter_map(|descriptor| {
+            if !metric_is_applicable(metrics, *descriptor) {
+                return None;
+            }
             let value = metric_value_as_f64(metrics, descriptor.metric_key)?;
             let weak_threshold =
                 adjusted_quality_metric_weak_threshold(*descriptor, runtime_context);
@@ -936,18 +968,21 @@ fn derive_quality_gate_from_metrics_object(
         resolve_adaptive_quality_gate_profile(runtime_context.as_ref(), Some(stage.as_str()));
     let pressure = build_quality_runtime_pressure(runtime_context.as_ref());
     let overall_score = metric_value_as_f64(metrics, "overall_score");
-    let low_items = collect_quality_metric_signals(metrics, runtime_context.as_ref())
-        .into_iter()
+    let metric_signals = collect_quality_metric_signals(metrics, runtime_context.as_ref());
+    let low_items = metric_signals
+        .iter()
         .filter(|item| item.value < item.weak_threshold)
+        .copied()
         .collect::<Vec<_>>();
     let weakest_metric = low_items
         .iter()
         .min_by(|left, right| left.normalized_value.total_cmp(&right.normalized_value))
         .copied()
         .or_else(|| {
-            collect_quality_metric_signals(metrics, runtime_context.as_ref())
-                .into_iter()
+            metric_signals
+                .iter()
                 .min_by(|left, right| left.normalized_value.total_cmp(&right.normalized_value))
+                .copied()
         });
     let weak_metric_count = low_items.len() as i64;
     let failed_metrics = low_items
@@ -3081,6 +3116,84 @@ mod tests {
             normalized["quality_gate"]["quality_runtime_pressure"]["career_state_count"],
             2
         );
+    }
+
+    #[test]
+    fn should_ignore_inapplicable_quality_metrics_in_gate_and_guidance() {
+        let metrics = json!({
+            "overall_score": 66.1,
+            "conflict_chain_hit_rate": 86.0,
+            "rule_grounding_hit_rate": 84.0,
+            "outline_alignment_rate": 0.0,
+            "dialogue_naturalness_rate": 79.0,
+            "opening_hook_rate": 75.0,
+            "payoff_chain_rate": 74.0,
+            "cliffhanger_rate": 72.0,
+            "pacing_score": 7.1,
+            "details": {
+                "outline_alignment": {
+                    "applicable": false
+                }
+            }
+        });
+
+        let normalized = normalize_quality_metrics_history_item(&metrics, "chapter")
+            .expect("normalized metrics");
+        let gate = normalized["quality_gate"]
+            .as_object()
+            .expect("quality gate");
+        let guidance = normalized["repair_guidance"]
+            .as_object()
+            .expect("repair guidance");
+
+        let failed_metrics = gate["failed_metrics"].as_array().expect("failed metrics");
+        assert!(failed_metrics
+            .iter()
+            .all(|metric| metric["key"] != "outline_alignment_rate"));
+        assert_ne!(gate["weakest_metric_key"], json!("outline"));
+        assert_ne!(guidance["weakest_metric_key"], json!("outline"));
+        assert!(!gate["focus_areas"]
+            .as_array()
+            .expect("focus areas")
+            .iter()
+            .any(|item| item == "outline"));
+        assert!(!guidance["focus_areas"]
+            .as_array()
+            .expect("guidance focus areas")
+            .iter()
+            .any(|item| item == "outline"));
+        assert!(!gate["repair_targets"]
+            .as_array()
+            .expect("repair targets")
+            .iter()
+            .any(|item| item.as_str().is_some_and(|text| text.contains("大纲"))));
+    }
+
+    #[test]
+    fn should_keep_flat_metrics_when_details_are_missing() {
+        let metrics = json!({
+            "overall_score": 66.1,
+            "conflict_chain_hit_rate": 71.5,
+            "rule_grounding_hit_rate": 84.0,
+            "outline_alignment_rate": 68.0,
+            "dialogue_naturalness_rate": 79.0,
+            "opening_hook_rate": 75.0,
+            "payoff_chain_rate": 74.0,
+            "cliffhanger_rate": 72.0,
+            "pacing_score": 7.1
+        });
+
+        let normalized = normalize_quality_metrics_history_item(&metrics, "chapter")
+            .expect("normalized metrics");
+        let gate = normalized["quality_gate"]
+            .as_object()
+            .expect("quality gate");
+
+        let failed_metrics = gate["failed_metrics"].as_array().expect("failed metrics");
+        assert!(failed_metrics
+            .iter()
+            .any(|metric| metric["key"] == "outline_alignment_rate"));
+        assert_eq!(gate["weakest_metric_key"], json!("outline"));
     }
 
     #[test]

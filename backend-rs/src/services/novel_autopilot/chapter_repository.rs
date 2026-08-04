@@ -3,7 +3,7 @@ use std::fmt;
 use chrono::{NaiveDateTime, Utc};
 use sea_orm::{
     sea_query::Expr, ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait,
-    QueryFilter, Set, TransactionTrait,
+    QueryFilter, QuerySelect, Set, TransactionTrait,
 };
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -201,6 +201,7 @@ impl NovelAutopilotRepository {
 
         let mut repair_payload = json!({
             "candidate_full_content": candidate.content,
+            "candidate_content_digest": candidate.result_digest,
             "content_complete": true,
             "candidate_chapter_status": candidate.chapter_status,
             "autopilot_chapter_snapshot_digest": chapter_business_snapshot_digest(expected_chapter),
@@ -360,6 +361,26 @@ impl NovelAutopilotRepository {
         })
     }
 
+    pub(crate) async fn find_waiting_chapter_candidate_id(
+        db: &DatabaseConnection,
+        project_id: &str,
+        step_id: &str,
+    ) -> Result<Option<String>, NovelAutopilotRepositoryError> {
+        chapter_draft_attempt::Entity::find()
+            .select_only()
+            .column(chapter_draft_attempt::Column::Id)
+            .filter(chapter_draft_attempt::Column::Id.eq(step_id))
+            .filter(chapter_draft_attempt::Column::ProjectId.eq(project_id))
+            .filter(chapter_draft_attempt::Column::Source.eq(NOVEL_AUTOPILOT_CANDIDATE_SOURCE))
+            .filter(
+                chapter_draft_attempt::Column::AttemptState.eq(NOVEL_AUTOPILOT_CANDIDATE_WAITING),
+            )
+            .into_tuple::<String>()
+            .one(db)
+            .await
+            .map_err(database_error)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn accept_chapter_manual_review_candidate(
         db: &DatabaseConnection,
@@ -403,7 +424,11 @@ impl NovelAutopilotRepository {
             .is_ok_and(NovelAutopilotStepStatus::is_terminal)
             || !matches!(
                 step.error_code.as_deref(),
-                Some("chapter_quality_manual_review" | "chapter_repair_manual_review")
+                Some(
+                    "chapter_quality_manual_review"
+                        | "chapter_generation_attempts_exhausted"
+                        | "chapter_repair_manual_review"
+                )
             )
             || step.quality_decision.as_deref()
                 != Some(NovelAutopilotQualityDecision::ManualReview.as_str())
@@ -433,6 +458,19 @@ impl NovelAutopilotRepository {
             extract_candidate_draft_full_content(&candidate);
         if !content_complete {
             return Err(invalid_config("candidate_content"));
+        }
+        let stored_result_digest = candidate
+            .repair_payload
+            .as_ref()
+            .and_then(|payload| payload.get("candidate_content_digest"))
+            .and_then(Value::as_str)
+            .filter(|digest| !digest.trim().is_empty())
+            .ok_or_else(|| invalid_config("candidate_result_digest"))?;
+        let computed_result_digest = chapter_content_digest(&candidate_content);
+        if stored_result_digest != computed_result_digest
+            || step.result_digest.as_deref() != Some(stored_result_digest)
+        {
+            return Err(invalid_config("candidate_result_digest"));
         }
         let (candidate_content, _) = sanitize_generated_narrative_text(&candidate_content);
         if candidate_content.trim().is_empty()
@@ -843,6 +881,9 @@ fn validate_manual_review_candidate(
         return Err(invalid_config("candidate_chapter_status"));
     }
     if candidate.result_digest.trim().is_empty() {
+        return Err(invalid_config("candidate_result_digest"));
+    }
+    if candidate.result_digest != chapter_content_digest(&candidate.content) {
         return Err(invalid_config("candidate_result_digest"));
     }
     Ok(())

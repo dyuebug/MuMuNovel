@@ -71,7 +71,24 @@ For each boundary:
 
 **Good**: Each layer only knows its neighbors
 
-### Mistake 4: Every Consumer Parses The Same Payload
+### Mistake 4: Treating State As Capability
+
+**Bad**: Inferring that every `waiting_human` state has an acceptable candidate.
+
+**Good**: Project capabilities explicitly from durable evidence. A UI action is
+available only when its required reference, digest, version fence, and persisted
+owner record exist.
+
+**Rule**: When one status can represent multiple causes, define a separate
+capability/reference field and test both the present and absent cases. For the
+Novel Autopilot candidate and failure contract, see
+`../backend/durable-novel-autopilot.md`.
+
+**Server boundary**: Hiding or disabling a UI action does not revoke the API
+capability. Every mutating endpoint must re-read its durable evidence and reject
+crafted requests before changing versioned state, guidance, or task records.
+
+### Mistake 5: Every Consumer Parses The Same Payload
 
 **Bad**: A command reads JSONL events and casts fields inline:
 
@@ -120,6 +137,10 @@ After implementation:
       casting payload fields locally
 - [ ] Checked that derived state points back to the source event identifier
       (`seq`, `id`, `version`) instead of inventing a second cursor
+- [ ] Checked that each user action is enabled by explicit durable evidence,
+      not inferred from an overloaded status value
+- [ ] Checked success, no-result failure, invalid payload, and time-zone display
+      across storage, API, task/event projection, and UI
 
 ---
 

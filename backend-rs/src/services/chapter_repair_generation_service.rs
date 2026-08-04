@@ -19,6 +19,9 @@ use crate::{
         chapter_generation_runtime_service::GeneratedChapterResult,
         chapter_single_generation_result_lifecycle_service::single_generation_candidate_draft_attempt_view,
         cooperative_cancellation_service::CooperativeCancellationToken,
+        novel_autopilot::failure_diagnostic::{
+            NovelAutopilotFailureDiagnostic, NovelAutopilotProviderFailureHint,
+        },
     },
 };
 
@@ -134,7 +137,10 @@ pub(crate) enum ChapterRepairGenerationError {
     InvalidInput(&'static str),
     Context(String),
     AnalysisNotFound,
-    Generation(String),
+    Generation {
+        message: String,
+        provider_hint: Option<NovelAutopilotProviderFailureHint>,
+    },
     InvalidResult(&'static str),
 }
 
@@ -145,8 +151,40 @@ impl ChapterRepairGenerationError {
             Self::InvalidInput(_) => "invalid_input",
             Self::Context(_) => "context_error",
             Self::AnalysisNotFound => "analysis_not_found",
-            Self::Generation(_) => "generation_error",
+            Self::Generation { .. } => "generation_error",
             Self::InvalidResult(_) => "invalid_result",
+        }
+    }
+
+    pub(crate) fn failure_diagnostic(&self) -> NovelAutopilotFailureDiagnostic {
+        match self {
+            Self::Cancelled => NovelAutopilotFailureDiagnostic::context_invalid("cancelled"),
+            Self::InvalidInput(_) => {
+                NovelAutopilotFailureDiagnostic::context_invalid("invalid_input")
+            }
+            Self::Context(_) | Self::AnalysisNotFound => {
+                NovelAutopilotFailureDiagnostic::context_invalid(self.code())
+            }
+            Self::Generation {
+                message,
+                provider_hint,
+            } => {
+                if message_indicates_response_invalid(message) {
+                    NovelAutopilotFailureDiagnostic::response_invalid_with_hint(
+                        "generation_error",
+                        provider_hint.clone(),
+                    )
+                } else {
+                    NovelAutopilotFailureDiagnostic::provider_failure(
+                        "generation_error",
+                        provider_hint.clone(),
+                        Some(message),
+                    )
+                }
+            }
+            Self::InvalidResult(_) => {
+                NovelAutopilotFailureDiagnostic::response_invalid("invalid_result")
+            }
         }
     }
 }
@@ -158,7 +196,7 @@ impl fmt::Display for ChapterRepairGenerationError {
             Self::InvalidInput(field) => write!(formatter, "invalid chapter repair input: {field}"),
             Self::Context(_) => formatter.write_str("failed to load chapter repair context"),
             Self::AnalysisNotFound => formatter.write_str("current chapter analysis was not found"),
-            Self::Generation(_) => formatter.write_str("chapter repair generation failed"),
+            Self::Generation { .. } => formatter.write_str("chapter repair generation failed"),
             Self::InvalidResult(field) => {
                 write!(formatter, "invalid chapter repair result: {field}")
             }
@@ -247,6 +285,9 @@ pub(crate) async fn generate_chapter_repair_candidate_for_autopilot(
         provider_payload,
         role_policy_context,
     } = execution_config;
+    let provider_hint = Some(NovelAutopilotProviderFailureHint::from_ai_config(
+        &ai_config,
+    ));
     let generated = context
         .generate_candidate_only_with_contract_and_guidance(
             ai_config,
@@ -259,7 +300,10 @@ pub(crate) async fn generate_chapter_repair_candidate_for_autopilot(
             role_policy_context,
         )
         .await
-        .map_err(ChapterRepairGenerationError::Generation)?;
+        .map_err(|error| ChapterRepairGenerationError::Generation {
+            message: error,
+            provider_hint,
+        })?;
     ensure_not_cancelled(cancellation_token)?;
 
     if generated.chapter_id != chapter_id {
@@ -490,6 +534,15 @@ fn deduplicate_non_empty(items: Vec<String>, limit: usize) -> Vec<String> {
     normalized
 }
 
+fn message_indicates_response_invalid(message: &str) -> bool {
+    let normalized = message.to_ascii_lowercase();
+    normalized.contains("json")
+        || normalized.contains("parse")
+        || normalized.contains("解析")
+        || normalized.contains("candidate")
+        || normalized.contains("result")
+}
+
 fn ensure_not_cancelled(
     cancellation_token: Option<&CooperativeCancellationToken>,
 ) -> Result<(), ChapterRepairGenerationError> {
@@ -590,6 +643,31 @@ mod tests {
             ChapterRepairGenerationError::AnalysisNotFound.code(),
             "analysis_not_found"
         );
+    }
+
+    #[test]
+    fn generation_error_diagnostic_maps_rate_limit_without_leaking_raw_message() {
+        use crate::services::novel_autopilot::failure_diagnostic::{
+            NovelAutopilotFailureDomain, NovelAutopilotProviderFailureHint,
+        };
+
+        let error = ChapterRepairGenerationError::Generation {
+            message: "HTTP 429 Too Many Requests api_key=secret prompt=完整正文".to_string(),
+            provider_hint: Some(NovelAutopilotProviderFailureHint {
+                provider: Some("openai".to_string()),
+                model: Some("gpt-5.1".to_string()),
+                http_status: None,
+            }),
+        };
+        let diagnostic = error.failure_diagnostic();
+        let serialized = serde_json::to_string(&diagnostic.to_value()).expect("serialize");
+
+        assert_eq!(
+            diagnostic.reason_code(NovelAutopilotFailureDomain::ChapterRepair),
+            "chapter_repair_provider_rate_limited"
+        );
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("完整正文"));
     }
 
     #[test]

@@ -23,8 +23,9 @@ use super::{
         NovelAutopilotRepositoryError, PrepareAndClaimNovelAutopilotStep,
     },
     types::{
-        NovelAutopilotPhase, NovelAutopilotQualityDecision, NovelAutopilotRunConfig,
-        NovelAutopilotRunStatus, NovelAutopilotStepStatus, NovelAutopilotStepType,
+        NovelAutopilotFailureCounterKind, NovelAutopilotPhase, NovelAutopilotQualityDecision,
+        NovelAutopilotRunConfig, NovelAutopilotRunStatus, NovelAutopilotStepStatus,
+        NovelAutopilotStepType,
     },
 };
 
@@ -395,7 +396,7 @@ fn manual_review_candidate(content: &str) -> NovelAutopilotManualReviewCandidate
         content: content.to_string(),
         word_count: i32::try_from(content.chars().count()).expect("candidate word count fits i32"),
         chapter_status: NovelAutopilotStepStatus::Completed.as_str().to_string(),
-        result_digest: format!("manual-review-digest-{}", content.chars().count()),
+        result_digest: chapter_content_digest(content),
         quality_metrics: Some(json!({"overall_score": 6.8})),
         quality_gate_action: Some("manual_review".to_string()),
         quality_gate_message: Some("需要人工确认候选质量".to_string()),
@@ -521,6 +522,126 @@ async fn manual_review_candidate_persists_content_outside_durable_run_and_step()
 }
 
 #[tokio::test]
+async fn manual_review_candidate_rejects_mismatched_content_digest_without_writes() {
+    let db = setup_repository_db().await;
+    insert_project(&db).await;
+    insert_chapter(&db).await;
+    let claimed = claim_chapter_step(&db, NovelAutopilotStepType::ChapterGenerate, TASK_ID).await;
+    let expected = ChapterBusinessSnapshot::load(&db, PROJECT_ID, CHAPTER_ID)
+        .await
+        .expect("load chapter business snapshot");
+    let mut candidate = manual_review_candidate("摘要必须绑定完整候选正文。");
+    candidate.result_digest = chapter_content_digest("另一份正文");
+
+    let error = NovelAutopilotRepository::persist_chapter_manual_review_candidate(
+        &db,
+        &claimed.step.id,
+        USER_ID,
+        claimed.run.version,
+        claimed.run.epoch,
+        STEP_KEY,
+        NovelAutopilotStepType::ChapterGenerate,
+        Some(TASK_ID),
+        &expected,
+        NovelAutopilotStepStatus::Skipped,
+        "chapter_quality_manual_review",
+        candidate,
+    )
+    .await
+    .expect_err("mismatched candidate digest must be rejected");
+
+    assert!(matches!(
+        error,
+        NovelAutopilotRepositoryError::InvalidConfig {
+            field: "candidate_result_digest",
+            ..
+        }
+    ));
+    assert_eq!(
+        chapter_draft_attempt::Entity::find()
+            .count(&db)
+            .await
+            .expect("count draft attempts"),
+        0
+    );
+    let run = NovelAutopilotRepository::find_owned(&db, &claimed.run.id, USER_ID)
+        .await
+        .expect("reload run");
+    assert_eq!(run.version, claimed.run.version);
+    assert_eq!(run.current_step.as_deref(), Some(STEP_KEY));
+}
+
+#[tokio::test]
+async fn accepting_manual_review_candidate_rejects_tampered_digest_without_chapter_write() {
+    let db = setup_repository_db().await;
+    insert_project(&db).await;
+    insert_chapter(&db).await;
+    let claimed = claim_chapter_step(&db, NovelAutopilotStepType::ChapterGenerate, TASK_ID).await;
+    let expected = ChapterBusinessSnapshot::load(&db, PROJECT_ID, CHAPTER_ID)
+        .await
+        .expect("load chapter business snapshot");
+    let waiting = NovelAutopilotRepository::persist_chapter_manual_review_candidate(
+        &db,
+        &claimed.step.id,
+        USER_ID,
+        claimed.run.version,
+        claimed.run.epoch,
+        STEP_KEY,
+        NovelAutopilotStepType::ChapterGenerate,
+        Some(TASK_ID),
+        &expected,
+        NovelAutopilotStepStatus::Skipped,
+        "chapter_quality_manual_review",
+        manual_review_candidate("候选正文摘要被篡改后不得接受。"),
+    )
+    .await
+    .expect("persist candidate");
+    let candidate = chapter_draft_attempt::Entity::find_by_id(&claimed.step.id)
+        .one(&db)
+        .await
+        .expect("load candidate")
+        .expect("candidate exists");
+    let mut candidate = candidate.into_active_model();
+    let mut repair_payload = candidate
+        .repair_payload
+        .take()
+        .expect("repair payload is set")
+        .expect("repair payload exists");
+    repair_payload["candidate_content_digest"] = json!(chapter_content_digest("被替换的正文"));
+    candidate.repair_payload = Set(Some(repair_payload));
+    candidate
+        .update(&db)
+        .await
+        .expect("tamper candidate digest");
+
+    let decision_task_id = "chapter-candidate-tampered-accept-task";
+    let running = resume_manual_candidate_for_accept(&db, &waiting.run, decision_task_id).await;
+    let error = NovelAutopilotRepository::accept_chapter_manual_review_candidate(
+        &db,
+        &running.id,
+        &claimed.step.id,
+        USER_ID,
+        running.version,
+        running.epoch,
+        Some(decision_task_id),
+    )
+    .await
+    .expect_err("tampered digest must reject accept");
+
+    assert!(matches!(
+        error,
+        NovelAutopilotRepositoryError::InvalidConfig {
+            field: "candidate_result_digest",
+            ..
+        }
+    ));
+    assert_eq!(
+        load_chapter(&db).await.content.as_deref(),
+        Some(INITIAL_CONTENT)
+    );
+}
+
+#[tokio::test]
 async fn accepting_manual_review_candidate_commits_chapter_history_and_run_progress() {
     let db = setup_repository_db().await;
     insert_project(&db).await;
@@ -594,6 +715,76 @@ async fn accepting_manual_review_candidate_commits_chapter_history_and_run_progr
             .expect("count candidate apply history"),
         1
     );
+}
+
+#[tokio::test]
+async fn accepting_generation_attempts_exhausted_candidate_commits_chapter_history_and_run_progress(
+) {
+    let db = setup_repository_db().await;
+    insert_project(&db).await;
+    insert_chapter(&db).await;
+    let claimed = claim_chapter_step(&db, NovelAutopilotStepType::ChapterGenerate, TASK_ID).await;
+    let expected = ChapterBusinessSnapshot::load(&db, PROJECT_ID, CHAPTER_ID)
+        .await
+        .expect("load chapter business snapshot");
+    let candidate_content = "质量重试耗尽后保存的候选正文依然可供人工接受。";
+    let waiting = NovelAutopilotRepository::persist_chapter_manual_review_candidate(
+        &db,
+        &claimed.step.id,
+        USER_ID,
+        claimed.run.version,
+        claimed.run.epoch,
+        STEP_KEY,
+        NovelAutopilotStepType::ChapterGenerate,
+        Some(TASK_ID),
+        &expected,
+        NovelAutopilotStepStatus::Skipped,
+        "chapter_generation_attempts_exhausted",
+        manual_review_candidate(candidate_content),
+    )
+    .await
+    .expect("persist exhausted candidate");
+    let decision_task_id = "chapter-generation-exhausted-accept-task";
+    let running = resume_manual_candidate_for_accept(&db, &waiting.run, decision_task_id).await;
+
+    let accepted = NovelAutopilotRepository::accept_chapter_manual_review_candidate(
+        &db,
+        &running.id,
+        &claimed.step.id,
+        USER_ID,
+        running.version,
+        running.epoch,
+        Some(decision_task_id),
+    )
+    .await
+    .expect("accept exhausted candidate");
+
+    let expected_word_count = i32::try_from(candidate_content.chars().count()).unwrap();
+    let chapter_after = load_chapter(&db).await;
+    assert_eq!(chapter_after.content.as_deref(), Some(candidate_content));
+    assert_eq!(chapter_after.word_count, expected_word_count);
+    assert_eq!(
+        chapter_after.status,
+        NovelAutopilotStepStatus::Completed.as_str()
+    );
+    assert_eq!(accepted.candidate_id, claimed.step.id);
+    assert_eq!(accepted.word_count, expected_word_count);
+    assert_eq!(
+        accepted.run.completed_chapters,
+        claimed.run.completed_chapters + 1
+    );
+    assert_eq!(
+        accepted.run.total_word_count,
+        claimed.run.total_word_count + i64::from(expected_word_count)
+    );
+    assert!(accepted.run.active_background_task_id.is_none());
+
+    let candidate = chapter_draft_attempt::Entity::find_by_id(&claimed.step.id)
+        .one(&db)
+        .await
+        .expect("load exhausted candidate")
+        .expect("exhausted candidate exists");
+    assert_eq!(candidate.attempt_state, "accepted");
 }
 
 #[tokio::test]
@@ -1394,7 +1585,7 @@ async fn chapter_analysis_provider_failure_updates_budget_without_persisting_ana
         insert_chapter(&db).await;
         let claimed = claim_chapter_analysis_step(&db).await;
 
-        let terminal = NovelAutopilotRepository::finish_chapter_analysis_provider_failure(
+        let terminal = NovelAutopilotRepository::finish_chapter_analysis_failure(
             &db,
             &claimed.step.id,
             USER_ID,
@@ -1403,6 +1594,7 @@ async fn chapter_analysis_provider_failure_updates_budget_without_persisting_ana
             ANALYSIS_STEP_KEY,
             Some(ANALYSIS_TASK_ID),
             "chapter_analysis_provider_failed",
+            NovelAutopilotFailureCounterKind::Provider,
             waiting_human,
         )
         .await
@@ -1559,9 +1751,28 @@ async fn chapter_repair_commit_rejects_manual_edit_and_rolls_back_run_and_step()
 
 #[tokio::test]
 async fn chapter_repair_failure_tracks_provider_and_quality_budgets_independently() {
-    for (provider_failure, waiting_human, decision) in [
-        (true, false, NovelAutopilotQualityDecision::Retry),
-        (false, true, NovelAutopilotQualityDecision::ManualReview),
+    for (counter_kind, waiting_human, decision, provider_failures, quality_failures) in [
+        (
+            NovelAutopilotFailureCounterKind::Provider,
+            false,
+            NovelAutopilotQualityDecision::Retry,
+            1,
+            0,
+        ),
+        (
+            NovelAutopilotFailureCounterKind::Quality,
+            true,
+            NovelAutopilotQualityDecision::ManualReview,
+            0,
+            1,
+        ),
+        (
+            NovelAutopilotFailureCounterKind::None,
+            true,
+            NovelAutopilotQualityDecision::ManualReview,
+            0,
+            0,
+        ),
     ] {
         let db = setup_repository_db().await;
         insert_project(&db).await;
@@ -1577,7 +1788,7 @@ async fn chapter_repair_failure_tracks_provider_and_quality_budgets_independentl
             REPAIR_STEP_KEY,
             Some(REPAIR_TASK_ID),
             "chapter_repair_failed",
-            provider_failure,
+            counter_kind,
             waiting_human,
             decision,
             None,
@@ -1587,12 +1798,9 @@ async fn chapter_repair_failure_tracks_provider_and_quality_budgets_independentl
 
         assert_eq!(
             terminal.run.consecutive_provider_failures,
-            i32::from(provider_failure)
+            provider_failures
         );
-        assert_eq!(
-            terminal.run.consecutive_quality_failures,
-            i32::from(!provider_failure)
-        );
+        assert_eq!(terminal.run.consecutive_quality_failures, quality_failures);
         assert_eq!(
             terminal.run.status,
             if waiting_human {
@@ -1640,7 +1848,7 @@ async fn chapter_repair_quality_failure_atomically_persists_retry_candidate_and_
         REPAIR_STEP_KEY,
         Some(REPAIR_TASK_ID),
         "chapter_repair_quality_retry",
-        false,
+        NovelAutopilotFailureCounterKind::Quality,
         false,
         NovelAutopilotQualityDecision::Retry,
         Some(evidence),
@@ -1711,7 +1919,7 @@ async fn chapter_repair_retry_candidate_insert_failure_rolls_back_run_and_step()
         REPAIR_STEP_KEY,
         Some(REPAIR_TASK_ID),
         "chapter_repair_quality_retry",
-        false,
+        NovelAutopilotFailureCounterKind::Quality,
         false,
         NovelAutopilotQualityDecision::Retry,
         Some(evidence),
@@ -1766,7 +1974,7 @@ async fn chapter_repair_retry_candidate_rejects_stale_chapter_and_invalid_scope(
             REPAIR_STEP_KEY,
             Some(REPAIR_TASK_ID),
             "chapter_repair_quality_retry",
-            false,
+            NovelAutopilotFailureCounterKind::Quality,
             false,
             NovelAutopilotQualityDecision::Retry,
             Some(evidence),

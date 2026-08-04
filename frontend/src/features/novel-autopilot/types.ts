@@ -151,6 +151,7 @@ export interface NovelAutopilotStepRun {
   background_task_id: string | null;
   quality_decision: NovelAutopilotQualityDecision | null;
   error_code: string | null;
+  candidate_id: string | null;
   started_at: string | null;
   completed_at: string | null;
   created_at: string;

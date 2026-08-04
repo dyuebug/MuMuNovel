@@ -63,11 +63,11 @@ const buildRun = (
   has_guidance: false,
   active_background_task_id: status === 'running' ? taskId : null,
   final_export_ref: null,
-  created_at: '2026-07-19T08:00:00+08:00',
-  updated_at: '2026-07-19T09:30:00+08:00',
-  started_at: '2026-07-19T08:01:00+08:00',
-  paused_at: status === 'paused' ? '2026-07-19T09:00:00+08:00' : null,
-  completed_at: status === 'completed' ? '2026-07-19T09:30:00+08:00' : null,
+  created_at: '2026-08-01T05:34:58Z',
+  updated_at: '2026-08-01T05:40:00Z',
+  started_at: '2026-08-01T05:35:00Z',
+  paused_at: status === 'paused' ? '2026-08-01T05:39:00Z' : null,
+  completed_at: status === 'completed' ? '2026-08-01T05:40:00Z' : null,
   ...overrides,
 });
 
@@ -86,10 +86,11 @@ const buildSteps = (): NovelAutopilotStepRun[] => [
     background_task_id: 'task-chapter-analyze',
     quality_decision: 'accept',
     error_code: null,
-    started_at: '2026-07-19T08:01:00+08:00',
-    completed_at: '2026-07-19T08:02:00+08:00',
-    created_at: '2026-07-19T08:01:00+08:00',
-    updated_at: '2026-07-19T08:02:00+08:00',
+    candidate_id: null,
+    started_at: '2026-08-01T05:35:00Z',
+    completed_at: '2026-08-01T05:36:00Z',
+    created_at: '2026-08-01T05:35:00Z',
+    updated_at: '2026-08-01T05:36:00Z',
   },
   {
     id: 'step-outline-expand',
@@ -105,10 +106,11 @@ const buildSteps = (): NovelAutopilotStepRun[] => [
     background_task_id: 'task-outline-expand',
     quality_decision: null,
     error_code: longStepErrorCode,
-    started_at: '2026-07-19T08:10:00+08:00',
-    completed_at: '2026-07-19T08:11:00+08:00',
-    created_at: '2026-07-19T08:10:00+08:00',
-    updated_at: '2026-07-19T08:11:00+08:00',
+    candidate_id: null,
+    started_at: '2026-08-01T05:37:00Z',
+    completed_at: '2026-08-01T05:38:00Z',
+    created_at: '2026-08-01T05:37:00Z',
+    updated_at: '2026-08-01T05:38:00Z',
   },
   {
     id: 'step-chapter-3',
@@ -124,10 +126,11 @@ const buildSteps = (): NovelAutopilotStepRun[] => [
     background_task_id: taskId,
     quality_decision: null,
     error_code: null,
-    started_at: '2026-07-19T09:29:00+08:00',
+    candidate_id: null,
+    started_at: '2026-08-01T05:39:00Z',
     completed_at: null,
-    created_at: '2026-07-19T09:29:00+08:00',
-    updated_at: '2026-07-19T09:30:00+08:00',
+    created_at: '2026-08-01T05:39:00Z',
+    updated_at: '2026-08-01T05:40:00Z',
   },
 ];
 
@@ -190,8 +193,8 @@ const installApiMocks = async (page: Page, options: ApiMockOptions = {}) => {
         outline_mode: 'one-to-many',
         chapter_count: run?.completed_chapters ?? 0,
         character_count: 3,
-        created_at: '2026-07-19T08:00:00+08:00',
-        updated_at: '2026-07-19T09:30:00+08:00',
+        created_at: '2026-08-01T05:34:58Z',
+        updated_at: '2026-08-01T05:40:00Z',
       });
       return;
     }
@@ -204,7 +207,7 @@ const installApiMocks = async (page: Page, options: ApiMockOptions = {}) => {
         allowed_transitions: [],
         can_rollback: true,
         suggested_next_phase: null,
-        updated_at: '2026-07-19T09:30:00+08:00',
+        updated_at: '2026-08-01T05:40:00Z',
         source: 'projects.status',
       });
       return;
@@ -214,7 +217,7 @@ const installApiMocks = async (page: Page, options: ApiMockOptions = {}) => {
       await fulfillJson(route, {
         schema_version: 'runtime-metrics/v1',
         read_model: 'derived_readonly',
-        workflow: { state: 'available', schema_version: 1, phase: 'writing', updated_at: '2026-07-19T09:30:00+08:00' },
+        workflow: { state: 'available', schema_version: 1, phase: 'writing', updated_at: '2026-08-01T05:40:00Z' },
         tasks: { state: 'empty', observed_limit: 100, observed_count: 0, pending_count: 0, running_count: 0, completed_count: 0, failed_count: 0, cancelled_count: 0 },
         quality: { state: 'unavailable', observed_limit: 0, total_chapters: null, analyzed_chapters: null, latest_overall_score: null, overall_score_delta: null, overall_score_trend: null, last_generated_at: null },
         autopilot_audits: { state: 'empty', observed_limit: 100, observed_count: 0, queued_count: 0, running_count: 0, succeeded_count: 0, failed_count: 0, cancelled_count: 0 },
@@ -281,8 +284,8 @@ const installApiMocks = async (page: Page, options: ApiMockOptions = {}) => {
         status: nextStatus,
         version: run.version + 1,
         active_background_task_id: nextStatus === 'running' ? taskId : null,
-        paused_at: nextStatus === 'paused' ? '2026-07-19T09:31:00+08:00' : run.paused_at,
-        updated_at: '2026-07-19T09:31:00+08:00',
+        paused_at: nextStatus === 'paused' ? '2026-08-01T05:41:00Z' : run.paused_at,
+        updated_at: '2026-08-01T05:41:00Z',
         ...overrides,
       };
       await fulfillJson(route, { run });
@@ -427,12 +430,17 @@ test.describe('durable novel autopilot workbench', () => {
     await expect(page.getByText('已观察输出 Token（估算）')).toBeVisible();
     await expect(page.getByText('成本预算（需 Provider 计价）')).toBeVisible();
     await expect(page.getByText('步骤时间线（3）')).toBeVisible();
+    await expect(page.getByText('2026/8/1 13:34:58')).toBeVisible();
+    await expect(page.getByText('2026/8/1 13:40:00').first()).toBeVisible();
     await expect(page.getByText('章节分析', { exact: true })).toBeVisible();
     await expect(page.getByText('一纲多章展开')).toBeVisible();
     await expect(page.getByText('planning:outline_expand:0001:outline-1')).toBeVisible();
     await expect(page.getByText('chapter:0003:generate', { exact: true })).toHaveCount(0);
 
     const timelineCard = page.locator('.ant-card').filter({ hasText: '步骤时间线（3）' });
+    await expect(timelineCard.getByText('2026/8/1 13:36:00')).toBeVisible();
+    await expect(timelineCard.getByText('2026/8/1 13:38:00')).toBeVisible();
+    await expect(timelineCard.getByText('2026/8/1 13:40:00')).toBeVisible();
     const stepHeaderBox = await timelineCard.getByRole('columnheader', { name: '步骤' }).boundingBox();
     const chapterHeaderBox = await timelineCard.getByRole('columnheader', { name: '章节' }).boundingBox();
     const attemptHeader = timelineCard.getByRole('columnheader', { name: '尝试' });
@@ -587,10 +595,27 @@ test.describe('durable novel autopilot workbench', () => {
   test('submits a waiting-human decision with optional guidance', async ({ page }) => {
     await preparePage(page);
     const api = await installApiMocks(page, {
-      initialRun: buildRun('waiting_human', { version: 12, active_background_task_id: null }),
+      initialRun: buildRun('waiting_human', {
+        version: 12,
+        active_background_task_id: null,
+        last_error_code: 'chapter_generation_attempts_exhausted',
+      }),
+      steps: buildSteps().map((step) => (
+        step.id === 'step-chapter-3'
+          ? {
+            ...step,
+            status: 'skipped',
+            quality_decision: 'manual_review',
+            error_code: 'chapter_generation_attempts_exhausted',
+            candidate_id: step.id,
+            completed_at: '2026-08-01T05:40:00Z',
+          }
+          : step
+      )),
     });
 
     await page.goto(`/project/${projectId}/autopilot`);
+    await expect(page.getByText('候选已保存，等待人工复核', { exact: true })).toBeVisible();
     await page.getByPlaceholder('例如：后续三章降低战斗密度，加强人物关系推进，并保持既有世界观约束。')
       .fill('保留冲突结果，但补强人物动机。');
     await page.getByRole('button', { name: '接受并继续' }).click();
@@ -604,6 +629,75 @@ test.describe('durable novel autopilot workbench', () => {
         guidance: '保留冲突结果，但补强人物动机。',
       },
     });
+  });
+
+  test('submits repair guidance for a generated chapter candidate', async ({ page }) => {
+    await preparePage(page);
+    const api = await installApiMocks(page, {
+      initialRun: buildRun('waiting_human', {
+        version: 12,
+        active_background_task_id: null,
+        last_error_code: 'chapter_generation_attempts_exhausted',
+      }),
+      steps: buildSteps().map((step) => (
+        step.id === 'step-chapter-3'
+          ? {
+            ...step,
+            status: 'skipped',
+            quality_decision: 'manual_review',
+            error_code: 'chapter_generation_attempts_exhausted',
+            candidate_id: step.id,
+            completed_at: '2026-08-01T05:40:00Z',
+          }
+          : step
+      )),
+    });
+
+    await page.goto(`/project/${projectId}/autopilot`);
+    await page.getByPlaceholder('例如：后续三章降低战斗密度，加强人物关系推进，并保持既有世界观约束。')
+      .fill('保留现有候选作为审计记录，按此指导重新生成。');
+    await page.getByRole('button', { name: '返修' }).click();
+
+    await expect(page.getByText('人工决定已提交')).toBeVisible();
+    expect(api.requests.at(-1)).toEqual({
+      action: 'decision',
+      body: {
+        expected_version: 12,
+        decision: 'repair',
+        guidance: '保留现有候选作为审计记录，按此指导重新生成。',
+      },
+    });
+  });
+
+  test('does not expose accept when a provider failure has no candidate', async ({ page }) => {
+    await preparePage(page);
+    await installApiMocks(page, {
+      initialRun: buildRun('waiting_human', {
+        version: 12,
+        active_background_task_id: null,
+        last_error_code: 'chapter_repair_provider_failed',
+      }),
+      steps: buildSteps().map((step) => (
+        step.id === 'step-chapter-3'
+          ? {
+            ...step,
+            status: 'failed',
+            step_type: 'chapter_repair',
+            step_key: 'chapter:0003:repair',
+            error_code: 'chapter_repair_provider_failed',
+            candidate_id: null,
+            completed_at: '2026-08-01T05:40:00Z',
+          }
+          : step
+      )),
+    });
+
+    await page.goto(`/project/${projectId}/autopilot`);
+
+    await expect(page.getByText('模型 Provider 调用失败，未生成可供人工接受的候选')).toBeVisible();
+    await expect(page.getByRole('button', { name: '接受并继续' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '重试' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '返修' })).toBeVisible();
   });
 
   test('shows a validated final export descriptor for a completed book', async ({ page }) => {
@@ -630,6 +724,7 @@ test.describe('durable novel autopilot workbench', () => {
     await expect(page.getByText('最终导出产物')).toBeVisible();
     await expect(page.getByText('已校验描述符')).toBeVisible();
     await expect(page.getByText('Durable-Autopilot-E2E.txt')).toBeVisible();
+    await expect(page.getByText('运行时间：5分钟 0秒')).toBeVisible();
     const exportCard = page.getByText('最终导出产物').locator('xpath=ancestor::div[contains(@class, "ant-card")]');
     await expect(exportCard.getByText('86,000')).toBeVisible();
     await expect(page.getByText('sha256:durable-autopilot-e2e')).toBeVisible();

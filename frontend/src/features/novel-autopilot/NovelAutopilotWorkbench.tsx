@@ -190,10 +190,46 @@ const RUN_ERROR_MESSAGES: Record<string, string> = {
   novel_autopilot_provider_failures_exhausted: '模型 Provider 连续失败达到上限，请检查模型配置或服务状态。',
   novel_autopilot_quality_failures_exhausted: '连续质量失败达到上限，请调整指导、质量阈值或人工修复。',
   novel_autopilot_cost_estimation_unavailable: '当前 Provider 尚无统一计价来源，无法可靠执行成本预算；请清空成本上限或配置受支持的计价能力。',
+  chapter_quality_manual_review: '候选已保存，等待人工复核。',
+  chapter_generation_attempts_exhausted: '候选已保存，等待人工复核。',
+  chapter_repair_manual_review: '候选已保存，等待人工复核。',
+  chapter_analysis_provider_failed: '章节分析 Provider 调用失败，未生成可供人工接受的候选。',
+  chapter_repair_provider_failed: '章节返修 Provider 调用失败，未生成可供人工接受的候选。',
+  chapter_analysis_result_invalid: '章节分析结果无效，未生成可供人工接受的候选。',
+  chapter_repair_result_invalid: '章节返修结果无效，未生成可供人工接受的候选。',
+  chapter_analysis_context_invalid: '章节分析上下文无效，未生成可供人工接受的候选。',
+  chapter_repair_context_invalid: '章节返修上下文无效，未生成可供人工接受的候选。',
+  chapter_analysis_provider_timeout: '章节分析 Provider 超时，请稍后重试或检查上游服务。',
+  chapter_repair_provider_timeout: '章节返修 Provider 超时，请稍后重试或检查上游服务。',
+  chapter_analysis_provider_rate_limited: '章节分析 Provider 触发限流，请稍后重试。',
+  chapter_repair_provider_rate_limited: '章节返修 Provider 触发限流，请稍后重试。',
+  chapter_analysis_provider_upstream_unavailable: '章节分析上游不可用，请稍后重试或检查服务状态。',
+  chapter_repair_provider_upstream_unavailable: '章节返修上游不可用，请稍后重试或检查服务状态。',
+  chapter_analysis_provider_authentication_or_configuration: '章节分析 Provider 鉴权或配置异常，请检查模型与接口配置。',
+  chapter_repair_provider_authentication_or_configuration: '章节返修 Provider 鉴权或配置异常，请检查模型与接口配置。',
 };
 
+const WAITING_HUMAN_PROVIDER_FAILURE_PREFIXES = [
+  'chapter_analysis_provider_',
+  'chapter_repair_provider_',
+];
+
+const WAITING_HUMAN_RESULT_INVALID_CODES = new Set([
+  'chapter_analysis_result_invalid',
+  'chapter_repair_result_invalid',
+]);
+
+const WAITING_HUMAN_CONTEXT_INVALID_CODES = new Set([
+  'chapter_analysis_context_invalid',
+  'chapter_repair_context_invalid',
+]);
+
+const isProviderFailureWaitingHumanCode = (errorCode: string) => (
+  WAITING_HUMAN_PROVIDER_FAILURE_PREFIXES.some((prefix) => errorCode.startsWith(prefix))
+);
+
 const describeRunError = (errorCode: string) =>
-  `${RUN_ERROR_MESSAGES[errorCode] ?? '运行进入人工处理，请根据步骤时间线和服务日志定位原因。'}（错误代码：${errorCode}）`;
+  `${RUN_ERROR_MESSAGES[errorCode] ?? '已记录错误，请根据步骤时间线和服务日志定位原因。'}（错误代码：${errorCode}）`;
 
 const readBooleanPreference = (key: string, fallback: boolean) => {
   if (typeof window === 'undefined') {
@@ -365,6 +401,7 @@ const RunMetrics = ({
 
 const RunSummary = ({ run }: { run: NovelAutopilotRun }) => {
   const statusMeta = RUN_STATUS_META[run.status];
+  const errorDescription = run.last_error_code ? describeRunError(run.last_error_code) : null;
   return (
     <Card size="small" title="当前运行状态">
       <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 3 }}>
@@ -381,8 +418,8 @@ const RunSummary = ({ run }: { run: NovelAutopilotRun }) => {
         <Descriptions.Item label="更新时间">{formatTimestamp(run.updated_at)}</Descriptions.Item>
         <Descriptions.Item label="活动后台任务">{run.active_background_task_id ?? '—'}</Descriptions.Item>
       </Descriptions>
-      {run.last_error_code ? (
-        <Alert style={{ marginTop: 12 }} type="error" showIcon message="运行已记录错误" description={describeRunError(run.last_error_code)} />
+      {errorDescription ? (
+        <Alert style={{ marginTop: 12 }} type="error" showIcon message="运行已记录错误" description={errorDescription} />
       ) : null}
     </Card>
   );
@@ -652,11 +689,13 @@ const CreateRunPanel = ({
 
 const HumanGatePanel = ({
   run,
+  steps,
   loading,
   onDecision,
   onGuidance,
 }: {
   run: NovelAutopilotRun;
+  steps: NovelAutopilotStepRun[];
   loading: boolean;
   onDecision: (decision: NovelAutopilotHumanDecision, guidance?: string) => Promise<void>;
   onGuidance: (guidance: string) => Promise<void>;
@@ -665,6 +704,19 @@ const HumanGatePanel = ({
   if (run.status !== 'waiting_human' && run.status !== 'paused') {
     return null;
   }
+
+  const latestErrorCode = run.last_error_code ?? '';
+  const candidateId = steps.find((step) => step.candidate_id)?.candidate_id ?? null;
+  const waitingHumanMessage = candidateId
+    ? '候选已保存，等待人工复核'
+    : latestErrorCode && isProviderFailureWaitingHumanCode(latestErrorCode)
+      ? '模型 Provider 调用失败，未生成可供人工接受的候选'
+      : WAITING_HUMAN_RESULT_INVALID_CODES.has(latestErrorCode)
+        ? '模型返回的章节结果无效，未生成可供人工接受的候选'
+        : WAITING_HUMAN_CONTEXT_INVALID_CODES.has(latestErrorCode)
+          ? '章节上下文无效，未生成可供人工接受的候选'
+      : '自动流程正在等待人工决定';
+  const showCandidateActions = run.status === 'waiting_human' && candidateId !== null;
 
   const submitGuidance = async () => {
     if (!guidance.trim()) {
@@ -680,7 +732,7 @@ const HumanGatePanel = ({
       <Alert
         type={run.status === 'waiting_human' ? 'warning' : 'info'}
         showIcon
-        message={run.status === 'waiting_human' ? '自动流程正在等待人工决定' : '流程已暂停，可以补充后续创作指导'}
+        message={run.status === 'waiting_human' ? waitingHumanMessage : '流程已暂停，可以补充后续创作指导'}
         description="指导文本只应进入受控生成输入，不应出现在公开 Run、日志或审计结果中。"
         style={{ marginBottom: 12 }}
       />
@@ -695,9 +747,17 @@ const HumanGatePanel = ({
       <Space wrap style={{ marginTop: 12 }}>
         {run.status === 'paused' ? (
           <Button loading={loading} onClick={() => void submitGuidance()}>保存后续指导</Button>
-        ) : (
+        ) : showCandidateActions ? (
           <>
             <Button type="primary" icon={<CheckCircleOutlined />} loading={loading} onClick={() => void onDecision('accept', guidance)}>接受并继续</Button>
+            <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void onDecision('retry', guidance)}>重试</Button>
+            <Button icon={<CaretRightOutlined />} loading={loading} onClick={() => void onDecision('repair', guidance)}>返修</Button>
+            <Popconfirm title="停止后将把当前 Run 标记为已取消，确定继续？" onConfirm={() => void onDecision('stop', guidance)}>
+              <Button danger icon={<StopOutlined />} loading={loading}>停止</Button>
+            </Popconfirm>
+          </>
+        ) : (
+          <>
             <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void onDecision('retry', guidance)}>重试</Button>
             <Button icon={<CaretRightOutlined />} loading={loading} onClick={() => void onDecision('repair', guidance)}>返修</Button>
             <Popconfirm title="停止后将把当前 Run 标记为已取消，确定继续？" onConfirm={() => void onDecision('stop', guidance)}>
@@ -822,6 +882,7 @@ export const NovelAutopilotWorkbench = ({ projectId }: NovelAutopilotWorkbenchPr
       {run ? (
         <HumanGatePanel
           run={run}
+          steps={state.steps}
           loading={state.mutating}
           onGuidance={async (guidance) => {
             await updateGuidance(guidance);

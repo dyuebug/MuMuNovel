@@ -917,6 +917,49 @@ async fn complete_task(
     }
 }
 
+fn novel_book_autopilot_completion_message(task_result: &Value) -> String {
+    let dispatch_status = task_result.get("dispatch_status").and_then(Value::as_str);
+    let candidate_id = task_result.get("candidate_id").and_then(Value::as_str);
+    let reason_code = task_result.get("reason_code").and_then(Value::as_str);
+
+    if dispatch_status == Some("waiting_human") && candidate_id.is_some() {
+        return "候选已保存，等待人工复核".to_string();
+    }
+
+    if dispatch_status == Some("waiting_human") {
+        if reason_code.is_some_and(is_provider_failure_reason_code) {
+            return "模型 Provider 调用失败，未生成可供人工接受的候选".to_string();
+        }
+        if reason_code.is_some_and(is_result_invalid_reason_code) {
+            return "模型返回的章节结果无效，未生成可供人工接受的候选".to_string();
+        }
+        if reason_code.is_some_and(is_context_invalid_reason_code) {
+            return "章节上下文无效，未生成可供人工接受的候选".to_string();
+        }
+    }
+
+    "整本小说自动创作编排步骤已完成".to_string()
+}
+
+fn is_provider_failure_reason_code(reason_code: &str) -> bool {
+    reason_code.starts_with("chapter_analysis_provider_")
+        || reason_code.starts_with("chapter_repair_provider_")
+}
+
+fn is_result_invalid_reason_code(reason_code: &str) -> bool {
+    matches!(
+        reason_code,
+        "chapter_analysis_result_invalid" | "chapter_repair_result_invalid"
+    )
+}
+
+fn is_context_invalid_reason_code(reason_code: &str) -> bool {
+    matches!(
+        reason_code,
+        "chapter_analysis_context_invalid" | "chapter_repair_context_invalid"
+    )
+}
+
 async fn fail_task(
     registry: &TaskRegistry,
     stream_hub: &TaskStreamHub,
@@ -1291,12 +1334,13 @@ async fn execute_task(
                     task_result
                 }
             };
+            let completion_message = novel_book_autopilot_completion_message(&task_result);
             complete_task(
                 registry,
                 stream_hub,
                 &record.task_id,
                 task_result,
-                Some("整本小说自动创作编排步骤已完成".to_string()),
+                Some(completion_message),
             )
             .await;
         }
@@ -2141,12 +2185,13 @@ mod tests {
         build_missing_task_payload, build_task_list_response, cancel_active_task, cancel_task,
         compatible_task_payload, complete_task, enrich_task_payload, execute_task, fail_task,
         map_task_list_query_request_error, mark_task_running, next_task_stream_data,
-        normalize_task_statuses_query, prepare_task_execution_payload,
-        spawn_channel_progress_bridge, spawn_task_execution, subscribe_task_with_latest_snapshot,
-        sync_channel_state_to_task, task_type_allows_empty_project, TaskListQueryRequestError,
-        TaskListRequest, TaskStreamState, BACKGROUND_TASKS_CANCEL_ROUTE,
-        BACKGROUND_TASKS_DETAIL_ROUTE, BACKGROUND_TASKS_LIST_CREATE_ROUTE,
-        BACKGROUND_TASKS_STREAM_ROUTE, BACKGROUND_TASKS_WORKFLOW_STATE_ROUTE,
+        normalize_task_statuses_query, novel_book_autopilot_completion_message,
+        prepare_task_execution_payload, spawn_channel_progress_bridge, spawn_task_execution,
+        subscribe_task_with_latest_snapshot, sync_channel_state_to_task,
+        task_type_allows_empty_project, TaskListQueryRequestError, TaskListRequest,
+        TaskStreamState, BACKGROUND_TASKS_CANCEL_ROUTE, BACKGROUND_TASKS_DETAIL_ROUTE,
+        BACKGROUND_TASKS_LIST_CREATE_ROUTE, BACKGROUND_TASKS_STREAM_ROUTE,
+        BACKGROUND_TASKS_WORKFLOW_STATE_ROUTE,
     };
     use crate::models::{autopilot_invocation_audit, project};
     use crate::services::auth::Claims;
@@ -2179,6 +2224,39 @@ mod tests {
         .await
         .expect("create autopilot invocation audits table");
         db
+    }
+
+    #[test]
+    fn novel_autopilot_completion_message_distinguishes_no_candidate_failures() {
+        assert_eq!(
+            novel_book_autopilot_completion_message(&json!({
+                "dispatch_status": "waiting_human",
+                "candidate_id": "step-1",
+                "reason_code": "chapter_generation_attempts_exhausted",
+            })),
+            "候选已保存，等待人工复核"
+        );
+        assert_eq!(
+            novel_book_autopilot_completion_message(&json!({
+                "dispatch_status": "waiting_human",
+                "reason_code": "chapter_repair_provider_timeout",
+            })),
+            "模型 Provider 调用失败，未生成可供人工接受的候选"
+        );
+        assert_eq!(
+            novel_book_autopilot_completion_message(&json!({
+                "dispatch_status": "waiting_human",
+                "reason_code": "chapter_analysis_result_invalid",
+            })),
+            "模型返回的章节结果无效，未生成可供人工接受的候选"
+        );
+        assert_eq!(
+            novel_book_autopilot_completion_message(&json!({
+                "dispatch_status": "waiting_human",
+                "reason_code": "chapter_repair_context_invalid",
+            })),
+            "章节上下文无效，未生成可供人工接受的候选"
+        );
     }
 
     async fn insert_project(db: &DatabaseConnection, id: &str, user_id: &str, status: &str) {

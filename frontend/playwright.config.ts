@@ -20,6 +20,8 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
     headless: true,
+    locale: 'zh-CN',
+    timezoneId: 'Asia/Shanghai',
   },
   projects: [
     {

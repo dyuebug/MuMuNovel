@@ -71,7 +71,8 @@ const EXECUTION_CANCELLED: &str = "小说自动创作编排步骤已取消";
 const PLANNING_ADAPTER_UNAVAILABLE: &str = "planning_adapter_unavailable";
 const ROUTER_IDLE: &str = "router_idle";
 const INVALID_ROUTER_FACTS: &str = "invalid_router_facts";
-const HUMAN_DECISION_CANDIDATE_UNAVAILABLE: &str = "human_decision_candidate_unavailable";
+pub(crate) const HUMAN_DECISION_CANDIDATE_UNAVAILABLE: &str =
+    "human_decision_candidate_unavailable";
 const HUMAN_DECISION_CANDIDATE_STALE: &str = "human_decision_candidate_stale";
 const HUMAN_DECISION_RETRY_ROUTE_MISMATCH: &str = "human_decision_retry_route_mismatch";
 const HUMAN_DECISION_REPAIR_NOT_SUPPORTED: &str = "human_decision_repair_not_supported";
@@ -1061,7 +1062,11 @@ fn next_tick_lease(run: &crate::models::novel_autopilot_run::Model) -> NovelAuto
 fn is_manual_review_candidate_step(step: &crate::models::novel_autopilot_step_run::Model) -> bool {
     matches!(
         step.error_code.as_deref(),
-        Some("chapter_quality_manual_review" | "chapter_repair_manual_review")
+        Some(
+            "chapter_quality_manual_review"
+                | "chapter_generation_attempts_exhausted"
+                | "chapter_repair_manual_review"
+        )
     )
 }
 
@@ -1079,10 +1084,7 @@ fn apply_human_decision(
 
     match decision {
         "accept" => {
-            if matches!(
-                latest_step.error_code.as_deref(),
-                Some("chapter_quality_manual_review" | "chapter_repair_manual_review")
-            ) {
+            if latest_step.error_code.is_some() {
                 AppliedHumanDecision::WaitForHuman(HUMAN_DECISION_CANDIDATE_UNAVAILABLE)
             } else {
                 AppliedHumanDecision::Route(routed)
@@ -1113,6 +1115,18 @@ fn apply_human_decision(
                         chapter_id,
                         "repair",
                         NovelAutopilotStepType::ChapterRepair,
+                    ),
+                )),
+                (
+                    Some(NovelAutopilotStepType::ChapterGenerate),
+                    Some(chapter_id),
+                    Some(chapter_number),
+                ) => AppliedHumanDecision::Route(NovelAutopilotRouteDecision::Execute(
+                    AutopilotStepPlan::chapter(
+                        chapter_number,
+                        chapter_id,
+                        "generate",
+                        NovelAutopilotStepType::ChapterGenerate,
                     ),
                 )),
                 _ => AppliedHumanDecision::WaitForHuman(HUMAN_DECISION_REPAIR_NOT_SUPPORTED),
@@ -1469,7 +1483,7 @@ mod human_decision_tests {
     use super::{
         apply_human_decision, AppliedHumanDecision, NovelAutopilotRouteDecision,
         HUMAN_DECISION_CANDIDATE_UNAVAILABLE, HUMAN_DECISION_INVALID,
-        HUMAN_DECISION_REPAIR_NOT_SUPPORTED, HUMAN_DECISION_RETRY_ROUTE_MISMATCH,
+        HUMAN_DECISION_RETRY_ROUTE_MISMATCH,
     };
     use crate::{
         models::novel_autopilot_step_run,
@@ -1556,7 +1570,12 @@ mod human_decision_tests {
     fn accept_without_persisted_candidate_stays_waiting_human() {
         for error_code in [
             "chapter_quality_manual_review",
+            "chapter_generation_attempts_exhausted",
             "chapter_repair_manual_review",
+            "chapter_analysis_provider_failed",
+            "chapter_repair_provider_timeout",
+            "chapter_analysis_result_invalid",
+            "chapter_repair_context_invalid",
         ] {
             let latest = latest_step(
                 "chapter:0001:generate",
@@ -1632,20 +1651,28 @@ mod human_decision_tests {
     }
 
     #[test]
-    fn repair_rejects_generation_candidate_and_missing_decision_context() {
+    fn repair_routes_generation_candidate_to_a_new_guided_generation_attempt() {
         let latest = latest_step(
             "chapter:0001:generate",
             NovelAutopilotStepType::ChapterGenerate,
             Some("chapter_quality_manual_review"),
         );
-        assert_eq!(
-            apply_human_decision(
-                Some("repair"),
-                NovelAutopilotRouteDecision::Idle,
-                Some(&latest),
-            ),
-            AppliedHumanDecision::WaitForHuman(HUMAN_DECISION_REPAIR_NOT_SUPPORTED)
+        let applied = apply_human_decision(
+            Some("repair"),
+            NovelAutopilotRouteDecision::Idle,
+            Some(&latest),
         );
+        let AppliedHumanDecision::Route(NovelAutopilotRouteDecision::Execute(step)) = applied
+        else {
+            panic!("generation candidate repair must schedule a new generation attempt");
+        };
+        assert_eq!(step.step_key, "chapter:0001:generate");
+        assert_eq!(step.step_type, NovelAutopilotStepType::ChapterGenerate);
+        assert_eq!(step.chapter_id.as_deref(), Some("chapter-1"));
+    }
+
+    #[test]
+    fn human_decision_without_context_stays_waiting_human() {
         assert_eq!(
             apply_human_decision(Some("accept"), NovelAutopilotRouteDecision::Idle, None,),
             AppliedHumanDecision::WaitForHuman(HUMAN_DECISION_INVALID)

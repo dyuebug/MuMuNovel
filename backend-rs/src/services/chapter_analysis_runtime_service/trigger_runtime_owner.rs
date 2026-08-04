@@ -32,6 +32,7 @@ use crate::services::generation_execution_audit_service::{
     build_generation_execution_audit, GenerationExecutionAuditV1,
     GENERATION_EXECUTION_AUDIT_HISTORY_FIELD,
 };
+use crate::services::novel_autopilot::failure_diagnostic::NovelAutopilotProviderFailureHint;
 use crate::services::prompt_template_service::PromptTemplateService;
 use crate::services::wizard_service::clean_json_response;
 
@@ -146,6 +147,35 @@ async fn build_chapter_analysis_prompt(
 struct ExecutedChapterReview {
     content: String,
     audit: GenerationExecutionAuditV1,
+    provider_hint: NovelAutopilotProviderFailureHint,
+}
+
+#[derive(Debug)]
+pub(crate) enum ChapterAnalysisAutopilotRuntimeError {
+    Cancelled,
+    Context(&'static str),
+    Configuration {
+        message: String,
+        provider_hint: Option<NovelAutopilotProviderFailureHint>,
+    },
+    Provider {
+        message: String,
+        provider_hint: NovelAutopilotProviderFailureHint,
+    },
+    ResponseInvalid {
+        provider_hint: NovelAutopilotProviderFailureHint,
+    },
+}
+
+impl ChapterAnalysisAutopilotRuntimeError {
+    fn into_legacy_message(self) -> String {
+        match self {
+            Self::Cancelled => "chapter analysis was cancelled".to_string(),
+            Self::Context(source) => format!("chapter analysis context invalid: {source}"),
+            Self::Configuration { message, .. } | Self::Provider { message, .. } => message,
+            Self::ResponseInvalid { .. } => "chapter analysis result must be an object".to_string(),
+        }
+    }
 }
 
 fn finalize_chapter_review_prompt(prompt: String, additional_guidance: Option<&str>) -> String {
@@ -157,7 +187,7 @@ async fn execute_chapter_review_prompt(
     user_id: &str,
     prompt: String,
     additional_guidance: Option<&str>,
-) -> Result<ExecutedChapterReview, String> {
+) -> Result<ExecutedChapterReview, ChapterAnalysisAutopilotRuntimeError> {
     let prepared = prepare_role_aware_generation_execution_config_with_provider_payload(
         db,
         user_id,
@@ -165,10 +195,20 @@ async fn execute_chapter_review_prompt(
         None,
         build_placeholder_prompt_context_provider_payload(),
     )
-    .await?;
-    let role_policy_context = prepared
-        .role_policy_context
-        .ok_or_else(|| "chapter review role policy context is missing".to_string())?;
+    .await
+    .map_err(
+        |message| ChapterAnalysisAutopilotRuntimeError::Configuration {
+            message,
+            provider_hint: None,
+        },
+    )?;
+    let provider_hint = NovelAutopilotProviderFailureHint::from_ai_config(&prepared.ai_config);
+    let role_policy_context = prepared.role_policy_context.ok_or_else(|| {
+        ChapterAnalysisAutopilotRuntimeError::Configuration {
+            message: "chapter review role policy context is missing".to_string(),
+            provider_hint: Some(provider_hint.clone()),
+        }
+    })?;
     let prompt = finalize_chapter_review_prompt(prompt, additional_guidance);
     let tracked = AIService::new(prepared.ai_config)
         .generate_text_tracked(
@@ -178,14 +218,21 @@ async fn execute_chapter_review_prompt(
             role_policy_context.allow_model_fallback,
         )
         .await
-        .map_err(|error| error.error.to_string())?;
+        .map_err(|error| ChapterAnalysisAutopilotRuntimeError::Provider {
+            message: error.error.message,
+            provider_hint: NovelAutopilotProviderFailureHint {
+                http_status: error.error.status_code,
+                ..provider_hint.clone()
+            },
+        })?;
     let audit =
         build_generation_execution_audit(&role_policy_context.resolved_policy, &tracked.execution)
-            .map_err(|error| error.to_string())?;
+            .map_err(|_| ChapterAnalysisAutopilotRuntimeError::Context("execution_audit"))?;
 
     Ok(ExecutedChapterReview {
         content: tracked.response.content,
         audit,
+        provider_hint,
     })
 }
 
@@ -204,50 +251,69 @@ fn attach_chapter_review_execution_audit(
     Ok(())
 }
 
-pub(crate) async fn generate_chapter_analysis_payload_for_autopilot(
+pub(crate) async fn generate_chapter_analysis_payload_for_autopilot_typed(
     db: &DatabaseConnection,
     user_id: &str,
     chapter_id: &str,
     additional_guidance: Option<&str>,
     cancellation_token: Option<&CooperativeCancellationToken>,
-) -> Result<(chapter::Model, Value), String> {
+) -> Result<
+    (chapter::Model, Value, NovelAutopilotProviderFailureHint),
+    ChapterAnalysisAutopilotRuntimeError,
+> {
     if cancellation_token.is_some_and(CooperativeCancellationToken::is_cancelled) {
-        return Err("chapter analysis was cancelled".to_string());
+        return Err(ChapterAnalysisAutopilotRuntimeError::Cancelled);
     }
     let chapter_model = ChapterService::get(db, chapter_id, user_id)
-        .await?
-        .ok_or_else(|| "章节不存在或无权访问".to_string())?;
+        .await
+        .map_err(|_| ChapterAnalysisAutopilotRuntimeError::Context("chapter_load"))?
+        .ok_or(ChapterAnalysisAutopilotRuntimeError::Context(
+            "chapter_not_found",
+        ))?;
     if chapter_model
         .content
         .as_deref()
         .is_none_or(|content| content.trim().is_empty())
     {
-        return Err("章节不存在或内容为空".to_string());
+        return Err(ChapterAnalysisAutopilotRuntimeError::Context(
+            "chapter_content_empty",
+        ));
     }
     let project_model = project::Entity::find_by_id(&chapter_model.project_id)
         .one(db)
         .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "项目不存在".to_string())?;
+        .map_err(|_| ChapterAnalysisAutopilotRuntimeError::Context("project_load"))?
+        .ok_or(ChapterAnalysisAutopilotRuntimeError::Context(
+            "project_not_found",
+        ))?;
     if project_model.user_id != user_id {
-        return Err("项目不存在".to_string());
+        return Err(ChapterAnalysisAutopilotRuntimeError::Context(
+            "project_not_found",
+        ));
     }
 
-    let prompt = build_chapter_analysis_prompt(db, &chapter_model, &project_model).await?;
+    let prompt = build_chapter_analysis_prompt(db, &chapter_model, &project_model)
+        .await
+        .map_err(|_| ChapterAnalysisAutopilotRuntimeError::Context("prompt_context"))?;
     if cancellation_token.is_some_and(CooperativeCancellationToken::is_cancelled) {
-        return Err("chapter analysis was cancelled".to_string());
+        return Err(ChapterAnalysisAutopilotRuntimeError::Cancelled);
     }
     let executed = execute_chapter_review_prompt(db, user_id, prompt, additional_guidance).await?;
     if cancellation_token.is_some_and(CooperativeCancellationToken::is_cancelled) {
-        return Err("chapter analysis was cancelled".to_string());
+        return Err(ChapterAnalysisAutopilotRuntimeError::Cancelled);
     }
     let cleaned = clean_json_response(&executed.content);
-    let parsed: Value =
-        serde_json::from_str(&cleaned).map_err(|error| format!("JSON解析失败: {error}"))?;
+    let parsed: Value = serde_json::from_str(&cleaned).map_err(|_| {
+        ChapterAnalysisAutopilotRuntimeError::ResponseInvalid {
+            provider_hint: executed.provider_hint.clone(),
+        }
+    })?;
     if !parsed.is_object() {
-        return Err("chapter analysis result must be an object".to_string());
+        return Err(ChapterAnalysisAutopilotRuntimeError::ResponseInvalid {
+            provider_hint: executed.provider_hint,
+        });
     }
-    Ok((chapter_model, parsed))
+    Ok((chapter_model, parsed, executed.provider_hint))
 }
 
 async fn execute_and_persist_chapter_review(
@@ -258,7 +324,9 @@ async fn execute_and_persist_chapter_review(
     task_id: &str,
 ) -> Result<Value, String> {
     let prompt = build_chapter_analysis_prompt(db, chapter_model, project_model).await?;
-    let executed = execute_chapter_review_prompt(db, user_id, prompt, None).await?;
+    let executed = execute_chapter_review_prompt(db, user_id, prompt, None)
+        .await
+        .map_err(ChapterAnalysisAutopilotRuntimeError::into_legacy_message)?;
     let cleaned = clean_json_response(&executed.content);
     let parsed: Value =
         serde_json::from_str(&cleaned).map_err(|error| format!("JSON解析失败: {}", error))?;

@@ -20,6 +20,7 @@ use crate::{
 
 use super::{
     output_observer::NovelAutopilotOutputObserver,
+    quality_diagnostic::build_safe_quality_diagnostic,
     repository::{
         ChapterBusinessSnapshot, ClaimedNovelAutopilotStep, NovelAutopilotChapterGenerateCommit,
         NovelAutopilotManualReviewCandidate, NovelAutopilotRepository,
@@ -205,11 +206,29 @@ pub(crate) async fn execute_chapter_generate_step(
             .await
         }
         ChapterQualityRoute::Retry(decision) => {
-            finish_quality_retry(db, record, claimed, step, config, generated, decision).await
+            finish_quality_retry(
+                db,
+                record,
+                claimed,
+                step,
+                config,
+                &expected_chapter,
+                generated,
+                decision,
+            )
+            .await
         }
         ChapterQualityRoute::ManualReview => {
-            persist_manual_review_candidate(db, record, claimed, step, &expected_chapter, generated)
-                .await
+            persist_manual_review_candidate(
+                db,
+                record,
+                claimed,
+                step,
+                &expected_chapter,
+                generated,
+                CHAPTER_QUALITY_MANUAL_REVIEW,
+            )
+            .await
         }
     }
 }
@@ -221,6 +240,7 @@ async fn persist_manual_review_candidate(
     step: &AutopilotStepPlan,
     expected_chapter: &ChapterBusinessSnapshot,
     generated: ChapterGeneratedDraft,
+    error_code: &str,
 ) -> Result<ChapterAdapterOutcome, ChapterAdapterError> {
     let word_count = generated.word_count;
     let quality_metrics = generated.quality_metrics.clone();
@@ -237,7 +257,7 @@ async fn persist_manual_review_candidate(
         Some(&record.task_id),
         expected_chapter,
         NovelAutopilotStepStatus::Skipped,
-        CHAPTER_QUALITY_MANUAL_REVIEW,
+        error_code,
         NovelAutopilotManualReviewCandidate {
             content: generated.content,
             word_count,
@@ -250,6 +270,11 @@ async fn persist_manual_review_candidate(
     )
     .await
     .map_err(ChapterAdapterError::Repository)?;
+    let quality_diagnostics = build_safe_quality_diagnostic(
+        quality_metrics.as_ref(),
+        quality_gate_action.as_deref(),
+        terminal.step.result_digest.as_deref(),
+    );
 
     Ok(ChapterAdapterOutcome::WaitingHuman {
         result: json!({
@@ -258,7 +283,7 @@ async fn persist_manual_review_candidate(
             "run_epoch": terminal.run.epoch,
             "run_version": terminal.run.version,
             "dispatch_status": "waiting_human",
-            "reason_code": CHAPTER_QUALITY_MANUAL_REVIEW,
+            "reason_code": error_code,
             "step_id": terminal.step.id,
             "candidate_id": terminal.step.id,
             "step_type": step.step_type,
@@ -268,8 +293,7 @@ async fn persist_manual_review_candidate(
             "word_count": word_count,
             "quality_decision": NovelAutopilotQualityDecision::ManualReview,
             "quality_gate_action": quality_gate_action,
-            "quality_gate_message": quality_gate_message,
-            "quality_metrics": quality_metrics,
+            "quality_diagnostics": quality_diagnostics,
             "result_digest": terminal.step.result_digest,
         }),
     })
@@ -287,6 +311,11 @@ async fn commit_accepted_chapter(
     let word_count = generated.word_count;
     let quality_metrics = generated.quality_metrics.clone();
     let quality_gate_action = generated.quality_gate_action.clone();
+    let quality_diagnostics = build_safe_quality_diagnostic(
+        quality_metrics.as_ref(),
+        quality_gate_action.as_deref(),
+        Some(&generated.content_digest),
+    );
     let human_gate_reason =
         accepted_chapter_human_gate_reason(config, claimed.run.completed_chapters);
     let target_run_status = if human_gate_reason.is_some() {
@@ -347,7 +376,7 @@ async fn commit_accepted_chapter(
         "word_count": word_count,
         "quality_decision": NovelAutopilotQualityDecision::Accept,
         "quality_gate_action": quality_gate_action,
-        "quality_metrics": quality_metrics,
+        "quality_diagnostics": quality_diagnostics,
         "result_digest": committed.step.result_digest,
     });
     if waiting_human {
@@ -400,6 +429,7 @@ async fn finish_quality_retry(
     claimed: ClaimedNovelAutopilotStep,
     step: &AutopilotStepPlan,
     config: &NovelAutopilotRunConfig,
+    expected_chapter: &ChapterBusinessSnapshot,
     generated: ChapterGeneratedDraft,
     decision: NovelAutopilotQualityDecision,
 ) -> Result<ChapterAdapterOutcome, ChapterAdapterError> {
@@ -408,6 +438,11 @@ async fn finish_quality_retry(
         _ => CHAPTER_QUALITY_RETRY,
     };
     if attempt_available(&claimed, config) {
+        let quality_diagnostics = build_safe_quality_diagnostic(
+            generated.quality_metrics.as_ref(),
+            generated.quality_gate_action.as_deref(),
+            Some(&generated.content_digest),
+        );
         let terminal = NovelAutopilotRepository::complete_step(
             db,
             &claimed.step.id,
@@ -442,22 +477,21 @@ async fn finish_quality_retry(
                 "max_step_attempts": config.max_step_attempts,
                 "quality_decision": decision,
                 "quality_gate_action": generated.quality_gate_action,
-                "quality_metrics": generated.quality_metrics,
+                "quality_diagnostics": quality_diagnostics,
                 "result_digest": terminal.step.result_digest,
             }),
             run: terminal.run,
         });
     }
 
-    finish_waiting_human(
+    persist_manual_review_candidate(
         db,
         record,
         claimed,
         step,
-        NovelAutopilotStepStatus::Failed,
+        expected_chapter,
+        generated,
         CHAPTER_GENERATION_ATTEMPTS_EXHAUSTED,
-        Some(generated.content_digest),
-        Some(decision),
     )
     .await
 }

@@ -33,6 +33,7 @@ pub(crate) mod export_repository;
 #[cfg(test)]
 mod export_tests;
 pub(crate) mod facts;
+pub(crate) mod failure_diagnostic;
 pub(crate) mod foundation_adapter;
 pub(crate) mod organization_adapter;
 pub(crate) mod outline_adapter;
@@ -40,6 +41,7 @@ pub(crate) mod outline_expansion_adapter;
 pub(crate) mod outline_expansion_repository;
 pub(crate) mod outline_repository;
 pub(crate) mod output_observer;
+pub(crate) mod quality_diagnostic;
 pub(crate) mod repository;
 pub(crate) mod router;
 pub(crate) mod types;

@@ -24,8 +24,8 @@ use super::{
         ClaimedNovelAutopilotStep, NovelAutopilotRepository, NovelAutopilotRepositoryError,
     },
     types::{
-        NovelAutopilotQualityDecision, NovelAutopilotRunStatus, NovelAutopilotStepStatus,
-        NovelAutopilotStepType,
+        NovelAutopilotFailureCounterKind, NovelAutopilotQualityDecision, NovelAutopilotRunStatus,
+        NovelAutopilotStepStatus, NovelAutopilotStepType,
     },
 };
 
@@ -210,7 +210,7 @@ impl NovelAutopilotRepository {
         expected_step_key: &str,
         expected_background_task_id: Option<&str>,
         error_code: &str,
-        provider_failure: bool,
+        failure_counter_kind: NovelAutopilotFailureCounterKind,
         waiting_human: bool,
         quality_decision: NovelAutopilotQualityDecision,
         candidate_evidence: Option<NovelAutopilotChapterRepairFailureEvidence>,
@@ -219,7 +219,7 @@ impl NovelAutopilotRepository {
             validate_repair_failure_evidence(
                 evidence,
                 step_id,
-                provider_failure,
+                failure_counter_kind,
                 waiting_human,
                 quality_decision,
             )?;
@@ -300,8 +300,8 @@ impl NovelAutopilotRepository {
                 Expr::col(novel_autopilot_run::Column::Version).add(1),
             )
             .col_expr(novel_autopilot_run::Column::UpdatedAt, Expr::value(now));
-        run_update = if provider_failure {
-            run_update
+        run_update = match failure_counter_kind {
+            NovelAutopilotFailureCounterKind::Provider => run_update
                 .col_expr(
                     novel_autopilot_run::Column::ConsecutiveProviderFailures,
                     Expr::col(novel_autopilot_run::Column::ConsecutiveProviderFailures).add(1),
@@ -309,9 +309,8 @@ impl NovelAutopilotRepository {
                 .col_expr(
                     novel_autopilot_run::Column::ConsecutiveQualityFailures,
                     Expr::value(0),
-                )
-        } else {
-            run_update
+                ),
+            NovelAutopilotFailureCounterKind::Quality => run_update
                 .col_expr(
                     novel_autopilot_run::Column::ConsecutiveProviderFailures,
                     Expr::value(0),
@@ -319,7 +318,8 @@ impl NovelAutopilotRepository {
                 .col_expr(
                     novel_autopilot_run::Column::ConsecutiveQualityFailures,
                     Expr::col(novel_autopilot_run::Column::ConsecutiveQualityFailures).add(1),
-                )
+                ),
+            NovelAutopilotFailureCounterKind::None => run_update,
         };
         let run_update = run_update
             .filter(novel_autopilot_run::Column::Id.eq(&run.id))
@@ -497,12 +497,12 @@ fn validate_repair_commit(
 fn validate_repair_failure_evidence(
     evidence: &NovelAutopilotChapterRepairFailureEvidence,
     step_id: &str,
-    provider_failure: bool,
+    failure_counter_kind: NovelAutopilotFailureCounterKind,
     waiting_human: bool,
     quality_decision: NovelAutopilotQualityDecision,
 ) -> Result<(), NovelAutopilotRepositoryError> {
     let draft = &evidence.draft_attempt;
-    if provider_failure
+    if failure_counter_kind != NovelAutopilotFailureCounterKind::Quality
         || waiting_human
         || !matches!(
             quality_decision,
