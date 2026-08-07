@@ -629,3 +629,36 @@ Persist scoped chapter-repair retry candidates and quality feedback atomically, 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: 修复自动创作重试、人工复核与时间契约
+
+**Date**: 2026-08-07
+**Task**: 修复自动创作重试、人工复核与时间契约
+**Branch**: `dev`
+
+### Summary
+
+完成 Provider typed Retry-After、持久化 next_attempt_at、ChapterGenerate 质量反馈闭环、人工候选状态、RFC3339 UTC 时间与 PostgreSQL migration；完成备份、部署、启动恢复及三章完整自动创作 smoke。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `680c231` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
