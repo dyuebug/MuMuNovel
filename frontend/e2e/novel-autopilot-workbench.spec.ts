@@ -68,6 +68,7 @@ const buildRun = (
   started_at: '2026-08-01T05:35:00Z',
   paused_at: status === 'paused' ? '2026-08-01T05:39:00Z' : null,
   completed_at: status === 'completed' ? '2026-08-01T05:40:00Z' : null,
+  next_attempt_at: null,
   ...overrides,
 });
 
@@ -412,6 +413,29 @@ test.describe('durable novel autopilot workbench', () => {
 
     await expect(page.getByText('每卷确认')).toBeVisible();
     await expect(page.getByText('Markdown')).toBeVisible();
+    await expect(page.getByText('运行时间：5分钟 0秒')).toBeVisible();
+    await expect(page.getByText('预计重试时间')).toHaveCount(0);
+  });
+
+  test('shows a persisted Provider retry due time in the configured local timezone', async ({ page }) => {
+    await preparePage(page);
+    await installApiMocks(page, {
+      initialRun: buildRun('running', {
+        current_step: null,
+        next_attempt_at: '2026-08-01T05:45:30Z',
+      }),
+      steps: buildSteps().map((step) => (
+        step.id === 'step-chapter-3'
+          ? { ...step, status: 'failed', completed_at: '2026-08-01T05:40:00Z' }
+          : step
+      )),
+    });
+
+    await page.goto(`/project/${projectId}/autopilot`);
+
+    await expect(page.getByText('运行中', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('预计重试时间')).toBeVisible();
+    await expect(page.getByText('2026/8/1 13:45:30')).toBeVisible();
   });
 
   test('restores an active Run with sticky metrics, limits, timeline, and live model output', async ({ page }) => {
@@ -698,6 +722,34 @@ test.describe('durable novel autopilot workbench', () => {
     await expect(page.getByRole('button', { name: '接受并继续' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '重试' })).toBeVisible();
     await expect(page.getByRole('button', { name: '返修' })).toBeVisible();
+  });
+
+  test('shows converged execution failure without exposing accept', async ({ page }) => {
+    await preparePage(page);
+    await installApiMocks(page, {
+      initialRun: buildRun('waiting_human', {
+        version: 12,
+        active_background_task_id: null,
+        last_error_code: 'novel_autopilot_execution_failed',
+      }),
+      steps: buildSteps().map((step) => (
+        step.id === 'step-chapter-3'
+          ? {
+            ...step,
+            status: 'failed',
+            error_code: 'novel_autopilot_execution_failed',
+            candidate_id: null,
+            completed_at: '2026-08-01T05:40:00Z',
+          }
+          : step
+      )),
+    });
+
+    await page.goto(`/project/${projectId}/autopilot`);
+
+    await expect(page.getByText(/自动创作步骤执行失败，运行状态已安全收敛/)).toBeVisible();
+    await expect(page.getByRole('button', { name: '接受并继续' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '重试' })).toBeVisible();
   });
 
   test('shows a validated final export descriptor for a completed book', async ({ page }) => {

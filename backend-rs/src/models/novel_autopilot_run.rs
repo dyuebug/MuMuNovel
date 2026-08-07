@@ -37,6 +37,7 @@ pub struct Model {
     pub consecutive_provider_failures: i32,
     pub consecutive_quality_failures: i32,
     pub last_error_code: Option<String>,
+    pub next_attempt_at: Option<NaiveDateTime>,
     pub guidance_digest: Option<String>,
     pub active_background_task_id: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]

@@ -1,3 +1,4 @@
+use chrono::Utc;
 use futures::StreamExt;
 use reqwest::Client;
 use serde_json::Value;
@@ -5,8 +6,8 @@ use std::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::ai::types::{
-    AIRequestError, AIResponse, AIStreamChunk, ChatMessage, ToolCall, ToolCallFunction, ToolChoice,
-    ToolDef,
+    retry_after_seconds_from_headers, AIRequestError, AIResponse, AIStreamChunk, ChatMessage,
+    ToolCall, ToolCallFunction, ToolChoice, ToolDef,
 };
 
 pub struct AnthropicClient {
@@ -232,11 +233,13 @@ impl AnthropicClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
+            let retry_after_seconds = retry_after_seconds_from_headers(resp.headers(), Utc::now());
             let text = resp.text().await.unwrap_or_default();
             return Err(AIRequestError {
                 message: format!("Anthropic HTTP {status}: {text}"),
                 transport_diagnostics: None,
                 status_code: Some(status.as_u16()),
+                retry_after_seconds,
             });
         }
 
@@ -256,8 +259,8 @@ impl AnthropicClient {
         system_prompt: Option<String>,
         tools: Option<Vec<ToolDef>>,
         tool_choice: Option<ToolChoice>,
-    ) -> ReceiverStream<Result<AIStreamChunk, String>> {
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<AIStreamChunk, String>>(32);
+    ) -> ReceiverStream<Result<AIStreamChunk, AIRequestError>> {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<AIStreamChunk, AIRequestError>>(32);
         let client = self.client.clone();
         let api_key = self.api_key.clone();
         let base_url = self.base_url.clone();
@@ -296,8 +299,8 @@ impl AnthropicClient {
         system_prompt: Option<String>,
         tools: Option<Vec<ToolDef>>,
         tool_choice: Option<ToolChoice>,
-        tx: tokio::sync::mpsc::Sender<Result<AIStreamChunk, String>>,
-    ) -> Result<(), String> {
+        tx: tokio::sync::mpsc::Sender<Result<AIStreamChunk, AIRequestError>>,
+    ) -> Result<(), AIRequestError> {
         let url = format!("{}/messages", base_url);
         let body = Self::build_request_body(
             &messages,
@@ -308,7 +311,8 @@ impl AnthropicClient {
             tools.as_deref(),
             tool_choice.as_ref(),
             true,
-        )?;
+        )
+        .map_err(AIRequestError::new)?;
 
         let resp = client
             .post(&url)
@@ -317,12 +321,18 @@ impl AnthropicClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("Anthropic stream request failed: {}", e))?;
+            .map_err(|e| AIRequestError::new(format!("Anthropic stream request failed: {e}")))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
+            let retry_after_seconds = retry_after_seconds_from_headers(resp.headers(), Utc::now());
             let text = resp.text().await.unwrap_or_default();
-            return Err(format!("Anthropic stream HTTP {}: {}", status, text));
+            return Err(AIRequestError {
+                message: format!("Anthropic stream HTTP {status}: {text}"),
+                transport_diagnostics: None,
+                status_code: Some(status.as_u16()),
+                retry_after_seconds,
+            });
         }
 
         let mut stream = resp.bytes_stream();
@@ -330,7 +340,7 @@ impl AnthropicClient {
         let mut tool_calls_buffer: Vec<ToolCall> = Vec::new();
 
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| format!("stream error: {}", e))?;
+            let chunk = chunk.map_err(|e| AIRequestError::new(format!("stream error: {e}")))?;
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buffer.find('\n') {
@@ -466,7 +476,7 @@ impl AnthropicClient {
                             .and_then(|e| e.get("message"))
                             .and_then(|m| m.as_str())
                             .unwrap_or("unknown error");
-                        return Err(msg.to_string());
+                        return Err(AIRequestError::new(msg.to_string()));
                     }
                     _ => {}
                 }

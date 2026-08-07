@@ -1,3 +1,4 @@
+use chrono::Utc;
 use futures::StreamExt;
 use reqwest::{header::CONTENT_TYPE, Client, Url};
 use serde_json::{Map, Value};
@@ -6,8 +7,8 @@ use std::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::ai::types::{
-    AIRequestError, AIResponse, AIStreamChunk, ChatMessage, ToolCall, ToolCallFunction, ToolChoice,
-    ToolDef,
+    retry_after_seconds_from_headers, AIRequestError, AIResponse, AIStreamChunk, ChatMessage,
+    ToolCall, ToolCallFunction, ToolChoice, ToolDef,
 };
 
 pub struct OpenAIClient {
@@ -291,6 +292,7 @@ impl OpenAIClient {
         endpoint_path: &str,
         message: String,
         status_code: Option<u16>,
+        retry_after_seconds: Option<u64>,
     ) -> AIRequestError {
         let (backup_endpoint_used, failover_count) =
             Self::summarize_transport_attempts(&diagnostics);
@@ -303,7 +305,12 @@ impl OpenAIClient {
             failover_count,
         );
 
-        AIRequestError::with_transport_status(message, Value::Object(diagnostics), status_code)
+        AIRequestError::with_transport_status_and_retry_after(
+            message,
+            Value::Object(diagnostics),
+            status_code,
+            retry_after_seconds,
+        )
     }
 
     fn should_retry_chat_completions_candidate(
@@ -682,6 +689,7 @@ impl OpenAIClient {
         );
 
         let mut last_error = None;
+        let mut last_retry_after_seconds = None;
         let primary_candidate_count = primary_candidates.len();
 
         'candidate_loop: for (candidate_index, primary_candidate_base_url) in
@@ -723,6 +731,8 @@ impl OpenAIClient {
                                 .and_then(|value| value.to_str().ok())
                                 .unwrap_or("")
                                 .to_ascii_lowercase();
+                            let retry_after_seconds =
+                                retry_after_seconds_from_headers(resp.headers(), Utc::now());
                             let text = resp.text().await.unwrap_or_default();
 
                             if !status.is_success() {
@@ -771,6 +781,7 @@ impl OpenAIClient {
                                     }),
                                 );
                                 last_error = Some(error.clone());
+                                last_retry_after_seconds = retry_after_seconds;
                                 if will_retry_same_endpoint {
                                     continue;
                                 }
@@ -794,6 +805,7 @@ impl OpenAIClient {
                                     endpoint_path,
                                     error,
                                     Some(status.as_u16()),
+                                    retry_after_seconds,
                                 ));
                             }
 
@@ -901,6 +913,7 @@ impl OpenAIClient {
                                         endpoint_path,
                                         error,
                                         None,
+                                        None,
                                     ));
                                 }
                             }
@@ -971,6 +984,7 @@ impl OpenAIClient {
                                 endpoint_path,
                                 error,
                                 None,
+                                None,
                             ));
                         }
                     }
@@ -995,6 +1009,7 @@ impl OpenAIClient {
             endpoint_path,
             final_error,
             None,
+            last_retry_after_seconds,
         ))
     }
 
@@ -1006,8 +1021,8 @@ impl OpenAIClient {
         max_tokens: u32,
         tools: Option<Vec<ToolDef>>,
         tool_choice: Option<ToolChoice>,
-    ) -> ReceiverStream<Result<AIStreamChunk, String>> {
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<AIStreamChunk, String>>(32);
+    ) -> ReceiverStream<Result<AIStreamChunk, AIRequestError>> {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<AIStreamChunk, AIRequestError>>(32);
         let client = self.client.clone();
         let api_key = self.api_key.clone();
         let base_url = self.base_url.clone();
@@ -1044,8 +1059,8 @@ impl OpenAIClient {
         max_tokens: u32,
         tools: Option<Vec<ToolDef>>,
         tool_choice: Option<ToolChoice>,
-        tx: tokio::sync::mpsc::Sender<Result<AIStreamChunk, String>>,
-    ) -> Result<(), String> {
+        tx: tokio::sync::mpsc::Sender<Result<AIStreamChunk, AIRequestError>>,
+    ) -> Result<(), AIRequestError> {
         let url = format!("{}/chat/completions", base_url);
 
         let mut body = serde_json::json!({
@@ -1057,7 +1072,8 @@ impl OpenAIClient {
         });
 
         if let Some(ref t) = tools {
-            body["tools"] = serde_json::to_value(t).map_err(|e| format!("{}", e))?;
+            body["tools"] =
+                serde_json::to_value(t).map_err(|error| AIRequestError::new(error.to_string()))?;
             match tool_choice.as_ref() {
                 Some(tool_choice) => {
                     if let Some(tool_choice) = Self::serialize_tool_choice(Some(tool_choice)) {
@@ -1076,12 +1092,18 @@ impl OpenAIClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("OpenAI stream request failed: {}", e))?;
+            .map_err(|e| AIRequestError::new(format!("OpenAI stream request failed: {e}")))?;
 
         let status = resp.status();
         if !status.is_success() {
+            let retry_after_seconds = retry_after_seconds_from_headers(resp.headers(), Utc::now());
             let text = resp.text().await.unwrap_or_default();
-            return Err(format!("OpenAI stream HTTP {}: {}", status, text));
+            return Err(AIRequestError {
+                message: format!("OpenAI stream HTTP {status}: {text}"),
+                transport_diagnostics: None,
+                status_code: Some(status.as_u16()),
+                retry_after_seconds,
+            });
         }
 
         let content_type = resp
@@ -1094,7 +1116,7 @@ impl OpenAIClient {
         if !content_type.contains("text/event-stream") {
             let text = resp.text().await.unwrap_or_default();
             if let Ok(json) = serde_json::from_str::<Value>(&text) {
-                let parsed = Self::parse_response(&json)?;
+                let parsed = Self::parse_response(&json).map_err(AIRequestError::new)?;
                 if let Some(reasoning_content) = parsed.reasoning_content.as_ref() {
                     let _ = tx
                         .send(Ok(AIStreamChunk {
@@ -1129,7 +1151,11 @@ impl OpenAIClient {
                 return Ok(());
             }
 
-            return Err(Self::invalid_content_error("OpenAI stream", status, &text));
+            return Err(AIRequestError::new(Self::invalid_content_error(
+                "OpenAI stream",
+                status,
+                &text,
+            )));
         }
 
         let mut stream = resp.bytes_stream();
@@ -1137,7 +1163,7 @@ impl OpenAIClient {
         let mut tool_calls_buffer: Vec<ToolCall> = Vec::new();
 
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| format!("stream error: {}", e))?;
+            let chunk = chunk.map_err(|e| AIRequestError::new(format!("stream error: {e}")))?;
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buffer.find('\n') {

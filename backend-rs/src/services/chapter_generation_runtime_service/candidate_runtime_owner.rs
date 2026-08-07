@@ -5,6 +5,7 @@ use crate::ai::execution_trace::{
     AIExecutionFallbackKind, AIExecutionFallbackSummaryV1, AIExecutionTraceV1,
 };
 use crate::ai::service::AIService;
+use crate::ai::types::AIRequestError;
 use crate::models::chapter;
 use crate::services::chapter_candidate_executor_production_adapter_service::{
     build_chapter_candidate_execution_trace_registry, build_chapter_candidate_quality_adapter,
@@ -46,6 +47,29 @@ use crate::services::generation_contract_service::{
 use serde_json::{json, Value};
 
 const SINGLE_GENERATION_CANDIDATE_MAX_CANDIDATES: i64 = 1;
+
+#[derive(Debug)]
+pub(crate) enum ChapterCandidateRuntimeError {
+    Provider(AIRequestError),
+    Other(String),
+}
+
+impl std::fmt::Display for ChapterCandidateRuntimeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Provider(error) => error.fmt(formatter),
+            Self::Other(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for ChapterCandidateRuntimeError {}
+
+impl From<String> for ChapterCandidateRuntimeError {
+    fn from(message: String) -> Self {
+        Self::Other(message)
+    }
+}
 
 #[derive(Debug, Clone)]
 struct SingleGenerationCandidateGatewayQualityContext {
@@ -241,18 +265,18 @@ async fn generate_single_generation_direct_fallback_candidate(
     prompt: String,
     context: ChapterCandidateProductionFallbackContext,
     allow_model_fallback: Option<bool>,
-) -> Result<(Value, Option<AIExecutionTraceV1>), String> {
+) -> Result<(Value, Option<AIExecutionTraceV1>), ChapterCandidateRuntimeError> {
     let (content, execution) = if let Some(allow_model_fallback) = allow_model_fallback {
         let tracked = AIService::new(ai_config)
             .generate_text_tracked(&prompt, None, None, allow_model_fallback)
             .await
-            .map_err(|error| error.error.to_string())?;
+            .map_err(|error| ChapterCandidateRuntimeError::Provider(error.error))?;
         (tracked.response.content, Some(tracked.execution))
     } else {
         let response = AIService::new(ai_config)
             .generate_text(&prompt, None, None)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(ChapterCandidateRuntimeError::Other)?;
         (response.content, None)
     };
 
@@ -438,7 +462,8 @@ pub(crate) async fn execute_single_generation_candidate_runtime_with_guidance(
         gateway_config,
         None,
     )
-    .await?;
+    .await
+    .map_err(|error| error.to_string())?;
     Ok((prompt, result))
 }
 
@@ -497,6 +522,33 @@ pub(crate) async fn execute_single_generation_candidate_runtime_tracked_with_gui
     gateway_config: ChapterCandidateRouteGatewayConfig,
     allow_model_fallback: bool,
 ) -> Result<(String, GeneratedChapterResult, Option<AIExecutionTraceV1>), String> {
+    execute_single_generation_candidate_runtime_tracked_with_guidance_typed(
+        context,
+        ai_config,
+        target_word_count,
+        provider_payload,
+        overrides,
+        additional_guidance,
+        gateway_config,
+        allow_model_fallback,
+    )
+    .await
+    .map_err(|error| error.to_string())
+}
+
+pub(crate) async fn execute_single_generation_candidate_runtime_tracked_with_guidance_typed(
+    context: &SingleGenerationCandidateRuntimeExecutionContext,
+    ai_config: AIConfig,
+    target_word_count: i32,
+    provider_payload: PromptContextProviderPayload,
+    overrides: &ChapterGenerationPromptOverrides,
+    additional_guidance: Option<&str>,
+    gateway_config: ChapterCandidateRouteGatewayConfig,
+    allow_model_fallback: bool,
+) -> Result<
+    (String, GeneratedChapterResult, Option<AIExecutionTraceV1>),
+    ChapterCandidateRuntimeError,
+> {
     execute_single_generation_candidate_runtime_internal(
         context,
         ai_config,
@@ -519,7 +571,10 @@ async fn execute_single_generation_candidate_runtime_internal(
     additional_guidance: Option<&str>,
     gateway_config: ChapterCandidateRouteGatewayConfig,
     allow_model_fallback: Option<bool>,
-) -> Result<(String, GeneratedChapterResult, Option<AIExecutionTraceV1>), String> {
+) -> Result<
+    (String, GeneratedChapterResult, Option<AIExecutionTraceV1>),
+    ChapterCandidateRuntimeError,
+> {
     let prompt = build_single_generation_runtime_prompt_with_guidance(
         context,
         target_word_count,
@@ -538,6 +593,9 @@ async fn execute_single_generation_candidate_runtime_internal(
     let fallback_execution_trace = Arc::clone(&execution_trace);
     let candidate_execution_traces = build_chapter_candidate_execution_trace_registry();
     let rust_candidate_execution_traces = Arc::clone(&candidate_execution_traces);
+    let provider_error_slot = Arc::new(Mutex::new(None));
+    let rust_provider_error_slot = Arc::clone(&provider_error_slot);
+    let fallback_provider_error_slot = Arc::clone(&provider_error_slot);
 
     let (quality_story_packet, quality_generation_intent) =
         resolve_single_generation_candidate_quality_contract(
@@ -562,6 +620,7 @@ async fn execute_single_generation_candidate_runtime_internal(
         gateway_config,
         move |request, ai_config, quality_adapter| {
             let candidate_execution_traces = Arc::clone(&rust_candidate_execution_traces);
+            let provider_error_slot = Arc::clone(&rust_provider_error_slot);
             Box::pin(async move {
                 if let Some(allow_model_fallback) = allow_model_fallback {
                     generate_best_ranked_candidate_with_runtime_quality_adapters_tracked(
@@ -570,6 +629,7 @@ async fn execute_single_generation_candidate_runtime_internal(
                         quality_adapter,
                         allow_model_fallback,
                         candidate_execution_traces,
+                        provider_error_slot,
                     )
                     .await
                 } else {
@@ -584,13 +644,27 @@ async fn execute_single_generation_candidate_runtime_internal(
         },
         move |_request, fallback_context| {
             Box::pin(async move {
-                let (payload, execution) = generate_single_generation_direct_fallback_candidate(
-                    fallback_ai_config,
-                    fallback_prompt,
-                    fallback_context,
-                    allow_model_fallback,
-                )
-                .await?;
+                let (payload, execution) =
+                    match generate_single_generation_direct_fallback_candidate(
+                        fallback_ai_config,
+                        fallback_prompt,
+                        fallback_context,
+                        allow_model_fallback,
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(ChapterCandidateRuntimeError::Provider(error)) => {
+                            let message = error.to_string();
+                            *fallback_provider_error_slot.lock().map_err(|_| {
+                                "single generation provider error slot lock poisoned".to_string()
+                            })? = Some(error);
+                            return Err(message);
+                        }
+                        Err(ChapterCandidateRuntimeError::Other(message)) => {
+                            return Err(message);
+                        }
+                    };
                 if let Some(execution) = execution {
                     *fallback_execution_trace.lock().map_err(|_| {
                         "single generation execution trace lock poisoned".to_string()
@@ -600,7 +674,23 @@ async fn execute_single_generation_candidate_runtime_internal(
             })
         },
     )
-    .await?;
+    .await;
+    let output = match output {
+        Ok(output) => output,
+        Err(message) => {
+            let provider_error = provider_error_slot
+                .lock()
+                .map_err(|_| {
+                    ChapterCandidateRuntimeError::Other(
+                        "single generation provider error slot lock poisoned".to_string(),
+                    )
+                })?
+                .take();
+            return Err(provider_error
+                .map(ChapterCandidateRuntimeError::Provider)
+                .unwrap_or(ChapterCandidateRuntimeError::Other(message)));
+        }
+    };
 
     let mut result = build_single_generation_runtime_generated_result_from_candidate(
         &context.chapter_model,
@@ -619,9 +709,9 @@ async fn execute_single_generation_candidate_runtime_internal(
             winner_candidate_index,
         )?;
         if execution.is_none() {
-            return Err(format!(
+            return Err(ChapterCandidateRuntimeError::Other(format!(
                 "tracked chapter candidate winner execution trace is missing: candidate_index={winner_candidate_index}"
-            ));
+            )));
         }
     }
     if let Some(execution) = execution.as_mut() {

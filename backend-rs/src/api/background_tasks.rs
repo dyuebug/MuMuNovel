@@ -54,7 +54,8 @@ use crate::services::cooperative_cancellation_service::{
 };
 use crate::services::novel_autopilot::{
     coordinator::{
-        execute_novel_book_autopilot_tick, NovelAutopilotNextTickLease, NovelAutopilotTickOutcome,
+        execute_novel_book_autopilot_tick, is_novel_autopilot_execution_cancelled,
+        NovelAutopilotNextTickLease, NovelAutopilotTickOutcome,
     },
     output_observer::NovelAutopilotOutputObserver,
     repository::{NovelAutopilotRepository, NovelAutopilotRepositoryError},
@@ -78,6 +79,7 @@ const TASK_LIST_LIMIT_MIN: i64 = 1;
 const TASK_LIST_LIMIT_MAX: usize = 100;
 const NOVEL_BOOK_AUTOPILOT_TASK_TYPE: &str = "novel_book_autopilot";
 const NOVEL_BOOK_AUTOPILOT_SCHEDULE_FAILED: &str = "novel_autopilot_schedule_failed";
+const NOVEL_BOOK_AUTOPILOT_EXECUTION_FAILED: &str = "novel_autopilot_execution_failed";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TaskListQueryRequestError {
@@ -621,6 +623,9 @@ pub(crate) async fn schedule_owned_novel_book_autopilot_tick(
     if let Some(decision) = decision {
         payload["decision"] = json!(decision);
     }
+    if let Some(not_before) = lease.next_attempt_at {
+        payload["not_before"] = json!(format!("{}Z", not_before.format("%Y-%m-%dT%H:%M:%S%.f")));
+    }
     let preparation = prepare_task_for_authenticated_user(
         &db,
         &registry,
@@ -636,6 +641,10 @@ pub(crate) async fn schedule_owned_novel_book_autopilot_tick(
                 "run_id": lease.run_id,
                 "epoch": lease.epoch,
                 "version": lease.version,
+                "not_before": lease.next_attempt_at.map(|value| format!(
+                    "{}Z",
+                    value.format("%Y-%m-%dT%H:%M:%S%.f")
+                )),
             })),
         },
     )
@@ -785,13 +794,36 @@ fn spawn_task_execution(
             CooperativeCancellationScope::BackgroundTask,
             record.task_id.clone(),
         );
+        let cancellation_token = cancellation_registration.token();
+        match wait_for_task_not_before(&payload, &cancellation_token).await {
+            Ok(true) => {}
+            Ok(false) => {
+                cancellation_registration.cleanup();
+                return;
+            }
+            Err(error) => {
+                if mark_task_running(&registry, &stream_hub, &record.task_id, "任务调度时间无效")
+                    .await
+                {
+                    best_effort_wait_for_human_after_execution_failure(
+                        &db,
+                        &record,
+                        &payload,
+                        NOVEL_BOOK_AUTOPILOT_EXECUTION_FAILED,
+                    )
+                    .await;
+                    fail_task(&registry, &stream_hub, &record.task_id, &error).await;
+                }
+                cancellation_registration.cleanup();
+                return;
+            }
+        }
         if !mark_task_running(&registry, &stream_hub, &record.task_id, "任务已开始执行").await
         {
             cancellation_registration.cleanup();
             return;
         }
 
-        let cancellation_token = cancellation_registration.token();
         let result = tokio::select! {
             biased;
             _ = cancellation_token.cancelled() => None,
@@ -812,6 +844,34 @@ fn spawn_task_execution(
         }
         cancellation_registration.cleanup();
     });
+}
+
+async fn wait_for_task_not_before(
+    payload: &Value,
+    cancellation_token: &CooperativeCancellationToken,
+) -> Result<bool, String> {
+    let Some(not_before) = payload.get("not_before").and_then(Value::as_str) else {
+        return Ok(true);
+    };
+    let not_before = chrono::DateTime::parse_from_rfc3339(not_before)
+        .map_err(|_| "novel_autopilot_not_before_invalid".to_string())?
+        .with_timezone(&Utc);
+
+    loop {
+        let now = Utc::now();
+        if not_before <= now {
+            return Ok(true);
+        }
+        let wait_duration = (not_before - now)
+            .to_std()
+            .unwrap_or_default()
+            .min(std::time::Duration::from_secs(60));
+        tokio::select! {
+            biased;
+            _ = cancellation_token.cancelled() => return Ok(false),
+            _ = tokio::time::sleep(wait_duration) => {}
+        }
+    }
 }
 
 async fn mark_task_running(
@@ -1245,6 +1305,81 @@ pub(crate) async fn best_effort_wait_for_human_after_schedule_failure(
     }
 }
 
+async fn best_effort_wait_for_human_after_execution_failure(
+    db: &DatabaseConnection,
+    record: &TaskRecord,
+    payload: &Value,
+    error_code: &str,
+) {
+    let Some(run_id) = payload.get("run_id").and_then(Value::as_str) else {
+        tracing::error!(
+            event = "novel_book_autopilot_execution_failure_scope_invalid",
+            error_code,
+            background_task_id = %record.task_id,
+            "durable novel autopilot execution failure payload has no run id"
+        );
+        return;
+    };
+    let Some(run_epoch) = payload.get("run_epoch").and_then(Value::as_i64) else {
+        tracing::error!(
+            event = "novel_book_autopilot_execution_failure_scope_invalid",
+            error_code,
+            run_id,
+            background_task_id = %record.task_id,
+            "durable novel autopilot execution failure payload has no run epoch"
+        );
+        return;
+    };
+
+    match NovelAutopilotRepository::fail_active_task_and_wait_owned(
+        db,
+        run_id,
+        &record.user_id,
+        run_epoch,
+        &record.task_id,
+        error_code,
+    )
+    .await
+    {
+        Ok(waiting) => {
+            tracing::warn!(
+                event = "novel_book_autopilot_execution_failure_waiting_human",
+                error_code,
+                run_id = %waiting.id,
+                run_epoch = waiting.epoch,
+                run_version = waiting.version,
+                background_task_id = %record.task_id,
+                "durable novel autopilot execution failure converged to waiting_human"
+            );
+        }
+        Err(
+            NovelAutopilotRepositoryError::StaleVersion
+            | NovelAutopilotRepositoryError::StaleEpoch
+            | NovelAutopilotRepositoryError::InvalidTransition,
+        ) => {
+            tracing::info!(
+                event = "novel_book_autopilot_execution_failure_superseded",
+                error_code,
+                run_id,
+                run_epoch,
+                background_task_id = %record.task_id,
+                "durable novel autopilot execution failure was superseded by a newer owner"
+            );
+        }
+        Err(error) => {
+            tracing::error!(
+                event = "novel_book_autopilot_execution_failure_convergence_failed",
+                error_code,
+                repository_error_code = error.code(),
+                run_id,
+                run_epoch,
+                background_task_id = %record.task_id,
+                "durable novel autopilot execution failure could not converge its run"
+            );
+        }
+    }
+}
+
 async fn execute_task(
     db: &DatabaseConnection,
     registry: &TaskRegistry,
@@ -1273,15 +1408,30 @@ async fn execute_task(
                 .ok_or_else(|| NOVEL_BOOK_AUTOPILOT_SCHEDULE_FAILED.to_string())?;
             let output_observer =
                 NovelAutopilotOutputObserver::new(stream_hub.clone(), record.task_id.clone());
-            let outcome = execute_novel_book_autopilot_tick(
+            let outcome = match execute_novel_book_autopilot_tick(
                 db,
                 record,
-                payload,
+                payload.clone(),
                 candidate_gateway_config,
                 &output_observer,
                 cancellation_token.clone(),
             )
-            .await?;
+            .await
+            {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    if !is_novel_autopilot_execution_cancelled(&error) {
+                        best_effort_wait_for_human_after_execution_failure(
+                            db,
+                            record,
+                            &payload,
+                            NOVEL_BOOK_AUTOPILOT_EXECUTION_FAILED,
+                        )
+                        .await;
+                    }
+                    return Err(error);
+                }
+            };
             let task_result = match outcome {
                 NovelAutopilotTickOutcome::Completed { task_result }
                 | NovelAutopilotTickOutcome::AwaitingHuman { task_result } => task_result,
@@ -2188,10 +2338,10 @@ mod tests {
         normalize_task_statuses_query, novel_book_autopilot_completion_message,
         prepare_task_execution_payload, spawn_channel_progress_bridge, spawn_task_execution,
         subscribe_task_with_latest_snapshot, sync_channel_state_to_task,
-        task_type_allows_empty_project, TaskListQueryRequestError, TaskListRequest,
-        TaskStreamState, BACKGROUND_TASKS_CANCEL_ROUTE, BACKGROUND_TASKS_DETAIL_ROUTE,
-        BACKGROUND_TASKS_LIST_CREATE_ROUTE, BACKGROUND_TASKS_STREAM_ROUTE,
-        BACKGROUND_TASKS_WORKFLOW_STATE_ROUTE,
+        task_type_allows_empty_project, wait_for_task_not_before, TaskListQueryRequestError,
+        TaskListRequest, TaskStreamState, BACKGROUND_TASKS_CANCEL_ROUTE,
+        BACKGROUND_TASKS_DETAIL_ROUTE, BACKGROUND_TASKS_LIST_CREATE_ROUTE,
+        BACKGROUND_TASKS_STREAM_ROUTE, BACKGROUND_TASKS_WORKFLOW_STATE_ROUTE,
     };
     use crate::models::{autopilot_invocation_audit, project};
     use crate::services::auth::Claims;
@@ -2224,6 +2374,129 @@ mod tests {
         .await
         .expect("create autopilot invocation audits table");
         db
+    }
+
+    #[tokio::test]
+    async fn autopilot_not_before_allows_missing_and_elapsed_deadlines() {
+        let cancellation_registry = CooperativeCancellationRegistry::default();
+        let registration = cancellation_registry.register(
+            CooperativeCancellationScope::BackgroundTask,
+            "not-before-elapsed",
+        );
+        let token = registration.token();
+
+        assert_eq!(wait_for_task_not_before(&json!({}), &token).await, Ok(true));
+        let elapsed = (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+        assert_eq!(
+            wait_for_task_not_before(&json!({"not_before": elapsed}), &token).await,
+            Ok(true)
+        );
+        registration.cleanup();
+    }
+
+    #[tokio::test]
+    async fn autopilot_not_before_wait_is_cooperatively_cancellable() {
+        let cancellation_registry = CooperativeCancellationRegistry::default();
+        let registration = cancellation_registry.register(
+            CooperativeCancellationScope::BackgroundTask,
+            "not-before-cancelled",
+        );
+        let token = registration.token();
+        let future = (Utc::now() + chrono::Duration::minutes(1)).to_rfc3339();
+        assert!(cancellation_registry.cancel(
+            CooperativeCancellationScope::BackgroundTask,
+            "not-before-cancelled"
+        ));
+
+        assert_eq!(
+            wait_for_task_not_before(&json!({"not_before": future}), &token).await,
+            Ok(false)
+        );
+        registration.cleanup();
+    }
+
+    #[tokio::test]
+    async fn autopilot_not_before_rejects_malformed_deadline() {
+        let cancellation_registry = CooperativeCancellationRegistry::default();
+        let registration = cancellation_registry.register(
+            CooperativeCancellationScope::BackgroundTask,
+            "not-before-invalid",
+        );
+        let token = registration.token();
+
+        assert_eq!(
+            wait_for_task_not_before(&json!({"not_before": "invalid"}), &token).await,
+            Err("novel_autopilot_not_before_invalid".to_string())
+        );
+        registration.cleanup();
+    }
+
+    #[tokio::test]
+    async fn spawned_task_stays_pending_until_not_before_then_starts_once() {
+        let db = setup_project_db().await;
+        let registry = TaskRegistry::new();
+        let stream_hub = TaskStreamHub::new();
+        let mut record = task_record();
+        record.task_id = "not-before-execution-boundary".to_string();
+        record.task_type = "not_before_test_unsupported".to_string();
+        record.status = TaskStatus::Pending;
+        record.progress = 0;
+        record.started_at = None;
+        registry.insert(record.clone()).await;
+        let mut receiver = stream_hub.subscribe(&record.task_id).await;
+        let not_before = (Utc::now() + chrono::Duration::milliseconds(250)).to_rfc3339();
+
+        spawn_task_execution(
+            db,
+            registry.clone(),
+            stream_hub,
+            Arc::new(BookImportService::new()),
+            None,
+            record.clone(),
+            json!({"not_before": not_before}),
+        );
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), receiver.recv())
+                .await
+                .is_err(),
+            "task emitted an execution event before its persisted deadline"
+        );
+        let waiting = registry
+            .get(&record.task_id)
+            .await
+            .expect("waiting task remains registered");
+        assert_eq!(waiting.status, TaskStatus::Pending);
+        assert_eq!(waiting.progress, 0);
+        assert!(waiting.started_at.is_none());
+
+        let running_payload =
+            tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv())
+                .await
+                .expect("task should start after its persisted deadline")
+                .expect("running event channel remains available");
+        let running_event: TaskEvent =
+            serde_json::from_str(&running_payload).expect("running event is valid JSON");
+        assert_eq!(running_event.event_type, "progress");
+        assert_eq!(running_event.status.as_deref(), Some("running"));
+
+        let terminal_payload =
+            tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv())
+                .await
+                .expect("test executor should reach a terminal state")
+                .expect("terminal event is delivered");
+        let terminal_event: TaskEvent =
+            serde_json::from_str(&terminal_payload).expect("terminal event is valid JSON");
+        assert_eq!(terminal_event.event_type, "error");
+        assert_eq!(terminal_event.status.as_deref(), Some("failed"));
+        assert!(receiver.recv().await.is_err());
+
+        let terminal = registry
+            .get(&record.task_id)
+            .await
+            .expect("terminal task remains registered");
+        assert_eq!(terminal.status, TaskStatus::Failed);
+        assert!(terminal.started_at.is_some());
     }
 
     #[test]

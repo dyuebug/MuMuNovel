@@ -135,6 +135,7 @@ export interface NovelAutopilotRun {
   started_at: string | null;
   paused_at: string | null;
   completed_at: string | null;
+  next_attempt_at: string | null;
 }
 
 export interface NovelAutopilotStepRun {

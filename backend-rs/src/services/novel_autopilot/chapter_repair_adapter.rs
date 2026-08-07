@@ -286,7 +286,6 @@ async fn persist_manual_review_candidate(
         NovelAutopilotManualReviewCandidate {
             content: generated.content,
             word_count,
-            chapter_status: generated.chapter_status,
             result_digest: generated.content_digest,
             quality_metrics: quality_metrics.clone(),
             quality_gate_action: quality_gate_action.clone(),
@@ -517,6 +516,9 @@ async fn finish_failure(
             Some(&evidence.result_digest),
         )
     });
+    let retry_after_seconds = failure_diagnostic
+        .as_ref()
+        .and_then(NovelAutopilotFailureDiagnostic::retry_after_seconds);
     let terminal = NovelAutopilotRepository::finish_chapter_repair_failure(
         db,
         &claimed.step.id,
@@ -527,6 +529,7 @@ async fn finish_failure(
         Some(&record.task_id),
         reason_code,
         failure_counter_kind,
+        retry_after_seconds,
         waiting_human,
         quality_decision,
         candidate_evidence,

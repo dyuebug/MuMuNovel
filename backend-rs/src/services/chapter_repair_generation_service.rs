@@ -16,7 +16,9 @@ use crate::{
             SingleChapterGenerationCompatOptions,
         },
         chapter_generation_runtime_service::runtime_execution_owner::load_generation_context,
-        chapter_generation_runtime_service::GeneratedChapterResult,
+        chapter_generation_runtime_service::{
+            ChapterCandidateRuntimeError, GeneratedChapterResult,
+        },
         chapter_single_generation_result_lifecycle_service::single_generation_candidate_draft_attempt_view,
         cooperative_cancellation_service::CooperativeCancellationToken,
         novel_autopilot::failure_diagnostic::{
@@ -141,6 +143,7 @@ pub(crate) enum ChapterRepairGenerationError {
         message: String,
         provider_hint: Option<NovelAutopilotProviderFailureHint>,
     },
+    Candidate(String),
     InvalidResult(&'static str),
 }
 
@@ -152,6 +155,7 @@ impl ChapterRepairGenerationError {
             Self::Context(_) => "context_error",
             Self::AnalysisNotFound => "analysis_not_found",
             Self::Generation { .. } => "generation_error",
+            Self::Candidate(_) => "candidate_error",
             Self::InvalidResult(_) => "invalid_result",
         }
     }
@@ -182,6 +186,9 @@ impl ChapterRepairGenerationError {
                     )
                 }
             }
+            Self::Candidate(_) => {
+                NovelAutopilotFailureDiagnostic::context_invalid("candidate_error")
+            }
             Self::InvalidResult(_) => {
                 NovelAutopilotFailureDiagnostic::response_invalid("invalid_result")
             }
@@ -197,6 +204,7 @@ impl fmt::Display for ChapterRepairGenerationError {
             Self::Context(_) => formatter.write_str("failed to load chapter repair context"),
             Self::AnalysisNotFound => formatter.write_str("current chapter analysis was not found"),
             Self::Generation { .. } => formatter.write_str("chapter repair generation failed"),
+            Self::Candidate(_) => formatter.write_str("chapter repair candidate execution failed"),
             Self::InvalidResult(field) => {
                 write!(formatter, "invalid chapter repair result: {field}")
             }
@@ -285,11 +293,9 @@ pub(crate) async fn generate_chapter_repair_candidate_for_autopilot(
         provider_payload,
         role_policy_context,
     } = execution_config;
-    let provider_hint = Some(NovelAutopilotProviderFailureHint::from_ai_config(
-        &ai_config,
-    ));
+    let provider_hint = NovelAutopilotProviderFailureHint::from_ai_config(&ai_config);
     let generated = context
-        .generate_candidate_only_with_contract_and_guidance(
+        .generate_candidate_only_with_contract_and_guidance_typed(
             ai_config,
             target_word_count,
             provider_payload,
@@ -300,9 +306,20 @@ pub(crate) async fn generate_chapter_repair_candidate_for_autopilot(
             role_policy_context,
         )
         .await
-        .map_err(|error| ChapterRepairGenerationError::Generation {
-            message: error,
-            provider_hint,
+        .map_err(|error| match error {
+            ChapterCandidateRuntimeError::Provider(error) => {
+                ChapterRepairGenerationError::Generation {
+                    message: error.message,
+                    provider_hint: Some(NovelAutopilotProviderFailureHint {
+                        http_status: error.status_code,
+                        retry_after_seconds: error.retry_after_seconds,
+                        ..provider_hint.clone()
+                    }),
+                }
+            }
+            ChapterCandidateRuntimeError::Other(message) => {
+                ChapterRepairGenerationError::Candidate(message)
+            }
         })?;
     ensure_not_cancelled(cancellation_token)?;
 
@@ -657,6 +674,7 @@ mod tests {
                 provider: Some("openai".to_string()),
                 model: Some("gpt-5.1".to_string()),
                 http_status: None,
+                retry_after_seconds: None,
             }),
         };
         let diagnostic = error.failure_diagnostic();

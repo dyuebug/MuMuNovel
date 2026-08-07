@@ -10,7 +10,7 @@ use serde_json::{Map, Value};
 use crate::ai::config::AIConfig;
 use crate::ai::execution_trace::AIExecutionTraceV1;
 use crate::ai::service::AIService;
-use crate::ai::types::ToolDef;
+use crate::ai::types::{AIRequestError, ToolDef};
 use crate::services::chapter_candidate_executor_default_dependency_service::{
     build_default_generation_candidate_record,
     generate_best_ranked_candidate_with_default_dependency_wiring,
@@ -19,7 +19,7 @@ use crate::services::chapter_candidate_executor_default_dependency_service::{
 use crate::services::chapter_candidate_executor_service::ChapterCandidateExecutorRequest;
 use crate::services::chapter_candidate_output_service::{
     collect_generation_candidate_output, collect_generation_candidate_output_tracked,
-    ChapterCandidateOutput, ChapterCandidateOutputRequest,
+    ChapterCandidateOutput, ChapterCandidateOutputRequest, TrackedChapterCandidateOutputError,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -370,10 +370,13 @@ pub(crate) async fn collect_default_generation_candidate_output_tracked(
     base_ai_config: AIConfig,
     mut input: ChapterCandidateDefaultOutputCollectInput,
     allow_model_fallback: bool,
-) -> Result<crate::services::chapter_candidate_output_service::TrackedChapterCandidateOutput, String>
-{
+) -> Result<
+    crate::services::chapter_candidate_output_service::TrackedChapterCandidateOutput,
+    TrackedChapterCandidateOutputError,
+> {
     let provider_request =
-        resolve_default_candidate_provider_stream_request(base_ai_config, input.clone())?;
+        resolve_default_candidate_provider_stream_request(base_ai_config, input.clone())
+            .map_err(TrackedChapterCandidateOutputError::Other)?;
     collect_generation_candidate_output_tracked(
         ChapterCandidateOutputRequest {
             ai_service: AIService::new(provider_request.ai_config),
@@ -696,6 +699,7 @@ pub(crate) async fn generate_best_ranked_candidate_with_runtime_quality_adapters
     >,
     allow_model_fallback: bool,
     execution_traces: ChapterCandidateExecutionTraceRegistry,
+    provider_error_slot: Arc<Mutex<Option<AIRequestError>>>,
 ) -> Result<Value, String>
 where
     BuildQualityRuntimeContext:
@@ -712,6 +716,7 @@ where
         quality_gate_plan_builder,
         allow_model_fallback,
         execution_traces,
+        provider_error_slot,
     )
     .await
 }
@@ -726,6 +731,7 @@ pub(crate) async fn generate_best_ranked_candidate_with_runtime_adapters_tracked
     quality_gate_plan_builder: QualityGatePlanBuilder,
     allow_model_fallback: bool,
     execution_traces: ChapterCandidateExecutionTraceRegistry,
+    provider_error_slot: Arc<Mutex<Option<AIRequestError>>>,
 ) -> Result<Value, String>
 where
     QualityEvaluator: FnMut(&str) -> Value + Send + 'static,
@@ -738,14 +744,28 @@ where
         move |input| {
             let ai_config = ai_config.clone();
             let execution_traces = Arc::clone(&execution_traces);
+            let provider_error_slot = Arc::clone(&provider_error_slot);
             async move {
                 let candidate_index = input.candidate_index;
-                let tracked = collect_default_generation_candidate_output_tracked(
+                let tracked = match collect_default_generation_candidate_output_tracked(
                     ai_config,
                     input,
                     allow_model_fallback,
                 )
-                .await?;
+                .await
+                {
+                    Ok(tracked) => tracked,
+                    Err(TrackedChapterCandidateOutputError::Provider(error)) => {
+                        let message = error.to_string();
+                        *provider_error_slot.lock().map_err(|_| {
+                            "chapter candidate provider error slot lock poisoned".to_string()
+                        })? = Some(error);
+                        return Err(message);
+                    }
+                    Err(TrackedChapterCandidateOutputError::Other(message)) => {
+                        return Err(message);
+                    }
+                };
                 execution_traces
                     .lock()
                     .map_err(|_| {

@@ -10,7 +10,8 @@ use crate::{
             DEFAULT_CHAPTER_GENERATION_TARGET_WORD_COUNT,
         },
         chapter_generation_service::{
-            generate_chapter_candidate_for_autopilot, ChapterGeneratedDraft, ChapterGenerationError,
+            generate_chapter_candidate_for_autopilot, ChapterGeneratedDraft,
+            ChapterGenerationError, ChapterGenerationRetryScope,
         },
         cooperative_cancellation_service::CooperativeCancellationToken,
         generation_contract_service::GenerationIntentKind,
@@ -19,6 +20,7 @@ use crate::{
 };
 
 use super::{
+    chapter_repository::NovelAutopilotChapterGenerateRetryCandidate,
     output_observer::NovelAutopilotOutputObserver,
     quality_diagnostic::build_safe_quality_diagnostic,
     repository::{
@@ -166,6 +168,13 @@ pub(crate) async fn execute_chapter_generate_step(
         chapter_id,
         DEFAULT_CHAPTER_GENERATION_TARGET_WORD_COUNT,
         &SingleChapterGenerationCompatOptions::default(),
+        &ChapterGenerationRetryScope {
+            run_id: claimed.run.id.clone(),
+            run_epoch: claimed.run.epoch,
+            current_step_attempt: claimed.step.attempt,
+            step_key: step.step_key.clone(),
+            source_chapter_snapshot_digest: expected_chapter.snapshot_digest(),
+        },
         execution_config,
         additional_guidance,
         gateway_config.clone(),
@@ -261,7 +270,6 @@ async fn persist_manual_review_candidate(
         NovelAutopilotManualReviewCandidate {
             content: generated.content,
             word_count,
-            chapter_status: generated.chapter_status,
             result_digest: generated.content_digest,
             quality_metrics: quality_metrics.clone(),
             quality_gate_action: quality_gate_action.clone(),
@@ -443,7 +451,9 @@ async fn finish_quality_retry(
             generated.quality_gate_action.as_deref(),
             Some(&generated.content_digest),
         );
-        let terminal = NovelAutopilotRepository::complete_step(
+        let word_count = generated.word_count;
+        let quality_gate_action = generated.quality_gate_action.clone();
+        let terminal = NovelAutopilotRepository::persist_chapter_generate_retry_candidate(
             db,
             &claimed.step.id,
             &record.user_id,
@@ -451,11 +461,16 @@ async fn finish_quality_retry(
             claimed.run.epoch,
             &step.step_key,
             Some(&record.task_id),
-            NovelAutopilotStepStatus::Failed,
-            NovelAutopilotStepTerminalPatch {
-                result_digest: Some(generated.content_digest),
-                quality_decision: Some(decision.as_str().to_string()),
-                error_code: Some(reason_code.to_string()),
+            expected_chapter,
+            decision,
+            reason_code,
+            NovelAutopilotChapterGenerateRetryCandidate {
+                content: generated.content,
+                word_count,
+                result_digest: generated.content_digest,
+                quality_diagnostic: quality_diagnostics.clone(),
+                quality_gate_action: quality_gate_action.clone(),
+                quality_gate_message: generated.quality_gate_message,
             },
         )
         .await
@@ -476,7 +491,7 @@ async fn finish_quality_retry(
                 "attempt": terminal.step.attempt,
                 "max_step_attempts": config.max_step_attempts,
                 "quality_decision": decision,
-                "quality_gate_action": generated.quality_gate_action,
+                "quality_gate_action": quality_gate_action,
                 "quality_diagnostics": quality_diagnostics,
                 "result_digest": terminal.step.result_digest,
             }),
@@ -725,6 +740,7 @@ mod tests {
                 last_error_code: None,
                 guidance_digest: None,
                 active_background_task_id: Some("task-1".to_string()),
+                next_attempt_at: None,
                 final_export_ref: None,
                 created_at: now,
                 updated_at: now,

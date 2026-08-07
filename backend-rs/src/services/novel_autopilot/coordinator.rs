@@ -86,6 +86,7 @@ pub(crate) struct NovelAutopilotNextTickLease {
     pub epoch: i64,
     pub version: i64,
     pub current_phase: String,
+    pub next_attempt_at: Option<chrono::NaiveDateTime>,
 }
 
 #[derive(Debug)]
@@ -122,6 +123,8 @@ struct NovelBookAutopilotTaskPayload {
     run_version: i64,
     #[serde(default)]
     decision: Option<String>,
+    #[serde(default, rename = "not_before")]
+    _not_before: Option<String>,
     project_id: String,
     user_id: String,
 }
@@ -462,6 +465,10 @@ pub(crate) async fn execute_novel_book_autopilot_tick(
                 .map(|task_result| NovelAutopilotTickOutcome::AwaitingHuman { task_result })
         }
     }
+}
+
+pub(crate) fn is_novel_autopilot_execution_cancelled(error: &str) -> bool {
+    error == EXECUTION_CANCELLED
 }
 
 async fn execute_deferred_step(
@@ -1056,6 +1063,7 @@ fn next_tick_lease(run: &crate::models::novel_autopilot_run::Model) -> NovelAuto
         epoch: run.epoch,
         version: run.version,
         current_phase: run.current_phase.clone(),
+        next_attempt_at: run.next_attempt_at,
     }
 }
 
@@ -1440,9 +1448,15 @@ fn map_outline_adapter_error(error: OutlineAdapterError) -> String {
 }
 
 fn map_repository_error(error: NovelAutopilotRepositoryError) -> String {
+    let (repository_error_field, repository_error_reason) = match &error {
+        NovelAutopilotRepositoryError::InvalidConfig { field, code } => (Some(*field), Some(*code)),
+        _ => (None, None),
+    };
     tracing::error!(
         event = "novel_book_autopilot_tick_repository_failed",
         error_code = error.code(),
+        repository_error_field,
+        repository_error_reason,
         "durable novel autopilot tick could not update its run"
     );
     EXECUTION_FAILED.to_string()

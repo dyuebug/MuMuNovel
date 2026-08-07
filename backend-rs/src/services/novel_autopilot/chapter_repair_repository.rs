@@ -20,6 +20,7 @@ use crate::{
 
 use super::{
     chapter_repository::{chapter_snapshot_condition, ChapterBusinessSnapshot},
+    failure_diagnostic::provider_retry_not_before,
     repository::{
         ClaimedNovelAutopilotStep, NovelAutopilotRepository, NovelAutopilotRepositoryError,
     },
@@ -211,6 +212,7 @@ impl NovelAutopilotRepository {
         expected_background_task_id: Option<&str>,
         error_code: &str,
         failure_counter_kind: NovelAutopilotFailureCounterKind,
+        retry_after_seconds: Option<u64>,
         waiting_human: bool,
         quality_decision: NovelAutopilotQualityDecision,
         candidate_evidence: Option<NovelAutopilotChapterRepairFailureEvidence>,
@@ -257,6 +259,16 @@ impl NovelAutopilotRepository {
         } else {
             NovelAutopilotRunStatus::Running
         };
+        let next_attempt_at = (failure_counter_kind == NovelAutopilotFailureCounterKind::Provider
+            && !waiting_human)
+            .then(|| {
+                provider_retry_not_before(
+                    now,
+                    step.attempt,
+                    &format!("{}:{}", run.id, expected_step_key),
+                    retry_after_seconds,
+                )
+            });
         let txn = db.begin().await.map_err(database_error)?;
         if let Some(evidence) = candidate_evidence.as_ref() {
             let chapter_fence = chapter::Entity::update_many()
@@ -294,6 +306,10 @@ impl NovelAutopilotRepository {
             .col_expr(
                 novel_autopilot_run::Column::LastErrorCode,
                 Expr::value(Some(error_code.to_string())),
+            )
+            .col_expr(
+                novel_autopilot_run::Column::NextAttemptAt,
+                Expr::value(next_attempt_at),
             )
             .col_expr(
                 novel_autopilot_run::Column::Version,

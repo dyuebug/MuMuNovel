@@ -304,6 +304,9 @@ async fn finish_failure(
     failure_counter_kind: NovelAutopilotFailureCounterKind,
     waiting_human: bool,
 ) -> Result<ChapterAnalysisAdapterOutcome, ChapterAnalysisAdapterError> {
+    let retry_after_seconds = failure_diagnostic
+        .as_ref()
+        .and_then(NovelAutopilotFailureDiagnostic::retry_after_seconds);
     let terminal = NovelAutopilotRepository::finish_chapter_analysis_failure(
         db,
         &claimed.step.id,
@@ -314,6 +317,7 @@ async fn finish_failure(
         Some(&record.task_id),
         error_code,
         failure_counter_kind,
+        retry_after_seconds,
         waiting_human,
     )
     .await

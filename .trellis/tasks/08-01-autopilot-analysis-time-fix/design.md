@@ -2,18 +2,22 @@
 
 ## 1. 设计目标
 
-本设计同时修复四个相互关联但所有权不同的问题：
+本设计同时修复六个相互关联但所有权不同的问题：
 
 1. 单章候选质量门错误地把 `applicable=false` 的指标作为 0 分弱项。
 2. 章节生成、分析或返修在质量重试耗尽后可能进入没有可操作候选的 `waiting_human`。
 3. 章节分析/返修 Provider 错误只留下聚合码，无法区分超时、限流、上游不可用和响应无效。
 4. Autopilot API 把 UTC 语义的 `NaiveDateTime` 输出为无时区字符串，前端因此少显示 8 小时。
+5. ChapterGenerate 预算内质量重试只保留 digest/摘要，丢弃上一候选正文，下一次尝试无法消费质量反馈形成定向改写闭环。
+6. Provider 瞬时故障没有持久化 `not_before`，同一 Run 在连续调度或进程重启后可能立即重试并形成请求突刺。
 
 产品决定是：保留最终人工复核候选。质量重试耗尽时，只有完整候选已经通过
 原子事务持久化后才能进入 `waiting_human`；用户主动配置的高风险确认等真实
 人工门保持不变。Provider 瞬时故障仅在预算内自动重试；认证/配置、上下文、
 响应结构错误不可重试，瞬时故障预算耗尽后也进入无候选 `waiting_human`，仅允许
-Retry/Repair/Stop，不允许 Accept。
+Retry/Repair/Stop，不允许 Accept。预算内 ChapterGenerate 质量重试必须持久化并
+消费上一完整候选；预算内 Provider 重试必须持久化 capped `next_attempt_at`，由
+连续调度和启动恢复共同遵守。
 
 ## 2. 所有权与修改边界
 
@@ -22,14 +26,18 @@ Retry/Repair/Stop，不允许 Accept。
 | 候选质量指标计算 | `single_generation_candidate_quality_owner.rs` | 保持现有 `details.*.applicable` 生产逻辑 |
 | 质量摘要、修复指引和质量门 | `story_repair_quality_context_owner.rs` | 在共享指标收集入口过滤不适用指标 |
 | 章节生成终态 | `novel_autopilot/chapter_adapter.rs` + Repository | 质量耗尽复用原子人工候选事务 |
+| 章节生成质量反馈闭环 | `chapter_adapter.rs` + `chapter_repository.rs` + generation service | 预算内保存并消费作用域正确的完整 retry evidence |
 | 章节分析终态 | `chapter_analysis_adapter.rs` + `chapter_analysis_repository.rs` | 有有效分析结果时人工复核，无结果时不伪造候选 |
 | 章节返修终态和重试证据 | `chapter_repair_adapter.rs` + `chapter_repair_repository.rs` | 保留中间重试证据和最终人工候选 |
 | 后台任务终态 | `novel_autopilot/coordinator.rs` + `api/background_tasks.rs` | 明确区分 waiting candidate 与 provider failure |
 | Provider 失败诊断 | 分析/返修 generation service 与 Adapter | 产生 allowlist 稳定类别和结构化日志 |
+| Provider 持久化退避 | Adapter/Repository + coordinator/API startup reconciliation | 持久化并执行跨重启 `not_before`，成功或离开自动重试状态时清理 |
+| Run schema | SeaORM model + Rust migration metadata + PostgreSQL Alembic/frozen migrator model | 新增 nullable UTC `next_attempt_at` 并保持 fresh revision chain/upgrade/downgrade 一致；冻结 initial baseline 不回写 |
 | 时间 API 契约 | `api/novel_autopilot_runs.rs` | UTC `NaiveDateTime` 输出 RFC 3339 `Z` |
 | 页面显示 | `NovelAutopilotWorkbench.tsx` | 按 Run 状态显示正确失败文案，继续使用浏览器本地时区 |
 
-不新增数据库表或列，不迁移历史时间，不修改与本任务无关的人工门。
+不新增数据库表；允许且只新增 `novel_autopilot_runs.next_attempt_at` nullable 列。
+该 schema 扩展不回填、不平移历史时间值，也不修改与本任务无关的人工门。
 
 ## 3. 质量门修复
 
@@ -157,12 +165,46 @@ Provider/解析失败继续使用不含候选的失败事务，并与候选事�
 
 ### 4.3 最终候选与中间重试证据
 
+- `chapter_generate` 预算内质量失败：把完整正文和受限质量信息保存为内部 retry evidence，下一次 ChapterGenerate 只消费作用域匹配的最新证据。
 - `chapter_generate` 最终未通过候选：调用既有人工候选持久化契约，保存完整正文、digest、word count 和受限质量信息。
 - `chapter_repair` 预算内失败：继续保存受 Run/epoch/source digest/analysis ID 约束的完整重试证据，供下一次自动返修消费。
 - `chapter_repair` 最终耗尽：调用 `persist_manual_review_candidate()`，把最后一次完整返修结果转换为人工候选。
 - Provider 失败没有完整候选：不得伪造候选或 digest。
 - Accept 使用候选 ID、Run version/epoch、Step identity 和章节快照 CAS；成功后提交正文并继续运行。
 - Retry/Repair/Stop 继续使用现有人工决定路由和版本围栏。
+
+### 4.4 ChapterGenerate 质量反馈闭环
+
+ChapterGenerate retry evidence 继续复用 `chapter_draft_attempts` 的完整候选所有权，
+但必须用独立 source/state 与 `waiting_human` 人工候选区分，不能让内部重试证据获得
+Accept 能力。候选正文通过现有完整正文抽取契约保存；Run/Step/Task/SSE/日志只允许
+输出 candidate ID/digest、attempt、质量决定、失败指标键和有界修复方向。
+
+每条 evidence 至少持久化并校验以下作用域：
+
+```text
+run_id
+run_epoch
+chapter_id + chapter_number
+source_content_digest       # 生成开始前的章节业务快照；无正文时使用明确 empty digest
+candidate_content_digest    # 必须等于完整候选正文的 digest
+step_attempt
+```
+
+预算内质量失败在一个 Repository 事务中完成：
+
+1. 以 user、Run version/epoch/status、Step identity/type/attempt、task fence 和章节快照 CAS 重新校验所有权。
+2. 校验候选非空、完整正文 digest、word count、质量决定和有界质量摘要。
+3. 插入以 terminal Step ID 为 ID 的 retry evidence，正文只进入 `chapter_draft_attempts`。
+4. 终结当前 Step，写相同 candidate digest、质量决定和稳定 retry reason。
+5. 更新 Run 的质量失败计数/version，清理当前 Step/task fence，保留自动重试状态。
+6. 任一候选插入、Step 更新、Run CAS 或章节快照校验失败时回滚全部写入。
+
+下一次 ChapterGenerate 在调用 Provider 前，按同一 `run_id/run_epoch/chapter/source digest`
+查询 attempt 小于当前 attempt 的最新 evidence，再验证 candidate digest 与完整正文一致。
+匹配时把上一候选正文和 allowlist 质量反馈/修复方向送入受控生成输入，形成
+“候选 -> 质量反馈 -> 定向改写”；缺失证据允许按首轮生成，存在但跨作用域、损坏或
+digest 不一致的证据必须拒绝或忽略并记录稳定安全码，不能静默串用其他 Run/章节内容。
 
 `POST /api/projects/{project_id}/novel-autopilot-runs/{run_id}/decision` 收到
 `decision=accept` 时必须先读取最新 Step 和 waiting candidate。存在候选时进入既有
@@ -246,6 +288,73 @@ Run `last_error_code`、Step `error_code` 和 Task `error` 使用同一个码：
 日志事件保留 Run、Step、attempt、chapter、background task、provider、model、
 category 和可选 HTTP 状态，不记录原始异常字符串。
 
+### 6.3 Provider 持久化退避与 `not_before`
+
+#### Schema contract
+
+`novel_autopilot_runs` 新增：
+
+```text
+next_attempt_at TIMESTAMP WITHOUT TIME ZONE NULL  # UTC semantics
+```
+
+- `NULL` 表示没有持久化时间门，可以立即参与正常调度。
+- upgrade 只添加 nullable 列，不设置 server default、不回填既有行。
+- downgrade 删除该列；回滚时先回滚读取该字段的新二进制，再执行 downgrade。
+- fresh 完整 revision chain、SeaORM model、Rust migration metadata、PostgreSQL Alembic
+  revision 和冻结 Python migrator model 必须得到相同类型与 nullability；历史 initial
+  baseline 保持 frozen，不声明本列。
+- 不修改既有 `created_at`/`updated_at` 等历史时间值，也不把 `next_attempt_at`
+  暴露为客户端可写字段。
+
+#### Delay calculation
+
+只对诊断为 retryable 的 Provider timeout、rate limit、upstream unavailable 和兼容
+unknown 类别计算退避；认证/配置、上下文或响应结构错误继续直接进入无候选人工处理。
+
+```text
+hint_delay = parse Retry-After delta-seconds or HTTP-date relative to now
+local_floor = capped_exponential(step_attempt/provider_failure_count)
+provider_floor = valid hint_delay ? clamp(hint_delay, min_delay, cap) : 0
+base_delay = max(local_floor, provider_floor)
+jitter_seed = digest(run_id, run_epoch, step_key, step_attempt, reason_code)
+jitter = deterministic non-negative bounded value derived from jitter_seed
+final_delay = min(cap, base_delay + jitter)
+next_attempt_at = now_utc + final_delay
+```
+
+有效 `Retry-After` 作为本地指数退避的 floor；较短的 Provider 提示不会缩短本地
+退避，较长的提示会把基础等待提升到经 cap 归一化后的值。无效、负数或无法解析的
+提示不持久化原文，只回退本地策略。所有路径共享一个明确 cap，超过 cap 的 hint 或
+jitter 都被截断。jitter 不使用随机进程状态、API Key、Prompt 或响应正文，因此同一
+失败事实在进程重启前后计算一致。
+
+当前实现已在 Provider HTTP transport boundary 从 response header 解析并规范化 typed
+`retry_after_seconds`，并经 generation error、失败诊断和章节分析/返修 Adapter 透传到
+Repository 退避计算。解析支持 delta-seconds 和 HTTP-date，禁止从错误字符串、URL 或
+响应正文猜测 `Retry-After`。该端到端链路已有自动化回归；部署后的
+OpenAI-compatible HTTP transport、完整工作流和跨重启运行行为也已通过 deterministic
+Provider smoke 验证。部署 smoke 未故意注入第三方 Provider 的 `Retry-After` 故障响应，
+因此 header 失败分支仍以聚焦自动化测试作为权威证据，不能扩张为外部网关实测结论。
+
+#### Durable scheduling and clearing
+
+- Provider 失败事务在终结 Step、增加失败计数、更新 Run version/状态并清理当前 task
+  fence的同时写入 `next_attempt_at`；部分写入必须回滚。
+- 同一后台任务的连续 tick、API dispatch retry、孤儿 queued Run 修复和 startup
+  reconciliation 都把 `next_attempt_at` 作为 `not_before`。`now < next_attempt_at`
+  时允许通过 Run version/epoch/active-task CAS 创建并绑定至多一个持久化 pending Task；
+  Task payload 保存同一 UTC `not_before`，到期前不得标记 running、claim Step 或调用
+  Provider。进程重启后按数据库中的原 due 重建 pending Task，不重新计算 delay；到期
+  后 claim 层继续使用数据库围栏，多实例竞争只能有一个执行者获胜。
+- Provider-backed Step 成功时清空；进入任何 `waiting_human`/manual review 时清空；
+  pause、cancel/stop 时清空。resume 只恢复正常可调度状态，不复用已经清除的旧退避。
+- 迟到旧 task 只能在匹配 Run version/epoch/active task fence 时更新或清理该字段，不能
+  覆盖较新失败写入的时间。
+- `next_attempt_at` 是内部持久化调度字段，本任务不要求新增 public API 字段。pending
+  Task payload 可以携带同一 `not_before`，但调度和 claim 判断必须以数据库值与
+  Run/Task fence 为准，不能依赖浏览器定时器或仅在 Task payload/result 中保存 delay。
+
 ## 7. 脱敏质量诊断
 
 人工候选及无候选故障诊断允许保留以下字段：
@@ -295,13 +404,21 @@ optional_utc_rfc3339(Option<NaiveDateTime>) -> string | null
 
 ## 10. 兼容性、迁移和回滚
 
-- 不做数据库迁移；历史 Run/Step 仍可读取。
+- 新增一条向后兼容的 schema migration，为 `novel_autopilot_runs` 增加 nullable
+  `next_attempt_at`；既有 Run 升级后为 `NULL`，仍可立即参与旧行为。
+- upgrade/downgrade 与 fresh 完整 revision catalog 同步；历史 ee0a initial baseline 保持
+  frozen，不回写新列。fresh 数据库先由后续 revision 创建 Autopilot 表，再由本 revision
+  执行 `ADD COLUMN/INDEX`。部署顺序为先 migration 后新二进制，回滚顺序为先旧二进制
+  后 downgrade。
 - 已经持久化为 `waiting_human` 的历史 Run 不自动改写，避免无审计的数据变更。
 - 旧无时区 API 值只存在于旧响应，数据库值不变；部署后新响应带 `Z`。
 - API 字段名和前端 TypeScript 类型不变，时间字符串从 ISO local-like 收紧为 RFC 3339 UTC。
 - 新 Provider 诊断码是向后兼容扩展，未知码已有回退显示。
 - 人工候选沿用现有表和 API，不需要数据库迁移。
-- 如候选耗尽路由出现回归，可回滚到已有 direct-manual-review 候选路径，不改变表结构。
+- ChapterGenerate retry evidence 复用现有 `chapter_draft_attempts`，不新增正文列；如反馈
+  消费出现回归，可停止读取新 evidence，但不得删除已持久化候选或放宽作用域校验。
+- 如持久化退避出现回归，可先回滚应用读取/写入，再 downgrade 删除 nullable 列；
+  downgrade 会丢失尚未到期的 `not_before`，因此回滚窗口内必须限制立即重试突刺。
 
 ## 11. 测试矩阵
 
@@ -312,12 +429,18 @@ optional_utc_rfc3339(Option<NaiveDateTime>) -> string | null
 - 质量和 Provider 预算内失败仍调度重试。
 - 最终质量耗尽原子写入人工候选、Run `waiting_human` 和可关联 Step。
 - 最终章节生成/返修候选可通过 Accept/Retry/Repair/Stop 操作；预算内重试证据仍可被下一次消费。
+- ChapterGenerate 预算内质量失败原子保存完整 retry evidence；下一 attempt 只消费作用域与 digest 全部匹配的最新记录，并确实把上一候选和安全反馈送入生成输入。
+- ChapterGenerate evidence 写入失败、章节快照变化、Run/epoch/task fence 变化时，candidate/Step/Run 全部回滚；正文不会出现在 Run/Step/Task/SSE/日志。
 - Provider、配置、上下文或响应无效的无候选故障不创建 `chapter_draft_attempts`；不可重试或预算耗尽时将 Run 投影为 `waiting_human`，且仅允许 Retry/Repair/Stop。
 - 构造无候选 `accept` 请求时 API 返回 `409 human_decision_candidate_unavailable`，Run
   保持 `waiting_human` 且 version、guidance 和后台任务均不变化；协调器直接收到同类
   decision 时也必须 fail-closed。
 - Repository CAS、candidate insert 或 Step update 失败时事务完整回滚。
 - Provider 分类覆盖 timeout、429、503、invalid result 和 unknown，并验证原文/密钥不出现在诊断。
+- typed Provider boundary 对 `Retry-After` delta-seconds/HTTP-date 的有效、无效、负数和超 cap 用例；验证规范化 hint 的端到端透传、有效提示优先，以及本地 fallback/cap 和 deterministic jitter 使用固定时钟与稳定 seed 可复现。纯函数仅以 `Some(seconds)` 测试不等同于 header 边界已接入。
+- `next_attempt_at` 未到期时连续调度、API 重派和 startup reconciliation 最多绑定一个携带原 due 的 pending Task，该 Task 不进入 running、不 claim Step、不调用 Provider；重启按同一 due 重建，到期后多实例 claim 只有一个 DB CAS 获胜。
+- success、waiting_human/manual、pause、cancel/stop 清空退避；旧 epoch/task 的迟到完成不能清除新值。
+- migration upgrade 后既有行为 `NULL`、downgrade 可逆、fresh 完整 revision chain 与 Rust/Python model metadata 完全一致，并断言 frozen initial baseline 未包含 `next_attempt_at`，避免重复 DDL。
 - `run_view()` / `step_view()` 所有非空时间以 `Z` 结尾，空值仍为 `null`。
 
 ### Frontend Playwright

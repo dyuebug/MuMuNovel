@@ -6,8 +6,9 @@ pub(crate) use self::candidate_runtime_owner::{
     execute_single_generation_candidate_runtime,
     execute_single_generation_candidate_runtime_tracked,
     execute_single_generation_candidate_runtime_tracked_with_guidance,
+    execute_single_generation_candidate_runtime_tracked_with_guidance_typed,
     execute_single_generation_candidate_runtime_with_guidance,
-    single_generation_candidate_gateway_content,
+    single_generation_candidate_gateway_content, ChapterCandidateRuntimeError,
 };
 use self::context_compaction_owner::build_generation_context_compaction_owner_contract;
 use self::quality_runtime_context_owner::build_generation_quality_runtime_owner_contract;

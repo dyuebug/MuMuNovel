@@ -1,3 +1,4 @@
+use chrono::Utc;
 use futures::StreamExt;
 use reqwest::Client;
 use serde_json::{Map, Value};
@@ -5,8 +6,8 @@ use std::time::Duration;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::ai::types::{
-    AIRequestError, AIResponse, AIStreamChunk, ChatMessage, ToolCall, ToolCallFunction, ToolChoice,
-    ToolDef,
+    retry_after_seconds_from_headers, AIRequestError, AIResponse, AIStreamChunk, ChatMessage,
+    ToolCall, ToolCallFunction, ToolChoice, ToolDef,
 };
 
 pub struct GeminiClient {
@@ -372,11 +373,13 @@ impl GeminiClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
+            let retry_after_seconds = retry_after_seconds_from_headers(resp.headers(), Utc::now());
             let text = resp.text().await.unwrap_or_default();
             return Err(AIRequestError {
                 message: format!("Gemini HTTP {status}: {text}"),
                 transport_diagnostics: None,
                 status_code: Some(status.as_u16()),
+                retry_after_seconds,
             });
         }
 
@@ -396,8 +399,8 @@ impl GeminiClient {
         system_prompt: Option<String>,
         tools: Option<Vec<ToolDef>>,
         _tool_choice: Option<ToolChoice>,
-    ) -> ReceiverStream<Result<AIStreamChunk, String>> {
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<AIStreamChunk, String>>(32);
+    ) -> ReceiverStream<Result<AIStreamChunk, AIRequestError>> {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<AIStreamChunk, AIRequestError>>(32);
         let client = self.client.clone();
         let api_key = self.api_key.clone();
         let base_url = self.base_url.clone();
@@ -434,8 +437,8 @@ impl GeminiClient {
         max_tokens: u32,
         system_prompt: Option<String>,
         tools: Option<Vec<ToolDef>>,
-        tx: tokio::sync::mpsc::Sender<Result<AIStreamChunk, String>>,
-    ) -> Result<(), String> {
+        tx: tokio::sync::mpsc::Sender<Result<AIStreamChunk, AIRequestError>>,
+    ) -> Result<(), AIRequestError> {
         let normalized_model = Self::normalize_model(&model);
         let url = format!(
             "{}/models/{}:streamGenerateContent?key={}&alt=sse",
@@ -454,18 +457,25 @@ impl GeminiClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| format!("Gemini stream request failed: {e}"))?;
+            .map_err(|e| AIRequestError::new(format!("Gemini stream request failed: {e}")))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
+            let retry_after_seconds = retry_after_seconds_from_headers(resp.headers(), Utc::now());
             let text = resp.text().await.unwrap_or_default();
-            return Err(format!("Gemini stream HTTP {status}: {text}"));
+            return Err(AIRequestError {
+                message: format!("Gemini stream HTTP {status}: {text}"),
+                transport_diagnostics: None,
+                status_code: Some(status.as_u16()),
+                retry_after_seconds,
+            });
         }
 
         let mut buffer = String::new();
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| format!("Gemini stream error: {e}"))?;
+            let chunk =
+                chunk.map_err(|e| AIRequestError::new(format!("Gemini stream error: {e}")))?;
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buffer.find('\n') {
@@ -479,7 +489,7 @@ impl GeminiClient {
                     continue;
                 };
 
-                let response = Self::parse_response(&payload)?;
+                let response = Self::parse_response(&payload).map_err(AIRequestError::new)?;
                 if !response.content.is_empty() {
                     let _ = tx
                         .send(Ok(AIStreamChunk {

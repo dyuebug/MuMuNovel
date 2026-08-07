@@ -407,6 +407,9 @@ impl AIService {
                                         status_code: fallback_error
                                             .status_code
                                             .or(primary_error.status_code),
+                                        retry_after_seconds: fallback_error
+                                            .retry_after_seconds
+                                            .or(primary_error.retry_after_seconds),
                                     };
                                     let execution = build_ai_execution_trace(
                                         &self.config.provider,
@@ -444,8 +447,22 @@ impl AIService {
         messages: Vec<ChatMessage>,
         tools: Option<Vec<ToolDef>>,
     ) -> ReceiverStream<Result<AIStreamChunk, String>> {
-        self.call_client_stream_tracked(messages, tools, true)
-            .stream
+        let mut typed_stream = self
+            .call_client_stream_tracked(messages, tools, true)
+            .stream;
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<AIStreamChunk, String>>(32);
+        tokio::spawn(async move {
+            while let Some(item) = typed_stream.next().await {
+                if tx
+                    .send(item.map_err(|error| error.to_string()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        ReceiverStream::new(rx)
     }
 
     fn call_client_stream_tracked(
@@ -505,7 +522,7 @@ impl AIService {
         let max_tokens = self.config.max_tokens;
         let temperature = self.config.temperature;
         let system_prompt = self.config.system_prompt.clone();
-        let (tx, rx) = tokio::sync::mpsc::channel::<Result<AIStreamChunk, String>>(32);
+        let (tx, rx) = tokio::sync::mpsc::channel::<Result<AIStreamChunk, AIRequestError>>(32);
         let (completion_tx, completion_rx) = oneshot::channel::<AIExecutionTraceV1>();
 
         tokio::spawn(async move {
@@ -555,7 +572,7 @@ impl AIService {
                     );
                 }
                 Err(error) => {
-                    let fallback_reason = Self::model_fallback_reason(&error);
+                    let fallback_reason = Self::model_fallback_reason(&error.message);
                     if !allow_model_fallback || fallback_reason.is_none() {
                         let _ = tx.send(Err(error)).await;
                         Self::complete_stream_trace(
@@ -652,10 +669,21 @@ impl AIService {
                             Err(fallback_error) => {
                                 outcome = AIExecutionOutcome::Failed;
                                 let _ = tx
-                                    .send(Err(format!(
-                                        "{}; fallback model {} also failed: {}",
-                                        error, fallback_model, fallback_error
-                                    )))
+                                    .send(Err(AIRequestError {
+                                        message: format!(
+                                            "{}; fallback model {} also failed: {}",
+                                            error, fallback_model, fallback_error
+                                        ),
+                                        transport_diagnostics: fallback_error
+                                            .transport_diagnostics
+                                            .or(error.transport_diagnostics),
+                                        status_code: fallback_error
+                                            .status_code
+                                            .or(error.status_code),
+                                        retry_after_seconds: fallback_error
+                                            .retry_after_seconds
+                                            .or(error.retry_after_seconds),
+                                    }))
                                     .await;
                                 break;
                             }
@@ -719,7 +747,8 @@ mod tests {
     use std::sync::Arc;
 
     use axum::extract::State;
-    use axum::http::StatusCode;
+    use axum::http::{header::RETRY_AFTER, HeaderValue, StatusCode};
+    use axum::response::{IntoResponse, Response};
     use axum::routing::{get, post};
     use axum::{Json, Router};
     use serde_json::{json, Value};
@@ -735,6 +764,8 @@ mod tests {
         PrimarySuccess,
         FallbackSuccess,
         FallbackFailure,
+        FallbackFailureWithBothRetryHints,
+        FallbackFailureWithPrimaryRetryHint,
     }
 
     #[derive(Clone)]
@@ -761,7 +792,7 @@ mod tests {
     async fn chat_handler(
         State(state): State<TestServerState>,
         Json(body): Json<Value>,
-    ) -> (StatusCode, Json<Value>) {
+    ) -> Response {
         let model = body
             .get("model")
             .and_then(Value::as_str)
@@ -770,35 +801,57 @@ mod tests {
             return successful_chat_response("primary response");
         }
         if model == "primary-model" {
-            return (
+            let retry_after = matches!(
+                state.mode,
+                TestMode::FallbackFailureWithBothRetryHints
+                    | TestMode::FallbackFailureWithPrimaryRetryHint
+            )
+            .then_some("120");
+            return json_response(
                 StatusCode::NOT_FOUND,
-                Json(json!({
+                json!({
                     "error": {"message": "model not found", "code": "not_found"}
-                })),
+                }),
+                retry_after,
             );
         }
         if model == "fallback-model" && matches!(state.mode, TestMode::FallbackSuccess) {
             return successful_chat_response("fallback response");
         }
 
-        (
+        let retry_after =
+            matches!(state.mode, TestMode::FallbackFailureWithBothRetryHints).then_some("240");
+        json_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
+            json!({
                 "error": {"message": "fallback upstream unavailable"}
-            })),
+            }),
+            retry_after,
         )
     }
 
-    fn successful_chat_response(content: &str) -> (StatusCode, Json<Value>) {
-        (
+    fn successful_chat_response(content: &str) -> Response {
+        json_response(
             StatusCode::OK,
-            Json(json!({
+            json!({
                 "choices": [{
                     "message": {"content": content},
                     "finish_reason": "stop"
                 }]
-            })),
+            }),
+            None,
         )
+    }
+
+    fn json_response(status: StatusCode, payload: Value, retry_after: Option<&str>) -> Response {
+        let mut response = (status, Json(payload)).into_response();
+        if let Some(retry_after) = retry_after {
+            response.headers_mut().insert(
+                RETRY_AFTER,
+                HeaderValue::from_str(retry_after).expect("valid retry-after test header"),
+            );
+        }
+        response
     }
 
     async fn spawn_openai_server(mode: TestMode) -> (String, Arc<AtomicUsize>, TestServerHandle) {
@@ -929,6 +982,36 @@ mod tests {
         assert!(!serialized.contains("secret prompt"));
         assert!(!serialized.contains("test-secret-key"));
         assert_eq!(model_list_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn tracked_non_stream_prefers_fallback_retry_after_hint() {
+        let (base_url, _model_list_calls, _server) =
+            spawn_openai_server(TestMode::FallbackFailureWithBothRetryHints).await;
+        let service = AIService::new(test_ai_config(base_url));
+
+        let tracked_error = service
+            .generate_text_tracked("secret prompt", None, None, true)
+            .await
+            .expect_err("fallback request should fail");
+
+        assert_eq!(tracked_error.error.status_code, Some(503));
+        assert_eq!(tracked_error.error.retry_after_seconds, Some(240));
+    }
+
+    #[tokio::test]
+    async fn tracked_non_stream_uses_primary_retry_after_when_fallback_has_none() {
+        let (base_url, _model_list_calls, _server) =
+            spawn_openai_server(TestMode::FallbackFailureWithPrimaryRetryHint).await;
+        let service = AIService::new(test_ai_config(base_url));
+
+        let tracked_error = service
+            .generate_text_tracked("secret prompt", None, None, true)
+            .await
+            .expect_err("fallback request should fail");
+
+        assert_eq!(tracked_error.error.status_code, Some(503));
+        assert_eq!(tracked_error.error.retry_after_seconds, Some(120));
     }
 
     #[tokio::test]

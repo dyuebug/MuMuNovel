@@ -22,7 +22,9 @@ use crate::services::chapter_generation_runtime_service::story_continuity_ledger
 };
 use crate::services::chapter_generation_runtime_service::{
     execute_single_generation_candidate_runtime_tracked_with_guidance,
-    execute_single_generation_candidate_runtime_with_guidance, GeneratedChapterResult,
+    execute_single_generation_candidate_runtime_tracked_with_guidance_typed,
+    execute_single_generation_candidate_runtime_with_guidance, ChapterCandidateRuntimeError,
+    GeneratedChapterResult,
 };
 use crate::services::generation_contract_service::{
     apply_generation_intent_overrides, build_generation_contract_snapshot, fill_missing_continuity,
@@ -302,6 +304,69 @@ impl ChapterGenerationRuntimeContext {
             )
             .await?;
         Ok(result)
+    }
+
+    pub(crate) async fn generate_candidate_only_with_contract_and_guidance_typed(
+        &self,
+        ai_config: AIConfig,
+        target_word_count: i32,
+        provider_payload: PromptContextProviderPayload,
+        overrides: &ChapterGenerationPromptOverrides,
+        additional_guidance: Option<&str>,
+        gateway_config: ChapterCandidateRouteGatewayConfig,
+        generation_contract_snapshot: GenerationContractSnapshotV1,
+        role_policy_context: Option<PreparedRoleModelPolicyContext>,
+    ) -> Result<GeneratedChapterResult, ChapterCandidateRuntimeError> {
+        let legacy_story_packet =
+            story_packet_to_legacy_flat_value(&generation_contract_snapshot.story_packet);
+        let execution_context =
+            crate::services::chapter_generation_runtime_service::SingleGenerationCandidateRuntimeExecutionContext {
+                project_model: self.project_model.clone(),
+                chapter_model: self.chapter_model.clone(),
+                previous_chapter_exists: self.previous_chapter.is_some(),
+                previous_chapter_prompt_context: self.previous_chapter_prompt_context.clone(),
+                story_packet: legacy_story_packet,
+                generation_contract_snapshot: Some(generation_contract_snapshot),
+            };
+
+        if let Some(role_policy_context) = role_policy_context {
+            let (_, result, execution) =
+                execute_single_generation_candidate_runtime_tracked_with_guidance_typed(
+                    &execution_context,
+                    ai_config,
+                    target_word_count,
+                    provider_payload,
+                    overrides,
+                    additional_guidance,
+                    gateway_config,
+                    role_policy_context.allow_model_fallback,
+                )
+                .await?;
+            execution
+                .as_ref()
+                .map(|execution| {
+                    build_generation_execution_audit(
+                        &role_policy_context.resolved_policy,
+                        execution,
+                    )
+                })
+                .transpose()
+                .map_err(|error| ChapterCandidateRuntimeError::Other(error.to_string()))?;
+            Ok(result)
+        } else {
+            let (_, result) = execute_single_generation_candidate_runtime_with_guidance(
+                &execution_context,
+                ai_config,
+                target_word_count,
+                provider_payload,
+                overrides,
+                additional_guidance,
+                gateway_config,
+            )
+            .await
+            .map_err(ChapterCandidateRuntimeError::Other)?;
+            Ok(result)
+        }
     }
 
     async fn generate_candidate_with_optional_contract(

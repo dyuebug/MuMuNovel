@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Utc};
 use sea_orm::{
     ActiveModelTrait, ConnectionTrait, Database, DatabaseConnection, DbBackend, EntityTrait,
     IntoActiveModel, PaginatorTrait, Schema, Set, Statement,
@@ -16,6 +16,7 @@ use super::{
     chapter_repair_repository::{
         NovelAutopilotChapterRepairCommit, NovelAutopilotChapterRepairFailureEvidence,
     },
+    chapter_repository::NovelAutopilotChapterGenerateRetryCandidate,
     repository::{
         ChapterBusinessSnapshot, ClaimedNovelAutopilotStep, CreateNovelAutopilotRun,
         CreateNovelAutopilotStepAttempt, NovelAutopilotChapterGenerateCommit,
@@ -395,12 +396,194 @@ fn manual_review_candidate(content: &str) -> NovelAutopilotManualReviewCandidate
     NovelAutopilotManualReviewCandidate {
         content: content.to_string(),
         word_count: i32::try_from(content.chars().count()).expect("candidate word count fits i32"),
-        chapter_status: NovelAutopilotStepStatus::Completed.as_str().to_string(),
         result_digest: chapter_content_digest(content),
         quality_metrics: Some(json!({"overall_score": 6.8})),
         quality_gate_action: Some("manual_review".to_string()),
         quality_gate_message: Some("需要人工确认候选质量".to_string()),
     }
+}
+
+fn generate_retry_candidate(content: &str) -> NovelAutopilotChapterGenerateRetryCandidate {
+    NovelAutopilotChapterGenerateRetryCandidate {
+        content: content.to_string(),
+        word_count: i32::try_from(content.chars().count()).expect("retry word count fits i32"),
+        result_digest: chapter_content_digest(content),
+        quality_diagnostic: json!({
+            "overall_score": 66.1,
+            "quality_gate_action": "auto_repair",
+            "failed_metrics": [{"key": "pacing", "label": "节奏"}],
+            "repair_targets": ["压缩说明段"]
+        }),
+        quality_gate_action: Some("auto_repair".to_string()),
+        quality_gate_message: Some("继续修复节奏与转折".to_string()),
+    }
+}
+
+#[tokio::test]
+async fn chapter_generate_quality_retry_atomically_persists_scoped_candidate() {
+    let db = setup_repository_db().await;
+    insert_project(&db).await;
+    insert_chapter(&db).await;
+    let claimed = claim_chapter_step(&db, NovelAutopilotStepType::ChapterGenerate, TASK_ID).await;
+    let expected = ChapterBusinessSnapshot::load(&db, PROJECT_ID, CHAPTER_ID)
+        .await
+        .expect("load chapter snapshot");
+    let candidate_content = "星门在暴雨中开启，林舟听见遗迹深处的回声。";
+    let candidate = generate_retry_candidate(candidate_content);
+
+    let terminal = NovelAutopilotRepository::persist_chapter_generate_retry_candidate(
+        &db,
+        &claimed.step.id,
+        USER_ID,
+        claimed.run.version,
+        claimed.run.epoch,
+        STEP_KEY,
+        Some(TASK_ID),
+        &expected,
+        NovelAutopilotQualityDecision::AutoRepair,
+        "chapter_quality_auto_repair",
+        candidate.clone(),
+    )
+    .await
+    .expect("persist generate retry candidate");
+
+    assert_eq!(
+        terminal.run.status,
+        NovelAutopilotRunStatus::Running.as_str()
+    );
+    assert_eq!(terminal.run.version, claimed.run.version + 1);
+    assert!(terminal.run.current_step.is_none());
+    assert!(terminal.run.active_background_task_id.is_none());
+    assert_eq!(
+        terminal.run.last_error_code.as_deref(),
+        Some("chapter_quality_auto_repair")
+    );
+    assert_eq!(terminal.run.consecutive_quality_failures, 1);
+    assert_eq!(
+        terminal.step.status,
+        NovelAutopilotStepStatus::Failed.as_str()
+    );
+    assert_eq!(
+        terminal.step.result_digest.as_deref(),
+        Some(candidate.result_digest.as_str())
+    );
+    assert_eq!(
+        terminal.step.quality_decision.as_deref(),
+        Some(NovelAutopilotQualityDecision::AutoRepair.as_str())
+    );
+
+    let attempt = chapter_draft_attempt::Entity::find_by_id(&claimed.step.id)
+        .one(&db)
+        .await
+        .expect("load retry evidence")
+        .expect("retry evidence exists");
+    assert_eq!(attempt.source, "novel_autopilot_chapter_generate");
+    assert_eq!(attempt.attempt_state, "retry");
+    assert_eq!(attempt.word_count, candidate.word_count);
+    assert_eq!(attempt.quality_metrics, Some(candidate.quality_diagnostic));
+    let payload = attempt.repair_payload.expect("retry payload");
+    assert_eq!(payload["run_id"], claimed.run.id);
+    assert_eq!(payload["run_epoch"], claimed.run.epoch);
+    assert_eq!(payload["step_attempt"], claimed.step.attempt);
+    assert_eq!(
+        payload["source_chapter_snapshot_digest"],
+        expected.snapshot_digest()
+    );
+    assert_eq!(payload["candidate_full_content"], candidate_content);
+    assert_eq!(payload["candidate_content_digest"], candidate.result_digest);
+    assert_eq!(payload["content_complete"], true);
+    assert_eq!(
+        load_chapter(&db).await.content.as_deref(),
+        Some(INITIAL_CONTENT)
+    );
+}
+
+#[tokio::test]
+async fn chapter_generate_quality_retry_rolls_back_when_chapter_snapshot_changes() {
+    let db = setup_repository_db().await;
+    insert_project(&db).await;
+    insert_chapter(&db).await;
+    let claimed = claim_chapter_step(&db, NovelAutopilotStepType::ChapterGenerate, TASK_ID).await;
+    let expected = ChapterBusinessSnapshot::load(&db, PROJECT_ID, CHAPTER_ID)
+        .await
+        .expect("load chapter snapshot");
+    let mut changed = load_chapter(&db).await.into_active_model();
+    changed.title = Set("人工修改后的标题".to_string());
+    changed
+        .update(&db)
+        .await
+        .expect("modify chapter after snapshot");
+
+    let error = NovelAutopilotRepository::persist_chapter_generate_retry_candidate(
+        &db,
+        &claimed.step.id,
+        USER_ID,
+        claimed.run.version,
+        claimed.run.epoch,
+        STEP_KEY,
+        Some(TASK_ID),
+        &expected,
+        NovelAutopilotQualityDecision::Retry,
+        "chapter_quality_retry",
+        generate_retry_candidate("这份候选不能覆盖人工修改。"),
+    )
+    .await
+    .expect_err("stale chapter snapshot must reject retry evidence");
+
+    assert_eq!(error, NovelAutopilotRepositoryError::BusinessDataChanged);
+    assert_eq!(
+        chapter_draft_attempt::Entity::find()
+            .count(&db)
+            .await
+            .expect("count retry evidence"),
+        0
+    );
+    assert_commit_not_applied(&db, &claimed).await;
+}
+
+#[tokio::test]
+async fn chapter_generate_quality_retry_rejects_invalid_digest_before_writes() {
+    let db = setup_repository_db().await;
+    insert_project(&db).await;
+    insert_chapter(&db).await;
+    let claimed = claim_chapter_step(&db, NovelAutopilotStepType::ChapterGenerate, TASK_ID).await;
+    let expected = ChapterBusinessSnapshot::load(&db, PROJECT_ID, CHAPTER_ID)
+        .await
+        .expect("load chapter snapshot");
+    let mut candidate = generate_retry_candidate("摘要错误的候选正文。");
+    candidate.result_digest = "sha256:tampered".to_string();
+
+    let error = NovelAutopilotRepository::persist_chapter_generate_retry_candidate(
+        &db,
+        &claimed.step.id,
+        USER_ID,
+        claimed.run.version,
+        claimed.run.epoch,
+        STEP_KEY,
+        Some(TASK_ID),
+        &expected,
+        NovelAutopilotQualityDecision::Retry,
+        "chapter_quality_retry",
+        candidate,
+    )
+    .await
+    .expect_err("invalid digest must reject retry evidence");
+
+    assert!(matches!(
+        error,
+        NovelAutopilotRepositoryError::InvalidConfig {
+            field: "retry_candidate_result_digest",
+            ..
+        }
+    ));
+    assert_eq!(
+        chapter_draft_attempt::Entity::find()
+            .count(&db)
+            .await
+            .expect("count retry evidence"),
+        0
+    );
+    assert_commit_not_applied(&db, &claimed).await;
 }
 
 async fn resume_manual_candidate_for_accept(
@@ -516,8 +699,70 @@ async fn manual_review_candidate_persists_content_outside_durable_run_and_step()
         Some(candidate_content)
     );
     assert_eq!(
+        candidate
+            .repair_payload
+            .as_ref()
+            .and_then(|payload| payload.get("candidate_chapter_status"))
+            .and_then(serde_json::Value::as_str),
+        Some("completed")
+    );
+    assert_eq!(
         load_chapter(&db).await.content.as_deref(),
         Some(INITIAL_CONTENT)
+    );
+}
+
+#[tokio::test]
+async fn active_task_execution_failure_atomically_finishes_step_and_updates_run_time() {
+    let db = setup_repository_db().await;
+    insert_project(&db).await;
+    insert_chapter(&db).await;
+    let claimed = claim_chapter_step(&db, NovelAutopilotStepType::ChapterGenerate, TASK_ID).await;
+    let previous_updated_at = claimed.run.updated_at;
+
+    let waiting = NovelAutopilotRepository::fail_active_task_and_wait_owned(
+        &db,
+        &claimed.run.id,
+        USER_ID,
+        claimed.run.epoch,
+        TASK_ID,
+        "novel_autopilot_execution_failed",
+    )
+    .await
+    .expect("converge execution failure");
+
+    assert_eq!(
+        waiting.status,
+        NovelAutopilotRunStatus::WaitingHuman.as_str()
+    );
+    assert_eq!(
+        waiting.last_error_code.as_deref(),
+        Some("novel_autopilot_execution_failed")
+    );
+    assert!(waiting.current_step.is_none());
+    assert!(waiting.active_background_task_id.is_none());
+    assert!(waiting.updated_at >= previous_updated_at);
+
+    let terminal_step = novel_autopilot_step_run::Entity::find_by_id(&claimed.step.id)
+        .one(&db)
+        .await
+        .expect("load terminal step")
+        .expect("terminal step exists");
+    assert_eq!(
+        terminal_step.status,
+        NovelAutopilotStepStatus::Failed.as_str()
+    );
+    assert_eq!(
+        terminal_step.error_code.as_deref(),
+        Some("novel_autopilot_execution_failed")
+    );
+    assert!(terminal_step.completed_at.is_some());
+    assert_eq!(
+        chapter_draft_attempt::Entity::find()
+            .count(&db)
+            .await
+            .expect("count execution failure candidates"),
+        0
     );
 }
 
@@ -1584,6 +1829,7 @@ async fn chapter_analysis_provider_failure_updates_budget_without_persisting_ana
         insert_project(&db).await;
         insert_chapter(&db).await;
         let claimed = claim_chapter_analysis_step(&db).await;
+        let failure_started_at = Utc::now().naive_utc();
 
         let terminal = NovelAutopilotRepository::finish_chapter_analysis_failure(
             &db,
@@ -1595,6 +1841,7 @@ async fn chapter_analysis_provider_failure_updates_budget_without_persisting_ana
             Some(ANALYSIS_TASK_ID),
             "chapter_analysis_provider_failed",
             NovelAutopilotFailureCounterKind::Provider,
+            Some(120),
             waiting_human,
         )
         .await
@@ -1617,6 +1864,11 @@ async fn chapter_analysis_provider_failure_updates_budget_without_persisting_ana
             terminal.run.last_error_code.as_deref(),
             Some("chapter_analysis_provider_failed")
         );
+        assert_eq!(terminal.run.next_attempt_at.is_some(), !waiting_human);
+        if let Some(next_attempt_at) = terminal.run.next_attempt_at {
+            assert!(next_attempt_at > claimed.run.updated_at);
+            assert!((next_attempt_at - failure_started_at).num_seconds() >= 120);
+        }
         assert_eq!(
             terminal.step.status,
             NovelAutopilotStepStatus::Failed.as_str()
@@ -1778,6 +2030,9 @@ async fn chapter_repair_failure_tracks_provider_and_quality_budgets_independentl
         insert_project(&db).await;
         insert_chapter(&db).await;
         let claimed = claim_chapter_repair_step(&db).await;
+        let failure_started_at = Utc::now().naive_utc();
+        let retry_after_seconds =
+            (counter_kind == NovelAutopilotFailureCounterKind::Provider).then_some(120);
 
         let terminal = NovelAutopilotRepository::finish_chapter_repair_failure(
             &db,
@@ -1789,6 +2044,7 @@ async fn chapter_repair_failure_tracks_provider_and_quality_budgets_independentl
             Some(REPAIR_TASK_ID),
             "chapter_repair_failed",
             counter_kind,
+            retry_after_seconds,
             waiting_human,
             decision,
             None,
@@ -1811,6 +2067,14 @@ async fn chapter_repair_failure_tracks_provider_and_quality_budgets_independentl
         );
         assert!(terminal.run.current_step.is_none());
         assert!(terminal.run.active_background_task_id.is_none());
+        assert_eq!(
+            terminal.run.next_attempt_at.is_some(),
+            counter_kind == NovelAutopilotFailureCounterKind::Provider && !waiting_human
+        );
+        if let Some(next_attempt_at) = terminal.run.next_attempt_at {
+            assert!(next_attempt_at > claimed.run.updated_at);
+            assert!((next_attempt_at - failure_started_at).num_seconds() >= 120);
+        }
         assert_eq!(
             terminal.step.status,
             NovelAutopilotStepStatus::Failed.as_str()
@@ -1849,6 +2113,7 @@ async fn chapter_repair_quality_failure_atomically_persists_retry_candidate_and_
         Some(REPAIR_TASK_ID),
         "chapter_repair_quality_retry",
         NovelAutopilotFailureCounterKind::Quality,
+        None,
         false,
         NovelAutopilotQualityDecision::Retry,
         Some(evidence),
@@ -1920,6 +2185,7 @@ async fn chapter_repair_retry_candidate_insert_failure_rolls_back_run_and_step()
         Some(REPAIR_TASK_ID),
         "chapter_repair_quality_retry",
         NovelAutopilotFailureCounterKind::Quality,
+        None,
         false,
         NovelAutopilotQualityDecision::Retry,
         Some(evidence),
@@ -1975,6 +2241,7 @@ async fn chapter_repair_retry_candidate_rejects_stale_chapter_and_invalid_scope(
             Some(REPAIR_TASK_ID),
             "chapter_repair_quality_retry",
             NovelAutopilotFailureCounterKind::Quality,
+            None,
             false,
             NovelAutopilotQualityDecision::Retry,
             Some(evidence),

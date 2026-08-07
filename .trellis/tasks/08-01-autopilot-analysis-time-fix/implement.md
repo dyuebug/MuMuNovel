@@ -74,7 +74,7 @@
 - [x] `run_view()` 的 created/updated/started/paused/completed 全部使用同一帮助函数。
 - [x] `step_view()` 的 created/updated/started/completed 全部使用同一帮助函数。
 - [x] API 测试覆盖微秒精度、`Z` 后缀和 `null`，确认其他 DTO 字段不变。
-- [x] 不修改模型、迁移或历史数据库行。
+- [x] UTC 显示修复不修改既有时间列语义，也不迁移、回填或平移历史数据库时间值。
 
 ## Phase 7：前端状态文案与时间回归
 
@@ -95,6 +95,71 @@
 - [x] 使用 `trellis-break-loop` 复盘“适用性元数据在下游丢失”和“人工等待状态缺少候选不变量”两类根因。
 - [x] 使用 `trellis-check` 执行规范一致性、复用、跨层数据流和缺失测试检查。
 
+## Phase 9：补齐 ChapterGenerate 质量反馈闭环
+
+- [x] 为 ChapterGenerate 定义独立 retry evidence source/state 和构造器，复用
+  `chapter_draft_attempts` 的完整正文持久化/抽取契约，但不得获得 `waiting_human`
+  人工候选的 Accept 语义。
+- [x] evidence payload 写入并校验 `run_id`、`run_epoch`、chapter ID/number、
+  `source_content_digest`、`candidate_content_digest` 和 `step_attempt`；候选 digest
+  必须与完整正文一致，word count 和完整标志必须自洽。
+- [x] 新增 Repository 原子入口，在同一事务内执行章节快照 CAS、插入 retry
+  evidence、终结当前 Step、更新 Run 质量失败计数/version 并释放 current step/task
+  fence；任一步骤失败时完整回滚。
+- [x] 修改 `chapter_adapter::finish_quality_retry()` 的预算内分支调用该原子入口，
+  Task result 仅返回 candidate ID/digest、attempt 和 `build_safe_quality_diagnostic()`
+  allowlist，不返回正文、Prompt、reasoning 或原始质量 payload。
+- [x] 在下一次 ChapterGenerate 调用 Provider 前加载 attempt 小于当前 attempt 的最新
+  evidence；只接受同 Run/epoch/chapter/source digest 且 candidate digest 自洽的记录，
+  将上一候选正文与有界质量反馈/修复方向注入受控生成输入。
+- [x] 覆盖首轮无 evidence、第二轮正确消费、跨 Run/epoch/章节隔离、source digest
+  变化、candidate digest 损坏、并发 CAS、事务回滚和正文不进入 Run/Step/Task/SSE/
+  日志的回归测试。
+
+## Phase 10：实现 Provider 持久化退避
+
+- [x] 新增独立 PostgreSQL Alembic revision：upgrade 为
+  `novel_autopilot_runs` 添加 UTC 语义 `next_attempt_at TIMESTAMP WITHOUT TIME ZONE
+  NULL`，无 default/backfill；downgrade 删除该列。不要同时修改已经发布的基线
+  revision 产生重复 `ADD COLUMN`。
+- [x] 在 Rust `schema_migration_metadata_service` 注册同一 revision 的 upgrade/
+  downgrade metadata；更新 SeaORM Run model 和冻结 Python migrator model。保持历史
+  ee0a initial baseline 不变；fresh schema 验证通过完整 revision chain 先创建 Autopilot
+  表、再由新 revision 添加列/index，并验证最终 metadata 的类型与 nullability，不重写
+  历史 Run/Step 时间值。
+- [x] 在 typed Provider generation error 边界提取并规范化 `Retry-After` delta-seconds 或
+  HTTP-date，只透传有界秒数/时间提示，不保留原始 header、URL、响应体或异常文本；禁止
+  从错误字符串或响应正文解析。
+- [x] 新增纯函数退避 owner：有效 `Retry-After` 优先，否则使用 capped exponential；
+  再以 `run_id/step_key/attempt` 生成 deterministic、非负、受限
+  jitter，最终 delay 始终不超过统一 cap。测试使用固定时钟和稳定 seed。
+- [x] 可重试 Provider 失败的 Repository 事务在终结 Step、增加失败计数、更新 Run
+  version/状态和释放 task fence 的同时写 `next_attempt_at=now+delay`；不可重试或预算
+  耗尽进入人工处理时写 `NULL`。
+- [x] coordinator 连续 tick、API dispatch retry、孤儿 queued Run 修复和 startup
+  reconciliation 统一检查数据库 `next_attempt_at`；未到期时通过 version/epoch/
+  active-task CAS 至多创建并绑定一个 payload 携带同一 `not_before` 的持久化 pending
+  Task，但到期前不标记 running、不 claim Step、不调用 Provider。重启后按数据库原
+  due 重建 pending Task，到期后 claim 层 DB 围栏与多实例 CAS 只允许一个执行者获胜。
+- [x] 在所有 Provider-backed Step 成功提交、进入 `waiting_human`/manual review、
+  pause、cancel/stop 路径清空 `next_attempt_at`；resume 不恢复旧值，迟到旧 epoch/task
+  不能覆盖或清除新值。
+- [x] 增加 migration upgrade/downgrade/fresh-chain、frozen initial baseline 无新列、
+  既有行 `NULL`、typed Retry-After 端到端透传与优先/cap、无效 hint fallback、jitter 重启复现、未到期单个 pending Task、到期前
+  不 running/claim/调用 Provider、重启按原 due 重建、到期多实例单次 claim 和所有
+  清理状态的回归测试。
+
+## Phase 11：扩展规范同步与最终质量门禁
+
+- [x] 将 ChapterGenerate retry evidence 与 Provider persistent backoff 的稳定契约
+  同步到 `.trellis/spec/backend/durable-novel-autopilot.md` 和跨层思考指南，确保 task
+  artifacts 与长期规范没有冲突。
+- [x] 使用 `trellis-check` 重新检查 DB -> Repository -> Adapter -> Coordinator/API ->
+  Task/SSE 的完整数据流、所有写/清理路径和同层一致性。
+- [x] 重新执行 Rust migration metadata、Repository、startup reconciliation、
+  ChapterGenerate、Provider failure、frontend lint/build 和聚焦 Playwright 验证；已实现的
+  Phase 9/10 本地持久化退避范围全部通过，未实现项继续单独保持未勾选。
+
 ## 验证命令
 
 具体测试过滤器在实现后按新增测试名补全，至少执行：
@@ -105,6 +170,9 @@ cargo check --manifest-path "backend-rs/Cargo.toml"
 cargo check --tests --manifest-path "backend-rs/Cargo.toml"
 cargo test --manifest-path "backend-rs/Cargo.toml" story_repair_quality_context_owner
 cargo test --manifest-path "backend-rs/Cargo.toml" novel_autopilot
+cargo test --manifest-path "backend-rs/Cargo.toml" schema_migration_metadata
+cargo test --manifest-path "backend-rs/Cargo.toml" chapter_generate_quality_retry
+cargo test --manifest-path "backend-rs/Cargo.toml" provider_retry_backoff
 npm --prefix "frontend" run lint
 npm --prefix "frontend" run build
 Push-Location "frontend"
@@ -122,13 +190,18 @@ Pop-Location
 | --- | --- | --- |
 | 质量门行为面较广 | `story_repair_quality_context_owner.rs` | 源头过滤、历史 payload 兼容测试 |
 | 人工候选原子事务 | `chapter_repository.rs` | 复用现有 CAS、候选插入失败和回滚测试 |
+| ChapterGenerate retry evidence 串线或泄露 | `chapter_adapter.rs` / `chapter_repository.rs` / generation service | 完整作用域 + digest 校验；正文仅在 `chapter_draft_attempts` |
 | 返修收敛能力 | `chapter_repair_adapter.rs` | 同时保留中间重试证据和最终人工候选 |
 | 后台任务共享逻辑 | `api/background_tasks.rs` | 只调整 Autopilot outcome 文案和安全结果 |
 | Provider 信息泄露 | generation error / Adapter logging | allowlist 构造、长度限制、敏感词回归 |
+| 退避重启后失效或重复调度 | Run model/Repository/coordinator/API reconciliation | nullable `next_attempt_at` + DB not-before + version/epoch/CAS |
+| schema owner 漂移 | Alembic revision / Rust migration metadata / SeaORM / frozen migrator model | upgrade/downgrade/fresh-chain metadata 一致性测试 |
 | 时间重复转换 | `novel_autopilot_runs.rs` / Workbench | 后端唯一补时区，前端不手工偏移 |
 
-业务代码可以按 Phase 独立回滚；本方案没有数据库 migration，因此不存在 schema
-降级步骤。历史已处于 `waiting_human` 的 Run 保持原样，不做批量数据修正。
+业务代码可以按 Phase 独立回滚；`next_attempt_at` 使用 nullable 扩展，部署时先执行
+upgrade 再发布新二进制。回滚时先切回不读取该列的旧二进制，再执行 downgrade；
+downgrade 会丢失尚未到期的 not-before，因此回滚窗口必须限制 Provider 立即重试突刺。
+历史已处于 `waiting_human` 的 Run 保持原样，既有时间值不做批量数据修正。
 
 ## 完成定义
 
@@ -141,13 +214,42 @@ Pop-Location
 - [x] 所有 Autopilot 时间字段为 RFC 3339 UTC，页面在北京时间显示正确。
 - [x] 安全扫描未发现 API Key、完整 Prompt、正文或原始 Provider 响应泄露。
 - [x] Rust、frontend 和聚焦 E2E 验证结果已如实记录。
+- [x] ChapterGenerate 预算内质量重试已形成完整、作用域正确、原子且不泄露正文的反馈闭环。
+- [x] Provider retry 已在 typed header 边界端到端使用 capped Retry-After；缺失 hint 时使用 local backoff + deterministic jitter，并通过数据库 `next_attempt_at` 跨重启执行 not-before。
+- [x] pause/cancel/manual/success 清理、迁移 upgrade/downgrade/fresh schema 和并发单次调度均有通过的自动化回归证据。
 
 ## 实际验证结果
 
+以下为本轮实际结果。typed `Retry-After`、数据库持久化退避、ChapterGenerate 候选
+反馈闭环、时间显示、无候选人工操作约束和并发/恢复矩阵已经通过自动化验证；真实
+PostgreSQL upgrade、新 Rust 镜像、OpenAI-compatible HTTP transport、后端重启恢复和
+三章完整整本创作也已在部署环境验证。生产数据库 downgrade 和第三方外部 Provider
+故障注入没有执行，不能把聚焦测试扩张为外部网关实测结论：
+
 - `cargo check`、`cargo check --tests`：通过。
 - `cargo test ... story_repair_quality_context_owner -- --test-threads=1`：12 passed。
-- `cargo test ... novel_autopilot -- --test-threads=1`：166 passed。
+- `cargo test ... novel_autopilot -- --test-threads=1`：176 passed。
+- `cargo test ... retry_after -- --test-threads=1`：6 passed。
+- `cargo test ... schema_migration_metadata -- --test-threads=1`：40 passed；同步修复新增 revision 后遗留的 replay 期望列表和 SQL step count。
 - `npm --prefix frontend run lint`：0 errors，33 个既有 Hook warnings。
 - `npm --prefix frontend run build`：通过；保留既有 circular chunk warning。
-- `npx playwright test e2e/novel-autopilot-workbench.spec.ts`：10 passed。
+- `npx playwright test e2e/novel-autopilot-workbench.spec.ts`：12 passed。
 - `cargo fmt -- --check`、`git diff --check`、UTF-8 无 BOM 检查：通过。
+- 部署前创建旧镜像回滚标签
+  `mumunovel-rust:rollback-autopilot-20260807-103700`，并生成经过
+  `pg_restore --list` 校验的 PostgreSQL custom-format 全量备份。
+- PostgreSQL migration head 已升级为 `20260807_autopilot_retry_backoff`；
+  `next_attempt_at` 为 nullable `timestamp without time zone`，并存在
+  `(status, next_attempt_at)` 索引。
+- Rust 容器已切换到镜像 `sha256:e372167dcb66ca730c6bb576fdbfb1329fa4f489b655fc7b00a45f1bab4b97ba`；
+  `/health`、`/readyz` 和 10 个 gateway probes 通过。
+- 历史卡死 Run `c6af04d5-2fe2-49d4-b6f5-3886a1b75cd1` 在启动恢复时把第三次
+  running Step 收口为 `stale/service_restarted`，Run 转为无 active task 的
+  `waiting_human/novel_autopilot_step_attempts_exhausted`，没有再次出现
+  `invalid_config(candidate_chapter_status)` 或继续调用 Provider。
+- 部署级 smoke Run `b42538ec-9e46-4647-96fd-9aae43daf1aa` 完成 3/3 章节、20 个
+  completed Step 和 1 个预期 stale Step；覆盖生成、5 次分析、返修、书评、润色、
+  暂停 fence、guidance、重启恢复及 TXT export digest，最终无失败章节、待返修或错误码。
+- smoke 的 18 次 OpenAI-compatible HTTP 请求全部被分类，临时 Provider 设置在 finally
+  中恢复；Run API 的 created/updated/started/completed 均带 RFC 3339 `Z`，并正确转换为
+  `Asia/Shanghai` 的 `+08:00` 时间。

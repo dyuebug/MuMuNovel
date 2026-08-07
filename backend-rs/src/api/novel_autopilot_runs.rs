@@ -617,6 +617,7 @@ fn run_task_lease(user_id: &str, run: &novel_autopilot_run::Model) -> NovelAutop
         epoch: run.epoch,
         version: run.version,
         current_phase: run.current_phase.clone(),
+        next_attempt_at: run.next_attempt_at,
     }
 }
 
@@ -742,6 +743,7 @@ fn run_view(run: &novel_autopilot_run::Model) -> Value {
         "started_at": optional_utc_rfc3339(run.started_at),
         "paused_at": optional_utc_rfc3339(run.paused_at),
         "completed_at": optional_utc_rfc3339(run.completed_at),
+        "next_attempt_at": optional_utc_rfc3339(run.next_attempt_at),
     })
 }
 
@@ -890,12 +892,13 @@ mod tests {
         http::StatusCode,
         Json,
     };
-    use chrono::NaiveDate;
+    use chrono::{Duration, NaiveDate, Utc};
     use sea_orm::{
         ActiveModelTrait, ConnectionTrait, Database, DatabaseConnection, DbBackend, EntityTrait,
-        PaginatorTrait, Schema, Set, Statement,
+        IntoActiveModel, PaginatorTrait, Schema, Set, Statement,
     };
     use serde_json::{json, Value};
+    use tokio::sync::Barrier;
 
     use super::{
         cancel_run, create_run, digest_guidance, get_run, list_runs, list_steps, pause_run,
@@ -904,13 +907,17 @@ mod tests {
         VersionedControlRequest,
     };
     use crate::{
-        api::background_tasks::best_effort_wait_for_human_after_schedule_failure,
+        api::background_tasks::{
+            best_effort_wait_for_human_after_schedule_failure, cancel_task_runtime,
+            schedule_owned_novel_book_autopilot_tick,
+        },
         models::{chapter_draft_attempt, novel_autopilot_run, novel_autopilot_step_run, project},
         services::{
             auth::Claims,
             book_import_service::BookImportService,
             chapter_candidate_route_gateway_service::ChapterCandidateRouteGatewayConfig,
             novel_autopilot::{
+                coordinator::NovelAutopilotNextTickLease,
                 repository::{CreateNovelAutopilotRun, NovelAutopilotRepository},
                 types::{NovelAutopilotPrivateSnapshot, NovelAutopilotRunConfig},
             },
@@ -979,6 +986,7 @@ mod tests {
             consecutive_provider_failures: 0,
             consecutive_quality_failures: 0,
             last_error_code: None,
+            next_attempt_at: Some(now),
             guidance_digest: Some("sha256:private".into()),
             active_background_task_id: Some("task-1".into()),
             final_export_ref: None,
@@ -1026,6 +1034,10 @@ mod tests {
         assert!(run_payload["started_at"]
             .as_str()
             .expect("started_at string")
+            .ends_with('Z'));
+        assert!(run_payload["next_attempt_at"]
+            .as_str()
+            .expect("next_attempt_at string")
             .ends_with('Z'));
         assert!(step_payload["created_at"]
             .as_str()
@@ -1154,6 +1166,101 @@ mod tests {
         .await
         .expect("create active run")
         .run
+    }
+
+    #[tokio::test]
+    async fn concurrent_schedulers_bind_only_one_pending_retry_task() {
+        let db = setup_api_db().await;
+        insert_project(&db, "project-concurrent-retry", "owner-1").await;
+        let run = seed_run(&db, "project-concurrent-retry", "owner-1").await;
+        let retry_due = Utc::now().naive_utc() + Duration::minutes(5);
+        let mut retrying = run.into_active_model();
+        retrying.next_attempt_at = Set(Some(retry_due));
+        let retrying = retrying.update(&db).await.expect("persist retry deadline");
+        let lease = Arc::new(NovelAutopilotNextTickLease {
+            run_id: retrying.id.clone(),
+            project_id: retrying.project_id.clone(),
+            user_id: retrying.user_id.clone(),
+            epoch: retrying.epoch,
+            version: retrying.version,
+            current_phase: retrying.current_phase.clone(),
+            next_attempt_at: retrying.next_attempt_at,
+        });
+        let registry = TaskRegistry::new();
+        let stream_hub = TaskStreamHub::new();
+        let book_import_service = Arc::new(BookImportService::new());
+        let barrier = Arc::new(Barrier::new(3));
+
+        let spawn_scheduler = || {
+            let db = db.clone();
+            let registry = registry.clone();
+            let stream_hub = stream_hub.clone();
+            let book_import_service = Arc::clone(&book_import_service);
+            let lease = Arc::clone(&lease);
+            let barrier = Arc::clone(&barrier);
+            tokio::spawn(async move {
+                barrier.wait().await;
+                schedule_owned_novel_book_autopilot_tick(
+                    db,
+                    registry,
+                    stream_hub,
+                    book_import_service,
+                    gateway_config(),
+                    lease.as_ref(),
+                    None,
+                )
+                .await
+            })
+        };
+        let first = spawn_scheduler();
+        let second = spawn_scheduler();
+        barrier.wait().await;
+        first
+            .await
+            .expect("first scheduler task completes")
+            .expect("first scheduler has a valid race outcome");
+        second
+            .await
+            .expect("second scheduler task completes")
+            .expect("second scheduler has a valid race outcome");
+
+        let latest = NovelAutopilotRepository::find_owned(&db, &retrying.id, "owner-1")
+            .await
+            .expect("reload retrying run");
+        let active_task_id = latest
+            .active_background_task_id
+            .as_deref()
+            .expect("one scheduler owns the run");
+        let records = registry.all_records().await;
+        let active: Vec<_> = records
+            .iter()
+            .filter(|record| record.status.is_active())
+            .collect();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].task_id, active_task_id);
+        assert_eq!(active[0].status, TaskStatus::Pending);
+        assert!(active[0].started_at.is_none());
+        let checkpoint_due = active[0]
+            .checkpoint
+            .as_ref()
+            .and_then(|checkpoint| checkpoint.get("not_before"))
+            .and_then(Value::as_str)
+            .expect("winner checkpoint keeps retry deadline");
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(checkpoint_due)
+                .expect("checkpoint deadline is RFC 3339")
+                .naive_utc(),
+            retry_due
+        );
+        assert!(records
+            .iter()
+            .filter(|record| record.task_id != active_task_id)
+            .all(|record| !record.status.is_active()));
+
+        for record in records {
+            let _ =
+                cancel_task_runtime(&registry, &stream_hub, &record.task_id, &record.user_id).await;
+        }
     }
 
     fn assert_error(error: (StatusCode, Json<Value>), status: StatusCode, code: &str) {

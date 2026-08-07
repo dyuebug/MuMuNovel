@@ -258,7 +258,7 @@ where
             }
         },
         Err(error) => {
-            let _ = tx.send(Ok(sse_error(&error, 500))).await;
+            let _ = tx.send(Ok(sse_error(&error.to_string(), 500))).await;
             Err(())
         }
     }
@@ -842,7 +842,7 @@ pub async fn execute_partial_regeneration_task(
     .map_err(|error| {
         CreatePartialRegenerationStreamWorkflowError::Prepare(
             PreparePartialRegenerationStreamError::Config(
-                BuildRegenerationAiServiceError::InvalidConfig(error),
+                BuildRegenerationAiServiceError::InvalidConfig(error.to_string()),
             ),
         )
     })?;
@@ -947,7 +947,7 @@ pub async fn execute_chapter_regeneration_task(
     .await
     .map_err(|error| {
         CreateChapterRegenerationStreamWorkflowError::Prepare(
-            BuildRegenerationAiServiceError::InvalidConfig(error),
+            BuildRegenerationAiServiceError::InvalidConfig(error.to_string()),
         )
     })?;
 

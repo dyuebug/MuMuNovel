@@ -189,6 +189,7 @@ const RUN_ERROR_MESSAGES: Record<string, string> = {
   novel_autopilot_step_attempts_exhausted: '当前步骤尝试次数达到上限，请检查失败原因后重试或修复。',
   novel_autopilot_provider_failures_exhausted: '模型 Provider 连续失败达到上限，请检查模型配置或服务状态。',
   novel_autopilot_quality_failures_exhausted: '连续质量失败达到上限，请调整指导、质量阈值或人工修复。',
+  novel_autopilot_execution_failed: '自动创作步骤执行失败，运行状态已安全收敛；请根据步骤时间线和服务日志处理后重试。',
   novel_autopilot_cost_estimation_unavailable: '当前 Provider 尚无统一计价来源，无法可靠执行成本预算；请清空成本上限或配置受支持的计价能力。',
   chapter_quality_manual_review: '候选已保存，等待人工复核。',
   chapter_generation_attempts_exhausted: '候选已保存，等待人工复核。',
@@ -416,6 +417,11 @@ const RunSummary = ({ run }: { run: NovelAutopilotRun }) => {
         </Descriptions.Item>
         <Descriptions.Item label="创建时间">{formatTimestamp(run.created_at)}</Descriptions.Item>
         <Descriptions.Item label="更新时间">{formatTimestamp(run.updated_at)}</Descriptions.Item>
+        {run.next_attempt_at ? (
+          <Descriptions.Item label="预计重试时间">
+            <Text type="warning">{formatTimestamp(run.next_attempt_at)}</Text>
+          </Descriptions.Item>
+        ) : null}
         <Descriptions.Item label="活动后台任务">{run.active_background_task_id ?? '—'}</Descriptions.Item>
       </Descriptions>
       {errorDescription ? (

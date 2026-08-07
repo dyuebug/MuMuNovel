@@ -1,9 +1,55 @@
+use chrono::{Duration, NaiveDateTime};
 use serde::Serialize;
 
 use crate::ai::AIConfig;
 
 pub(crate) const NOVEL_AUTOPILOT_FAILURE_DIAGNOSTIC_SCHEMA_VERSION: &str =
     "novel-autopilot-failure-diagnostic/v1";
+pub(crate) const NOVEL_AUTOPILOT_PROVIDER_RETRY_MAX_SECONDS: u64 = 15 * 60;
+const NOVEL_AUTOPILOT_PROVIDER_RETRY_BASE_SECONDS: u64 = 5;
+const NOVEL_AUTOPILOT_PROVIDER_RETRY_JITTER_PERCENT: u64 = 25;
+const FNV1A_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV1A_PRIME: u64 = 0x100000001b3;
+
+pub(crate) fn provider_retry_not_before(
+    now: NaiveDateTime,
+    attempt: i32,
+    scope_key: &str,
+    retry_after_seconds: Option<u64>,
+) -> NaiveDateTime {
+    let normalized_attempt = attempt.max(1) as u32;
+    let exponent = normalized_attempt.saturating_sub(1).min(16);
+    let exponential_seconds = NOVEL_AUTOPILOT_PROVIDER_RETRY_BASE_SECONDS
+        .saturating_mul(1_u64 << exponent)
+        .min(NOVEL_AUTOPILOT_PROVIDER_RETRY_MAX_SECONDS);
+    let provider_floor_seconds = retry_after_seconds
+        .map(|seconds| seconds.clamp(1, NOVEL_AUTOPILOT_PROVIDER_RETRY_MAX_SECONDS))
+        .unwrap_or(0);
+    let floor_seconds = exponential_seconds.max(provider_floor_seconds);
+    let remaining_seconds = NOVEL_AUTOPILOT_PROVIDER_RETRY_MAX_SECONDS - floor_seconds;
+    let jitter_window =
+        floor_seconds.saturating_mul(NOVEL_AUTOPILOT_PROVIDER_RETRY_JITTER_PERCENT) / 100;
+    let jitter_window = jitter_window.min(remaining_seconds);
+    let jitter_seconds = if jitter_window == 0 {
+        0
+    } else {
+        stable_retry_hash(scope_key, normalized_attempt) % (jitter_window + 1)
+    };
+    let delay_seconds = floor_seconds.saturating_add(jitter_seconds);
+    now.checked_add_signed(Duration::seconds(delay_seconds as i64))
+        .unwrap_or(now)
+}
+
+fn stable_retry_hash(scope_key: &str, attempt: u32) -> u64 {
+    scope_key
+        .as_bytes()
+        .iter()
+        .copied()
+        .chain(attempt.to_le_bytes())
+        .fold(FNV1A_OFFSET_BASIS, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(FNV1A_PRIME)
+        })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NovelAutopilotFailureDomain {
@@ -58,6 +104,7 @@ pub(crate) struct NovelAutopilotProviderFailureHint {
     pub(crate) provider: Option<String>,
     pub(crate) model: Option<String>,
     pub(crate) http_status: Option<u16>,
+    pub(crate) retry_after_seconds: Option<u64>,
 }
 
 impl NovelAutopilotProviderFailureHint {
@@ -66,6 +113,7 @@ impl NovelAutopilotProviderFailureHint {
             provider: sanitize_identifier(&ai_config.provider),
             model: sanitize_identifier(&ai_config.model),
             http_status: None,
+            retry_after_seconds: None,
         }
     }
 }
@@ -81,6 +129,8 @@ pub(crate) struct NovelAutopilotFailureDiagnostic {
     pub(crate) model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) http_status: Option<u16>,
+    #[serde(skip)]
+    retry_after_seconds: Option<u64>,
     pub(crate) retryable: bool,
 }
 
@@ -173,6 +223,10 @@ impl NovelAutopilotFailureDiagnostic {
         )
     }
 
+    pub(crate) const fn retry_after_seconds(&self) -> Option<u64> {
+        self.retry_after_seconds
+    }
+
     fn new(
         source_code: &'static str,
         category: NovelAutopilotFailureCategory,
@@ -192,6 +246,7 @@ impl NovelAutopilotFailureDiagnostic {
                 .and_then(|hint| hint.model.as_deref())
                 .and_then(sanitize_identifier),
             http_status: http_status.filter(|status| (400..=599).contains(status)),
+            retry_after_seconds: hint.and_then(|hint| hint.retry_after_seconds),
             retryable: category.retryable(),
         }
     }
@@ -310,9 +365,48 @@ mod tests {
     use crate::ai::AIConfig;
 
     use super::{
-        NovelAutopilotFailureDiagnostic, NovelAutopilotFailureDomain,
-        NovelAutopilotProviderFailureHint,
+        provider_retry_not_before, NovelAutopilotFailureDiagnostic, NovelAutopilotFailureDomain,
+        NovelAutopilotProviderFailureHint, NOVEL_AUTOPILOT_PROVIDER_RETRY_MAX_SECONDS,
     };
+
+    #[test]
+    fn provider_retry_backoff_is_deterministic_bounded_and_increases() {
+        let now = chrono::NaiveDate::from_ymd_opt(2026, 8, 7)
+            .expect("valid date")
+            .and_hms_opt(12, 0, 0)
+            .expect("valid time");
+        let first = provider_retry_not_before(now, 1, "run-1:chapter:1", None);
+        let repeated = provider_retry_not_before(now, 1, "run-1:chapter:1", None);
+        let second = provider_retry_not_before(now, 2, "run-1:chapter:1", None);
+        let capped = provider_retry_not_before(now, i32::MAX, "run-1:chapter:1", None);
+
+        assert_eq!(first, repeated);
+        assert!(first > now);
+        assert!(second > first);
+        assert_eq!(
+            (capped - now).num_seconds(),
+            NOVEL_AUTOPILOT_PROVIDER_RETRY_MAX_SECONDS as i64
+        );
+    }
+
+    #[test]
+    fn provider_retry_after_is_clamped_and_never_shortens_local_backoff() {
+        let now = chrono::NaiveDate::from_ymd_opt(2026, 8, 7)
+            .expect("valid date")
+            .and_hms_opt(12, 0, 0)
+            .expect("valid time");
+        let local = provider_retry_not_before(now, 3, "run-2:chapter:2", None);
+        let shorter_provider = provider_retry_not_before(now, 3, "run-2:chapter:2", Some(1));
+        let longer_provider = provider_retry_not_before(now, 3, "run-2:chapter:2", Some(120));
+        let capped_provider = provider_retry_not_before(now, 1, "run-2:chapter:2", Some(u64::MAX));
+
+        assert_eq!(local, shorter_provider);
+        assert!((longer_provider - now).num_seconds() >= 120);
+        assert_eq!(
+            (capped_provider - now).num_seconds(),
+            NOVEL_AUTOPILOT_PROVIDER_RETRY_MAX_SECONDS as i64
+        );
+    }
 
     #[test]
     fn provider_failure_maps_http_status_to_stable_reason_code() {
@@ -365,6 +459,7 @@ mod tests {
                 provider: Some("openai".to_string()),
                 model: Some("gpt-5.1".to_string()),
                 http_status: Some(401),
+                retry_after_seconds: None,
             }),
             None,
         );
@@ -406,10 +501,14 @@ mod tests {
                 provider: Some("openai?api_key=secret".to_string()),
                 model: Some("gpt-5;Authorization".to_string()),
                 http_status: Some(503),
+                retry_after_seconds: Some(120),
             }),
             Some("HTTP 503 api_key=secret prompt=完整正文 response=raw body"),
         );
         let serialized = serde_json::to_string(&diagnostic.to_value()).expect("serialize");
+
+        assert_eq!(diagnostic.retry_after_seconds(), Some(120));
+        assert!(!serialized.contains("retry_after"));
 
         assert_eq!(
             diagnostic.reason_code(NovelAutopilotFailureDomain::ChapterAnalysis),
@@ -431,6 +530,7 @@ mod tests {
                 provider: Some("openai".to_string()),
                 model: Some("gpt-5.1".to_string()),
                 http_status: Some(401),
+                retry_after_seconds: None,
             }),
             Some("request timed out after rate limit handling"),
         );
@@ -440,6 +540,7 @@ mod tests {
                 provider: Some("openai".to_string()),
                 model: Some("gpt-5.1".to_string()),
                 http_status: Some(503),
+                retry_after_seconds: None,
             }),
             Some("invalid api key after timeout"),
         );
@@ -490,6 +591,7 @@ mod tests {
                 provider: Some("openai".to_string()),
                 model: Some("gpt-5.1".to_string()),
                 http_status: None,
+                retry_after_seconds: None,
             }),
         );
 

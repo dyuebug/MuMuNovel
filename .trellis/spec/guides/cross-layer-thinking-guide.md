@@ -117,6 +117,19 @@ create one owner for:
 
 Rendering code may format fields, but it must not redefine the payload contract.
 
+### Mistake 6: Treating Lifecycle State As Target State
+
+**Bad**: Copying a runtime candidate's current `draft` status into a field that
+means the accepted chapter's target status.
+
+**Good**: Name and own current lifecycle state and target persisted state at
+different boundaries. If the target is invariant, make the persistence owner
+set it instead of accepting it from callers.
+
+**Rule**: For every cross-layer `status`, ask "status of what, at which time?"
+Add a composition test whenever one producer and one repository interpret the
+same string differently.
+
 ---
 
 ## Checklist for Cross-Layer Features
@@ -139,6 +152,8 @@ After implementation:
       (`seq`, `id`, `version`) instead of inventing a second cursor
 - [ ] Checked that each user action is enabled by explicit durable evidence,
       not inferred from an overloaded status value
+- [ ] Checked that current lifecycle state is not reused as a future target
+      persistence state
 - [ ] Checked success, no-result failure, invalid payload, and time-zone display
       across storage, API, task/event projection, and UI
 

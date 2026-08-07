@@ -33,6 +33,11 @@ class NovelAutopilotRun(Base):
             "project_id",
             "created_at",
         ),
+        Index(
+            "ix_novel_autopilot_runs_status_next_attempt_at",
+            "status",
+            "next_attempt_at",
+        ),
     )
 
     id = Column(String(36), primary_key=True)
@@ -73,6 +78,7 @@ class NovelAutopilotRun(Base):
     consecutive_provider_failures = Column(Integer, nullable=False)
     consecutive_quality_failures = Column(Integer, nullable=False)
     last_error_code = Column(String(128), nullable=True)
+    next_attempt_at = Column(DateTime, nullable=True)
     guidance_digest = Column(String(80), nullable=True)
     active_background_task_id = Column(String(36), nullable=True)
     final_export_ref = Column(Text, nullable=True)

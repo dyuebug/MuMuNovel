@@ -16,6 +16,7 @@ use crate::{
             candidate_draft_apply_history_model, candidate_draft_generated_content_payload,
         },
         chapter_draft_source_service::extract_candidate_draft_full_content,
+        chapter_generation_service::{CHAPTER_GENERATE_RETRY_SOURCE, CHAPTER_GENERATE_RETRY_STATE},
         chapter_narrative_cleaner_service::{
             contains_chapter_workflow_meta_text, sanitize_generated_narrative_text,
         },
@@ -72,6 +73,10 @@ impl ChapterBusinessSnapshot {
         self.content.as_deref().map(chapter_content_digest)
     }
 
+    pub(crate) fn snapshot_digest(&self) -> String {
+        chapter_business_snapshot_digest(self)
+    }
+
     pub(crate) fn from_model(chapter: &chapter::Model) -> Self {
         Self {
             project_id: chapter.project_id.clone(),
@@ -105,15 +110,25 @@ pub(crate) struct NovelAutopilotChapterGenerateCommit {
 
 const NOVEL_AUTOPILOT_CANDIDATE_SOURCE: &str = "novel_book_autopilot";
 const NOVEL_AUTOPILOT_CANDIDATE_WAITING: &str = "waiting_human";
+const ACCEPTED_CHAPTER_STATUS: &str = "completed";
 const NOVEL_AUTOPILOT_CANDIDATE_ACCEPTED: &str = "accepted";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct NovelAutopilotManualReviewCandidate {
     pub(crate) content: String,
     pub(crate) word_count: i32,
-    pub(crate) chapter_status: String,
     pub(crate) result_digest: String,
     pub(crate) quality_metrics: Option<Value>,
+    pub(crate) quality_gate_action: Option<String>,
+    pub(crate) quality_gate_message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct NovelAutopilotChapterGenerateRetryCandidate {
+    pub(crate) content: String,
+    pub(crate) word_count: i32,
+    pub(crate) result_digest: String,
+    pub(crate) quality_diagnostic: Value,
     pub(crate) quality_gate_action: Option<String>,
     pub(crate) quality_gate_message: Option<String>,
 }
@@ -129,6 +144,226 @@ pub(crate) struct AcceptedNovelAutopilotChapterCandidate {
 }
 
 impl NovelAutopilotRepository {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn persist_chapter_generate_retry_candidate(
+        db: &DatabaseConnection,
+        step_id: &str,
+        user_id: &str,
+        expected_run_version: i64,
+        expected_run_epoch: i64,
+        expected_step_key: &str,
+        expected_background_task_id: Option<&str>,
+        expected_chapter: &ChapterBusinessSnapshot,
+        quality_decision: NovelAutopilotQualityDecision,
+        error_code: &str,
+        candidate: NovelAutopilotChapterGenerateRetryCandidate,
+    ) -> Result<ClaimedNovelAutopilotStep, NovelAutopilotRepositoryError> {
+        validate_generate_retry_candidate(&candidate, quality_decision, error_code)?;
+        let step = novel_autopilot_step_run::Entity::find_by_id(step_id)
+            .one(db)
+            .await
+            .map_err(database_error)?
+            .ok_or(NovelAutopilotRepositoryError::NotFoundOrAccessDenied)?;
+        let run = find_owned_run(db, &step.run_id, user_id).await?;
+        if run.version != expected_run_version {
+            return Err(NovelAutopilotRepositoryError::StaleVersion);
+        }
+        if run.epoch != expected_run_epoch || step.run_epoch != expected_run_epoch {
+            return Err(NovelAutopilotRepositoryError::StaleEpoch);
+        }
+        if run.project_id != expected_chapter.project_id
+            || run.status != NovelAutopilotRunStatus::Running.as_str()
+            || step.status != NovelAutopilotStepStatus::Running.as_str()
+            || run.current_step.as_deref() != Some(expected_step_key)
+            || step.step_key != expected_step_key
+            || step.step_type != NovelAutopilotStepType::ChapterGenerate.as_str()
+            || step.chapter_id.as_deref() != Some(expected_chapter.chapter_id.as_str())
+            || step.chapter_number != Some(expected_chapter.chapter_number)
+            || step.attempt <= 0
+            || run.active_background_task_id.as_deref() != expected_background_task_id
+            || step.background_task_id.as_deref() != expected_background_task_id
+        {
+            return Err(NovelAutopilotRepositoryError::InvalidTransition);
+        }
+
+        let now = Utc::now().naive_utc();
+        let txn = db.begin().await.map_err(database_error)?;
+        let chapter_fence = chapter::Entity::update_many()
+            .col_expr(
+                chapter::Column::UpdatedAt,
+                Expr::col(chapter::Column::UpdatedAt).into(),
+            )
+            .filter(chapter::Column::Id.eq(&expected_chapter.chapter_id))
+            .filter(chapter::Column::ProjectId.eq(&expected_chapter.project_id))
+            .filter(chapter_snapshot_condition(expected_chapter))
+            .exec(&txn)
+            .await
+            .map_err(database_error)?;
+        if chapter_fence.rows_affected != 1 {
+            return Err(NovelAutopilotRepositoryError::BusinessDataChanged);
+        }
+
+        let mut repair_payload = json!({
+            "run_id": run.id,
+            "run_epoch": expected_run_epoch,
+            "step_attempt": step.attempt,
+            "source_chapter_snapshot_digest": expected_chapter.snapshot_digest(),
+            "candidate_full_content": candidate.content,
+            "candidate_content_digest": candidate.result_digest,
+            "content_complete": true,
+        });
+        if let Some(message) = candidate
+            .quality_gate_message
+            .as_deref()
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+        {
+            repair_payload["quality_gate_message"] =
+                Value::String(message.chars().take(1000).collect());
+        }
+        chapter_draft_attempt::ActiveModel {
+            id: Set(step_id.to_string()),
+            project_id: Set(expected_chapter.project_id.clone()),
+            chapter_id: Set(Some(expected_chapter.chapter_id.clone())),
+            batch_task_id: Set(None),
+            source: Set(CHAPTER_GENERATE_RETRY_SOURCE.to_string()),
+            attempt_state: Set(CHAPTER_GENERATE_RETRY_STATE.to_string()),
+            quality_gate_action: Set(candidate.quality_gate_action),
+            quality_gate_decision: Set(Some(quality_decision.as_str().to_string())),
+            word_count: Set(candidate.word_count),
+            summary_preview: Set(Some(
+                repair_payload["candidate_full_content"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .chars()
+                    .take(220)
+                    .collect(),
+            )),
+            content_preview: Set(Some(
+                repair_payload["candidate_full_content"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .chars()
+                    .take(4000)
+                    .collect(),
+            )),
+            quality_metrics: Set(Some(candidate.quality_diagnostic)),
+            repair_payload: Set(Some(repair_payload)),
+            created_at: Set(Some(now)),
+        }
+        .insert(&txn)
+        .await
+        .map_err(database_error)?;
+
+        let mut run_update = novel_autopilot_run::Entity::update_many()
+            .col_expr(
+                novel_autopilot_run::Column::CurrentStep,
+                Expr::value(None::<String>),
+            )
+            .col_expr(
+                novel_autopilot_run::Column::ActiveBackgroundTaskId,
+                Expr::value(None::<String>),
+            )
+            .col_expr(
+                novel_autopilot_run::Column::LastErrorCode,
+                Expr::value(Some(error_code.to_string())),
+            )
+            .col_expr(
+                novel_autopilot_run::Column::ConsecutiveProviderFailures,
+                Expr::value(0),
+            )
+            .col_expr(
+                novel_autopilot_run::Column::ConsecutiveQualityFailures,
+                Expr::col(novel_autopilot_run::Column::ConsecutiveQualityFailures).add(1),
+            )
+            .col_expr(
+                novel_autopilot_run::Column::Version,
+                Expr::col(novel_autopilot_run::Column::Version).add(1),
+            )
+            .col_expr(novel_autopilot_run::Column::UpdatedAt, Expr::value(now))
+            .filter(novel_autopilot_run::Column::Id.eq(&run.id))
+            .filter(novel_autopilot_run::Column::UserId.eq(user_id))
+            .filter(novel_autopilot_run::Column::Version.eq(expected_run_version))
+            .filter(novel_autopilot_run::Column::Epoch.eq(expected_run_epoch))
+            .filter(novel_autopilot_run::Column::CurrentStep.eq(expected_step_key))
+            .filter(
+                novel_autopilot_run::Column::Status.eq(NovelAutopilotRunStatus::Running.as_str()),
+            );
+        run_update = match expected_background_task_id {
+            Some(task_id) => {
+                run_update.filter(novel_autopilot_run::Column::ActiveBackgroundTaskId.eq(task_id))
+            }
+            None => {
+                run_update.filter(novel_autopilot_run::Column::ActiveBackgroundTaskId.is_null())
+            }
+        };
+        let run_update = run_update.exec(&txn).await.map_err(database_error)?;
+        if run_update.rows_affected != 1 {
+            return Err(NovelAutopilotRepositoryError::StaleEpoch);
+        }
+
+        let mut step_update = novel_autopilot_step_run::Entity::update_many()
+            .col_expr(
+                novel_autopilot_step_run::Column::Status,
+                Expr::value(NovelAutopilotStepStatus::Failed.as_str()),
+            )
+            .col_expr(
+                novel_autopilot_step_run::Column::ResultDigest,
+                Expr::value(Some(candidate.result_digest)),
+            )
+            .col_expr(
+                novel_autopilot_step_run::Column::QualityDecision,
+                Expr::value(Some(quality_decision.as_str().to_string())),
+            )
+            .col_expr(
+                novel_autopilot_step_run::Column::ErrorCode,
+                Expr::value(Some(error_code.to_string())),
+            )
+            .col_expr(
+                novel_autopilot_step_run::Column::CompletedAt,
+                Expr::value(Some(now)),
+            )
+            .col_expr(
+                novel_autopilot_step_run::Column::UpdatedAt,
+                Expr::value(now),
+            )
+            .filter(novel_autopilot_step_run::Column::Id.eq(step_id))
+            .filter(novel_autopilot_step_run::Column::RunId.eq(&run.id))
+            .filter(novel_autopilot_step_run::Column::RunEpoch.eq(expected_run_epoch))
+            .filter(novel_autopilot_step_run::Column::StepKey.eq(expected_step_key))
+            .filter(novel_autopilot_step_run::Column::Attempt.eq(step.attempt))
+            .filter(
+                novel_autopilot_step_run::Column::StepType
+                    .eq(NovelAutopilotStepType::ChapterGenerate.as_str()),
+            )
+            .filter(
+                novel_autopilot_step_run::Column::Status
+                    .eq(NovelAutopilotStepStatus::Running.as_str()),
+            );
+        step_update = match expected_background_task_id {
+            Some(task_id) => {
+                step_update.filter(novel_autopilot_step_run::Column::BackgroundTaskId.eq(task_id))
+            }
+            None => {
+                step_update.filter(novel_autopilot_step_run::Column::BackgroundTaskId.is_null())
+            }
+        };
+        let step_update = step_update.exec(&txn).await.map_err(database_error)?;
+        if step_update.rows_affected != 1 {
+            return Err(NovelAutopilotRepositoryError::InvalidTransition);
+        }
+        txn.commit().await.map_err(database_error)?;
+
+        Ok(ClaimedNovelAutopilotStep {
+            run: find_owned_run(db, &run.id, user_id).await?,
+            step: novel_autopilot_step_run::Entity::find_by_id(step_id)
+                .one(db)
+                .await
+                .map_err(database_error)?
+                .ok_or(NovelAutopilotRepositoryError::NotFoundOrAccessDenied)?,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn persist_chapter_manual_review_candidate(
         db: &DatabaseConnection,
@@ -203,7 +438,7 @@ impl NovelAutopilotRepository {
             "candidate_full_content": candidate.content,
             "candidate_content_digest": candidate.result_digest,
             "content_complete": true,
-            "candidate_chapter_status": candidate.chapter_status,
+            "candidate_chapter_status": ACCEPTED_CHAPTER_STATUS,
             "autopilot_chapter_snapshot_digest": chapter_business_snapshot_digest(expected_chapter),
         });
         if let Some(message) = candidate
@@ -486,7 +721,7 @@ impl NovelAutopilotRepository {
             .filter(|status| !status.trim().is_empty())
             .unwrap_or(NovelAutopilotStepStatus::Completed.as_str())
             .to_string();
-        if candidate_status != NovelAutopilotStepStatus::Completed.as_str() {
+        if candidate_status != ACCEPTED_CHAPTER_STATUS {
             return Err(invalid_config("candidate_chapter_status"));
         }
         let expected_snapshot_digest = candidate
@@ -877,14 +1112,43 @@ fn validate_manual_review_candidate(
     if candidate.word_count <= 0 {
         return Err(invalid_config("candidate_word_count"));
     }
-    if candidate.chapter_status != NovelAutopilotStepStatus::Completed.as_str() {
-        return Err(invalid_config("candidate_chapter_status"));
-    }
     if candidate.result_digest.trim().is_empty() {
         return Err(invalid_config("candidate_result_digest"));
     }
     if candidate.result_digest != chapter_content_digest(&candidate.content) {
         return Err(invalid_config("candidate_result_digest"));
+    }
+    Ok(())
+}
+
+fn validate_generate_retry_candidate(
+    candidate: &NovelAutopilotChapterGenerateRetryCandidate,
+    quality_decision: NovelAutopilotQualityDecision,
+    error_code: &str,
+) -> Result<(), NovelAutopilotRepositoryError> {
+    if candidate.content.trim().is_empty() {
+        return Err(invalid_config("retry_candidate_content"));
+    }
+    let actual_word_count = i32::try_from(candidate.content.chars().count()).unwrap_or(i32::MAX);
+    if candidate.word_count <= 0 || candidate.word_count != actual_word_count {
+        return Err(invalid_config("retry_candidate_word_count"));
+    }
+    if candidate.result_digest.trim().is_empty()
+        || candidate.result_digest != chapter_content_digest(&candidate.content)
+    {
+        return Err(invalid_config("retry_candidate_result_digest"));
+    }
+    if !matches!(
+        quality_decision,
+        NovelAutopilotQualityDecision::Retry | NovelAutopilotQualityDecision::AutoRepair
+    ) {
+        return Err(invalid_config("retry_candidate_quality_decision"));
+    }
+    if error_code.trim().is_empty() || error_code.len() > 160 {
+        return Err(invalid_config("retry_candidate_error_code"));
+    }
+    if !candidate.quality_diagnostic.is_object() {
+        return Err(invalid_config("retry_candidate_quality_diagnostic"));
     }
     Ok(())
 }

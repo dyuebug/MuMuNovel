@@ -63,7 +63,7 @@ pub struct TrackedAIRequestError {
 }
 
 pub struct TrackedAIStream {
-    pub stream: ReceiverStream<Result<AIStreamChunk, String>>,
+    pub stream: ReceiverStream<Result<AIStreamChunk, AIRequestError>>,
     pub completion: oneshot::Receiver<AIExecutionTraceV1>,
 }
 

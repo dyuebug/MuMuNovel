@@ -335,7 +335,7 @@ fn paused_waiting_and_terminal_runs_do_not_schedule() {
 
 #[cfg(test)]
 mod repository_tests {
-    use chrono::NaiveDate;
+    use chrono::{Duration, NaiveDate, Utc};
     use sea_orm::{
         ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, DbBackend,
         EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, Schema, Set, Statement,
@@ -555,11 +555,17 @@ mod repository_tests {
         )
         .await
         .expect("start run");
+        let mut retrying = running.clone().into_active_model();
+        retrying.next_attempt_at = Set(Some(Utc::now().naive_utc() + Duration::minutes(5)));
+        let retrying = retrying
+            .update(&db)
+            .await
+            .expect("persist pending retry before pause");
         let paused = NovelAutopilotRepository::transition_owned(
             &db,
             &created.run.id,
             "owner-1",
-            running.version,
+            retrying.version,
             NovelAutopilotRunStatus::Paused,
         )
         .await
@@ -567,6 +573,7 @@ mod repository_tests {
 
         assert_eq!(paused.epoch, running.epoch + 1);
         assert_eq!(paused.version, running.version + 1);
+        assert!(paused.next_attempt_at.is_none());
         assert_eq!(
             NovelAutopilotRepository::transition_owned(
                 &db,
@@ -578,6 +585,167 @@ mod repository_tests {
             .await
             .unwrap_err(),
             NovelAutopilotRepositoryError::StaleVersion
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_terminal_and_resume_transitions_clear_provider_retry_deadline() {
+        let db = setup_repository_db().await;
+        for (suffix, target) in [
+            ("manual", NovelAutopilotRunStatus::WaitingHuman),
+            ("completed", NovelAutopilotRunStatus::Completed),
+            ("failed", NovelAutopilotRunStatus::Failed),
+            ("cancelled", NovelAutopilotRunStatus::Cancelled),
+        ] {
+            let project_id = format!("project-retry-clear-{suffix}");
+            insert_project(&db, &project_id, "owner-1").await;
+            let created = NovelAutopilotRepository::create_or_get_active(
+                &db,
+                create_input(&project_id, "owner-1"),
+            )
+            .await
+            .expect("create retry cleanup run");
+            let running = NovelAutopilotRepository::transition_owned(
+                &db,
+                &created.run.id,
+                "owner-1",
+                created.run.version,
+                NovelAutopilotRunStatus::Running,
+            )
+            .await
+            .expect("start retry cleanup run");
+            let mut retrying = running.into_active_model();
+            retrying.next_attempt_at = Set(Some(Utc::now().naive_utc() + Duration::minutes(5)));
+            let retrying = retrying.update(&db).await.expect("persist retry deadline");
+
+            let transitioned = NovelAutopilotRepository::transition_owned(
+                &db,
+                &retrying.id,
+                "owner-1",
+                retrying.version,
+                target,
+            )
+            .await
+            .expect("leave automatic retry state");
+            assert!(
+                transitioned.next_attempt_at.is_none(),
+                "{suffix} transition retained a provider retry deadline"
+            );
+        }
+
+        insert_project(&db, "project-retry-clear-resume", "owner-1").await;
+        let created = NovelAutopilotRepository::create_or_get_active(
+            &db,
+            create_input("project-retry-clear-resume", "owner-1"),
+        )
+        .await
+        .expect("create resume cleanup run");
+        let running = NovelAutopilotRepository::transition_owned(
+            &db,
+            &created.run.id,
+            "owner-1",
+            created.run.version,
+            NovelAutopilotRunStatus::Running,
+        )
+        .await
+        .expect("start resume cleanup run");
+        let paused = NovelAutopilotRepository::transition_owned(
+            &db,
+            &running.id,
+            "owner-1",
+            running.version,
+            NovelAutopilotRunStatus::Paused,
+        )
+        .await
+        .expect("pause resume cleanup run");
+        let mut paused_with_stale_due = paused.into_active_model();
+        paused_with_stale_due.next_attempt_at =
+            Set(Some(Utc::now().naive_utc() + Duration::minutes(5)));
+        let paused_with_stale_due = paused_with_stale_due
+            .update(&db)
+            .await
+            .expect("simulate stale retry deadline before resume");
+        let resumed = NovelAutopilotRepository::transition_owned(
+            &db,
+            &paused_with_stale_due.id,
+            "owner-1",
+            paused_with_stale_due.version,
+            NovelAutopilotRunStatus::Queued,
+        )
+        .await
+        .expect("resume run");
+        assert!(resumed.next_attempt_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn step_claim_rejects_future_retry_and_clears_due_retry_when_available() {
+        let db = setup_repository_db().await;
+        insert_project(&db, "project-retry-due", "owner-1").await;
+        let created = NovelAutopilotRepository::create_or_get_active(
+            &db,
+            create_input("project-retry-due", "owner-1"),
+        )
+        .await
+        .expect("create retry due run");
+        let running = NovelAutopilotRepository::transition_owned(
+            &db,
+            &created.run.id,
+            "owner-1",
+            created.run.version,
+            NovelAutopilotRunStatus::Running,
+        )
+        .await
+        .expect("start retry due run");
+        let future_due = Utc::now().naive_utc() + Duration::minutes(5);
+        let mut future = running.clone().into_active_model();
+        future.next_attempt_at = Set(Some(future_due));
+        let future = future.update(&db).await.expect("persist future retry due");
+        let run_id = future.id.clone();
+        let run_epoch = future.epoch;
+
+        let claim_input = |expected_run_version| PrepareAndClaimNovelAutopilotStep {
+            attempt: CreateNovelAutopilotStepAttempt {
+                run_id: run_id.clone(),
+                user_id: "owner-1".to_string(),
+                step_key: "planning:foundation".to_string(),
+                step_type: NovelAutopilotStepType::Foundation,
+                phase: NovelAutopilotPhase::Foundation,
+                chapter_id: None,
+                chapter_number: None,
+                run_epoch,
+                input_digest: "retry-due-input".to_string(),
+            },
+            expected_run_version,
+            background_task_id: Some("retry-due-task".to_string()),
+        };
+
+        assert_eq!(
+            NovelAutopilotRepository::prepare_and_claim_step(&db, claim_input(future.version),)
+                .await
+                .unwrap_err(),
+            NovelAutopilotRepositoryError::InvalidTransition
+        );
+        assert_eq!(
+            novel_autopilot_step_run::Entity::find()
+                .count(&db)
+                .await
+                .expect("count rejected retry claims"),
+            0
+        );
+
+        let mut due = future.into_active_model();
+        due.next_attempt_at = Set(Some(Utc::now().naive_utc() - Duration::seconds(1)));
+        let due = due.update(&db).await.expect("make retry due");
+        let claimed =
+            NovelAutopilotRepository::prepare_and_claim_step(&db, claim_input(due.version))
+                .await
+                .expect("claim due retry");
+
+        assert!(claimed.run.next_attempt_at.is_none());
+        assert_eq!(claimed.step.attempt, 1);
+        assert_eq!(
+            claimed.run.active_background_task_id.as_deref(),
+            Some("retry-due-task")
         );
     }
 
@@ -1505,6 +1673,38 @@ mod repository_tests {
             .unwrap_err(),
             NovelAutopilotRepositoryError::StaleVersion
         );
+    }
+
+    #[tokio::test]
+    async fn startup_recovery_preserves_persisted_provider_retry_deadline() {
+        let db = setup_repository_db().await;
+        insert_project(&db, "project-retry-recovery", "owner-1").await;
+        let created = NovelAutopilotRepository::create_or_get_active(
+            &db,
+            create_input("project-retry-recovery", "owner-1"),
+        )
+        .await
+        .expect("create retrying run");
+        let retry_due = Utc::now().naive_utc() + Duration::minutes(5);
+        let mut retrying = created.run.into_active_model();
+        retrying.next_attempt_at = Set(Some(retry_due));
+        let retrying = retrying.update(&db).await.expect("persist retry deadline");
+
+        let recovered = NovelAutopilotRepository::prepare_startup_recovery(
+            &db,
+            &retrying.id,
+            retrying.version,
+            retrying.epoch,
+        )
+        .await
+        .expect("prepare retrying run for startup recovery");
+
+        assert_eq!(recovered.status, NovelAutopilotRunStatus::Queued.as_str());
+        assert_eq!(recovered.epoch, retrying.epoch + 1);
+        assert_eq!(recovered.version, retrying.version + 1);
+        assert_eq!(recovered.next_attempt_at, Some(retry_due));
+        assert!(recovered.current_step.is_none());
+        assert!(recovered.active_background_task_id.is_none());
     }
 
     #[tokio::test]

@@ -468,6 +468,11 @@ response: 409 { code: "human_decision_candidate_unavailable", detail: ... }
   points to a `chapter_draft_attempts` row.
 - Quality retry exhaustion after a complete generated or repaired chapter MUST
   persist the final candidate before setting Run `waiting_human`.
+- A generated result's lifecycle status and its accepted chapter target status
+  are different contracts. `retry/draft` means the candidate was not applied;
+  a complete manual-review candidate MUST persist `completed` as the status to
+  write only after Accept. Callers must not supply this target status from the
+  runtime lifecycle object; the candidate repository owns it.
 - Provider failures, invalid context, and invalid/parse-failed responses MUST
   not fabricate a candidate. They use the stable reason code and
   `failure_diagnostic` to explain why no Accept action is available. A
@@ -513,12 +518,20 @@ response: 409 { code: "human_decision_candidate_unavailable", detail: ... }
 - PostgreSQL `timestamp without time zone` values are UTC by convention. The API
   adds `Z`; the frontend uses standard `Date` parsing and browser local-time
   rendering. Do not manually add eight hours in the frontend.
+- If a claimed tick returns an execution error before its Adapter can commit a
+  terminal outcome, the background-task boundary MUST atomically fail the
+  running Step and move the owned Run to no-candidate `waiting_human`. The
+  update is fenced by Run version/epoch, `active_background_task_id`,
+  `current_step`, and Step status; it clears the active task and advances
+  `updated_at`. Cancellation and superseded ownership must not be converted to
+  this failure state.
 
 ### 4. Validation & Error Matrix
 
 | Condition | Required result |
 |---|---|
 | Complete candidate fails final quality attempt | Insert manual candidate, set `candidate_id`, Run `waiting_human`, reason `chapter_generation_attempts_exhausted` or `chapter_repair_manual_review` |
+| Runtime retry candidate has lifecycle `chapter_status=draft` | Persist the manual candidate with repository-owned accepted target `completed`; do not reject it as invalid config |
 | Provider timeout without candidate | No candidate row; reason `chapter_*_provider_timeout`; `retryable=true` |
 | HTTP 429 without candidate | No candidate row; reason `chapter_*_provider_rate_limited`; `http_status=429` |
 | HTTP 5xx without candidate | No candidate row; reason `chapter_*_provider_upstream_unavailable`; `http_status` retained if known |
@@ -530,6 +543,7 @@ response: 409 { code: "human_decision_candidate_unavailable", detail: ... }
 | Persisted or recomputed candidate digest differs | Reject persistence or Accept before writing the accepted chapter |
 | User chooses Repair for a generated candidate | Preserve candidate, save private guidance, schedule the next `chapter_generate` attempt |
 | Stored UTC value `2026-08-01T05:34:58` | API returns `2026-08-01T05:34:58Z`; Workbench in Asia/Shanghai displays `2026/8/1 13:34:58` |
+| Claimed tick fails before terminal persistence | Atomically fail the running Step, clear Run ownership/cursor, set `novel_autopilot_execution_failed`, enter no-candidate `waiting_human`, and advance Run/Step times |
 
 ### 5. Good / Base / Bad Cases
 
@@ -542,6 +556,8 @@ response: 409 { code: "human_decision_candidate_unavailable", detail: ... }
 - **Good**: A response-invalid failure enters no-candidate `waiting_human`
   without incrementing Provider or Quality counters and without exposing
   Accept.
+- **Good**: A `retry/draft` runtime candidate can become a manual candidate;
+  only Accept writes `completed` to the chapter.
 - **Base**: If the provider error cannot be safely classified, keep
   `chapter_*_provider_failed` and set category `unknown`.
 - **Bad**: Showing "候选已保存，等待人工复核" when `candidate_id` is absent.
@@ -549,6 +565,9 @@ response: 409 { code: "human_decision_candidate_unavailable", detail: ... }
   crafted no-candidate request.
 - **Bad**: Returning a UTC database timestamp without `Z`, causing the browser
   to interpret it as local time and display an eight-hour offset.
+- **Bad**: Copying `generated.chapter_status` into the manual candidate target;
+  the real runtime emits `draft` for quality retry even though the accepted
+  chapter must become `completed`.
 
 ### 6. Tests Required
 
@@ -558,6 +577,9 @@ response: 409 { code: "human_decision_candidate_unavailable", detail: ... }
   strings, and raw response bodies are absent from serialized diagnostics.
 - Repository/adapter tests proving final quality exhaustion creates exactly one
   manual candidate and Accept consumes it with existing fences.
+- A cross-layer regression using the real retry lifecycle (`attempt_state=retry`,
+  `chapter_status=draft`) and asserting candidate persistence records accepted
+  target `completed` without requiring Adapter callers to rewrite the status.
 - Counter tests proving Provider, Quality, and None update only their intended
   budgets; typed-status tests proving ports and bare numeric identifiers are not
   misclassified.
@@ -574,6 +596,9 @@ response: 409 { code: "human_decision_candidate_unavailable", detail: ... }
   `null`.
 - Workbench E2E with fixed `Asia/Shanghai` timezone proving UTC `Z` values show
   as local Beijing time and provider no-candidate failures do not expose Accept.
+- Repository and Workbench tests proving an unexpected claimed-tick failure
+  terminates the Step, advances Run/Step timestamps, clears task ownership, and
+  exposes Retry/Repair/Stop but not Accept.
 
 ### 7. Wrong vs Correct
 
@@ -582,6 +607,7 @@ response: 409 { code: "human_decision_candidate_unavailable", detail: ... }
 ```rust
 finish_failure("chapter_repair_provider_failed", waiting_human = true);
 json!({ "message": raw_provider_error, "candidate_id": null });
+manual_candidate.chapter_status = generated.chapter_status; // retry => draft
 // The UI hides Accept, but the API accepts any waiting_human Run.
 ```
 
@@ -597,4 +623,6 @@ let counter_kind = if diagnostic.counts_as_provider_failure() {
 };
 finish_failure(reason_code, counter_kind, waiting_human, Some(diagnostic));
 ensure_accept_decision_available(&db, &path, &user_id, &run).await?;
+// The repository, not the runtime lifecycle, owns the accepted target status.
+persist_manual_candidate(candidate_without_target_status, "completed").await?;
 ```

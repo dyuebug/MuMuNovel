@@ -1,11 +1,15 @@
-use std::future::Future;
+use std::{
+    fmt,
+    future::Future,
+    sync::{Arc, Mutex},
+};
 
 use futures::{Stream, StreamExt};
 use serde_json::Value;
 
 use crate::ai::execution_trace::{AIExecutionOutcome, AIExecutionTraceV1, TrackedAIStream};
 use crate::ai::service::AIService;
-use crate::ai::types::{AIStreamChunk, ToolDef};
+use crate::ai::types::{AIRequestError, AIStreamChunk, ToolDef};
 use crate::services::chapter_candidate_runtime_state_service::{
     build_chapter_candidate_runtime_state_owner_contract, snapshot_chapter_candidate_runtime_state,
     sync_chapter_candidate_runtime_state, ChapterCandidateRuntimeStatePatch,
@@ -24,6 +28,23 @@ pub(crate) struct TrackedChapterCandidateOutput {
     pub(crate) output: ChapterCandidateOutput,
     pub(crate) execution: AIExecutionTraceV1,
 }
+
+#[derive(Debug)]
+pub(crate) enum TrackedChapterCandidateOutputError {
+    Provider(AIRequestError),
+    Other(String),
+}
+
+impl fmt::Display for TrackedChapterCandidateOutputError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Provider(error) => error.fmt(formatter),
+            Self::Other(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for TrackedChapterCandidateOutputError {}
 
 struct CollectedChapterCandidateOutput {
     output: ChapterCandidateOutput,
@@ -91,7 +112,7 @@ pub(crate) async fn collect_generation_candidate_output_tracked<F, Fut>(
     request: ChapterCandidateOutputRequest<'_>,
     allow_model_fallback: bool,
     on_chunk: F,
-) -> Result<TrackedChapterCandidateOutput, String>
+) -> Result<TrackedChapterCandidateOutput, TrackedChapterCandidateOutputError>
 where
     F: FnMut(String, ChapterCandidateOutputProgress) -> Fut,
     Fut: Future<Output = Result<(), String>>,
@@ -110,7 +131,7 @@ pub(crate) async fn collect_generation_candidate_output_tracked_with_reasoning<F
     allow_model_fallback: bool,
     on_chunk: F,
     on_reasoning: R,
-) -> Result<TrackedChapterCandidateOutput, String>
+) -> Result<TrackedChapterCandidateOutput, TrackedChapterCandidateOutputError>
 where
     F: FnMut(String, ChapterCandidateOutputProgress) -> Fut,
     Fut: Future<Output = Result<(), String>>,
@@ -196,7 +217,7 @@ pub(crate) async fn collect_generation_candidate_output_from_tracked_stream<F, F
     max_output_chars: Option<usize>,
     runtime_state: Option<&mut Value>,
     on_chunk: F,
-) -> Result<TrackedChapterCandidateOutput, String>
+) -> Result<TrackedChapterCandidateOutput, TrackedChapterCandidateOutputError>
 where
     F: FnMut(String, ChapterCandidateOutputProgress) -> Fut,
     Fut: Future<Output = Result<(), String>>,
@@ -224,26 +245,46 @@ pub(crate) async fn collect_generation_candidate_output_from_tracked_stream_with
     runtime_state: Option<&mut Value>,
     on_chunk: F,
     on_reasoning: R,
-) -> Result<TrackedChapterCandidateOutput, String>
+) -> Result<TrackedChapterCandidateOutput, TrackedChapterCandidateOutputError>
 where
     F: FnMut(String, ChapterCandidateOutputProgress) -> Fut,
     Fut: Future<Output = Result<(), String>>,
     R: FnMut(String) -> RFut,
     RFut: Future<Output = Result<(), String>>,
 {
+    let provider_error = Arc::new(Mutex::new(None));
+    let stream_provider_error = Arc::clone(&provider_error);
+    let string_stream = tracked_stream.stream.map(move |chunk_result| {
+        chunk_result.map_err(|error| {
+            let message = error.to_string();
+            if let Ok(mut slot) = stream_provider_error.lock() {
+                *slot = Some(error);
+            }
+            message
+        })
+    });
     let collected = collect_generation_candidate_output_from_stream_internal(
-        tracked_stream.stream,
+        string_stream,
         candidate_index,
         max_output_chars,
         runtime_state,
         on_chunk,
         on_reasoning,
     )
-    .await?;
-    let mut execution = tracked_stream
-        .completion
-        .await
-        .map_err(|_| "candidate execution trace completion channel closed".to_string())?;
+    .await
+    .map_err(|message| {
+        provider_error
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take())
+            .map(TrackedChapterCandidateOutputError::Provider)
+            .unwrap_or(TrackedChapterCandidateOutputError::Other(message))
+    })?;
+    let mut execution = tracked_stream.completion.await.map_err(|_| {
+        TrackedChapterCandidateOutputError::Other(
+            "candidate execution trace completion channel closed".to_string(),
+        )
+    })?;
 
     if collected.stopped_by_max_output_chars && execution.outcome == AIExecutionOutcome::Failed {
         execution.outcome = AIExecutionOutcome::Succeeded;
@@ -522,6 +563,20 @@ mod tests {
         items: Vec<Result<AIStreamChunk, String>>,
         outcome: AIExecutionOutcome,
     ) -> TrackedAIStream {
+        tracked_stream_with_typed_errors(
+            items
+                .into_iter()
+                .map(|item| item.map_err(crate::ai::types::AIRequestError::new))
+                .collect(),
+            outcome,
+        )
+        .await
+    }
+
+    async fn tracked_stream_with_typed_errors(
+        items: Vec<Result<AIStreamChunk, crate::ai::types::AIRequestError>>,
+        outcome: AIExecutionOutcome,
+    ) -> TrackedAIStream {
         let (tx, rx) = mpsc::channel(items.len().max(1));
         for item in items {
             tx.send(item).await.expect("seed tracked stream");
@@ -721,11 +776,18 @@ mod tests {
 
     #[tokio::test]
     async fn should_propagate_tracked_stream_error_before_reading_completion() {
+        let provider_error =
+            crate::ai::types::AIRequestError::with_transport_status_and_retry_after(
+                "provider stream failed",
+                json!({"safe": true}),
+                Some(429),
+                Some(120),
+            );
         let error = collect_generation_candidate_output_from_tracked_stream(
-            tracked_stream(
+            tracked_stream_with_typed_errors(
                 vec![
-                    text_chunk("正文"),
-                    Err("provider stream failed".to_string()),
+                    text_chunk("正文").map_err(crate::ai::types::AIRequestError::new),
+                    Err(provider_error),
                 ],
                 AIExecutionOutcome::Failed,
             )
@@ -738,7 +800,16 @@ mod tests {
         .await
         .expect_err("tracked stream error");
 
-        assert_eq!(error, "provider stream failed");
+        match error {
+            super::TrackedChapterCandidateOutputError::Provider(error) => {
+                assert_eq!(error.message, "provider stream failed");
+                assert_eq!(error.status_code, Some(429));
+                assert_eq!(error.retry_after_seconds, Some(120));
+            }
+            super::TrackedChapterCandidateOutputError::Other(message) => {
+                panic!("expected typed provider error, got: {message}");
+            }
+        }
     }
 
     #[tokio::test]

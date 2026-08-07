@@ -197,6 +197,7 @@ mod tests {
             consecutive_provider_failures: 0,
             consecutive_quality_failures: 0,
             last_error_code: None,
+            next_attempt_at: None,
             guidance_digest: None,
             active_background_task_id: Some("task-1".to_string()),
             final_export_ref: None,

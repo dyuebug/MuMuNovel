@@ -222,6 +222,7 @@ async fn execute_chapter_review_prompt(
             message: error.error.message,
             provider_hint: NovelAutopilotProviderFailureHint {
                 http_status: error.error.status_code,
+                retry_after_seconds: error.error.retry_after_seconds,
                 ..provider_hint.clone()
             },
         })?;

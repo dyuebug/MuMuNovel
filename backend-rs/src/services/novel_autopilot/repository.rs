@@ -488,6 +488,7 @@ impl NovelAutopilotRepository {
             consecutive_provider_failures: Set(0),
             consecutive_quality_failures: Set(0),
             last_error_code: Set(None),
+            next_attempt_at: Set(None),
             guidance_digest: Set(None),
             active_background_task_id: Set(None),
             final_export_ref: Set(None),
@@ -758,6 +759,10 @@ impl NovelAutopilotRepository {
             )
             .col_expr(novel_autopilot_run::Column::UpdatedAt, Expr::value(now))
             .col_expr(
+                novel_autopilot_run::Column::NextAttemptAt,
+                Expr::value(None::<chrono::NaiveDateTime>),
+            )
+            .col_expr(
                 novel_autopilot_run::Column::Version,
                 Expr::col(novel_autopilot_run::Column::Version).add(1),
             )
@@ -930,6 +935,10 @@ impl NovelAutopilotRepository {
                 Expr::value(None::<String>),
             )
             .col_expr(
+                novel_autopilot_run::Column::NextAttemptAt,
+                Expr::value(None::<chrono::NaiveDateTime>),
+            )
+            .col_expr(
                 novel_autopilot_run::Column::Version,
                 Expr::col(novel_autopilot_run::Column::Version).add(1),
             )
@@ -952,6 +961,130 @@ impl NovelAutopilotRepository {
         if result.rows_affected != 1 {
             return Err(NovelAutopilotRepositoryError::StaleVersion);
         }
+        Self::find_owned(db, run_id, user_id).await
+    }
+
+    pub(crate) async fn fail_active_task_and_wait_owned(
+        db: &DatabaseConnection,
+        run_id: &str,
+        user_id: &str,
+        expected_epoch: i64,
+        expected_background_task_id: &str,
+        error_code: &str,
+    ) -> Result<novel_autopilot_run::Model, NovelAutopilotRepositoryError> {
+        if expected_background_task_id.trim().is_empty()
+            || error_code.trim().is_empty()
+            || error_code.len() > 160
+        {
+            return Err(NovelAutopilotRepositoryError::InvalidConfig {
+                field: "execution_failure",
+                code: "invalid_length",
+            });
+        }
+
+        let current = Self::find_owned(db, run_id, user_id).await?;
+        if current.epoch != expected_epoch {
+            return Err(NovelAutopilotRepositoryError::StaleEpoch);
+        }
+        if current.active_background_task_id.as_deref() != Some(expected_background_task_id) {
+            return Err(NovelAutopilotRepositoryError::InvalidTransition);
+        }
+        let current_status = current
+            .status
+            .parse::<NovelAutopilotRunStatus>()
+            .map_err(|_| NovelAutopilotRepositoryError::InvalidTransition)?;
+        if !matches!(
+            current_status,
+            NovelAutopilotRunStatus::Queued | NovelAutopilotRunStatus::Running
+        ) {
+            return Err(NovelAutopilotRepositoryError::InvalidTransition);
+        }
+
+        let now = Utc::now().naive_utc();
+        let txn = db.begin().await.map_err(database_error)?;
+        if let Some(current_step) = current.current_step.as_deref() {
+            let step_update = novel_autopilot_step_run::Entity::update_many()
+                .col_expr(
+                    novel_autopilot_step_run::Column::Status,
+                    Expr::value(NovelAutopilotStepStatus::Failed.as_str()),
+                )
+                .col_expr(
+                    novel_autopilot_step_run::Column::ErrorCode,
+                    Expr::value(Some(error_code.to_string())),
+                )
+                .col_expr(
+                    novel_autopilot_step_run::Column::CompletedAt,
+                    Expr::value(Some(now)),
+                )
+                .col_expr(
+                    novel_autopilot_step_run::Column::UpdatedAt,
+                    Expr::value(now),
+                )
+                .filter(novel_autopilot_step_run::Column::RunId.eq(run_id))
+                .filter(novel_autopilot_step_run::Column::StepKey.eq(current_step))
+                .filter(novel_autopilot_step_run::Column::RunEpoch.eq(expected_epoch))
+                .filter(
+                    novel_autopilot_step_run::Column::BackgroundTaskId
+                        .eq(expected_background_task_id),
+                )
+                .filter(
+                    novel_autopilot_step_run::Column::Status
+                        .eq(NovelAutopilotStepStatus::Running.as_str()),
+                )
+                .exec(&txn)
+                .await
+                .map_err(database_error)?;
+            if step_update.rows_affected != 1 {
+                return Err(NovelAutopilotRepositoryError::InvalidTransition);
+            }
+        }
+
+        let mut run_update = novel_autopilot_run::Entity::update_many()
+            .col_expr(
+                novel_autopilot_run::Column::Status,
+                Expr::value(NovelAutopilotRunStatus::WaitingHuman.as_str()),
+            )
+            .col_expr(
+                novel_autopilot_run::Column::CurrentStep,
+                Expr::value(None::<String>),
+            )
+            .col_expr(
+                novel_autopilot_run::Column::ActiveBackgroundTaskId,
+                Expr::value(None::<String>),
+            )
+            .col_expr(
+                novel_autopilot_run::Column::LastErrorCode,
+                Expr::value(Some(error_code.to_string())),
+            )
+            .col_expr(
+                novel_autopilot_run::Column::NextAttemptAt,
+                Expr::value(None::<chrono::NaiveDateTime>),
+            )
+            .col_expr(
+                novel_autopilot_run::Column::Version,
+                Expr::col(novel_autopilot_run::Column::Version).add(1),
+            )
+            .col_expr(novel_autopilot_run::Column::UpdatedAt, Expr::value(now))
+            .filter(novel_autopilot_run::Column::Id.eq(run_id))
+            .filter(novel_autopilot_run::Column::UserId.eq(user_id))
+            .filter(novel_autopilot_run::Column::Version.eq(current.version))
+            .filter(novel_autopilot_run::Column::Epoch.eq(expected_epoch))
+            .filter(novel_autopilot_run::Column::Status.eq(current_status.as_str()))
+            .filter(
+                novel_autopilot_run::Column::ActiveBackgroundTaskId.eq(expected_background_task_id),
+            );
+        run_update = match current.current_step.as_deref() {
+            Some(current_step) => {
+                run_update.filter(novel_autopilot_run::Column::CurrentStep.eq(current_step))
+            }
+            None => run_update.filter(novel_autopilot_run::Column::CurrentStep.is_null()),
+        };
+        let run_update = run_update.exec(&txn).await.map_err(database_error)?;
+        if run_update.rows_affected != 1 {
+            return Err(NovelAutopilotRepositoryError::StaleVersion);
+        }
+
+        txn.commit().await.map_err(database_error)?;
         Self::find_owned(db, run_id, user_id).await
     }
 
@@ -1048,6 +1181,10 @@ impl NovelAutopilotRepository {
                 Expr::value(Some(guidance_digest.to_string())),
             )
             .col_expr(
+                novel_autopilot_run::Column::NextAttemptAt,
+                Expr::value(None::<chrono::NaiveDateTime>),
+            )
+            .col_expr(
                 novel_autopilot_run::Column::Epoch,
                 Expr::col(novel_autopilot_run::Column::Epoch).add(1),
             )
@@ -1116,6 +1253,12 @@ impl NovelAutopilotRepository {
         if !run_status.can_schedule() || run.current_step.is_some() {
             return Err(NovelAutopilotRepositoryError::InvalidTransition);
         }
+        if run
+            .next_attempt_at
+            .is_some_and(|not_before| not_before > now)
+        {
+            return Err(NovelAutopilotRepositoryError::InvalidTransition);
+        }
 
         let previous = novel_autopilot_step_run::Entity::find()
             .filter(novel_autopilot_step_run::Column::RunId.eq(&attempt.run_id))
@@ -1169,6 +1312,10 @@ impl NovelAutopilotRepository {
                 Expr::value(input.background_task_id),
             )
             .col_expr(
+                novel_autopilot_run::Column::NextAttemptAt,
+                Expr::value(None::<chrono::NaiveDateTime>),
+            )
+            .col_expr(
                 novel_autopilot_run::Column::StartedAt,
                 Expr::value(run.started_at.or(Some(now))),
             )
@@ -1182,6 +1329,11 @@ impl NovelAutopilotRepository {
             .filter(novel_autopilot_run::Column::Version.eq(input.expected_run_version))
             .filter(novel_autopilot_run::Column::Epoch.eq(attempt.run_epoch))
             .filter(novel_autopilot_run::Column::CurrentStep.is_null())
+            .filter(
+                Condition::any()
+                    .add(novel_autopilot_run::Column::NextAttemptAt.is_null())
+                    .add(novel_autopilot_run::Column::NextAttemptAt.lte(now)),
+            )
             .filter(novel_autopilot_run::Column::Status.is_in([
                 NovelAutopilotRunStatus::Queued.as_str(),
                 NovelAutopilotRunStatus::Running.as_str(),
@@ -1470,6 +1622,10 @@ impl NovelAutopilotRepository {
             .col_expr(
                 novel_autopilot_run::Column::ActiveBackgroundTaskId,
                 Expr::value(None::<String>),
+            )
+            .col_expr(
+                novel_autopilot_run::Column::NextAttemptAt,
+                Expr::value(None::<chrono::NaiveDateTime>),
             )
             .col_expr(
                 novel_autopilot_run::Column::Version,

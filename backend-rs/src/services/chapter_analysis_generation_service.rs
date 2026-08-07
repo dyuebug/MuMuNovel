@@ -238,6 +238,7 @@ mod tests {
                 provider: Some("openai".to_string()),
                 model: Some("gpt-5.1".to_string()),
                 http_status: None,
+                retry_after_seconds: None,
             },
         };
         let diagnostic = error.failure_diagnostic();
