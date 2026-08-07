@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "evidence_status": "failed",
+  "runtime_owner": "backend-rs",
+  "diagnostics_directory": "e2e-diagnostics",
+  "github_sha": "4246eebdbc9eeb2bbd56a718d448bab9a14e7907",
+  "github_run_id": "29259268002",
+  "github_run_attempt": "1"
+}

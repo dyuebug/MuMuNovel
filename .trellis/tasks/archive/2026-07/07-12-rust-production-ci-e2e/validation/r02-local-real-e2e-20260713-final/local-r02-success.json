@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "evidence_status": "passed",
+  "evidence_scope": "local-r02-real-e2e",
+  "runtime_owner": "backend-rs",
+  "database": "postgresql-18-alpine",
+  "database_port": 55444,
+  "app_port": 18006,
+  "migration_executor": "passed",
+  "release_readiness_preflight": "passed",
+  "readyz": "passed",
+  "releasez": "passed",
+  "playwright_auth": "passed",
+  "playwright_background_task_pages": "passed",
+  "started_at": "2026-07-13T10:04:34.4813977Z",
+  "completed_at": "2026-07-13T10:06:21.3035802Z"
+}

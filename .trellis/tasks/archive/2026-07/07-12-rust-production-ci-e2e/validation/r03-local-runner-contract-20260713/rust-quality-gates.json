@@ -1,0 +1,6 @@
+{
+  "cargo-fmt-check": 0,
+  "cargo-check-locked": 0,
+  "cargo-test-locked": 0,
+  "cargo-clippy-ci-baseline": 0
+}

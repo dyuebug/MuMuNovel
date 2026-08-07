@@ -1,0 +1,57 @@
+[
+  {
+    "step_index": 5,
+    "name": "Install frontend dependencies",
+    "file": "workflow-run-blocks/05-install-frontend-dependencies.sh"
+  },
+  {
+    "step_index": 6,
+    "name": "Install Playwright browsers",
+    "file": "workflow-run-blocks/06-install-playwright-browsers.sh"
+  },
+  {
+    "step_index": 7,
+    "name": "Migrate PostgreSQL with Rust",
+    "file": "workflow-run-blocks/07-migrate-postgresql-with-rust.sh"
+  },
+  {
+    "step_index": 8,
+    "name": "Verify Rust release readiness preflight",
+    "file": "workflow-run-blocks/08-verify-rust-release-readiness-preflight.sh"
+  },
+  {
+    "step_index": 9,
+    "name": "Start Rust backend",
+    "file": "workflow-run-blocks/09-start-rust-backend.sh"
+  },
+  {
+    "step_index": 10,
+    "name": "Wait for Rust backend readiness",
+    "file": "workflow-run-blocks/10-wait-for-rust-backend-readiness.sh"
+  },
+  {
+    "step_index": 11,
+    "name": "Verify Rust release readiness contract",
+    "file": "workflow-run-blocks/11-verify-rust-release-readiness-contract.sh"
+  },
+  {
+    "step_index": 12,
+    "name": "Run auth + background-task smoke against Rust",
+    "file": "workflow-run-blocks/12-run-auth-background-task-smoke-against-rust.sh"
+  },
+  {
+    "step_index": 13,
+    "name": "Stop Rust backend and record lifecycle",
+    "file": "workflow-run-blocks/13-stop-rust-backend-and-record-lifecycle.sh"
+  },
+  {
+    "step_index": 14,
+    "name": "Record successful Rust E2E evidence",
+    "file": "workflow-run-blocks/14-record-successful-rust-e2e-evidence.sh"
+  },
+  {
+    "step_index": 15,
+    "name": "Record failed Rust E2E evidence",
+    "file": "workflow-run-blocks/15-record-failed-rust-e2e-evidence.sh"
+  }
+]

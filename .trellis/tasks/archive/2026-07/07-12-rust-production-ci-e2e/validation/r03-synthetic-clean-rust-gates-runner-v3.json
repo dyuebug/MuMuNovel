@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "base_head": "d0cff4f5fafeeb22f6b4c0f319e9d493ba7a8346",
+  "candidate_archive": ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-clean-candidate-runner-v3.tar",
+  "candidate_manifest": ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-clean-candidate-runner-v3.json",
+  "candidate_file_count": 26,
+  "rust_image": "rust:1.88-bookworm",
+  "runner_simulation": {
+    "target": "GitHub hosted Linux runner executing Cargo directly on VM host",
+    "adjustment": "remove ephemeral /.dockerenv before tests so application code does not enter Docker-only host.docker.internal fallback path"
+  },
+  "setup": [
+    "rustup component add rustfmt clippy"
+  ],
+  "commands": [
+    "cargo fmt -- --check",
+    "cargo check --locked",
+    "cargo test --locked",
+    "cargo clippy --locked --all-targets -- -D clippy::correctness -D clippy::suspicious"
+  ],
+  "started_at_utc": "2026-07-13T12:25:04.3824597Z",
+  "finished_at_utc": "2026-07-13T12:28:06.4364671Z",
+  "exit_code": 0,
+  "status": "PASS",
+  "prior_attempts": [
+    ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-synthetic-clean-rust-gates.json",
+    ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-synthetic-clean-rust-gates-retry.json",
+    ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-synthetic-clean-rust-gates-v2.json"
+  ],
+  "log": ".trellis/tasks/07-12-rust-production-ci-e2e/validation/r03-synthetic-clean-rust-gates-runner-v3.log"
+}

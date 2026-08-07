@@ -1,0 +1,1 @@
+/home/runner/work/MuMuNovel/MuMuNovel/backend-rs/target/debug/mumu-novel-backend

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "evidence_status": "passed",
+  "runtime_owner": "backend-rs",
+  "database": "postgresql",
+  "migration_executor": "passed",
+  "release_readiness_preflight": "passed",
+  "readyz": "passed",
+  "releasez": "passed",
+  "playwright_smoke": "passed",
+  "github_sha": "0123456789abcdef0123456789abcdef01234567",
+  "github_run_id": "123456789",
+  "github_run_attempt": "2"
+}

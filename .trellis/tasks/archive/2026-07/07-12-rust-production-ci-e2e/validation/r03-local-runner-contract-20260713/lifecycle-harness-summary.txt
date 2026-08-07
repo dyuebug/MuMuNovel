@@ -1,0 +1,5 @@
+terminated_exit=0
+identity_mismatch_exit=1
+invalid_pid_exit=1
+already_exited_exit=1
+LIFECYCLE_HARNESS=PASS

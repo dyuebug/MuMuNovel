@@ -1,0 +1,7 @@
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "ModelOutputPanel、SSEProgressModal 与 SSELoadingOverlay 的复用、职责边界和受控 props 设计"}
+{"file": ".trellis/spec/frontend/hook-guidelines.md", "reason": "useModelOutputStream 与 useBackgroundTaskOutputStream 的生命周期、清理和稳定回调约束"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "模型瞬时文本不进入全局持久状态，仅由当前任务 owner 局部持有"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "SSE reasoning_chunk 事件、组件 props 与 hook 返回值保持显式类型"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "前端 lint、TypeScript build、兼容性和交互质量门"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Provider 流错误和后台输出桥保持原任务失败语义，不泄露内部诊断"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Rust fmt/check、focused test 与环境阻塞结果记录"}
